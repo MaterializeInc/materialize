@@ -1,0 +1,161 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Publishes the wasm npm packages that the `deploy-npm` Buildkite step builds.
+#
+# Buildkite remains the release pipeline: it builds and packs the tarballs,
+# stages them in S3, triggers this workflow, and fails its step if this
+# workflow fails. This workflow exists only because npm's trusted publishing
+# accepts OIDC tokens from GitHub Actions, GitLab, and CircleCI, but not from
+# Buildkite -- so this is the smallest possible amount of publishing that has
+# to happen outside of Buildkite in order to retire the long-lived NPM_TOKEN.
+#
+# Each package's trusted publisher on npmjs.com must name this workflow file
+# ("publish-npm.yml") and the "npm-publish" environment. The repository
+# variable NPM_PUBLISH_ROLE_ARN must name the GithubActionsNpmPublish role
+# from MaterializeInc/i2, which grants read access to the staging bucket.
+
+name: publish npm packages
+
+run-name: publish npm packages (${{ inputs.staging_uri || github.event.client_payload.staging_uri }})
+
+on:
+  repository_dispatch:
+    types: [publish-npm]
+  workflow_dispatch:
+    inputs:
+      staging_uri:
+        description: "s3:// URI of a staging directory left behind by a Buildkite deploy-npm step"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # Mints the OIDC tokens used both to assume the AWS role and to authenticate
+  # to npm. Without this, npm falls back to token auth and the publish fails.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # npm's trusted publisher configuration is pinned to this environment, and
+    # the AWS role's trust policy only accepts tokens issued for it.
+    environment: npm-publish
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ vars.NPM_PUBLISH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      # Node 22.14+ and npm 11.5.1+ are what support OIDC publishing.
+      #
+      # Deliberately no `registry-url`: it makes setup-node write an
+      # `_authToken` line into .npmrc, and an empty token there makes npm
+      # believe it is already authenticated and skip the OIDC exchange
+      # entirely, which fails the publish with ENEEDAUTH.
+      # See https://github.com/actions/setup-node/issues/1551. The default
+      # registry is registry.npmjs.org, which is where we publish anyway.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Check for auth that would preempt OIDC
+        run: |
+          set -euo pipefail
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$npmrc" ] && grep -q _authToken "$npmrc"; then
+            echo "::error::$npmrc configures an _authToken, which stops npm from using OIDC"
+            exit 1
+          fi
+          npm --version
+
+      - name: Download staged packages
+        env:
+          STAGING_URI: ${{ inputs.staging_uri || github.event.client_payload.staging_uri }}
+        run: |
+          set -euo pipefail
+          case "$STAGING_URI" in
+            s3://*) ;;
+            *) echo "refusing to fetch non-s3 staging URI: $STAGING_URI" >&2; exit 1 ;;
+          esac
+          mkdir staging
+          aws s3 cp --recursive "$STAGING_URI" staging/
+          test -f staging/manifest.json
+          cat staging/manifest.json
+
+      - name: Publish to npm
+        # Provenance is generated automatically when publishing over OIDC, but
+        # it would attest that this workflow built the tarballs, and it did
+        # not -- Buildkite did. Publishing an attestation we know to be untrue
+        # is worse than publishing none, which is what we do today.
+        env:
+          NPM_CONFIG_PROVENANCE: "false"
+        run: |
+          set -euo pipefail
+          jq -c '.packages[]' staging/manifest.json | while read -r package; do
+            name=$(jq -r '.name' <<<"$package")
+            version=$(jq -r '.version' <<<"$package")
+            tarball=$(jq -r '.tarball' <<<"$package")
+            tag=$(jq -r '.tag' <<<"$package")
+            # Tolerating an already-published version is what makes this
+            # workflow re-runnable: if a later step fails, the whole run can be
+            # repeated from the same staging URI, which is how missing
+            # dist-tags get fixed.
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published, skipping"
+              continue
+            fi
+            echo "::group::publishing $name@$version (tag $tag)"
+            npm publish "staging/$tarball" --access public --tag "$tag"
+            echo "::endgroup::"
+            echo "- \`$name@$version\` published with tag \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Apply additional dist-tags
+        # `npm dist-tag` never performs the OIDC exchange itself -- only
+        # `npm publish` and `npm stage publish` do -- so we perform it by hand
+        # and hand the resulting short-lived, package-scoped registry token to
+        # the CLI. This is what keeps the `latest-X.Y` tags from requiring a
+        # long-lived token that would need rotating every 90 days.
+        run: |
+          set -euo pipefail
+          specs=$(jq -r '.packages[] | select(.extra_tags | length > 0) | .extra_tags[] as $t | "\(.name) \(.version) \($t)"' staging/manifest.json)
+          if [ -z "$specs" ]; then
+            echo "no additional dist-tags requested"
+            exit 0
+          fi
+          id_token=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -G --data-urlencode "audience=npm:registry.npmjs.org" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r '.value')
+          while read -r name version tag; do
+            # npm escapes the scope separator when addressing a package by
+            # name in this API, as npm-package-arg's `escapedName` does.
+            escaped=${name/\//%2f}
+            token=$(curl -fsS -X POST -H "Authorization: Bearer $id_token" \
+              "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$escaped" \
+              | jq -r '.token')
+            echo "::group::tagging $name@$version as $tag"
+            npm dist-tag add "$name@$version" "$tag" \
+              "--//registry.npmjs.org/:_authToken=$token"
+            echo "::endgroup::"
+            echo "- \`$name@$version\` tagged \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          done <<<"$specs"
+
+      - name: Explain a dist-tag failure
+        if: failure()
+        run: |
+          {
+            echo "### Publish incomplete"
+            echo
+            echo "If the packages published but the dist-tag step failed, re-run"
+            echo "this workflow from the same staging URI -- the publish step"
+            echo "skips versions that are already on npm. The staged tarballs"
+            echo "are kept for 14 days."
+          } >> "$GITHUB_STEP_SUMMARY"

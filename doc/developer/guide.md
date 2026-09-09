@@ -286,6 +286,15 @@ WASM builds can then be initiated through
 WASM crates reside in `misc/wasm/` Cargo workspace, and should be kept out of
 the main Cargo workspace to avoid cache invalidation issues.
 
+Publishing happens in two hops. The `deploy-npm` Buildkite step builds and
+packs the packages ([`ci/deploy/npm.py`](/ci/deploy/npm.py)), stages the
+tarballs in S3, and triggers the
+[`publish-npm`](/.github/workflows/publish-npm.yml) GitHub Actions workflow,
+which runs the actual `npm publish` and reports back -- the Buildkite step
+fails if the workflow does. The hop exists because npm's trusted publishing
+issues credentials to GitHub Actions, GitLab, and CircleCI but not to
+Buildkite, so this is what lets us publish without a long-lived npm token.
+
 ## Running Confluent Platform
 
 As mentioned above, **Confluent Platform is only required need to test Kafka
