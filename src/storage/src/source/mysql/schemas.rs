@@ -85,7 +85,7 @@ where
                                 Some((
                                     output,
                                     DefiniteError::IncompatibleSchema(
-                                        output.desc.schema_change(change),
+                                        output.desc.build_schema_change_error(change),
                                     ),
                                 ))
                             }
