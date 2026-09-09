@@ -2269,7 +2269,7 @@ feature_flags!(
         name: enable_exclude_constraints_option,
         desc: "Whether to allow the EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS options \
                in CREATE TABLE .. FROM SOURCE.",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
