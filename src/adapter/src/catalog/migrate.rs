@@ -1049,14 +1049,15 @@ fn ast_rewrite_add_missing_index_ids(
 /// as a bare qualified name, unlike a relation in the same position, because
 /// name resolution suppressed ids for types. Resolution now prints the id
 /// (see `NameResolver::resolve_doc_on_name`); this rewrites stored statements
-/// to match, so the reference survives renames and `create_sql` reference
-/// extraction (`mz_object_dependencies`) recovers the sink's edge to the
-/// type.
+/// to match, so `create_sql` reference extraction (`mz_object_dependencies`)
+/// recovers the sink's edge to the type. The id form would also keep the
+/// reference valid if renames of types were ever added.
 ///
 /// References that already carry an id are skipped, so this is idempotent and
-/// safe to run every boot. A name without a database part denotes an item in
-/// an ambient (system) schema; those are not durable items and builtin names
-/// are stable, so such references are left resolving by name.
+/// safe to run every boot. A bare name in a `DOC ON` position can only denote
+/// a type: relations always carried ids there and functions cannot resolve
+/// there. Names in ambient schemas denote builtin types, which are resolved
+/// through the system object mappings.
 fn ast_rewrite_add_missing_doc_on_ids(
     tx: &Transaction<'_>,
     stmt: &mut Statement<Raw>,
@@ -1067,22 +1068,39 @@ fn ast_rewrite_add_missing_doc_on_ids(
     rewrite_doc_on_ids(stmt, |name| {
         let parts = &name.0;
         let (db_name, schema_name, item_name) = match parts.len() {
-            3 => (&parts[0], &parts[1], &parts[2]),
-            2 => return None,
+            3 => (Some(&parts[0]), &parts[1], &parts[2]),
+            2 => (None, &parts[0], &parts[1]),
             _ => panic!("invalid doc on reference: {name:?}"),
         };
-        let db = tx.get_databases().find(|db| db.name == db_name.as_str());
-        let db = db.unwrap_or_else(|| panic!("missing database in doc on reference: {name:?}"));
+        let db_id = db_name.map(|db_name| {
+            let db = tx.get_databases().find(|db| db.name == db_name.as_str());
+            let db = db.unwrap_or_else(|| panic!("missing database in doc on reference: {name:?}"));
+            db.id
+        });
         let schema = tx
             .get_schemas()
-            .find(|s| s.name == schema_name.as_str() && s.database_id == Some(db.id));
+            .find(|s| s.name == schema_name.as_str() && s.database_id == db_id);
         let schema =
             schema.unwrap_or_else(|| panic!("missing schema in doc on reference: {name:?}"));
-        let item = tx
-            .get_items()
-            .find(|i| i.name == item_name.as_str() && i.schema_id == schema.id);
-        let item = item.unwrap_or_else(|| panic!("missing item in doc on reference: {name:?}"));
-        Some(item.id.to_string())
+        // A type may share its (schema, name) with a secret, connection, sink,
+        // or function, and `get_items()` is id-sorted, so an unfiltered lookup
+        // would bind to whichever same-named item is older.
+        let user_type = tx.get_items().find(|i| {
+            i.name == item_name.as_str()
+                && i.schema_id == schema.id
+                && i.item_type() == CatalogItemType::Type
+        });
+        if let Some(item) = user_type {
+            return Some(item.id.to_string());
+        }
+        let builtin_type = tx.get_system_object_mappings().find(|m| {
+            m.description.schema_name == schema.name
+                && m.description.object_type == CatalogItemType::Type
+                && m.description.object_name == item_name.as_str()
+        });
+        let builtin_type =
+            builtin_type.unwrap_or_else(|| panic!("missing type in doc on reference: {name:?}"));
+        Some(builtin_type.unique_identifier.catalog_id.to_string())
     });
     Ok(())
 }
@@ -1339,7 +1357,11 @@ mod tests {
                     assert_eq!(name.0[2].as_str(), "point", "unexpected lookup: {name:?}");
                     Some("u9".into())
                 }
-                _ => None,
+                2 => {
+                    assert_eq!(name.0[1].as_str(), "int4", "unexpected lookup: {name:?}");
+                    Some("s23".into())
+                }
+                _ => panic!("unexpected lookup: {name:?}"),
             },
         );
         assert!(
@@ -1350,10 +1372,9 @@ mod tests {
             out.contains(r#"DOC ON COLUMN [u9 AS "materialize"."public"."point"]."x""#),
             "column reference not rewritten: {out}"
         );
-        // An ambient-schema (builtin) reference keeps resolving by name.
         assert!(
-            out.contains(r#"DOC ON TYPE "pg_catalog"."int4""#),
-            "ambient reference rewritten: {out}"
+            out.contains(r#"DOC ON TYPE [s23 AS "pg_catalog"."int4"]"#),
+            "builtin type reference not rewritten: {out}"
         );
     }
 
