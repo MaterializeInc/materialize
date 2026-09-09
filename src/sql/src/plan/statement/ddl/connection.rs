@@ -756,11 +756,6 @@ impl ConnectionOptionExtracted {
                                         "invalid CONNECTION: OAUTH2 SERVER URL applies to CREDENTIAL auth, not GCP CONNECTION"
                                     );
                                 }
-                                if self.access_delegation.is_some() {
-                                    sql_bail!(
-                                        "invalid CONNECTION: ICEBERG GCP CONNECTION does not support ACCESS DELEGATION"
-                                    );
-                                }
                                 // A GCP connection authenticates to GCS, so the
                                 // store is already determined. Reject a
                                 // contradicting value rather than silently
