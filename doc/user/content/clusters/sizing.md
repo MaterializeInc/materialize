@@ -191,21 +191,30 @@ approximate, it is approximate in ways that matter for sizing:
 
 - **Only indexes and materialized views are tracked per object.** Sources,
   including upsert sources, contribute no rows to object history and do not hold
-  a replica episode open. Their memory and disk usage is still counted in the
-  replica peaks, which measure whole processes, so a cluster hosting an upsert
-  source is sized correctly by those peaks even though the source itself never
-  appears per object.
+  a replica episode open. The replica peaks measure whole processes, so they
+  include a source's memory and disk only for the work it had finished by the
+  moment the episode was recorded. An episode closes on the compute dataflows,
+  and [snapshotting](/fundamentals/concepts/snapshotting/) an upsert source
+  often runs well past that, so a cluster whose peak is driven by snapshotting
+  is not sized by these numbers. Read
+  [`mz_internal.mz_cluster_replica_metrics_history`](/sql/system-catalog/mz_internal/#mz_cluster_replica_metrics_history)
+  for that instead.
 
 - **Short-lived objects can be missed entirely.** Recording works by sampling
   each replica in a rotation, so an object that is dropped before its replica's
   turn leaves no trace. Nothing incorrect is recorded, the episode is simply
   absent.
 
-- **The peaks are upper bounds on the episode.** They come from operating-system
-  high-water marks that cover each process's whole lifetime up to the moment the
-  episode is recorded, so post-hydration work can raise them, and a later
-  episode can inherit an earlier episode's mark. For sizing this errs the safe
-  way: the recorded value is never below the true hydration peak.
+- **`peak_memory_bytes` is an upper bound on the episode.** It comes from the
+  kernel's own high-water mark, covering each process's whole lifetime up to the
+  moment the episode is recorded, so post-hydration work can raise it and a
+  later episode can inherit an earlier episode's mark. For sizing memory this
+  errs the safe way: the recorded value is never below the true hydration peak.
+
+- **`peak_disk_bytes` is a lower bound.** Where a scratch filesystem is in use
+  there is no kernel high-water mark to read, so the value is a maximum over
+  samples and can miss a spike between two of them. Leave more headroom on disk
+  than the number by itself implies.
 
 - **Timestamps can carry clock skew.** On a multi-process replica the endpoints
   of an interval come from different process clocks, so a recorded duration
