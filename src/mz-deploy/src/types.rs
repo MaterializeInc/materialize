@@ -43,10 +43,12 @@
 //! - [`data_type::DataType`] — A column's type. Structural rather than a type
 //!   name, because a record, an anonymous list, and an anonymous map have no
 //!   spelling the SQL grammar accepts.
+//! - [`stub`] — Turns a recorded schema back into a relation.
 
 pub(crate) mod data_type;
+pub(crate) mod stub;
 
-pub(crate) use data_type::DataType;
+pub(crate) use data_type::{DataType, RecordField};
 
 use crate::project::ir::object_id::ObjectId;
 use data_type::{FieldLock, TypeLock, TypeLockError};
@@ -613,7 +615,6 @@ impl Types {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use data_type::RecordField;
     use std::collections::BTreeMap;
 
     #[mz_ore::test]

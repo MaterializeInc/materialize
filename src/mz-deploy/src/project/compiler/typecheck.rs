@@ -554,6 +554,116 @@ mod run_tests {
         );
     }
 
+    /// A record column has no data-type syntax, so it only survives once a
+    /// dependent forces the producing view to be stubbed.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn record_column_stubs_for_dependents() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_sql(
+            root,
+            "models/materialize/storage/t1.sql",
+            "CREATE TABLE t1 (a int NOT NULL, b text)",
+        );
+        write_sql(
+            root,
+            "models/materialize/public/wrapped.sql",
+            "CREATE VIEW wrapped AS SELECT ROW(a, b) AS r FROM materialize.storage.t1",
+        );
+        write_sql(
+            root,
+            "models/materialize/public/downstream.sql",
+            "CREATE VIEW downstream AS SELECT (r).f1 AS a FROM materialize.public.wrapped",
+        );
+
+        let fs = crate::fs::FileSystem::new();
+        let project = compile_sync(&fs, root, None, None, &BTreeMap::new()).unwrap();
+        let (merged, _stats) = run(
+            root,
+            "default",
+            None,
+            &BTreeMap::new(),
+            &project,
+            Types::default(),
+        )
+        .unwrap();
+
+        let wrapped = &merged.tables[&"materialize.public.wrapped".parse::<ObjectId>().unwrap()];
+        assert_eq!(
+            wrapped["r"].r#type.to_string(),
+            "record(f1: int4,f2: text?)"
+        );
+        let downstream =
+            &merged.tables[&"materialize.public.downstream".parse::<ObjectId>().unwrap()];
+        assert_eq!(downstream["a"].r#type.to_string(), "int4");
+        assert!(
+            !downstream["a"].nullable,
+            "field nullability must survive the stub"
+        );
+    }
+
+    /// The same for a record arriving over the data contract rather than from
+    /// a project object.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn external_record_column_typechecks() {
+        use crate::types::{ObjectKind, RecordField};
+
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_sql(
+            root,
+            "models/materialize/public/v_ext.sql",
+            "CREATE VIEW v_ext AS SELECT (payload).a AS a, (payload).n AS n FROM ext.public.t",
+        );
+
+        let payload = DataType::Record(vec![
+            RecordField {
+                name: "a".into(),
+                r#type: DataType::named("int4"),
+                nullable: false,
+            },
+            RecordField {
+                name: "n".into(),
+                r#type: DataType::Record(vec![RecordField {
+                    name: "x".into(),
+                    r#type: DataType::named("text"),
+                    nullable: true,
+                }]),
+                nullable: true,
+            },
+        ]);
+        let t: ObjectId = "ext.public.t".parse().unwrap();
+        let external = Types {
+            tables: BTreeMap::from([(
+                t.clone(),
+                BTreeMap::from([(
+                    "payload".to_string(),
+                    ColumnType {
+                        r#type: payload,
+                        nullable: false,
+                        position: 0,
+                        comment: None,
+                    },
+                )]),
+            )]),
+            kinds: BTreeMap::from([(t, ObjectKind::Table)]),
+            comments: BTreeMap::new(),
+        };
+
+        let fs = crate::fs::FileSystem::new();
+        let project = compile_sync(&fs, root, None, None, &BTreeMap::new()).unwrap();
+        let (merged, _stats) = run(root, "default", None, &BTreeMap::new(), &project, external)
+            .expect("record-typed external dependency should typecheck");
+
+        let v_ext = &merged.tables[&"materialize.public.v_ext".parse::<ObjectId>().unwrap()];
+        assert_eq!(v_ext["a"].r#type.to_string(), "int4");
+        assert!(!v_ext["a"].nullable, "field nullability must survive");
+        assert_eq!(v_ext["n"].r#type.to_string(), "record(x: text?)");
+        assert!(v_ext["n"].nullable);
+    }
+
     /// A second `run` after no source change should typecheck zero nodes.
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]

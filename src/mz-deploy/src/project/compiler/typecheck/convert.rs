@@ -19,47 +19,38 @@ use crate::project::ast::Statement as ProjectStatement;
 use crate::project::ir::compiled::FullyQualifiedName;
 use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::NormalizingVisitor;
-use crate::types::{ColumnType, DataType};
+use crate::types::stub::{StubError, StubTarget, build_stub_statements};
+use crate::types::{ColumnType, DataType, RecordField};
 use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use mz_repr::{RelationDesc, SqlScalarType};
 use mz_sql_parser::ast::ColumnOption;
 use std::collections::BTreeMap;
 
-/// Build the stub table statement used to restore a cached dependency.
-pub(super) fn create_stub_table_sql(
+/// The statements that restore a cached dependency as a relation.
+///
+/// Helper relations come first and the stub itself is last; execute them in
+/// order.
+pub(super) fn create_stub_statements(
     object_id: &ObjectId,
     columns: &BTreeMap<String, ColumnType>,
-) -> String {
-    // `columns` is keyed by name, so iterating it directly yields alphabetical
-    // order. The schema's real column order lives in `ColumnType::position`.
-    let mut ordered: Vec<_> = columns.iter().collect();
-    ordered.sort_by_key(|(_, ct)| ct.position);
-
-    let mut col_defs = Vec::new();
-    for (col_name, col_type) in ordered {
-        let nullable = if col_type.nullable { "" } else { " NOT NULL" };
-        col_defs.push(format!(
-            "{} {}{}",
-            quote_identifier(col_name),
-            col_type.r#type,
-            nullable
-        ));
-    }
-
-    let prefix = match object_id.database() {
+) -> Result<Vec<String>, StubError> {
+    let qualification = match object_id.database() {
         Some(db) => format!(
-            "{}.{}.{}",
+            "{}.{}.",
             quote_identifier(db),
             quote_identifier(object_id.schema()),
-            quote_identifier(object_id.object()),
         ),
-        None => format!(
-            "{}.{}",
-            quote_identifier(object_id.schema()),
-            quote_identifier(object_id.object()),
-        ),
+        None => format!("{}.", quote_identifier(object_id.schema())),
     };
-    format!("CREATE TABLE {} ({})", prefix, col_defs.join(", "))
+    let target = StubTarget {
+        name: format!("{}{}", qualification, quote_identifier(object_id.object())),
+        helper_prefix: qualification,
+        // Helpers share the stub's schema. The suffix is what keeps them from
+        // colliding with a project object, which is named after a `.sql` file
+        // stem.
+        helper_stem: format!("{}_mz_deploy_stub", object_id.object()),
+    };
+    build_stub_statements(object_id, &target, columns)
 }
 
 /// Transform a compiled statement into SQL for the private catalog workspace.
@@ -156,6 +147,12 @@ pub(super) fn relation_desc_to_columns(desc: &RelationDesc) -> BTreeMap<String, 
 
 /// Convert a Materialize scalar type into the contract's structured form.
 ///
+/// NOTE: user-defined types are not represented. A named composite becomes the
+/// `record` pseudo-token rather than an anonymous record with the same fields,
+/// because `SqlScalarType::base_eq` treats the two as different types and
+/// substituting one would change what typechecks. A named list or map is still
+/// expanded structurally, which has the same flaw.
+/// TODO: record user-defined types in the contract and recreate them.
 fn sql_scalar_type_to_data_type(scalar_type: &SqlScalarType) -> DataType {
     let named = |name: &str| DataType::named(name);
     match scalar_type {
@@ -222,16 +219,37 @@ fn sql_scalar_type_to_data_type(scalar_type: &SqlScalarType) -> DataType {
         )),
         SqlScalarType::MzAclItem => named("mz_aclitem"),
         SqlScalarType::AclItem => named("aclitem"),
-        // A record has no data-type syntax, so this is the pseudo-type token
-        // the catalog itself reports. Nothing can be rebuilt from it.
-        SqlScalarType::Record { .. } => named("record"),
+        SqlScalarType::Record { fields, .. } => DataType::Record(
+            fields
+                .iter()
+                .map(|(name, col_type)| RecordField {
+                    name: name.as_str().to_string(),
+                    r#type: sql_scalar_type_to_data_type(&col_type.scalar_type),
+                    nullable: col_type.nullable,
+                })
+                .collect(),
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_repr::SqlColumnType;
     use mz_repr::adt::numeric::NumericMaxScale;
+
+    fn record(fields: &[(&str, DataType, bool)]) -> DataType {
+        DataType::Record(
+            fields
+                .iter()
+                .map(|(name, r#type, nullable)| RecordField {
+                    name: (*name).to_string(),
+                    r#type: r#type.clone(),
+                    nullable: *nullable,
+                })
+                .collect(),
+        )
+    }
 
     #[mz_ore::test]
     fn numeric_renders_scale_in_the_scale_position() {
@@ -255,6 +273,47 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn record_keeps_field_names_types_and_nullability() {
+        let scalar = SqlScalarType::Record {
+            fields: [
+                (
+                    "a".into(),
+                    SqlColumnType {
+                        scalar_type: SqlScalarType::Int32,
+                        nullable: false,
+                    },
+                ),
+                (
+                    "n".into(),
+                    SqlColumnType {
+                        scalar_type: SqlScalarType::Record {
+                            fields: [(
+                                "x".into(),
+                                SqlColumnType {
+                                    scalar_type: SqlScalarType::String,
+                                    nullable: true,
+                                },
+                            )]
+                            .into(),
+                            custom_id: None,
+                        },
+                        nullable: true,
+                    },
+                ),
+            ]
+            .into(),
+            custom_id: None,
+        };
+        assert_eq!(
+            sql_scalar_type_to_data_type(&scalar),
+            record(&[
+                ("a", DataType::named("int4"), false),
+                ("n", record(&[("x", DataType::named("text"), true)]), true),
+            ])
+        );
+    }
+
+    #[mz_ore::test]
     fn anonymous_list_keeps_its_element_type() {
         let scalar = SqlScalarType::List {
             element_type: Box::new(SqlScalarType::Int64),
@@ -267,7 +326,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn create_stub_table_sql_preserves_column_order() {
+    fn stub_sql_preserves_column_order() {
         let mut columns = BTreeMap::new();
         // Deliberately non-alphabetical by position so the wrong (BTreeMap)
         // order would emit `apple` before `zebra`.
@@ -291,12 +350,100 @@ mod tests {
         );
 
         let id = ObjectId::new("db".to_string(), "public".to_string(), "dep".to_string());
-        let sql = create_stub_table_sql(&id, &columns);
+        let statements = create_stub_statements(&id, &columns).expect("stub builds");
+        let sql = statements.join("\n");
+        assert_eq!(statements.len(), 1, "no record means a plain table: {sql}");
         let zebra = sql.find("zebra").expect("zebra column present");
         let apple = sql.find("apple").expect("apple column present");
         assert!(
             zebra < apple,
             "stub columns must follow schema position order; got: {sql}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn record_column_becomes_a_view_over_helpers() {
+        let mut columns = BTreeMap::new();
+        columns.insert(
+            "payload".to_string(),
+            ColumnType {
+                r#type: record(&[
+                    ("a", DataType::named("integer"), false),
+                    ("b", DataType::named("text"), true),
+                ]),
+                nullable: true,
+                position: 0,
+                comment: None,
+            },
+        );
+
+        let id = ObjectId::new("db".to_string(), "public".to_string(), "dep".to_string());
+        let statements = create_stub_statements(&id, &columns).expect("stub builds");
+        assert_eq!(
+            statements.len(),
+            2,
+            "helper table then view: {statements:?}"
+        );
+        assert!(
+            statements[0].starts_with(r#"CREATE TABLE "db"."public"."dep_mz_deploy_stub_h0""#),
+            "helper table first: {}",
+            statements[0]
+        );
+        assert!(
+            statements[0].contains(r#""a" integer NOT NULL"#)
+                && statements[0].contains(r#""b" text"#),
+            "helper carries the record's field nullability: {}",
+            statements[0]
+        );
+        assert!(
+            statements[1].starts_with(r#"CREATE VIEW "db"."public"."dep" AS"#),
+            "stub is the last statement: {}",
+            statements[1]
+        );
+    }
+
+    #[mz_ore::test]
+    fn pseudo_token_is_reported_against_its_column() {
+        let mut columns = BTreeMap::new();
+        columns.insert(
+            "payload".to_string(),
+            ColumnType {
+                r#type: DataType::named("record"),
+                nullable: true,
+                position: 0,
+                comment: None,
+            },
+        );
+        let id = ObjectId::new("db".to_string(), "public".to_string(), "dep".to_string());
+        let err = create_stub_statements(&id, &columns).expect_err("pseudo type is rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("payload") && message.contains("mz-deploy lock"),
+            "error should name the column and the fix: {message}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn record_inside_a_container_is_rejected() {
+        let mut columns = BTreeMap::new();
+        columns.insert(
+            "payloads".to_string(),
+            ColumnType {
+                r#type: DataType::List(Box::new(record(&[(
+                    "a",
+                    DataType::named("integer"),
+                    false,
+                )]))),
+                nullable: true,
+                position: 0,
+                comment: None,
+            },
+        );
+        let id = ObjectId::new("db".to_string(), "public".to_string(), "dep".to_string());
+        let err = create_stub_statements(&id, &columns).expect_err("nested record is rejected");
+        assert!(
+            err.to_string().contains("not supported"),
+            "unexpected error: {err}"
         );
     }
 }

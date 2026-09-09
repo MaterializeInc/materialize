@@ -520,6 +520,20 @@ fn build_error(object_id: &ObjectId, kind: ObjectTypeCheckErrorKind) -> ObjectTy
     }
 }
 
+/// The statements that recreate a dependency, with an unreconstructible type
+/// reported against the dependency itself.
+fn stub_statements(
+    object_id: &ObjectId,
+    columns: &BTreeMap<String, ColumnType>,
+) -> Result<Vec<String>, TypeCheckError> {
+    super::convert::create_stub_statements(object_id, columns).map_err(|err| {
+        TypeCheckError::Multiple(vec![build_error(
+            object_id,
+            ObjectTypeCheckErrorKind::Internal(err.to_string()),
+        )])
+    })
+}
+
 /// Build a `LocalItem` from a planned table/view/MV statement.
 ///
 /// Allocates fresh ids and pulls the per-variant fields (name, item type,
@@ -689,16 +703,17 @@ impl CatalogRuntime {
         }
     }
 
-    /// Insert a placeholder table with the given column schema.
+    /// Insert a placeholder relation with the given column schema.
     pub(super) fn create_stub_table(
         &mut self,
         object_id: &ObjectId,
         columns: &BTreeMap<String, ColumnType>,
     ) -> Result<(), TypeCheckError> {
-        let sql = super::convert::create_stub_table_sql(object_id, columns);
-        self.create_item(object_id, &sql)
-            .map(|_| ())
-            .map_err(|e| TypeCheckError::Multiple(vec![e]))
+        for sql in stub_statements(object_id, columns)? {
+            self.create_item(object_id, &sql)
+                .map_err(|e| TypeCheckError::Multiple(vec![e]))?;
+        }
+        Ok(())
     }
 
     /// Parse, resolve, and type-check a SQL statement against the catalog.
@@ -1817,10 +1832,11 @@ impl TaskCatalog {
         object_id: &ObjectId,
         columns: &BTreeMap<String, ColumnType>,
     ) -> Result<(), TypeCheckError> {
-        let sql = super::convert::create_stub_table_sql(object_id, columns);
-        self.create_item(object_id, &sql)
-            .map(|_| ())
-            .map_err(|e| TypeCheckError::Multiple(vec![e]))
+        for sql in stub_statements(object_id, columns)? {
+            self.create_item(object_id, &sql)
+                .map_err(|e| TypeCheckError::Multiple(vec![e]))?;
+        }
+        Ok(())
     }
 
     pub(super) fn create_item(

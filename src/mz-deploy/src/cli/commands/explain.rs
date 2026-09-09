@@ -50,6 +50,7 @@ use crate::project::ir::compiled::FullyQualifiedName;
 use crate::project::ir::graph;
 use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::NormalizingVisitor;
+use crate::types::stub::{StubTarget, build_stub_statements};
 use crate::types::{ColumnType, DataType, Types};
 use crate::verbose;
 use mz_sql_parser::ast::*;
@@ -512,6 +513,7 @@ fn raw_data_type_to_data_type(data_type: &RawDataType) -> DataType {
     }
 }
 
+/// Execute the staging actions, create the target, and run EXPLAIN.
 async fn execute_explain(
     client: &Client,
     explain_db: &str,
@@ -547,34 +549,36 @@ async fn execute_explain(
         .map_err(|e| CliError::Message(format!("failed to create explain schema: {}", e)))?;
 
     // Execute staging actions
+    let mut stub_seq = 0usize;
     for action in actions {
         match action {
             StagingAction::StubTable { object_id, columns } => {
                 let fqn = object_id.to_string();
-                let mut col_defs = Vec::new();
-                for (col_name, col_type) in columns {
-                    let nullable = if col_type.nullable { "" } else { " NOT NULL" };
-                    col_defs.push(format!(
-                        "{} {}{}",
-                        quote_identifier(col_name),
-                        col_type.r#type,
-                        nullable
-                    ));
-                }
-                let sql = format!(
-                    "CREATE TABLE {}.{}.{} ({})",
+                let qualification = format!(
+                    "{}.{}.",
                     quote_identifier(explain_db),
                     quote_identifier(explain_schema),
-                    quote_identifier(&fqn),
-                    col_defs.join(", ")
                 );
-                verbose!("Stub table: {}", sql);
-                client.execute(&sql, &[]).await.map_err(|e| {
-                    CliError::Message(format!(
-                        "failed to create stub table for '{}': {}",
-                        object_id, e
-                    ))
-                })?;
+                let target = StubTarget {
+                    name: format!("{}{}", qualification, quote_identifier(&fqn)),
+                    helper_prefix: qualification,
+                    // Every stub in the explain schema is named after an
+                    // `ObjectId`, which always contains a dot, so a dot-free
+                    // helper name cannot collide with one.
+                    helper_stem: format!("mz_deploy_stub_{}", stub_seq),
+                };
+                stub_seq += 1;
+                let statements = build_stub_statements(object_id, &target, columns)
+                    .map_err(|e| CliError::Message(e.to_string()))?;
+                for sql in statements {
+                    verbose!("Stub table: {}", sql);
+                    client.execute(&sql, &[]).await.map_err(|e| {
+                        CliError::Message(format!(
+                            "failed to create stub table for '{}': {}",
+                            object_id, e
+                        ))
+                    })?;
+                }
             }
             StagingAction::CreateIndex { index, on_object } => {
                 let sql = build_index_sql(index, on_object, explain_db, explain_schema);

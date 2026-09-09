@@ -67,6 +67,43 @@ impl DataType {
     pub fn named(name: impl Into<String>) -> Self {
         DataType::Named(name.into())
     }
+
+    /// Whether a record appears anywhere in this type.
+    ///
+    /// A schema free of records is expressible as a `CREATE TABLE`; one
+    /// containing a record is not, and has to be built out of helper relations.
+    pub fn contains_record(&self) -> bool {
+        match self {
+            DataType::Named(_) => false,
+            DataType::Array(inner) | DataType::List(inner) | DataType::Map(inner) => {
+                inner.contains_record()
+            }
+            DataType::Record(_) => true,
+        }
+    }
+
+    /// Whether this type is one of the pseudo-type tokens the catalog reports
+    /// in place of a structural type it cannot spell.
+    ///
+    /// These are exactly the columns that need a `pg_typeof` probe at capture
+    /// time, and the ones no stub can be built from.
+    pub fn is_pseudo_token(&self) -> bool {
+        match self {
+            DataType::Named(name) => name == RECORD_TAG || name == LIST_TAG || name == MAP_TAG,
+            _ => false,
+        }
+    }
+
+    /// Whether a pseudo-type token appears anywhere in this type.
+    pub fn contains_pseudo_token(&self) -> bool {
+        match self {
+            DataType::Named(_) => self.is_pseudo_token(),
+            DataType::Array(inner) | DataType::List(inner) | DataType::Map(inner) => {
+                inner.contains_pseudo_token()
+            }
+            DataType::Record(fields) => fields.iter().any(|f| f.r#type.contains_pseudo_token()),
+        }
+    }
 }
 
 /// Renders the type as Materialize humanizes it, which is valid data-type
