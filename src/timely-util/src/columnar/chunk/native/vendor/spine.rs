@@ -73,171 +73,17 @@
 //! have paid back any "debt" to higher layers by continuing to provide fuel as updates arrive.
 
 use std::collections::VecDeque;
-use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::logging::Logger;
-use differential_dataflow::trace::{Description, ExertionLogic};
+use differential_dataflow_next::lattice::Lattice;
+use differential_dataflow_next::logging::Logger;
+use differential_dataflow_next::trace::asynchronous::{Batch as SpineBatch, MergeStatus, Merger};
+use differential_dataflow_next::trace::{Description, ExertionLogic, Span};
 use mz_ore::cast::CastFrom;
 
-use ::timely::dataflow::operators::generic::OperatorInfo;
-use ::timely::order::PartialOrder;
-use ::timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
-
-/// An interval of a trace's history: a description of the times it covers, and the batch of
-/// updates within it, absent exactly when there are none.
-///
-/// The interval is never empty, but the batch may be missing; a span records that its times
-/// happened and brought no updates.
-#[derive(Clone, Debug)]
-pub struct Span<T, B> {
-    /// The lower and upper bounds of contained update times, and the compaction frontier.
-    pub desc: Description<T>,
-    /// The updates within the interval; absent exactly when there are none.
-    pub inner: Option<B>,
-}
-
-impl<T, B> Span<T, B> {
-    /// A span from a description and the batch within it, absent when there are no updates.
-    pub fn new(desc: Description<T>, inner: Option<B>) -> Self {
-        Self { desc, inner }
-    }
-    /// All times in the span are greater or equal to an element of `lower`.
-    pub fn lower(&self) -> &Antichain<T> {
-        self.desc.lower()
-    }
-    /// All times in the span are not greater or equal to any element of `upper`.
-    pub fn upper(&self) -> &Antichain<T> {
-        self.desc.upper()
-    }
-    /// True if the span carries a batch of updates.
-    ///
-    /// This is about the updates, not the interval, which is never empty.
-    pub fn has_updates(&self) -> bool {
-        self.inner.is_some()
-    }
-}
-
-impl<T: Timestamp, B> Span<T, B> {
-    /// A span over the indicated interval carrying no updates.
-    pub fn empty(lower: Antichain<T>, upper: Antichain<T>) -> Self {
-        Self {
-            desc: Description::new(lower, upper, Antichain::from_elem(T::minimum())),
-            inner: None,
-        }
-    }
-}
-
-/// The requirements this spine imposes on the batches its spans carry.
-///
-/// These are opinions of this spine, not properties of batches in general: a batch must
-/// support progressive (fuel-limited) merging through a [`Merger`], and must report its
-/// size, which drives the spine's geometric layering and its logging.
-pub trait SpineBatch: Sized {
-    /// The timestamp type of the batch's updates.
-    type Time: Timestamp + Lattice;
-
-    /// A type used to progressively merge batches.
-    type Merger: Merger<Self>;
-
-    /// The number of updates in the batch.
-    ///
-    /// A span with nothing in it is meant to carry no batch at all rather than an empty one,
-    /// so this should be positive. The spine does not rely on that: it asks this method
-    /// rather than asking whether a span carries a batch, so a producer that hands it an
-    /// empty batch costs an extra merge rather than behaving differently from the absent
-    /// case.
-    fn len(&self) -> usize;
-}
-
-/// Whether a polled merger finished or exhausted its work allowance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MergeStatus {
-    /// More CPU work is required.
-    InProgress,
-    /// All output is ready for extraction.
-    Complete,
-}
-
-/// A progressive merge of consecutive batches, optionally waiting for I/O.
-pub trait Merger<Output: SpineBatch> {
-    /// Creates a new merger to merge the supplied batches, optionally compacting
-    /// up to the supplied frontier.
-    fn new(
-        source1: &Output,
-        source2: &Output,
-        compaction_frontier: AntichainRef<Output::Time>,
-    ) -> Self;
-    /// Perform some amount of work, decrementing `fuel`.
-    ///
-    /// If `fuel` is non-zero after the call, the merging is complete and
-    /// one should call `done` to extract the merged results.
-    fn work(&mut self, _source1: &Output, _source2: &Output, _fuel: &mut isize) {
-        panic!("this merger requires poll_work")
-    }
-    /// Perform admitted work, registering `cx` before returning pending.
-    ///
-    /// A pending call retains all progress, including consumed fuel. Polling again
-    /// must not resubmit reads or require the inputs to change. Waiting consumes no
-    /// fuel. Implementations must be ready to observe read completion even at zero fuel.
-    fn poll_work(
-        &mut self,
-        source1: &Output,
-        source2: &Output,
-        cx: &mut Context<'_>,
-        fuel: &mut isize,
-    ) -> Poll<MergeStatus> {
-        let _ = cx;
-        self.work(source1, source2, fuel);
-        Poll::Ready(if *fuel > 0 {
-            MergeStatus::Complete
-        } else {
-            MergeStatus::InProgress
-        })
-    }
-    /// Extracts merged results, absent if the merge cancelled to nothing.
-    ///
-    /// Call only after `poll_work` reports `Complete`, or the synchronous
-    /// `work` adapter reports completion through its remaining fuel.
-    fn done(self) -> Option<Output>;
-}
-
-impl<B: SpineBatch> SpineBatch for Rc<B> {
-    type Time = B::Time;
-    type Merger = RcMerger<B>;
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-}
-
-/// Wrapper type for merging reference counted batches.
-pub struct RcMerger<B: SpineBatch> {
-    merger: B::Merger,
-}
-
-impl<B: SpineBatch> Merger<Rc<B>> for RcMerger<B> {
-    fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: AntichainRef<B::Time>) -> Self {
-        RcMerger {
-            merger: B::Merger::new(source1, source2, compaction_frontier),
-        }
-    }
-    fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) {
-        self.merger.work(source1, source2, fuel)
-    }
-    fn poll_work(
-        &mut self,
-        source1: &Rc<B>,
-        source2: &Rc<B>,
-        cx: &mut Context<'_>,
-        fuel: &mut isize,
-    ) -> Poll<MergeStatus> {
-        self.merger.poll_work(source1, source2, cx, fuel)
-    }
-    fn done(self) -> Option<Rc<B>> {
-        self.merger.done().map(Rc::new)
-    }
-}
+use ::timely_next::dataflow::operators::generic::OperatorInfo;
+use ::timely_next::order::PartialOrder;
+use ::timely_next::progress::{Antichain, frontier::AntichainRef};
 
 /// The number of updates in a span: its batch's length, or zero when it carries none.
 ///
@@ -287,7 +133,7 @@ pub struct Spine<B: SpineBatch> {
     pending: Vec<Span<B::Time, B>>,        // Spans at times in advance of `frontier`.
     upper: Antichain<B::Time>,
     effort: usize,
-    activator: Option<timely::scheduling::activate::Activator>,
+    activator: Option<timely_next::scheduling::activate::Activator>,
     /// Parameters to `exert_logic`, containing tuples of `(index, count, length)`.
     exert_logic_param: Vec<(usize, usize, usize)>,
     /// Logic to indicate whether and how many records we should introduce in the absence of actual updates.
@@ -302,7 +148,7 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
         // If `upper` is the minimum frontier, we can return an empty cursor.
         // This can happen with operators that are written to expect the ability to acquire cursors
         // for their prior frontiers, and which start at `[T::minimum()]`, such as `Reduce`, sadly.
-        if upper.less_equal(&<B::Time as timely::progress::Timestamp>::minimum()) {
+        if upper.less_equal(&<B::Time as timely_next::progress::Timestamp>::minimum()) {
             return Some(Vec::new());
         }
 
@@ -435,9 +281,9 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
 impl<B: SpineBatch + Clone + 'static> Spine<B> {
     /// Construct an empty spine with the default effort multiplier.
     pub fn new(
-        info: ::timely::dataflow::operators::generic::OperatorInfo,
-        logging: Option<differential_dataflow::logging::Logger>,
-        activator: Option<timely::scheduling::activate::Activator>,
+        info: ::timely_next::dataflow::operators::generic::OperatorInfo,
+        logging: Option<differential_dataflow_next::logging::Logger>,
+        activator: Option<timely_next::scheduling::activate::Activator>,
     ) -> Self {
         Self::with_effort(1, info, logging, activator)
     }
@@ -489,7 +335,7 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
     pub fn insert(&mut self, span: Span<B::Time, B>) {
         // Log the introduction of a batch.
         self.logger.as_ref().map(|l| {
-            l.log(differential_dataflow::logging::BatchEvent {
+            l.log(differential_dataflow_next::logging::BatchEvent {
                 operator: self.operator.global_id,
                 length: span_len(&span),
             })
@@ -527,23 +373,23 @@ impl<B: SpineBatch> Spine<B> {
             for batch in self.merging.drain(..) {
                 match batch {
                     MergeState::Single(Some(batch)) => {
-                        logger.log(differential_dataflow::logging::DropEvent {
+                        logger.log(differential_dataflow_next::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: span_len(&batch),
                         });
                     }
                     MergeState::Double(MergeVariant::InProgress(batch1, batch2, _, _)) => {
-                        logger.log(differential_dataflow::logging::DropEvent {
+                        logger.log(differential_dataflow_next::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: span_len(&batch1),
                         });
-                        logger.log(differential_dataflow::logging::DropEvent {
+                        logger.log(differential_dataflow_next::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: span_len(&batch2),
                         });
                     }
                     MergeState::Double(MergeVariant::Complete(Some((batch, _)))) => {
-                        logger.log(differential_dataflow::logging::DropEvent {
+                        logger.log(differential_dataflow_next::logging::DropEvent {
                             operator: self.operator.global_id,
                             length: span_len(&batch),
                         });
@@ -552,7 +398,7 @@ impl<B: SpineBatch> Spine<B> {
                 }
             }
             for batch in self.pending.drain(..) {
-                logger.log(differential_dataflow::logging::DropEvent {
+                logger.log(differential_dataflow_next::logging::DropEvent {
                     operator: self.operator.global_id,
                     length: span_len(&batch),
                 });
@@ -602,8 +448,8 @@ impl<B: SpineBatch> Spine<B> {
     pub fn with_effort(
         mut effort: usize,
         operator: OperatorInfo,
-        logger: Option<differential_dataflow::logging::Logger>,
-        activator: Option<timely::scheduling::activate::Activator>,
+        logger: Option<differential_dataflow_next::logging::Logger>,
+        activator: Option<timely_next::scheduling::activate::Activator>,
     ) -> Self {
         // Zero effort is .. not smart.
         if effort == 0 {
@@ -614,14 +460,14 @@ impl<B: SpineBatch> Spine<B> {
             operator,
             logger,
             logical_frontier: Antichain::from_elem(
-                <B::Time as timely::progress::Timestamp>::minimum(),
+                <B::Time as timely_next::progress::Timestamp>::minimum(),
             ),
             physical_frontier: Antichain::from_elem(
-                <B::Time as timely::progress::Timestamp>::minimum(),
+                <B::Time as timely_next::progress::Timestamp>::minimum(),
             ),
             merging: Vec::new(),
             pending: Vec::new(),
-            upper: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
+            upper: Antichain::from_elem(<B::Time as timely_next::progress::Timestamp>::minimum()),
             effort,
             activator,
             exert_logic_param: Vec::default(),
@@ -814,7 +660,7 @@ impl<B: SpineBatch> Spine<B> {
             MergeState::Single(old) => {
                 // Log the initiation of a merge.
                 self.logger.as_ref().map(|l| {
-                    l.log(differential_dataflow::logging::MergeEvent {
+                    l.log(differential_dataflow_next::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
                         length1: old.as_ref().map(span_len).unwrap_or(0),
@@ -837,7 +683,7 @@ impl<B: SpineBatch> Spine<B> {
             if let Some((input1, input2)) = inputs {
                 // Log the completion of a merge from existing parts.
                 self.logger.as_ref().map(|l| {
-                    l.log(differential_dataflow::logging::MergeEvent {
+                    l.log(differential_dataflow_next::logging::MergeEvent {
                         operator: self.operator.global_id,
                         scale: index,
                         length1: span_len(&input1),

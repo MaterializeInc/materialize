@@ -14,11 +14,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
-use super::vendor;
 use columnar::Columnar;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::Chunk as MzChunk;
+use differential_dataflow_next::trace::chunk::{Chunk as NativeChunk, asynchronous::AsyncChunk};
 use futures_util::FutureExt;
 use futures_util::future::LocalBoxFuture;
 use timely::dataflow::channels::ContainerBytes;
@@ -27,12 +27,14 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use super::super::merge::ReadBudget;
 use super::super::{Column, ColumnChunk};
+use super::timestamp::{Time, to_mz, to_native};
 
 /// A columnar chunk with shared admission for native Differential merge reads.
 pub struct PoolChunk<D: Columnar, T: Columnar, R: Columnar> {
     pub(super) chunk: ColumnChunk<D, T, R>,
     pub(super) budget: ReadBudget,
 }
+
 impl<D: Columnar, T: Columnar, R: Columnar> PoolChunk<D, T, R> {
     fn take_columns(chunks: &mut VecDeque<Self>) -> VecDeque<ColumnChunk<D, T, R>> {
         chunks.drain(..).map(|chunk| chunk.chunk).collect()
@@ -58,6 +60,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> Clone for PoolChunk<D, T, R> {
         }
     }
 }
+
 impl<D: Columnar, T: Columnar, R: Columnar> Default for PoolChunk<D, T, R> {
     fn default() -> Self {
         Self {
@@ -81,6 +84,7 @@ pub struct ReadState<D: Columnar, T: Columnar, R: Columnar> {
     reservation: Option<Arc<OwnedSemaphorePermit>>,
     pending: Option<LocalBoxFuture<'static, LoadedInputs<D, T, R>>>,
 }
+
 impl<D: Columnar, T: Columnar, R: Columnar> Default for ReadState<D, T, R> {
     fn default() -> Self {
         Self {
@@ -91,6 +95,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> Default for ReadState<D, T, R> {
         }
     }
 }
+
 struct LoadedInputs<D: Columnar, T: Columnar, R: Columnar> {
     chunks: Vec<ColumnChunk<D, T, R>>,
     reservation: Arc<OwnedSemaphorePermit>,
@@ -169,7 +174,7 @@ where
     }
 }
 
-impl<D, T, R> vendor::chunk::Chunk for PoolChunk<D, T, R>
+impl<D, T, R> NativeChunk for PoolChunk<D, T, R>
 where
     D: Columnar + 'static,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -177,30 +182,11 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>> + 'static,
 {
-    type Time = T;
-    type Pending = ReadState<D, T, R>;
+    type Time = Time<T>;
     const TARGET: usize = <ColumnChunk<D, T, R> as MzChunk>::TARGET;
+
     fn len(&self) -> usize {
         self.chunk.len()
-    }
-    fn pending_for(left: &[Self], right: &[Self]) -> Self::Pending {
-        let largest_chunk_bytes = |run: &[Self]| {
-            run.iter()
-                .map(|chunk| match &chunk.chunk {
-                    ColumnChunk::Resident(column, _) => column.length_in_bytes(),
-                    ColumnChunk::Spilled(body, _) => body.bytes,
-                })
-                .max()
-                .unwrap_or(0)
-        };
-        ReadState {
-            budget: left
-                .first()
-                .or_else(|| right.first())
-                .map(|chunk| chunk.budget.clone()),
-            required_bytes: largest_chunk_bytes(left).saturating_add(largest_chunk_bytes(right)),
-            ..ReadState::default()
-        }
     }
 
     fn merge(left: &mut VecDeque<Self>, right: &mut VecDeque<Self>, output: &mut VecDeque<Self>) {
@@ -221,7 +207,7 @@ where
 
     fn advance(
         input: &mut VecDeque<Self>,
-        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
+        frontier: timely_next::progress::frontier::AntichainRef<Self::Time>,
         done: bool,
         output: &mut VecDeque<Self>,
     ) {
@@ -230,7 +216,7 @@ where
         };
         let mut columns = Self::take_columns(input);
         let mut advanced = VecDeque::new();
-        let frontier = frontier.to_owned();
+        let frontier = to_mz(frontier);
         ColumnChunk::advance(&mut columns, frontier.borrow(), done, &mut advanced);
         Self::extend_columns(input, columns, &budget);
         Self::extend_columns(output, advanced, &budget);
@@ -238,8 +224,8 @@ where
 
     fn extract(
         input: &mut VecDeque<Self>,
-        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
-        residual: &mut timely::progress::Antichain<Self::Time>,
+        frontier: timely_next::progress::frontier::AntichainRef<Self::Time>,
+        residual: &mut timely_next::progress::Antichain<Self::Time>,
         keep: &mut VecDeque<Self>,
         ship: &mut VecDeque<Self>,
     ) {
@@ -249,8 +235,8 @@ where
         let mut columns = Self::take_columns(input);
         let mut kept = VecDeque::new();
         let mut shipped = VecDeque::new();
-        let frontier = frontier.to_owned();
-        let mut remaining = residual.clone();
+        let frontier = to_mz(frontier);
+        let mut remaining = to_mz(residual.borrow());
         ColumnChunk::extract(
             &mut columns,
             frontier.borrow(),
@@ -258,7 +244,7 @@ where
             &mut kept,
             &mut shipped,
         );
-        *residual = remaining;
+        *residual = to_native(remaining.borrow());
         Self::extend_columns(input, columns, &budget);
         Self::extend_columns(keep, kept, &budget);
         Self::extend_columns(ship, shipped, &budget);
@@ -273,6 +259,37 @@ where
         ColumnChunk::settle(&mut columns, done, &mut settled);
         Self::extend_columns(input, columns, &budget);
         Self::extend_columns(output, settled, &budget);
+    }
+}
+
+impl<D, T, R> AsyncChunk for PoolChunk<D, T, R>
+where
+    D: Columnar + 'static,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Timestamp + Lattice + Ord,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>> + 'static,
+{
+    type Pending = ReadState<D, T, R>;
+
+    fn pending_for(left: &[Self], right: &[Self]) -> Self::Pending {
+        let largest_chunk_bytes = |run: &[Self]| {
+            run.iter()
+                .map(|chunk| match &chunk.chunk {
+                    ColumnChunk::Resident(column, _) => column.length_in_bytes(),
+                    ColumnChunk::Spilled(body, _) => body.bytes,
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        ReadState {
+            budget: left
+                .first()
+                .or_else(|| right.first())
+                .map(|chunk| chunk.budget.clone()),
+            required_bytes: largest_chunk_bytes(left).saturating_add(largest_chunk_bytes(right)),
+            ..ReadState::default()
+        }
     }
 
     fn poll_merge(
@@ -316,11 +333,12 @@ where
         Self::merge(left, right, output);
         Poll::Ready(())
     }
+
     fn poll_advance(
         io: &mut Self::Pending,
         cx: &mut Context<'_>,
         input: &mut VecDeque<Self>,
-        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
+        frontier: timely_next::progress::frontier::AntichainRef<Self::Time>,
         done: bool,
         out: &mut VecDeque<Self>,
     ) -> Poll<()> {
@@ -337,18 +355,19 @@ where
         Self::advance(input, frontier, done, out);
         Poll::Ready(())
     }
+
     fn poll_extract(
         io: &mut Self::Pending,
         cx: &mut Context<'_>,
         input: &mut VecDeque<Self>,
-        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
-        residual: &mut timely::progress::Antichain<Self::Time>,
+        frontier: timely_next::progress::frontier::AntichainRef<Self::Time>,
+        residual: &mut timely_next::progress::Antichain<Self::Time>,
         keep: &mut VecDeque<Self>,
         ship: &mut VecDeque<Self>,
     ) -> Poll<()> {
         if let Some(chunk) = input.front() {
             let (low, high) = chunk.chunk.chunk_time_bounds();
-            let upper = frontier.to_owned();
+            let upper = to_mz(frontier);
             let entirely_before = high.iter().all(|time| !upper.less_equal(time));
             let entirely_after = low.iter().all(|time| upper.less_equal(time));
             let straddles_frontier = !entirely_before && !entirely_after;
@@ -367,6 +386,7 @@ pub struct PreparedChunker<D: Columnar, T: Columnar, R: Columnar> {
     queued: VecDeque<PoolChunk<D, T, R>>,
     ready: PoolChunk<D, T, R>,
 }
+
 impl<D: Columnar, T: Columnar, R: Columnar> Default for PreparedChunker<D, T, R> {
     fn default() -> Self {
         Self {
@@ -375,20 +395,24 @@ impl<D: Columnar, T: Columnar, R: Columnar> Default for PreparedChunker<D, T, R>
         }
     }
 }
-impl<D: Columnar, T: Columnar, R: Columnar> timely::container::ContainerBuilder
+
+impl<D: Columnar, T: Columnar, R: Columnar> timely_next::container::ContainerBuilder
     for PreparedChunker<D, T, R>
 {
     type Container = PoolChunk<D, T, R>;
+
     fn extract(&mut self) -> Option<&mut Self::Container> {
         self.ready = self.queued.pop_front()?;
         Some(&mut self.ready)
     }
+
     fn finish(&mut self) -> Option<&mut Self::Container> {
         self.extract()
     }
 }
+
 impl<D: Columnar, T: Columnar, R: Columnar>
-    timely::container::PushInto<&mut Vec<PoolChunk<D, T, R>>> for PreparedChunker<D, T, R>
+    timely_next::container::PushInto<&mut Vec<PoolChunk<D, T, R>>> for PreparedChunker<D, T, R>
 {
     fn push_into(&mut self, input: &mut Vec<PoolChunk<D, T, R>>) {
         self.queued.extend(input.drain(..));

@@ -2,12 +2,12 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-//! MZ trace interfaces over vendored Differential maintenance machinery.
+//! MZ trace interfaces over Differential's pollable batcher and a vendored spine.
 //!
 //! [`Batcher`] accepts columnar input and seals it at a frontier. [`Spine`] exposes
-//! published batches through DD's trace traits. Both use the resumable algorithms
-//! in [`vendor`]. DD still supplies trace readers, reader holds, descriptions, and
-//! difference and lattice semantics. All types use MZ's existing Timely dependency.
+//! published batches through DD's trace traits. DD supplies the chunk, batcher,
+//! and merger contracts. The vendored spine owns scheduling and publication across
+//! suspension. [`timestamp`] bridges the two DD/Timely versions at this boundary.
 //!
 //! [`pool_chunk`] supplies columnar kernels and buffer-pool reads.
 //! [`super::asynchronous::arrange`] owns the Timely operator and calls [`maintain`]
@@ -25,21 +25,26 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::trace::{Description, ExertionLogic, Trace, TraceReader};
+use differential_dataflow_next::trace::Span;
+use differential_dataflow_next::trace::chunk::{
+    ChunkBatch as NativeChunkBatch,
+    asynchronous::{AsyncChunk, ChunkBatcher},
+};
 use timely::progress::{Antichain, Timestamp, frontier::AntichainRef};
 use tokio::sync::Notify;
 
 use super::ColumnChunk;
 use super::merge::ReadBudget;
 use pool_chunk::{PoolChunk, PreparedChunker};
+use timestamp::{Time, to_mz, to_native};
 
 mod pool_chunk;
+mod timestamp;
 mod vendor;
 
-type NativeBatcher<D, T, R> =
-    vendor::chunk::ChunkBatcher<PreparedChunker<D, T, R>, PoolChunk<D, T, R>>;
-type NativeSpine<D, T, R> = vendor::chunk::ChunkSpine<PoolChunk<D, T, R>>;
-type NativeSpan<D, T, R> =
-    vendor::spine::Span<T, Rc<vendor::chunk::ChunkBatch<PoolChunk<D, T, R>>>>;
+type NativeBatcher<D, T, R> = ChunkBatcher<PreparedChunker<D, T, R>, PoolChunk<D, T, R>>;
+type NativeSpine<D, T, R> = vendor::spine::Spine<Rc<NativeChunkBatch<PoolChunk<D, T, R>>>>;
+type NativeSpan<D, T, R> = Span<Time<T>, Rc<NativeChunkBatch<PoolChunk<D, T, R>>>>;
 
 /// Columnar stash backed by Differential's pollable merge batcher.
 ///
@@ -48,7 +53,7 @@ type NativeSpan<D, T, R> =
 /// retain an unfinished operation that must not be mistaken for the next one.
 pub struct Batcher<D: Columnar, T: Columnar, R: Columnar>
 where
-    PoolChunk<D, T, R>: vendor::chunk::Chunk,
+    PoolChunk<D, T, R>: AsyncChunk,
 {
     inner: NativeBatcher<D, T, R>,
     /// Lower frontier for the next batch description.
@@ -56,6 +61,7 @@ where
     frontier: Antichain<T>,
     budget: ReadBudget,
 }
+
 impl<D, T, R> Batcher<D, T, R>
 where
     D: Columnar + 'static,
@@ -81,8 +87,8 @@ where
 
     /// Insert a sorted, consolidated chunk.
     pub async fn push(&mut self, chunk: ColumnChunk<D, T, R>) {
-        use vendor::batcher::Batcher as _;
-        use vendor::chunk::Chunk as _;
+        use differential_dataflow_next::batcher::asynchronous::Batcher as _;
+        use differential_dataflow_next::trace::chunk::Chunk as _;
         let mut input = VecDeque::from([PoolChunk {
             chunk,
             budget: self.budget.clone(),
@@ -98,11 +104,11 @@ where
         &mut self,
         upper: Antichain<T>,
     ) -> (Vec<ColumnChunk<D, T, R>>, Description<T>) {
-        use vendor::batcher::Batcher as _;
-        let target = upper.clone();
+        use differential_dataflow_next::batcher::asynchronous::Batcher as _;
+        let target = to_native(upper.borrow());
         let (batch, retained) =
             futures_util::future::poll_fn(|cx| self.inner.poll_extract(target.borrow(), cx)).await;
-        self.frontier = retained;
+        self.frontier = to_mz(retained.borrow());
         let lower = std::mem::replace(&mut self.lower, upper.clone());
         (
             batch
@@ -122,7 +128,7 @@ where
 /// references without borrowing the native spine through its `RefCell`.
 pub struct Spine<D: Columnar, T: Columnar, R: Columnar>
 where
-    PoolChunk<D, T, R>: vendor::chunk::Chunk,
+    PoolChunk<D, T, R>: AsyncChunk,
 {
     pub(super) state: Rc<RefCell<NativeSpine<D, T, R>>>,
     pub(super) notify: Arc<Notify>,
@@ -130,6 +136,7 @@ where
     physical: Antichain<T>,
     budget: ReadBudget,
 }
+
 impl<D, T, R> Spine<D, T, R>
 where
     D: Columnar + 'static,
@@ -144,6 +151,11 @@ where
         budget: ReadBudget,
     ) -> Self {
         let notify = Arc::new(Notify::new());
+        let info = timely_next::dataflow::operators::generic::OperatorInfo::new(
+            info.local_id,
+            info.global_id,
+            info.address,
+        );
         let mut native = NativeSpine::new(info, None, None);
         native.set_waker(Waker::from(Arc::new(NotifyWake(Arc::clone(&notify)))));
         Self {
@@ -162,7 +174,11 @@ where
             .flat_map(|batch| batch.chunks.iter())
             .map(|chunk| chunk.chunk.clone())
             .collect();
-        let description = span.desc.clone();
+        let description = Description::new(
+            to_mz(span.desc.lower().borrow()),
+            to_mz(span.desc.upper().borrow()),
+            to_mz(span.desc.since().borrow()),
+        );
         Rc::new(ChunkBatch {
             chunks,
             description,
@@ -170,7 +186,11 @@ where
     }
 
     fn to_native_span(&self, batch: &ChunkBatch<ColumnChunk<D, T, R>>) -> NativeSpan<D, T, R> {
-        let description = batch.description.clone();
+        let description = differential_dataflow_next::trace::Description::new(
+            to_native(batch.description.lower().borrow()),
+            to_native(batch.description.upper().borrow()),
+            to_native(batch.description.since().borrow()),
+        );
         let inner = if batch.chunks.is_empty() {
             None
         } else {
@@ -182,11 +202,12 @@ where
                     budget: self.budget.clone(),
                 })
                 .collect();
-            Some(Rc::new(vendor::chunk::ChunkBatch::new(chunks)))
+            Some(Rc::new(NativeChunkBatch::new(chunks)))
         };
-        vendor::spine::Span::new(description, inner)
+        Span::new(description, inner)
     }
 }
+
 impl<D, T, R> TraceReader for Spine<D, T, R>
 where
     D: Columnar + 'static,
@@ -197,11 +218,12 @@ where
 {
     type Time = T;
     type Batch = Rc<ChunkBatch<ColumnChunk<D, T, R>>>;
+
     fn batches_through(&mut self, upper: AntichainRef<T>) -> Option<Vec<Self::Batch>> {
         if !timely::PartialOrder::less_equal(&self.physical.borrow(), &upper) {
             return None;
         }
-        let upper = upper.to_owned();
+        let upper = to_native(upper);
         self.state
             .borrow_mut()
             .spans_through(upper.borrow())
@@ -214,30 +236,39 @@ where
             &frontier
         ));
         self.logical = frontier.to_owned();
-        self.state.borrow_mut().set_logical_compaction(frontier);
+        self.state
+            .borrow_mut()
+            .set_logical_compaction(to_native(frontier).borrow());
         self.notify.notify_one();
     }
+
     fn get_logical_compaction(&mut self) -> AntichainRef<'_, T> {
         self.logical.borrow()
     }
+
     fn set_physical_compaction(&mut self, frontier: AntichainRef<T>) {
         assert!(timely::PartialOrder::less_equal(
             &self.physical.borrow(),
             &frontier
         ));
         self.physical = frontier.to_owned();
-        self.state.borrow_mut().set_physical_compaction(frontier);
+        self.state
+            .borrow_mut()
+            .set_physical_compaction(to_native(frontier).borrow());
         self.notify.notify_one();
     }
+
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, T> {
         self.physical.borrow()
     }
+
     fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
         self.state
             .borrow()
             .map_spans(|span| f(&Self::to_mz_batch(span)));
     }
 }
+
 impl<D, T, R> Trace for Spine<D, T, R>
 where
     D: Columnar + 'static,
@@ -253,17 +284,21 @@ where
     ) -> Self {
         Self::with_budget(info, ReadBudget::new(256 << 20))
     }
+
     fn exert(&mut self) {
         self.state.borrow_mut().exert();
     }
+
     fn set_exert_logic(&mut self, logic: ExertionLogic) {
         self.state.borrow_mut().set_exert_logic(logic);
     }
+
     fn insert(&mut self, batch: Self::Batch) {
         let span = self.to_native_span(&batch);
         self.state.borrow_mut().insert(span);
         self.notify.notify_one();
     }
+
     fn close(&mut self) {
         self.state.borrow_mut().close();
         self.notify.notify_one();
@@ -275,6 +310,7 @@ impl Wake for NotifyWake {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
+
     fn wake_by_ref(self: &Arc<Self>) {
         self.0.notify_one();
     }

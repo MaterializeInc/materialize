@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: MIT
 // See ../LICENSE.
 
-use super::super::spine::Span;
-use super::super::spine::{MergeStatus, Merger, Spine, SpineBatch};
-use differential_dataflow::trace::Description;
+use super::super::spine::Spine;
+use differential_dataflow_next::trace::asynchronous::{Batch as SpineBatch, MergeStatus, Merger};
+use differential_dataflow_next::trace::{Description, Span};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
-use timely::dataflow::operators::generic::OperatorInfo;
-use timely::progress::{Antichain, frontier::AntichainRef};
+use timely_next::dataflow::operators::generic::OperatorInfo;
+use timely_next::progress::{Antichain, frontier::AntichainRef};
 
 #[derive(Default)]
 struct Gate {
@@ -16,33 +16,41 @@ struct Gate {
     waker: Option<Waker>,
     polls: usize,
 }
+
 struct WakeCount(std::sync::atomic::AtomicUsize);
+
 impl Wake for WakeCount {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
+
     fn wake_by_ref(self: &Arc<Self>) {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
+
 #[derive(Clone)]
 struct Batch {
     rows: Vec<(u64, u64, i64)>,
     gate: Arc<Mutex<Gate>>,
 }
+
 impl SpineBatch for Batch {
     type Time = u64;
     type Merger = Merge;
+
     fn len(&self) -> usize {
         self.rows.len()
     }
 }
+
 struct Merge {
     rows: Vec<(u64, u64, i64)>,
     position: usize,
     since: u64,
     gate: Arc<Mutex<Gate>>,
 }
+
 impl Merger<Batch> for Merge {
     fn new(a: &Batch, b: &Batch, since: AntichainRef<u64>) -> Self {
         Self {
@@ -52,6 +60,7 @@ impl Merger<Batch> for Merge {
             gate: Arc::clone(&a.gate),
         }
     }
+
     fn poll_work(
         &mut self,
         _: &Batch,
@@ -77,19 +86,21 @@ impl Merger<Batch> for Merge {
             MergeStatus::InProgress
         })
     }
+
     fn done(mut self) -> Option<Batch> {
         assert_eq!(
             self.position,
             self.rows.len(),
             "extracted an incomplete merge"
         );
-        differential_dataflow::consolidation::consolidate_updates(&mut self.rows);
+        differential_dataflow_next::consolidation::consolidate_updates(&mut self.rows);
         (!self.rows.is_empty()).then_some(Batch {
             rows: self.rows,
             gate: self.gate,
         })
     }
 }
+
 fn contents(trace: &Spine<Batch>) -> Vec<(u64, u64, i64)> {
     let mut rows = Vec::new();
     trace.map_spans(|span| {
@@ -97,9 +108,10 @@ fn contents(trace: &Spine<Batch>) -> Vec<(u64, u64, i64)> {
             rows.extend_from_slice(&batch.rows);
         }
     });
-    differential_dataflow::consolidation::consolidate_updates(&mut rows);
+    differential_dataflow_next::consolidation::consolidate_updates(&mut rows);
     rows
 }
+
 fn drive(trace: &mut Spine<Batch>, gate: &Mutex<Gate>, expected: &[(u64, u64, i64)]) {
     for _ in 0..200_000 {
         assert_eq!(
@@ -122,6 +134,7 @@ fn drive(trace: &mut Spine<Batch>, gate: &Mutex<Gate>, expected: &[(u64, u64, i6
     }
     panic!("maintenance failed to resume");
 }
+
 #[mz_ore::test]
 fn pending_reads_preserve_rollup_and_every_published_update() {
     let gate = Arc::new(Mutex::new(Gate::default()));
@@ -133,7 +146,7 @@ fn pending_reads_preserve_rollup_and_every_published_update() {
         let count = [1, 1, 2, 1, 32, 3, 1, 128, 2, 7][usize::try_from(time % 10).unwrap()];
         let rows = (0..count).map(|key| (key, time, 1)).collect::<Vec<_>>();
         expected.extend_from_slice(&rows);
-        differential_dataflow::consolidation::consolidate_updates(&mut expected);
+        differential_dataflow_next::consolidation::consolidate_updates(&mut expected);
         trace.insert(Span::new(
             Description::new(
                 Antichain::from_elem(time),

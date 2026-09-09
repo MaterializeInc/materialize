@@ -16,6 +16,14 @@ multiple-versions = "deny"
 # Materialize-maintained fork that avoids the duplicated transitive
 # dependencies.
 skip = [
+    # The DNM async-merge prototype consumes two DD/Timely APIs.
+    { name = "differential-dataflow", version = "=0.25.1" },
+    { name = "timely", version = "=0.31.0" },
+    { name = "timely_bytes", version = "=0.31.0" },
+    { name = "timely_communication", version = "=0.31.0" },
+    { name = "timely_container", version = "=0.31.0" },
+    { name = "timely_logging", version = "=0.31.0" },
+
     # arrayvec had a significant API change in 0.7
     { name = "arrayvec", version = "0.5.2" },
     # One-time exception for base64 due to its prevalence in the crate graph.
@@ -367,6 +375,11 @@ license-files = [
 [sources]
 unknown-git = "deny"
 unknown-registry = "deny"
+# DNM-only exceptions for the async-merge prototype, pinned in Cargo.lock.
+allow-git = [
+    "https://github.com/DAlperin/differential-dataflow",
+    "https://github.com/TimelyDataflow/timely-dataflow",
+]
 # Do not allow non-MaterializeInc Git repositories here! Git repositories must
 # be owned by the MaterializeInc organization so that maintainership is shared
 # amongst Materialize employees and so that historical versions of Materialize

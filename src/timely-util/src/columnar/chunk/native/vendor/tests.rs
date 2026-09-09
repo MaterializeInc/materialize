@@ -2,5 +2,4 @@
 // SPDX-License-Identifier: MIT
 // See LICENSE.
 
-mod chunk;
 mod spine;
