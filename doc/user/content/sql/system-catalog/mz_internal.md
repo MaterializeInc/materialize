@@ -739,6 +739,12 @@ multi-process replica, timestamps come from process-local logging clocks and inc
 their clock skew. A process whose clock is ahead can be absent at the sampled
 logical timestamp, so the recorded finish can precede the latest process's finish.
 
+Only indexes and materialized views are recorded. Sources, including upsert
+sources, contribute no rows here and do not gate the completion of a replica
+episode in [`mz_replica_hydration_history`](#mz_replica_hydration_history).
+Their memory and disk usage is still reflected in that table's peaks, which
+measure whole replica processes rather than individual dataflows.
+
 `object_id` is a global ID rather than a catalog item ID, so join
 [`mz_object_global_ids`](#mz_object_global_ids) to reach the index or
 materialized view. To recover the name and size of a replica that has since been

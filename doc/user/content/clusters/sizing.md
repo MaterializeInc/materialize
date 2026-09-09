@@ -189,6 +189,13 @@ approximate, it is approximate in ways that matter for sizing:
   always `hydrated`. A missing row is a signal in its own right, as in step 4,
   but it is never a measurement of a failure.
 
+- **Only indexes and materialized views are tracked per object.** Sources,
+  including upsert sources, contribute no rows to object history and do not hold
+  a replica episode open. Their memory and disk usage is still counted in the
+  replica peaks, which measure whole processes, so a cluster hosting an upsert
+  source is sized correctly by those peaks even though the source itself never
+  appears per object.
+
 - **Short-lived objects can be missed entirely.** Recording works by sampling
   each replica in a rotation, so an object that is dropped before its replica's
   turn leaves no trace. Nothing incorrect is recorded, the episode is simply
