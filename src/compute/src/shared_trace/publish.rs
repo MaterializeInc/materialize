@@ -18,8 +18,6 @@ use mz_timely_util::shared_trace::{Shared, SharedReader, SharedSpine};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 
-use crate::shared_trace::handle::SharedTraceHandle;
-
 /// Why a publication point refused an `as_of`.
 ///
 /// Read off the point rather than off a handle, so a failure path registers no hold on its way to a
@@ -51,11 +49,6 @@ pub(crate) struct Published<Tr: TraceReader> {
     /// compacted past its `as_of`. This hold forbids that: a shared arrangement compacts only as
     /// fast as the slowest runtime's stream position.
     pub(super) standing: Mutex<SharedReader<Tr::Batch>>,
-    /// Total peer count (workers-per-process times processes) of the scope that publishes this
-    /// arrangement. Pairwise import (importer worker `i` reads publisher worker `i`) is sound only
-    /// when an importing scope shards keys the same way, which requires this to match the importing
-    /// scope's own `peers()`.
-    pub(super) peers: usize,
 }
 
 impl<Tr: TraceReader> Published<Tr>
@@ -71,10 +64,7 @@ where
     /// fills the same `Arc`, so a handle captured by value at construction (as a differential join
     /// captures its input trace) observes the filled chain: the handle is a live proxy into the
     /// shared state, not a snapshot.
-    ///
-    /// `peers` must equal the total peer count of the scope that later adopts the point, the same
-    /// invariant [`SharedTraceHandle::import_snapshot_at`] enforces.
-    pub(crate) fn new(peers: usize) -> Self {
+    pub(crate) fn new() -> Self {
         let shared = Arc::new(Shared::new());
         let mut standing = shared.reader();
         // A standing hold is logical only. Joining with the empty antichain releases the physical
@@ -83,7 +73,6 @@ where
         Published {
             shared,
             standing: Mutex::new(standing),
-            peers,
         }
     }
 
@@ -91,8 +80,8 @@ where
     ///
     /// The handle registers a logical hold at the current published `since`, so the arrangement
     /// will not compact past it until the handle (and all its clones) drop.
-    pub(crate) fn handle(&self) -> SharedTraceHandle<Tr> {
-        SharedTraceHandle::new(self.shared.reader(), self.peers)
+    pub(crate) fn handle(&self) -> SharedReader<Tr::Batch> {
+        self.shared.reader()
     }
 
     /// Hands out a handle whose hold is registered at `as_of`, failing when the published `since` is
@@ -111,10 +100,8 @@ where
     pub(crate) fn handle_at(
         &self,
         as_of: &Antichain<Tr::Time>,
-    ) -> Result<SharedTraceHandle<Tr>, Antichain<Tr::Time>> {
-        self.shared
-            .reader_at(as_of)
-            .map(|reader| SharedTraceHandle::new(reader, self.peers))
+    ) -> Result<SharedReader<Tr::Batch>, Antichain<Tr::Time>> {
+        self.shared.reader_at(as_of)
     }
 
     /// The published `upper`.
@@ -163,8 +150,6 @@ pub(crate) trait PublishArrangement<Tr: TraceReader> {
     /// build handles and imports over `point` before this arrangement is rendered, and they are
     /// seeded with the arrangement's contents now.
     ///
-    /// Requires the arrangement's total peer count to equal `point`'s, panicking otherwise.
-    ///
     /// `on_seal` fires once per publish on which the published `upper` advances, after the state
     /// lock is released and `upper` reflects the advance. A fast-path peek parked on this
     /// arrangement's seal is re-examined only through this callback, so it must observe the
@@ -181,12 +166,6 @@ where
 {
     fn adopt<F: Fn() + 'static>(&self, point: &Published<SharedSpine<Inner>>, on_seal: F) {
         let scope = self.stream.scope();
-        assert_eq!(
-            scope.peers(),
-            point.peers,
-            "adopt requires equal total peers (workers_per_process * num_processes)"
-        );
-
         // Seed the standing hold at the trace's own compaction frontier. The importing runtime may
         // not have applied any compaction for this collection yet, and until it has, this is the
         // frontier the trace may compact to: the controller offers no `as_of` below a collection's
@@ -201,7 +180,7 @@ where
             .sync_activator_for(self.trace.operator().address.to_vec());
         self.trace.trace_box_unstable().borrow().trace().attach(
             Arc::clone(&point.shared),
-            Some(activator),
+            activator,
             on_seal,
         );
     }
