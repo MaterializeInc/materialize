@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 2b20610177
+revision: 8b1c640604
 ---
 
 # mz-sql::plan::statement::ddl
@@ -30,3 +30,4 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `plan_create_type` validates nested type references using a shared `TypeResolutionBudget`, rejecting types that exceed `MAX_TYPE_NESTING_DEPTH` (128) or `MAX_TYPE_RESOLUTION_NODES` (100,000) at `CREATE TYPE` time with graceful planning errors. Map key types are validated under a separate per-root budget (since the key type is not part of the resolved type tree at runtime), while the value type and record fields draw from the function's main budget.
 `plan_create_metric_sink` plans `CREATE METRIC SINK` statements (gated by `ENABLE_METRIC_SINK`). The planner validates that the `FROM` relation exposes five required columns: `metric_name` (`String`), `metric_type` (`String`), `labels` (`Map<String, String>`), `value` (`Float64`), and `help` (`String`). The `PREFIX` option is required and must be a non-empty string that starts with the reserved marker `"mz_metric_sink_"` and whose characters satisfy the Prometheus metric family name grammar (`[a-zA-Z_:][a-zA-Z0-9_:]*`); the `mz_metric_sink_` namespace confines published metric family names away from platform metrics and third-party collectors. `relation_desc()` returning `None` on the `FROM` item doubles as the rejection filter for item types that cannot be read from (such as indexes). The resulting `CreateMetricSinkPlan` contains a `MetricSink` carrying `create_sql`, `from: GlobalId`, `cluster_id`, and `prefix`.
 `ClusterFeatureExtracted` includes the `enable_union_cancellation_after_relation_cse` field, which is passed through to `OptimizerFeatureOverrides` when planning `CREATE CLUSTER` and `ALTER CLUSTER` statements, and is restored during `unplan_create_cluster`.
+`plan_create_table_from_source` extracts `ExcludeConstraints` (a `Vec<String>` of constraint names to filter) and `ExcludeAllConstraints` (a `bool`) from `TableFromSourceOptionExtracted`; when either is non-empty/true, the `enable_exclude_constraints_option` feature flag is required. The two options are mutually exclusive: both set together is a planning error. `EXCLUDE CONSTRAINTS` and `EXCLUDE ALL CONSTRAINTS` are only supported for Postgres sources; other source types produce an error. The extracted values are passed to the Postgres purification helper, which filters or clears the table's constraint list accordingly.

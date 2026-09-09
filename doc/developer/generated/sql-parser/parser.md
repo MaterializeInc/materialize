@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: 4e012ea88d
+revision: 8b1c640604
 ---
 
 # mz-sql-parser::parser
@@ -31,3 +31,4 @@ The `Precedence` enum is `pub(crate)` and serves as the single source of truth f
 `CREATE METRIC SINK [IF NOT EXISTS] <name> [IN CLUSTER <cluster>] FROM <source> [WITH (PREFIX = ...)]` is parsed by `parse_create_metric_sink`, which is dispatched from `parse_create` when the next two tokens are `METRIC SINK`. The only supported `WITH` option is `PREFIX`, parsed by `parse_create_metric_sink_option`.
 
 `SHOW METRIC SINKS [IN CLUSTER <cluster>]` is handled in `parse_show_objects`: `parse_object_type` recognizes the two-token sequence `METRIC SINKS` and returns `ObjectType::MetricSink`, which is then dispatched to `ShowObjectType::MetricSink { in_cluster }`. `SHOW CREATE METRIC SINK <name>` is handled in `parse_show_create` by matching the three-token sequence `CREATE METRIC SINK` and producing `ShowStatement::ShowCreateMetricSink`.
+In `parse_table_from_source_options`, the `EXCLUDE` keyword dispatches on a second keyword: `COLUMNS` yields `TableFromSourceOptionName::ExcludeColumns` (parsing a sequence of identifiers as before), `CONSTRAINTS` yields `TableFromSourceOptionName::ExcludeConstraints` (parsing a sequence of string literals, since constraint names are raw upstream identifiers whose case must be preserved), and `ALL` (followed by `CONSTRAINTS`) yields `TableFromSourceOptionName::ExcludeAllConstraints` with no value.
