@@ -1,0 +1,116 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_source_references. The relation is a
+# BuiltinMaterializedView over the durable SourceReferences records in
+# mz_internal.mz_catalog_raw: see MZ_SOURCE_REFERENCES in
+# src/catalog/src/builtin/mz_internal.rs. Load generator sources record
+# references without an upstream system, so they cover the shape here;
+# test/testdrive/source-tables.td covers PostgreSQL, MySQL and Kafka sources
+# and ALTER SOURCE ... REFRESH REFERENCES.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 5 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_source_references' AND s.name = 'mz_internal'
+ORDER BY c.position
+----
+source_id  text  false
+namespace  text  true
+name  text  false
+updated_at  timestamp␠with␠time␠zone  false
+columns  text[]  true
+
+# --- Empty on a fresh env -----------------------------------------------------
+
+query I
+SELECT count(*) FROM mz_internal.mz_source_references
+----
+0
+
+# --- One row per reference, with the recorded columns -------------------------
+
+statement ok
+CREATE SOURCE lg_auction IN CLUSTER quickstart FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+
+# The `columns` array preserves the upstream column order rather than sorting.
+query TTT
+SELECT r.namespace, r.name, r.columns::text
+FROM mz_internal.mz_source_references r
+JOIN mz_catalog.mz_sources s ON s.id = r.source_id
+WHERE s.name = 'lg_auction'
+ORDER BY r.name
+----
+auction  accounts  {id,org_id,balance}
+auction  auctions  {id,seller,item,end_time}
+auction  bids  {id,buyer,auction_id,amount,bid_time}
+auction  organizations  {id,name}
+auction  users  {id,org_id,name}
+
+# --- A reference with no recorded columns -------------------------------------
+
+# A single-output load generator records the reference but no column list,
+# which must read as NULL rather than an empty array.
+statement ok
+CREATE SOURCE lg_counter IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER
+
+query TTT
+SELECT r.namespace, r.name, (r.columns IS NULL)::text
+FROM mz_internal.mz_source_references r
+JOIN mz_catalog.mz_sources s ON s.id = r.source_id
+WHERE s.name = 'lg_counter'
+----
+counter  counter  true
+
+# --- updated_at ---------------------------------------------------------------
+
+# Recorded at reference-refresh time, so it must be a real wall-clock instant
+# and not the epoch.
+query T
+SELECT bool_and(updated_at > '2020-01-01Z'::timestamptz)::text
+FROM mz_internal.mz_source_references
+----
+true
+
+# --- FK-like invariant --------------------------------------------------------
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_source_references r
+LEFT JOIN mz_catalog.mz_sources s ON s.id = r.source_id
+WHERE s.id IS NULL
+----
+0
+
+# --- Dropping a source retracts its references --------------------------------
+
+statement ok
+DROP SOURCE lg_auction CASCADE
+
+query I
+SELECT count(*) FROM mz_internal.mz_source_references
+----
+1
+
+statement ok
+DROP SOURCE lg_counter CASCADE
+
+query I
+SELECT count(*) FROM mz_internal.mz_source_references
+----
+0
