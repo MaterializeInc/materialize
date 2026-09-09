@@ -16,6 +16,7 @@ use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::Oid;
+use tracing::warn;
 
 use crate::schema_change::{KeyRef, SchemaChange, SchemaChangeError};
 
@@ -59,7 +60,7 @@ impl PostgresTableDesc {
     /// Currently this means that the values are equal except for the following
     /// exceptions:
     /// - `self`'s columns are a compatible prefix of `other`'s columns.
-    ///   Compatibility is defined by `PostgresColumnDesc::is_compatible`.
+    ///   Compatibility is defined by `PostgresColumnDesc::get_incompatible_schema_change`.
     /// - `self`'s keys are all present in `other`
     ///
     /// On incompatibility, the error describes the first mismatch found and
@@ -74,8 +75,18 @@ impl PostgresTableDesc {
             return Ok(());
         }
 
-        if self.oid != other.oid || self.namespace != other.namespace || self.name != other.name {
-            return Err(self.schema_change(SchemaChange::TableRenamed {
+        if self.oid != other.oid {
+            warn!(
+                "table {}.{} changed oid from {} to {} during schema verification",
+                self.namespace, self.name, self.oid, other.oid
+            );
+            return Err(
+                self.build_schema_change_error(SchemaChange::TableDropped { oid: other.oid })
+            );
+        }
+
+        if self.namespace != other.namespace || self.name != other.name {
+            return Err(self.build_schema_change_error(SchemaChange::TableRenamed {
                 namespace: other.namespace.clone(),
                 name: other.name.clone(),
                 oid: other.oid,
@@ -86,19 +97,21 @@ impl PostgresTableDesc {
         for column in &self.columns {
             let allow_type_change = allow_type_to_change_by_col_num.contains(&column.col_num);
             let other_column = other_cols_by_name.get(&column.name).copied();
-            if let Some(change) = column.is_compatible(other_column, allow_type_change) {
-                return Err(self.schema_change(change));
+            if let Some(change) =
+                column.get_incompatible_schema_change(other_column, allow_type_change)
+            {
+                return Err(self.build_schema_change_error(change));
             }
         }
 
         if let Some(key) = self.keys.difference(&other.keys).next() {
-            return Err(self.schema_change(self.key_change(key, other)));
+            return Err(self.build_schema_change_error(self.key_change(key, other)));
         }
 
         Ok(())
     }
 
-    fn schema_change(&self, change: SchemaChange) -> SchemaChangeError {
+    fn build_schema_change_error(&self, change: SchemaChange) -> SchemaChangeError {
         SchemaChangeError {
             namespace: self.namespace.clone(),
             name: self.name.clone(),
@@ -197,7 +210,7 @@ impl PostgresColumnDesc {
     /// Note that this function somewhat unnecessarily errors if the names
     /// differ; this is negotiable but we want users to understand the fixedness
     /// of names in our schemas.
-    fn is_compatible(
+    fn get_incompatible_schema_change(
         &self,
         other: Option<&PostgresColumnDesc>,
         allow_type_change: bool,

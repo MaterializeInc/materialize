@@ -30,6 +30,8 @@ pub struct SchemaChangeError {
 /// The upstream change behind a [`SchemaChangeError`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum SchemaChange {
+    #[error("table was dropped and recreated upstream (it now has oid {oid})")]
+    TableDropped { oid: u32 },
     #[error("table was renamed or moved upstream (it is now {namespace}.{name} with oid {oid})")]
     TableRenamed {
         namespace: String,
@@ -105,7 +107,8 @@ impl SchemaChangeError {
                 escape::escape_literal(&key.name),
             )),
             SchemaChange::NotNullDropped { .. } => Some(recreate(Some("EXCLUDE ALL CONSTRAINTS"))),
-            SchemaChange::TableRenamed { .. }
+            SchemaChange::TableDropped { .. }
+            | SchemaChange::TableRenamed { .. }
             | SchemaChange::ColumnDropped { .. }
             | SchemaChange::ColumnMoved { .. }
             | SchemaChange::ColumnTypeChanged { .. } => None,
