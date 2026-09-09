@@ -466,6 +466,14 @@ catalog. Run against a staging or production environment with history:
 -- replica's actual lifetime in the window is the gap measure. Note also
 -- that `mz_cluster_replica_history` already excludes system clusters but
 -- does not exclude INTERNAL or BILLED AS replicas.
+--
+-- The size join is LEFT, deliberately. An inner join would silently drop
+-- any replica whose size is no longer in the size map (a retired size),
+-- which in a revenue report is a silent undercount rather than an error.
+-- Unmatched sizes surface as NULL rates and must be chased down, not
+-- filtered out. The real metering record has the same obligation: it must
+-- capture the rate at collection time rather than joining to a live map
+-- that can lose entries.
 WITH samples AS (
     SELECT
         m.replica_id,
@@ -489,7 +497,7 @@ priced AS (
                                                               AS credits_per_gib_hour
     FROM samples s
     JOIN mz_internal.mz_cluster_replica_history r ON r.replica_id = s.replica_id
-    JOIN mz_catalog.mz_cluster_replica_sizes  rs ON rs.size = r.size
+    LEFT JOIN mz_catalog.mz_cluster_replica_sizes rs ON rs.size = r.size
 )
 SELECT
     cluster_name,
