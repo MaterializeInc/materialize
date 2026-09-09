@@ -108,7 +108,9 @@ configuration** panel. Set Name `groups`, Name format `Unspecified`, and a
 Filter such as `Starts with` and your role-name prefix. The newer
 expression UI does not expose group functions like `Groups.startsWith` or
 `Arrays.flatten` on trial / integrator tenants, which is why the legacy
-table is the reliable path.
+table is the reliable path. See Okta's [attribute statements](https://help.okta.com/oie/en-us/content/topics/apps/define-attribute-statements.htm),
+the legacy config, versus their newer [federated claims](https://help.okta.com/oie/en-us/content/topics/apps/federated-claims-overview.htm)
+model.
 {{</ note >}}
 
 ### Step 2. Get the Polis admin API key
