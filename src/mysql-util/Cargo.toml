@@ -25,6 +25,7 @@ mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
 mysql_common.workspace = true
 mysql_async.workspace = true
+postgres-protocol.workspace = true
 prost.workspace = true
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
