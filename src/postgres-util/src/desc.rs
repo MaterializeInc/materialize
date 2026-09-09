@@ -193,6 +193,10 @@ pub struct PostgresColumnDesc {
 impl PostgresColumnDesc {
     /// Determines if data a relation with a structure of `other` can be treated
     /// the same as `self`.
+    ///
+    /// Note that this function somewhat unnecessarily errors if the names
+    /// differ; this is negotiable but we want users to understand the fixedness
+    /// of names in our schemas.
     fn is_compatible(
         &self,
         other: Option<&PostgresColumnDesc>,
@@ -202,6 +206,9 @@ impl PostgresColumnDesc {
         let Some(other) = other else {
             return Some(SchemaChange::ColumnDropped { column });
         };
+        if self.name != other.name {
+            return Some(SchemaChange::ColumnDropped { column });
+        }
         if self.col_num != other.col_num {
             return Some(SchemaChange::ColumnMoved { column });
         }
