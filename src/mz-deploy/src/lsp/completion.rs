@@ -567,7 +567,7 @@ fn format_column_detail(col_type: &ColumnType) -> String {
     if col_type.nullable {
         format!("{} (nullable)", col_type.r#type)
     } else {
-        col_type.r#type.clone()
+        col_type.r#type.to_string()
     }
 }
 

@@ -30,20 +30,26 @@
 //! [`crate::project::compiler::typecheck`]. That subsystem persists per-object
 //! validation artifacts for consumers such as `explain` and the LSP.
 //!
-//! This module owns:
-//!
-//! - the `types.lock` contract format
-//! - shared type/schema utilities such as `type_hash`
+//! This module owns the `types.lock` contract format and the type vocabulary
+//! it records.
 //!
 //! ## Key Types
 //!
-//! - [`Types`] — In-memory representation of a `types.lock` file: a versioned
-//!   map from fully-qualified object names to column schemas, plus optional
+//! - [`Types`] — In-memory representation of a `types.lock` file: a map from
+//!   fully-qualified object names to column schemas, plus optional
 //!   object-level comments from `COMMENT ON` in the source database.
-//! - [`ColumnType`] — A single column's type name, nullability, and optional
+//! - [`ColumnType`] — A single column's type, nullability, and optional
 //!   `COMMENT ON COLUMN` description.
+//! - [`data_type::DataType`] — A column's type. Structural rather than a type
+//!   name, because a record, an anonymous list, and an anonymous map have no
+//!   spelling the SQL grammar accepts.
+
+pub(crate) mod data_type;
+
+pub(crate) use data_type::DataType;
 
 use crate::project::ir::object_id::ObjectId;
+use data_type::{FieldLock, TypeLock, TypeLockError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -131,6 +137,14 @@ impl fmt::Display for ObjectKind {
 /// Directory name for mz-deploy build artifacts.
 pub(crate) const BUILD_DIR: &str = "target";
 
+/// Highest `types.lock` format this binary understands.
+///
+/// Version 2 records structured types; version 1 recorded a bare SQL type name
+/// per column, which cannot express a record. A version 1 file still loads: its
+/// type names parse as [`DataType::Named`], and only the columns whose name was
+/// a pseudo-type token are unreconstructible.
+pub(crate) const LOCK_VERSION: u8 = 2;
+
 /// Errors that can occur when reading, writing, or parsing `types.lock` files.
 #[derive(Error, Debug)]
 pub enum TypesError {
@@ -155,6 +169,22 @@ pub enum TypesError {
         #[source]
         source: toml::de::Error,
     },
+    #[error(
+        "types.lock at {path} was written by a newer mz-deploy (format version {version}, this binary understands {supported}); upgrade mz-deploy"
+    )]
+    UnsupportedLockVersion {
+        path: PathBuf,
+        version: u8,
+        supported: u8,
+    },
+    #[error("types.lock at {path}: column `{column}` of `{object}` has an invalid type")]
+    InvalidColumnType {
+        path: PathBuf,
+        object: String,
+        column: String,
+        #[source]
+        source: TypeLockError,
+    },
     #[error("failed to create directory {path}")]
     DirectoryCreationFailed {
         path: PathBuf,
@@ -165,17 +195,16 @@ pub enum TypesError {
     DependencyError(#[from] crate::project::error::DependencyError),
 }
 
-/// A single column's type name, nullability, and optional comment in a data contract.
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+/// A single column's type, nullability, and optional comment in a data contract.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColumnType {
-    /// SQL type syntax used when recreating cached dependencies as stub tables.
-    pub r#type: String,
+    /// The column's type, structured so that it survives the round trip through
+    /// the lock file and the build artifact.
+    pub r#type: DataType,
     pub nullable: bool,
     /// Original column position from the database schema.
-    #[serde(default)]
     pub position: usize,
     /// Optional `COMMENT ON COLUMN` description from the source database.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
 }
 
@@ -185,20 +214,17 @@ pub struct ColumnType {
 /// schemas. Used for type-checking views against external dependencies.
 /// Optionally includes object-level and column-level comments from
 /// `COMMENT ON` statements in the source database.
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Types {
-    pub version: u8,
     pub tables: BTreeMap<ObjectId, BTreeMap<String, ColumnType>>,
     pub kinds: BTreeMap<ObjectId, ObjectKind>,
     /// Object-level comments from `COMMENT ON` in the source database.
-    #[serde(default)]
     pub comments: BTreeMap<ObjectId, String>,
 }
 
 impl Default for Types {
     fn default() -> Self {
         Types {
-            version: 1,
             tables: BTreeMap::new(),
             kinds: BTreeMap::new(),
             comments: BTreeMap::new(),
@@ -229,7 +255,7 @@ struct TypesLock {
 impl Default for TypesLock {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: LOCK_VERSION,
             table: vec![],
             view: vec![],
             materialized_view: vec![],
@@ -242,31 +268,21 @@ impl Default for TypesLock {
 }
 
 impl TypesLock {
-    /// Collect all objects paired with their kind into a vec.
-    fn all_objects(&self) -> Vec<(ObjectKind, &ObjectLock)> {
-        let mut result = Vec::new();
-        for obj in &self.table {
-            result.push((ObjectKind::Table, obj));
-        }
-        for obj in &self.view {
-            result.push((ObjectKind::View, obj));
-        }
-        for obj in &self.materialized_view {
-            result.push((ObjectKind::MaterializedView, obj));
-        }
-        for obj in &self.source {
-            result.push((ObjectKind::Source, obj));
-        }
-        for obj in &self.sink {
-            result.push((ObjectKind::Sink, obj));
-        }
-        for obj in &self.secret {
-            result.push((ObjectKind::Secret, obj));
-        }
-        for obj in &self.connection {
-            result.push((ObjectKind::Connection, obj));
-        }
-        result
+    /// Collect all objects paired with their kind, consuming the lock.
+    fn into_objects(self) -> Vec<(ObjectKind, ObjectLock)> {
+        let kinds = [
+            (ObjectKind::Table, self.table),
+            (ObjectKind::View, self.view),
+            (ObjectKind::MaterializedView, self.materialized_view),
+            (ObjectKind::Source, self.source),
+            (ObjectKind::Sink, self.sink),
+            (ObjectKind::Secret, self.secret),
+            (ObjectKind::Connection, self.connection),
+        ];
+        kinds
+            .into_iter()
+            .flat_map(|(kind, objs)| objs.into_iter().map(move |obj| (kind, obj)))
+            .collect()
     }
 
     /// Return a mutable reference to the vec for a given kind.
@@ -291,20 +307,53 @@ struct ObjectLock {
     columns: Vec<ColumnLock>,
 }
 
+/// On-disk form of a column: its name and nullability widened over the
+/// `type`/`of`/`fields` keys of [`crate::types::data_type`].
 #[derive(Serialize, Deserialize)]
 struct ColumnLock {
     name: String,
     #[serde(rename = "type")]
-    r#type: String,
+    type_name: String,
     nullable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    of: Option<Box<TypeLock>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fields: Vec<FieldLock>,
+}
+
+impl ColumnLock {
+    fn new(name: String, column: &ColumnType) -> Self {
+        let (type_name, of, fields) = data_type::split_data_type(&column.r#type);
+        ColumnLock {
+            name,
+            type_name,
+            nullable: column.nullable,
+            comment: column.comment.clone(),
+            of,
+            fields,
+        }
+    }
+
+    fn into_column_type(self, position: usize) -> Result<(String, ColumnType), TypeLockError> {
+        let r#type = data_type::join_data_type(self.type_name, self.of, self.fields)?;
+        Ok((
+            self.name,
+            ColumnType {
+                r#type,
+                nullable: self.nullable,
+                position,
+                comment: self.comment,
+            },
+        ))
+    }
 }
 
 impl From<&Types> for TypesLock {
     fn from(types: &Types) -> Self {
         let mut lock = TypesLock {
-            version: types.version,
+            version: LOCK_VERSION,
             table: Vec::new(),
             view: Vec::new(),
             materialized_view: Vec::new(),
@@ -319,12 +368,7 @@ impl From<&Types> for TypesLock {
             cols.sort_by_key(|(_, ct)| ct.position);
             let cols: Vec<ColumnLock> = cols
                 .into_iter()
-                .map(|(col_name, col_type)| ColumnLock {
-                    name: col_name.clone(),
-                    r#type: col_type.r#type.clone(),
-                    nullable: col_type.nullable,
-                    comment: col_type.comment.clone(),
-                })
+                .map(|(col_name, col_type)| ColumnLock::new(col_name.clone(), col_type))
                 .collect();
 
             let kind = types
@@ -346,39 +390,41 @@ impl From<&Types> for TypesLock {
     }
 }
 
-impl From<TypesLock> for Types {
-    fn from(lock: TypesLock) -> Self {
+impl TypesLock {
+    /// Convert into the in-memory form, reporting the object and column of any
+    /// type whose structural payload does not match its tag.
+    fn into_types(self, path: &Path) -> Result<Types, TypesError> {
         let mut tables = BTreeMap::new();
         let mut kinds = BTreeMap::new();
         let mut comments = BTreeMap::new();
-
-        for (kind, obj) in lock.all_objects() {
-            let id = obj.name.clone();
+        for (kind, obj) in self.into_objects() {
+            let id = obj.name;
             let mut columns = BTreeMap::new();
-            for (position, col) in obj.columns.iter().enumerate() {
-                columns.insert(
-                    col.name.clone(),
-                    ColumnType {
-                        r#type: col.r#type.clone(),
-                        nullable: col.nullable,
-                        position,
-                        comment: col.comment.clone(),
-                    },
-                );
+            for (position, col) in obj.columns.into_iter().enumerate() {
+                let object = id.to_string();
+                let column = col.name.clone();
+                let (name, column_type) = col.into_column_type(position).map_err(|source| {
+                    TypesError::InvalidColumnType {
+                        path: path.to_path_buf(),
+                        object,
+                        column,
+                        source,
+                    }
+                })?;
+                columns.insert(name, column_type);
             }
             kinds.insert(id.clone(), kind);
-            if let Some(comment) = &obj.comment {
-                comments.insert(id.clone(), comment.clone());
+            if let Some(comment) = obj.comment {
+                comments.insert(id.clone(), comment);
             }
             tables.insert(id, columns);
         }
 
-        Types {
-            version: lock.version,
+        Ok(Types {
             tables,
             kinds,
             comments,
-        }
+        })
     }
 }
 
@@ -431,22 +477,87 @@ fn write_toml(lock: &TypesLock) -> String {
             }
             out.push_str("columns = [\n");
             for col in &obj.columns {
-                let mut parts = format!(
-                    "name = \"{}\", type = \"{}\", nullable = {}",
-                    escape_toml_string(&col.name),
-                    escape_toml_string(&col.r#type),
-                    col.nullable,
-                );
-                if let Some(comment) = &col.comment {
-                    parts.push_str(&format!(", comment = \"{}\"", escape_toml_string(comment)));
-                }
-                out.push_str(&format!("    {{ {} }},\n", parts));
+                write_column(&mut out, col, COLUMN_INDENT);
             }
             out.push_str("]\n");
         }
     }
 
     out
+}
+
+/// Indentation of a column entry inside a `columns` array.
+const COLUMN_INDENT: usize = 4;
+
+/// Render one column as a TOML inline table, breaking a record's field list
+/// across lines.
+///
+/// A newline inside the nested `fields` array is legal TOML: it sits within an
+/// array value, not between the inline table's own braces.
+fn write_column(out: &mut String, col: &ColumnLock, indent: usize) {
+    let pad = " ".repeat(indent);
+    out.push_str(&pad);
+    out.push_str(&format!(
+        "{{ name = \"{}\", type = \"{}\", nullable = {}",
+        escape_toml_string(&col.name),
+        escape_toml_string(&col.type_name),
+        col.nullable,
+    ));
+    if let Some(comment) = &col.comment {
+        out.push_str(&format!(", comment = \"{}\"", escape_toml_string(comment)));
+    }
+    if let Some(of) = &col.of {
+        out.push_str(", of = ");
+        write_inline_type(out, of);
+    }
+    if !col.fields.is_empty() {
+        out.push_str(", fields = [\n");
+        for field in &col.fields {
+            write_field(out, field, indent + COLUMN_INDENT);
+        }
+        out.push_str(&pad);
+        out.push(']');
+    }
+    out.push_str(" },\n");
+}
+
+/// Render one record field. Fields carry no comment, so this is [`write_column`]
+/// over the field's own keys.
+fn write_field(out: &mut String, field: &FieldLock, indent: usize) {
+    write_column(
+        out,
+        &ColumnLock {
+            name: field.name.clone(),
+            type_name: field.type_name.clone(),
+            nullable: field.nullable,
+            comment: None,
+            of: field.of.clone(),
+            fields: field.fields.clone(),
+        },
+        indent,
+    );
+}
+
+/// Render a container's element type as a single-line inline table.
+fn write_inline_type(out: &mut String, ty: &TypeLock) {
+    out.push_str(&format!("{{ type = \"{}\"", escape_toml_string(&ty.name)));
+    if let Some(of) = &ty.of {
+        out.push_str(", of = ");
+        write_inline_type(out, of);
+    }
+    if !ty.fields.is_empty() {
+        out.push_str(", fields = [");
+        for (i, field) in ty.fields.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            let mut buf = String::new();
+            write_field(&mut buf, field, 0);
+            out.push_str(buf.trim_end().trim_end_matches(','));
+        }
+        out.push(']');
+    }
+    out.push_str(" }");
 }
 
 /// Load the types.lock file from the specified directory.
@@ -459,9 +570,18 @@ pub(crate) fn load_types_lock(directory: &Path) -> Result<Types, TypesError> {
         source,
     })?;
 
-    let lock: TypesLock =
-        toml::from_str(&contents).map_err(|source| TypesError::ParseFailed { path, source })?;
-    Ok(lock.into())
+    let lock: TypesLock = toml::from_str(&contents).map_err(|source| TypesError::ParseFailed {
+        path: path.clone(),
+        source,
+    })?;
+    if lock.version > LOCK_VERSION {
+        return Err(TypesError::UnsupportedLockVersion {
+            path,
+            version: lock.version,
+            supported: LOCK_VERSION,
+        });
+    }
+    lock.into_types(&path)
 }
 
 impl Types {
@@ -493,6 +613,7 @@ impl Types {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use data_type::RecordField;
     use std::collections::BTreeMap;
 
     #[mz_ore::test]
@@ -503,7 +624,7 @@ mod tests {
         order_cols.insert(
             "amount".to_string(),
             ColumnType {
-                r#type: "numeric".to_string(),
+                r#type: DataType::named("numeric"),
                 nullable: true,
                 position: 0,
                 comment: None,
@@ -512,7 +633,7 @@ mod tests {
         order_cols.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 1,
                 comment: None,
@@ -521,7 +642,7 @@ mod tests {
         order_cols.insert(
             "user_id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: true,
                 position: 2,
                 comment: None,
@@ -533,7 +654,7 @@ mod tests {
         user_cols.insert(
             "name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 0,
                 comment: None,
@@ -542,7 +663,7 @@ mod tests {
         user_cols.insert(
             "user_id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 1,
                 comment: None,
@@ -561,7 +682,6 @@ mod tests {
         );
 
         let types = Types {
-            version: 1,
             tables,
             kinds,
             comments: BTreeMap::new(),
@@ -583,7 +703,7 @@ mod tests {
         cols.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -609,7 +729,6 @@ mod tests {
         );
 
         let types = Types {
-            version: 1,
             tables,
             kinds,
             comments: BTreeMap::new(),
@@ -631,7 +750,7 @@ mod tests {
         cols.insert(
             "id".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 0,
                 comment: Some("Primary key".to_string()),
@@ -640,7 +759,7 @@ mod tests {
         cols.insert(
             "name".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 1,
                 comment: None,
@@ -661,7 +780,6 @@ mod tests {
         );
 
         let types = Types {
-            version: 1,
             tables,
             kinds,
             comments,
@@ -699,5 +817,181 @@ columns = [
             .get(&"app.ingest.orders".parse::<ObjectId>().unwrap())
             .unwrap();
         assert!(cols.get("id").unwrap().comment.is_none());
+    }
+
+    /// A record's fields are written as an array nested inside the column's
+    /// inline table. The newlines are inside an array value, which TOML allows;
+    /// this pins that the `toml` crate agrees.
+    #[mz_ore::test]
+    fn structured_types_round_trip_through_the_lock_file() {
+        let payload = DataType::Record(vec![
+            RecordField {
+                name: "a".into(),
+                r#type: DataType::named("integer"),
+                nullable: false,
+            },
+            RecordField {
+                name: "n".into(),
+                r#type: DataType::Record(vec![RecordField {
+                    name: "x".into(),
+                    r#type: DataType::List(Box::new(DataType::named("uint8"))),
+                    nullable: true,
+                }]),
+                nullable: true,
+            },
+        ]);
+        let columns = BTreeMap::from([
+            (
+                "payload".to_string(),
+                ColumnType {
+                    r#type: payload,
+                    nullable: false,
+                    position: 0,
+                    comment: Some("nested".into()),
+                },
+            ),
+            (
+                "tags".to_string(),
+                ColumnType {
+                    r#type: DataType::List(Box::new(DataType::named("text"))),
+                    nullable: true,
+                    position: 1,
+                    comment: None,
+                },
+            ),
+            (
+                "grid".to_string(),
+                ColumnType {
+                    r#type: DataType::Array(Box::new(DataType::Map(Box::new(DataType::named(
+                        "int4",
+                    ))))),
+                    nullable: true,
+                    position: 2,
+                    comment: None,
+                },
+            ),
+        ]);
+
+        let id: ObjectId = "app.public.events".parse().unwrap();
+        let types = Types {
+            tables: BTreeMap::from([(id.clone(), columns)]),
+            kinds: BTreeMap::from([(id, ObjectKind::Table)]),
+            comments: BTreeMap::new(),
+        };
+
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        types
+            .write_types_lock(dir.path())
+            .expect("failed to write types.lock");
+        let loaded = load_types_lock(dir.path()).expect("failed to load types.lock");
+        assert_eq!(types, loaded);
+    }
+
+    /// A lock file written before structured types still loads: its type names
+    /// become plain named types.
+    #[mz_ore::test]
+    fn version_1_lock_file_loads() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        fs::write(
+            dir.path().join("types.lock"),
+            "version = 1\n\n[[table]]\nname = \"app.public.events\"\ncolumns = [\n    \
+             { name = \"id\", type = \"integer\", nullable = true },\n]\n",
+        )
+        .unwrap();
+
+        let loaded = load_types_lock(dir.path()).expect("a version 1 file still loads");
+        let events = &loaded.tables[&"app.public.events".parse::<ObjectId>().unwrap()];
+        assert_eq!(events["id"].r#type, DataType::named("integer"));
+    }
+
+    #[mz_ore::test]
+    fn newer_lock_file_is_refused() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        fs::write(
+            dir.path().join("types.lock"),
+            format!("version = {}\n", LOCK_VERSION + 1),
+        )
+        .unwrap();
+
+        let err = load_types_lock(dir.path()).expect_err("a newer format is refused");
+        assert!(
+            err.to_string().contains("upgrade mz-deploy"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// `lock` leaves a column at its pseudo-type token when it cannot probe the
+    /// column, so that token has to survive a write and read back. Rejecting it
+    /// would make the file `lock` just wrote unreadable, and every caller
+    /// defaults a load failure to an empty contract.
+    #[mz_ore::test]
+    fn pseudo_type_tokens_round_trip() {
+        let columns: BTreeMap<String, ColumnType> = ["record", "list", "map"]
+            .into_iter()
+            .enumerate()
+            .map(|(position, token)| {
+                (
+                    token.to_string(),
+                    ColumnType {
+                        r#type: DataType::named(token),
+                        nullable: true,
+                        position,
+                        comment: None,
+                    },
+                )
+            })
+            .collect();
+
+        let id: ObjectId = "app.public.wide".parse().unwrap();
+        let types = Types {
+            tables: BTreeMap::from([(id.clone(), columns)]),
+            kinds: BTreeMap::from([(id, ObjectKind::View)]),
+            comments: BTreeMap::new(),
+        };
+
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        types
+            .write_types_lock(dir.path())
+            .expect("failed to write types.lock");
+        let loaded = load_types_lock(dir.path()).expect("a pseudo token must load back");
+        assert_eq!(types, loaded);
+    }
+
+    /// A version 1 file records those same tokens, since that is what
+    /// `mz_columns.type` reported.
+    #[mz_ore::test]
+    fn version_1_pseudo_type_tokens_load() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        fs::write(
+            dir.path().join("types.lock"),
+            "version = 1\n\n[[table]]\nname = \"app.public.events\"\ncolumns = [\n    \
+             { name = \"payload\", type = \"record\", nullable = true },\n    \
+             { name = \"tags\", type = \"list\", nullable = true },\n]\n",
+        )
+        .unwrap();
+
+        let loaded = load_types_lock(dir.path()).expect("a version 1 file still loads");
+        let events = &loaded.tables[&"app.public.events".parse::<ObjectId>().unwrap()];
+        assert_eq!(events["payload"].r#type, DataType::named("record"));
+        assert_eq!(events["tags"].r#type, DataType::named("list"));
+    }
+
+    #[mz_ore::test]
+    fn structural_payload_on_the_wrong_type_is_rejected() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        fs::write(
+            dir.path().join("types.lock"),
+            "version = 2\n\n[[table]]\nname = \"app.public.events\"\ncolumns = [\n    \
+             { name = \"id\", type = \"integer\", nullable = true, fields = [\n        \
+             { name = \"a\", type = \"int4\", nullable = true },\n    ] },\n]\n",
+        )
+        .unwrap();
+
+        let err = load_types_lock(dir.path()).expect_err("fields on a scalar is rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("events") && message.contains("id"),
+            "error should name the object and column: {message}"
+        );
     }
 }

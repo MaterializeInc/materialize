@@ -19,9 +19,9 @@ use crate::project::ast::Statement as ProjectStatement;
 use crate::project::ir::compiled::FullyQualifiedName;
 use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::NormalizingVisitor;
-use crate::types::ColumnType;
+use crate::types::{ColumnType, DataType};
 use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
-use mz_repr::{RelationDesc, SqlColumnType, SqlScalarType};
+use mz_repr::{RelationDesc, SqlScalarType};
 use mz_sql_parser::ast::ColumnOption;
 use std::collections::BTreeMap;
 
@@ -135,7 +135,8 @@ fn create_catalog_item_statement(
     }
 }
 
-/// Convert a relation description into the column map stored in the build artifact database.
+/// Convert a relation description into the column map stored in the build
+/// artifact database.
 pub(super) fn relation_desc_to_columns(desc: &RelationDesc) -> BTreeMap<String, ColumnType> {
     desc.iter()
         .enumerate()
@@ -143,7 +144,7 @@ pub(super) fn relation_desc_to_columns(desc: &RelationDesc) -> BTreeMap<String, 
             (
                 name.as_str().to_string(),
                 ColumnType {
-                    r#type: sql_column_type_to_sql(col_type),
+                    r#type: sql_scalar_type_to_data_type(&col_type.scalar_type),
                     nullable: col_type.nullable,
                     position,
                     comment: None,
@@ -153,76 +154,77 @@ pub(super) fn relation_desc_to_columns(desc: &RelationDesc) -> BTreeMap<String, 
         .collect()
 }
 
-/// Convert a column type to its SQL type name string.
-fn sql_column_type_to_sql(column_type: &SqlColumnType) -> String {
-    sql_scalar_type_to_sql(&column_type.scalar_type)
-}
-
-/// Convert a Materialize scalar type to its SQL type name string.
-/// Handles parameterized types (precision, length, element types).
-fn sql_scalar_type_to_sql(scalar_type: &SqlScalarType) -> String {
+/// Convert a Materialize scalar type into the contract's structured form.
+///
+fn sql_scalar_type_to_data_type(scalar_type: &SqlScalarType) -> DataType {
+    let named = |name: &str| DataType::named(name);
     match scalar_type {
-        SqlScalarType::Bool => "bool".into(),
-        SqlScalarType::Int16 => "int2".into(),
-        SqlScalarType::Int32 => "int4".into(),
-        SqlScalarType::Int64 => "int8".into(),
-        SqlScalarType::UInt16 => "uint2".into(),
-        SqlScalarType::UInt32 => "uint4".into(),
-        SqlScalarType::UInt64 => "uint8".into(),
-        SqlScalarType::Float32 => "float4".into(),
-        SqlScalarType::Float64 => "float8".into(),
+        SqlScalarType::Bool => named("bool"),
+        SqlScalarType::Int16 => named("int2"),
+        SqlScalarType::Int32 => named("int4"),
+        SqlScalarType::Int64 => named("int8"),
+        SqlScalarType::UInt16 => named("uint2"),
+        SqlScalarType::UInt32 => named("uint4"),
+        SqlScalarType::UInt64 => named("uint8"),
+        SqlScalarType::Float32 => named("float4"),
+        SqlScalarType::Float64 => named("float8"),
         SqlScalarType::Numeric { max_scale } => match max_scale {
-            None => "numeric".into(),
-            Some(max_scale) => format!(
+            None => named("numeric"),
+            Some(max_scale) => DataType::Named(format!(
                 "numeric({},{})",
                 NUMERIC_DATUM_MAX_PRECISION,
                 max_scale.into_u8()
-            ),
+            )),
         },
-        SqlScalarType::Date => "date".into(),
-        SqlScalarType::Time => "time".into(),
+        SqlScalarType::Date => named("date"),
+        SqlScalarType::Time => named("time"),
         SqlScalarType::Timestamp { precision } => match precision {
-            None => "timestamp".into(),
-            Some(precision) => format!("timestamp({})", precision.into_u8()),
+            None => named("timestamp"),
+            Some(precision) => DataType::Named(format!("timestamp({})", precision.into_u8())),
         },
         SqlScalarType::TimestampTz { precision } => match precision {
-            None => "timestamptz".into(),
-            Some(precision) => format!("timestamptz({})", precision.into_u8()),
+            None => named("timestamptz"),
+            Some(precision) => DataType::Named(format!("timestamptz({})", precision.into_u8())),
         },
-        SqlScalarType::Interval => "interval".into(),
-        SqlScalarType::PgLegacyChar => "\"char\"".into(),
-        SqlScalarType::PgLegacyName => "name".into(),
-        SqlScalarType::Bytes => "bytea".into(),
-        SqlScalarType::String => "text".into(),
+        SqlScalarType::Interval => named("interval"),
+        SqlScalarType::PgLegacyChar => named("\"char\""),
+        SqlScalarType::PgLegacyName => named("name"),
+        SqlScalarType::Bytes => named("bytea"),
+        SqlScalarType::String => named("text"),
         SqlScalarType::Char { length } => match length {
-            None => "char".into(),
-            Some(length) => format!("char({})", length.into_u32()),
+            None => named("char"),
+            Some(length) => DataType::Named(format!("char({})", length.into_u32())),
         },
         SqlScalarType::VarChar { max_length } => match max_length {
-            None => "varchar".into(),
-            Some(length) => format!("varchar({})", length.into_u32()),
+            None => named("varchar"),
+            Some(length) => DataType::Named(format!("varchar({})", length.into_u32())),
         },
-        SqlScalarType::Jsonb => "jsonb".into(),
-        SqlScalarType::Uuid => "uuid".into(),
-        SqlScalarType::Array(element_type) => format!("{}[]", sql_scalar_type_to_sql(element_type)),
+        SqlScalarType::Jsonb => named("jsonb"),
+        SqlScalarType::Uuid => named("uuid"),
+        SqlScalarType::Array(element_type) => {
+            DataType::Array(Box::new(sql_scalar_type_to_data_type(element_type)))
+        }
         SqlScalarType::List { element_type, .. } => {
-            format!("{} list", sql_scalar_type_to_sql(element_type))
+            DataType::List(Box::new(sql_scalar_type_to_data_type(element_type)))
         }
         SqlScalarType::Map { value_type, .. } => {
-            format!("map[text=>{}]", sql_scalar_type_to_sql(value_type))
+            DataType::Map(Box::new(sql_scalar_type_to_data_type(value_type)))
         }
-        SqlScalarType::Oid => "oid".into(),
-        SqlScalarType::RegProc => "regproc".into(),
-        SqlScalarType::RegType => "regtype".into(),
-        SqlScalarType::RegClass => "regclass".into(),
-        SqlScalarType::Int2Vector => "int2vector".into(),
-        SqlScalarType::MzTimestamp => "mz_timestamp".into(),
-        SqlScalarType::Range { element_type } => {
-            format!("range({})", sql_scalar_type_to_sql(element_type))
-        }
-        SqlScalarType::MzAclItem => "mz_aclitem".into(),
-        SqlScalarType::AclItem => "aclitem".into(),
-        SqlScalarType::Record { .. } => "record".into(),
+        SqlScalarType::Oid => named("oid"),
+        SqlScalarType::RegProc => named("regproc"),
+        SqlScalarType::RegType => named("regtype"),
+        SqlScalarType::RegClass => named("regclass"),
+        SqlScalarType::Int2Vector => named("int2vector"),
+        SqlScalarType::MzTimestamp => named("mz_timestamp"),
+        SqlScalarType::Range { element_type } => DataType::Named(format!(
+            "range({})",
+            sql_scalar_type_to_data_type(element_type)
+        )),
+        SqlScalarType::MzAclItem => named("mz_aclitem"),
+        SqlScalarType::AclItem => named("aclitem"),
+        // A record has no data-type syntax, so this is the pseudo-type token
+        // the catalog itself reports. Nothing can be rebuilt from it.
+        SqlScalarType::Record { .. } => named("record"),
     }
 }
 
@@ -233,21 +235,34 @@ mod tests {
 
     #[mz_ore::test]
     fn numeric_renders_scale_in_the_scale_position() {
+        let render = |t| sql_scalar_type_to_data_type(&t).to_string();
         assert_eq!(
-            sql_scalar_type_to_sql(&SqlScalarType::Numeric { max_scale: None }),
+            render(SqlScalarType::Numeric { max_scale: None }),
             "numeric"
         );
         assert_eq!(
-            sql_scalar_type_to_sql(&SqlScalarType::Numeric {
+            render(SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO)
             }),
             "numeric(39,0)"
         );
         assert_eq!(
-            sql_scalar_type_to_sql(&SqlScalarType::Numeric {
+            render(SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::try_from(2i64).unwrap())
             }),
             "numeric(39,2)"
+        );
+    }
+
+    #[mz_ore::test]
+    fn anonymous_list_keeps_its_element_type() {
+        let scalar = SqlScalarType::List {
+            element_type: Box::new(SqlScalarType::Int64),
+            custom_id: None,
+        };
+        assert_eq!(
+            sql_scalar_type_to_data_type(&scalar).to_string(),
+            "int8 list"
         );
     }
 
@@ -259,7 +274,7 @@ mod tests {
         columns.insert(
             "zebra".to_string(),
             ColumnType {
-                r#type: "integer".to_string(),
+                r#type: DataType::named("integer"),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -268,7 +283,7 @@ mod tests {
         columns.insert(
             "apple".to_string(),
             ColumnType {
-                r#type: "text".to_string(),
+                r#type: DataType::named("text"),
                 nullable: true,
                 position: 1,
                 comment: None,

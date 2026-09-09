@@ -2466,6 +2466,7 @@ impl ConnectionResolver for TaskCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::DataType;
     use mz_sql::catalog::SessionCatalog;
 
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
@@ -2529,7 +2530,7 @@ mod tests {
         columns.insert(
             "col_date".to_string(),
             ColumnType {
-                r#type: "date".into(),
+                r#type: DataType::named("date"),
                 nullable: true,
                 position: 0,
                 comment: None,
@@ -2538,7 +2539,7 @@ mod tests {
         columns.insert(
             "col_ts".to_string(),
             ColumnType {
-                r#type: "timestamptz".into(),
+                r#type: DataType::named("timestamptz"),
                 nullable: false,
                 position: 1,
                 comment: None,
@@ -2601,7 +2602,7 @@ mod tests {
         columns.insert(
             "operations".to_string(),
             ColumnType {
-                r#type: "text[]".into(),
+                r#type: DataType::Array(Box::new(DataType::named("text"))),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -2610,7 +2611,7 @@ mod tests {
         columns.insert(
             "counts".to_string(),
             ColumnType {
-                r#type: "int4[]".into(),
+                r#type: DataType::Array(Box::new(DataType::named("int4"))),
                 nullable: true,
                 position: 1,
                 comment: None,
@@ -2643,13 +2644,15 @@ mod tests {
         runtime.ensure_user_schema("test_db", "test_schema");
         let object_id = ObjectId::new("test_db".into(), "test_schema".into(), "test_table".into());
         let mut columns = BTreeMap::new();
-        // Dimensionality is a property of the value, not the type. `text[][]`
-        // and `int4[2][2]` denote the same types as `text[]` and `int4[]`, so
-        // both spellings have to resolve through the element type's array_id.
+        // Dimensionality is a property of the value, not the type: a nested
+        // array denotes the same type as a one-dimensional one, so both have to
+        // resolve through the element type's array_id.
         columns.insert(
             "grid".to_string(),
             ColumnType {
-                r#type: "text[][]".into(),
+                r#type: DataType::Array(Box::new(DataType::Array(Box::new(DataType::named(
+                    "text",
+                ))))),
                 nullable: false,
                 position: 0,
                 comment: None,
@@ -2658,7 +2661,9 @@ mod tests {
         columns.insert(
             "matrix".to_string(),
             ColumnType {
-                r#type: "int4[2][2]".into(),
+                r#type: DataType::Array(Box::new(DataType::Array(Box::new(DataType::named(
+                    "int4",
+                ))))),
                 nullable: true,
                 position: 1,
                 comment: None,

@@ -27,7 +27,7 @@
 use crate::client::connection::TypeInfoClient;
 use crate::client::errors::ConnectionError;
 use crate::project::ir::object_id::ObjectId;
-use crate::types::{ColumnType, ObjectKind, Types};
+use crate::types::{ColumnType, DataType, ObjectKind, Types};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,7 +78,6 @@ impl TypeInfoClient<'_> {
         if all_oids.is_empty() {
             return Ok((
                 Types {
-                    version: 1,
                     tables: BTreeMap::new(),
                     kinds: BTreeMap::new(),
                     comments: BTreeMap::new(),
@@ -185,7 +184,7 @@ impl TypeInfoClient<'_> {
                 columns.insert(
                     col.name,
                     ColumnType {
-                        r#type: col.r#type,
+                        r#type: DataType::Named(col.r#type),
                         nullable: col.nullable,
                         position: usize::try_from(col.position).unwrap_or(0),
                         comment: col.comment,
@@ -204,7 +203,6 @@ impl TypeInfoClient<'_> {
 
         Ok((
             Types {
-                version: 1,
                 tables,
                 kinds,
                 comments,

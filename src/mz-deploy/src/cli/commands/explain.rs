@@ -50,7 +50,7 @@ use crate::project::ir::compiled::FullyQualifiedName;
 use crate::project::ir::graph;
 use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::NormalizingVisitor;
-use crate::types::{ColumnType, Types};
+use crate::types::{ColumnType, DataType, Types};
 use crate::verbose;
 use mz_sql_parser::ast::*;
 use serde::Serialize;
@@ -482,7 +482,7 @@ fn get_columns_for_stub(
             columns.insert(
                 col.name.as_str().to_string(),
                 ColumnType {
-                    r#type: col.data_type.to_string(),
+                    r#type: raw_data_type_to_data_type(&col.data_type),
                     nullable,
                     position,
                     comment: None,
@@ -498,7 +498,20 @@ fn get_columns_for_stub(
     )))
 }
 
-/// Execute the staging actions, create the target, and run EXPLAIN.
+/// Convert a parsed `CREATE TABLE` column type into the contract's form.
+///
+/// The grammar has no record production, so this never produces a record.
+fn raw_data_type_to_data_type(data_type: &RawDataType) -> DataType {
+    match data_type {
+        RawDataType::Array(inner) => DataType::Array(Box::new(raw_data_type_to_data_type(inner))),
+        RawDataType::List(inner) => DataType::List(Box::new(raw_data_type_to_data_type(inner))),
+        RawDataType::Map { value_type, .. } => {
+            DataType::Map(Box::new(raw_data_type_to_data_type(value_type)))
+        }
+        RawDataType::Other { .. } => DataType::Named(data_type.to_string()),
+    }
+}
+
 async fn execute_explain(
     client: &Client,
     explain_db: &str,

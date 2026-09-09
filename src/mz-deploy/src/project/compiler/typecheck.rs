@@ -350,7 +350,6 @@ pub(crate) fn run(
 
     Ok((
         Types {
-            version: 1,
             tables: merged_tables,
             kinds: merged_kinds,
             comments: BTreeMap::new(),
@@ -433,7 +432,7 @@ fn digest_columns(cols: &BTreeMap<String, ColumnType>) -> String {
     for (name, t) in cols {
         hasher.update(name.as_bytes());
         hasher.update(b"\0");
-        hasher.update(t.r#type.as_bytes());
+        hasher.update(t.r#type.to_string().as_bytes());
         hasher.update(b"\0");
         hasher.update([u8::from(t.nullable)]);
         hasher.update(b"\0");
@@ -456,6 +455,7 @@ fn compute_external_digests(external_types: &Types) -> BTreeMap<String, String> 
 mod run_tests {
     use super::*;
     use crate::project::compiler::compile_sync;
+    use crate::types::DataType;
     use std::collections::BTreeMap;
     use std::fs;
     use tempfile::tempdir;
@@ -545,8 +545,8 @@ mod run_tests {
         .unwrap();
 
         let agg = &merged.tables[&"materialize.public.agg".parse::<ObjectId>().unwrap()];
-        assert_eq!(agg["su"].r#type, "numeric(39,0)");
-        assert_eq!(agg["sb"].r#type, "numeric(39,0)");
+        assert_eq!(agg["su"].r#type.to_string(), "numeric(39,0)");
+        assert_eq!(agg["sb"].r#type.to_string(), "numeric(39,0)");
         assert!(
             merged
                 .tables
@@ -697,7 +697,7 @@ mod run_tests {
                 BTreeMap::from([(
                     "a".to_string(),
                     ColumnType {
-                        r#type: a_type.to_string(),
+                        r#type: DataType::named(a_type),
                         nullable: true,
                         position: 0,
                         comment: None,
@@ -709,7 +709,7 @@ mod run_tests {
                 BTreeMap::from([(
                     "a".to_string(),
                     ColumnType {
-                        r#type: b_type.to_string(),
+                        r#type: DataType::named(b_type),
                         nullable: true,
                         position: 0,
                         comment: None,
@@ -719,7 +719,6 @@ mod run_tests {
             kinds.insert(t_a, ObjectKind::Table);
             kinds.insert(t_b, ObjectKind::Table);
             Types {
-                version: 1,
                 tables,
                 kinds,
                 comments: BTreeMap::new(),
