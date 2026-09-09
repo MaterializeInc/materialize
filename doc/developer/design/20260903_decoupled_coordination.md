@@ -18,11 +18,15 @@ clients without another ownership redesign. Enabling concurrent catalog writers
 and deploying multiple adapters are not required here.
 
 Initial implementation and validation target environments initialized under the
-new protection rules. Conversion of existing environments is deferred and is not
-a prerequisite for the [milestones](#milestones). Enabling the new ownership model
-for existing environments requires a separate conversion and rollout decision
-that preserves their promised results. Fresh environments must still survive
-restarts, replanning, and ownership handover.
+new protection rules. Conversion of existing environments, builtin schema migration,
+and version-upgrade support for protected environments are deferred until after
+demonstrating fresh-environment decoupling. They are not prerequisites for the
+[milestones](#milestones).
+
+Enabling the new ownership model for existing environments requires a separate
+conversion and rollout decision that preserves their promised results. Fresh
+environments must still survive same-version restarts, replanning, and ownership
+handover.
 
 Query-local dataflows that do not go through the catalog, including slow-path
 SELECTs, SUBSCRIBEs, and COPY TO, remain on the fast protocol. Their creation,
@@ -267,8 +271,7 @@ Measure publication and retained-history costs as the real path becomes availabl
 This milestone can use the current single-writer arrangement.
 
 Include fresh builtin initialization and same-version recovery, including MVs
-reading system-catalog collections. Builtin schema migration belongs to milestone
-2. Milestone 1 does not establish version-upgrade support for protected environments.
+reading system-catalog collections.
 
 #### 2. Catalog-driven maintained lifecycle
 
@@ -631,3 +634,12 @@ Retain the explicit-bounds decision and its accepted catalog traffic cost rather
 than reopen delegated admission and reclamation. Next: complete source/sink
 requirements at the catalog authorization boundary and maintained compute permission.
 Milestone 2 remains the independent lifecycle subscriber and builtin migration.
+
+### 2026-09-09: Migration follow-on scope agreed with Aljoscha
+
+Builtin schema migration and protected-environment version upgrades join
+existing-environment conversion as follow-on work after demonstrating
+fresh-environment decoupling, not milestone 2 requirements. Fresh builtin
+initialization, same-version recovery, and ownership handover remain in scope.
+Milestone 1 remains active. Next: complete maintained protection, then move
+lifecycle execution to the independent catalog subscriber in milestone 2.
