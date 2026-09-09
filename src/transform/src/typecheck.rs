@@ -787,7 +787,7 @@ fn datum_difference_with_column_type(
 
 fn row_difference_with_column_types<'a>(
     source: &'a MirRelationExpr,
-    datums: &Vec<Datum<'_>>,
+    datums: &[Datum<'_>],
     column_types: &[ReprColumnType],
 ) -> Result<(), TypeError<'a>> {
     // correct length
@@ -1508,11 +1508,11 @@ impl Typecheck {
                 Literal(row, typ) => {
                     let typ = typ.clone();
                     if let Ok(row) = row {
-                        let datums = row.unpack();
-
+                        // A literal's row holds exactly one datum.
+                        let datum = row.unpack_first();
                         row_difference_with_column_types(
                             source,
-                            &datums,
+                            &[datum],
                             std::slice::from_ref(&typ),
                         )?;
                     }
@@ -1587,7 +1587,13 @@ impl Typecheck {
             Ok(())
         })?;
 
-        Ok(types.pop().expect("root type"))
+        let typ = types.pop().expect("root type");
+        assert!(
+            types.is_empty(),
+            "typecheck_scalar left {} types unconsumed",
+            types.len()
+        );
+        Ok(typ)
     }
 
     /// Typecheck an `AggregateExpr`
@@ -2181,17 +2187,19 @@ mod tests {
         assert_err!(diff);
     }
     /// A scalar expression far deeper than `RECURSION_LIMIT` typechecks, on a
-    /// thread whose stack is far smaller than `mz_ore::stack::STACK_RED_ZONE`.
-    /// The walk keeps its worklist on the heap, so neither the recursion guard
-    /// nor the native stack bounds the depth it accepts.
+    /// thread whose stack could not hold one frame per node. The walk keeps its
+    /// worklist on the heap, so neither the recursion guard nor the native stack
+    /// bounds the depth it accepts.
     ///
     /// `MirScalarExpr`'s `Drop` is recursive, which shapes the rest of the test:
     /// the expression is built and dismantled with loops, and the outcome is
     /// reduced to shallow values before anything can panic. An assertion that
     /// unwound past a `DEPTH`-deep expression would overflow this thread while
-    /// dropping it and report that instead of the failure it caught.
+    /// dropping it and report that instead of the failure it caught. A stack
+    /// overflow aborts the process rather than unwinding, so the `join` below
+    /// can only ever report a panic inside the thread.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
+    #[cfg_attr(miri, ignore)] // the 40k-node walk is slow under Miri
     fn deep_scalar_typechecks_without_recursing() {
         const DEPTH: usize = 20 * RECURSION_LIMIT;
         const THREAD_STACK_SIZE: usize = 256 << 10;
@@ -2226,6 +2234,6 @@ mod tests {
             })
             .expect("spawn")
             .join()
-            .expect("deep scalar typecheck must not overflow the stack");
+            .expect("deep scalar typecheck panicked");
     }
 }

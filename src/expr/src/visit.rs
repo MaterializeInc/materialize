@@ -117,10 +117,14 @@ pub trait VisitChildren<T> {
 ///
 /// The mutable visitors deliberately do not do this. Their callbacks are
 /// higher-ranked over the reference lifetime, which prevents a callback from
-/// retaining what it is handed. Retaining were it permitted would produce
-/// aliasing `&mut` references to a parent and its child, because a parent's
-/// pointer stays on the traversal stack while its children are visited. See
-/// [`VisitMutAction`] for the full argument.
+/// retaining what it is handed. For the post-order and pre-post visitors that
+/// is load-bearing: they rebuild `&mut Self` from raw pointers while a parent's
+/// pointer stays on the traversal stack, so retaining a child reference, were
+/// that permitted, would alias `&mut` references to a parent and its child.
+/// See `VisitMutAction` for the full argument. The pre-order visitors keep
+/// plain `&mut Self` on their stack and consume a parent before visiting its
+/// children, so for them the borrow checker would reject the generalization
+/// rather than accept unsound code.
 ///
 /// NB that any visitor with mutable post-traversal uses unsafe code. It is critical
 /// that `VisitChildren::children_mut` be written using safe code, i.e., no aliasing
