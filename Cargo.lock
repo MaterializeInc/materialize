@@ -8378,6 +8378,7 @@ dependencies = [
  "mz-tls-util",
  "openssh",
  "openssl",
+ "postgres-protocol",
  "postgres_array",
  "proptest",
  "proptest-derive",

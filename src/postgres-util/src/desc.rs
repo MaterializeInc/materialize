@@ -59,8 +59,7 @@ impl PostgresTableDesc {
     /// Currently this means that the values are equal except for the following
     /// exceptions:
     /// - `self`'s columns are a compatible prefix of `other`'s columns.
-    ///   Compatibility is defined as returning `true` for
-    ///   `PostgresColumnDesc::is_compatible`.
+    ///   Compatibility is defined by `PostgresColumnDesc::is_compatible`.
     /// - `self`'s keys are all present in `other`
     ///
     /// On incompatibility, the error describes the first mismatch found and
@@ -87,7 +86,7 @@ impl PostgresTableDesc {
         for column in &self.columns {
             let allow_type_change = allow_type_to_change_by_col_num.contains(&column.col_num);
             let other_column = other_cols_by_name.get(&column.name).copied();
-            if let Some(change) = column.diff(other_column, allow_type_change) {
+            if let Some(change) = column.is_compatible(other_column, allow_type_change) {
                 return Err(self.schema_change(change));
             }
         }
@@ -194,25 +193,7 @@ pub struct PostgresColumnDesc {
 impl PostgresColumnDesc {
     /// Determines if data a relation with a structure of `other` can be treated
     /// the same as `self`.
-    ///
-    /// Note that this function somewhat unnecessarily errors if the names
-    /// differ; this is negotiable but we want users to understand the fixedness
-    /// of names in our schemas.
-    fn is_compatible(&self, other: &PostgresColumnDesc, allow_type_change: bool) -> bool {
-        self.name == other.name
-            && self.col_num == other.col_num
-            && (self.type_oid == other.type_oid || allow_type_change)
-            && (self.type_mod == other.type_mod || allow_type_change)
-            // Columns are compatible if:
-            // - self is nullable; introducing a not null constraint doesn't
-            //   change this column's behavior.
-            // - self and other are both not nullable
-            && (self.nullable || self.nullable == other.nullable)
-    }
-}
-
-impl PostgresColumnDesc {
-    fn diff(
+    fn is_compatible(
         &self,
         other: Option<&PostgresColumnDesc>,
         allow_type_change: bool,
@@ -221,9 +202,6 @@ impl PostgresColumnDesc {
         let Some(other) = other else {
             return Some(SchemaChange::ColumnDropped { column });
         };
-        if self.is_compatible(other, allow_type_change) {
-            return None;
-        }
         if self.col_num != other.col_num {
             return Some(SchemaChange::ColumnMoved { column });
         }
@@ -232,10 +210,14 @@ impl PostgresColumnDesc {
         {
             return Some(SchemaChange::ColumnTypeChanged { column });
         }
+        // Columns are compatible if:
+        // - self is nullable; introducing a not null constraint doesn't
+        //   change this column's behavior.
+        // - self and other are both not nullable
         if !self.nullable && other.nullable {
             return Some(SchemaChange::NotNullDropped { column });
         }
-        Some(SchemaChange::ColumnAltered { column })
+        None
     }
 }
 

@@ -291,7 +291,7 @@ regex:incompatible schema change on public\.alter_drop_unique \(oid \d+\): UNIQU
 hint:WITH (EXCLUDE CONSTRAINTS ('alter_drop_unique_f1_key')) before the upstream drop
 
 # The same hint is surfaced in the table's status.
-> SELECT details->'hints'->>0 = E'To keep ingesting without this constraint, recreate the table in a new versioned schema, then swap your views to the new table:\n  CREATE SCHEMA v2;\n  CREATE TABLE v2.alter_drop_unique\n  FROM SOURCE <source> (REFERENCE public.alter_drop_unique);\nTo make a planned constraint drop a non-event, create the table with WITH (EXCLUDE CONSTRAINTS (''alter_drop_unique_f1_key'')) before the upstream drop.'
+> SELECT details->'hints'->>0 = E'To keep ingesting without this constraint, recreate the table in a new versioned schema, then swap your views to the new table:\n  CREATE SCHEMA v2;\n  CREATE TABLE v2."alter_drop_unique"\n  FROM SOURCE <source> (REFERENCE "public"."alter_drop_unique");\nTo make a planned constraint drop a non-event, create the table with WITH (EXCLUDE CONSTRAINTS (''alter_drop_unique_f1_key'')) before the upstream drop.'
   FROM mz_internal.mz_source_statuses WHERE name = 'alter_drop_unique'
 true
 
