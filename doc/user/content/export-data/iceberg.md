@@ -18,6 +18,8 @@ Iceberg sinks provide exactly once delivery of updates from Materialize into
 Materialize, the corresponding Iceberg tables are automatically kept up to date.
 You can sink data from a materialized view, a source, or a table.
 
+## Create an Iceberg sink
+
 Materialize reaches your tables through an Iceberg catalog. Follow the guide for
 the catalog hosting them:
 
@@ -29,6 +31,18 @@ the catalog hosting them:
 - [Databricks Unity Catalog](/export-data/iceberg-databricks/)[^4] on
   AWS, which authenticates with the OAuth2 credentials of a Databricks service
   principal.
+
+## Consume an Iceberg sink
+
+A sink created with `MODE APPEND` writes a changelog rather than current state,
+so consuming it means reconstructing current state from the `_mz_diff` column:
+
+{{% include-headless "/headless/iceberg-sinks/append-mode-current-state" %}}
+
+For the query to do this in a specific engine's dialect, along with the setup
+that engine requires, see:
+
+- [Snowflake on AWS S3 Tables](/export-data/iceberg-aws-snowflake/)
 
 [^1]:
     [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
