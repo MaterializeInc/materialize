@@ -265,6 +265,143 @@ resize triggers [hydration](#hydration-considerations). During hydration, the
 cluster keeps serving since Materialize provisions new replicas at the
 target size and hydrates them before retiring the old ones.
 
+### Size a cluster for hydration
+
+The resources required to hydrate a workload depend on its data volume, data
+distribution, and dataflows. You cannot reliably predict these requirements
+before the workload hydrates for the first time. Start with a cluster size that
+has ample capacity, observe a successful hydration, and then resize down in
+steps. Starting too small can cause an out-of-memory restart and rehydration
+loop.
+
+To establish a cluster size:
+
+1. Create the cluster at a conservatively large size with a replication factor
+   of `0`. This lets you deploy the complete workload before starting compute,
+   so the first hydration episode represents the workload as a whole. Replace
+   `<large-size>` with the size you want to evaluate.
+
+   ```mzsql
+   CREATE CLUSTER my_cluster (
+       SIZE = '<large-size>',
+       REPLICATION FACTOR = 0
+   );
+   ```
+
+   Deploy every source, index, materialized view, and sink that the cluster will
+   maintain. Then start compute by setting the intended replication factor.
+
+   ```mzsql
+   ALTER CLUSTER my_cluster SET (REPLICATION FACTOR = 1);
+   ```
+
+1. Monitor the cluster through the [provisioning, hydrating, catching up, and
+   steady-state phases](#lifecycle-of-a-cluster). Wait until every object has
+   hydrated and the cluster has caught up before evaluating the size.
+
+1. Inspect the latest completed hydration episode for each replica in
+   [`mz_replica_hydration_history`](/sql/system-catalog/mz_internal/#mz_replica_hydration_history).
+   Replace `my_cluster` with your cluster name. Completed episodes are collected
+   asynchronously, so retry the query if the cluster only recently hydrated.
+
+   ```mzsql
+   WITH ranked_history AS (
+       SELECT h.*,
+              row_number() OVER (
+                  PARTITION BY h.replica_id
+                  ORDER BY h.finished_at DESC
+              ) AS recency
+       FROM mz_internal.mz_replica_hydration_history AS h
+   )
+   SELECT c.name AS cluster,
+          r.name AS replica,
+          r.size,
+          h.finished_at - h.started_at AS hydration_time,
+          h.object_count,
+          round(h.peak_memory_bytes::numeric / 1073741824, 2)
+              AS peak_memory_gib,
+          round(h.peak_disk_bytes::numeric / 1073741824, 2)
+              AS peak_disk_gib
+   FROM ranked_history AS h
+   JOIN mz_catalog.mz_clusters AS c ON c.id = h.cluster_id
+   JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+   WHERE c.name = 'my_cluster'
+     AND h.recency = 1
+   ORDER BY r.name;
+   ```
+
+   Confirm that `object_count` is consistent across sizing trials. This count
+   includes maintained compute dataflows, including system dataflows, and does
+   not correspond directly to the number of user objects. Then use
+   `hydration_time` to evaluate the hydration portion of your recovery
+   objective. Use the resource peaks as evidence when deciding whether to try a
+   smaller size. Leave headroom for data growth and variation between hydration
+   episodes.
+
+   {{< note >}}
+
+   Hydration history is best effort and currently records only successful
+   hydration. A missing row does not mean that hydration did not occur. The
+   resource values are the largest process-lifetime high-water marks observed
+   when the episode was collected, so work before collection can contribute to
+   them. Disk peaks are sampled lower bounds. A newly provisioned replica that
+   is inspected soon after its first hydration provides the clearest signal.
+
+   {{< /note >}}
+
+1. If you need to identify objects that took the longest to hydrate, inspect
+   the per-object history in
+   [`mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history).
+
+   ```mzsql
+   WITH ranked_replica_history AS (
+       SELECT h.*,
+              row_number() OVER (
+                  PARTITION BY h.replica_id
+                  ORDER BY h.finished_at DESC
+              ) AS recency
+       FROM mz_internal.mz_replica_hydration_history AS h
+   ),
+   latest_episodes AS (
+       SELECT h.*
+       FROM ranked_replica_history AS h
+       JOIN mz_catalog.mz_clusters AS c ON c.id = h.cluster_id
+       JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+       WHERE c.name = 'my_cluster'
+         AND h.recency = 1
+   )
+   SELECT coalesce(o.name, h.object_id) AS object,
+          o.type,
+          coalesce(r.name, h.replica_id) AS replica,
+          h.hydrated_at - coalesce(h.started_at, h.installed_at)
+              AS hydration_time
+   FROM latest_episodes AS e
+   JOIN mz_internal.mz_object_hydration_history AS h
+       ON h.cluster_id = e.cluster_id
+      AND h.replica_id = e.replica_id
+      AND h.installed_at >= e.started_at
+      AND h.hydrated_at <= e.finished_at
+   LEFT JOIN mz_internal.mz_object_global_ids AS g
+       ON g.global_id = h.object_id
+   LEFT JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+   LEFT JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+   ORDER BY hydration_time DESC;
+   ```
+
+   Historical object IDs might not resolve to names after an object is dropped.
+   In that case, the query displays the dataflow ID from the history table.
+
+1. [Resize the cluster](/sql/alter-cluster/#resizing) down one step. The resize
+   creates new replicas at the target size and hydrates them while the existing
+   replicas continue serving. Repeat the lifecycle and history checks before
+   trying another smaller size. If hydration exceeds your recovery objective or
+   a replica runs out of memory, return to the last successful size.
+
+After you determine the steady-state size, you can configure an [autoscaling
+strategy](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
+to provision a larger burst replica during future hydration. Use a size that
+you have observed successfully hydrate the workload as the hydration size.
+
 ## Hydration considerations
 
 {{% include-from-yaml data="hydration-details" name="definition" %}}
@@ -315,6 +452,8 @@ production cluster(s) to run development workloads or non-production tasks.
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`ALTER CLUSTER`](/sql/alter-cluster)
 - [Hydration](/fundamentals/concepts/hydration/)
+- [`mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history)
+- [`mz_replica_hydration_history`](/sql/system-catalog/mz_internal/#mz_replica_hydration_history)
 - [System clusters](/sql/system-clusters)
 - [Usage & billing](/materialize-cloud/billing/)
 - [Operational guidelines](/clusters/operational-guidelines/)

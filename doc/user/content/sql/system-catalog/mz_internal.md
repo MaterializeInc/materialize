@@ -728,7 +728,9 @@ materialized views, with one row for each time a dataflow hydrated on a replica.
 By default, rows are retained for 30 days while collection is enabled. Disabling
 collection also suspends retention, so existing rows remain until collection is
 enabled again. `object_id`, `cluster_id`, and `replica_id` may name objects that no
-longer exist.
+longer exist. Rows survive normal environment and replica restarts until they
+age out. For an example that uses this table to investigate cluster sizing, see
+[Size a cluster for hydration](/fundamentals/concepts/clusters/#size-a-cluster-for-hydration).
 
 Recording is best effort. Only successful hydration is recorded, an episode can be
 missed if the object or its replica goes away before the episode is recorded, and a
@@ -759,7 +761,10 @@ By default, rows are retained for 30 days while collection is enabled. Recording
 is best effort, and only the latest completed episode visible in each collection
 is recorded. Resource peaks cover the replica processes' lifetimes through
 collection, not only the hydration episode. On a multi-process replica, the
-table records the largest peak reported by any process.
+table records the largest peak reported by any process. Rows survive normal
+environment and replica restarts until they age out. For an example that uses
+this table to investigate cluster sizing, see [Size a cluster for
+hydration](/fundamentals/concepts/clusters/#size-a-cluster-for-hydration).
 
 <!-- RELATION_SPEC mz_internal.mz_replica_hydration_history -->
 | Field               | Type                         | Meaning                                                                                                                  |
