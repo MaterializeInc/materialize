@@ -164,7 +164,7 @@ INSERT INTO all_excl VALUES (2, NULL, 20);
 
 #
 # Combining with EXCLUDE COLUMNS: a key whose column is also excluded is still
-# a valid name to exclude, and excluding a key column alone also prunes the key.
+# a valid name to exclude.
 #
 
 > CREATE TABLE excl_combo FROM SOURCE mz_source (REFERENCE public.excl_combo)
