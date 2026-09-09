@@ -191,7 +191,9 @@ Here, dropping loses the old pinned plan; recreating the object stores a new one
 There is a challenge, however: what if only a few objects need to change, but other plans should stay the same?
 
 The proposed approach is _cloning_ objects, in contrast to _copying_ data.
+
 > _Cloning_ an object is exactly as though we ran the source object's original `CREATE` statement in some new target schema and cluster, with references to other cloned objects in the same statement rewritten to their clones---but rather than invoking the optimizer, we use the pinned `LIR` (substituting `GlobalId`s appropriately).
+
 Other than the pinned plan, cloned objects will be fresh: global ids, persist shards, dataflow operators, and ownership are all as though a fresh `CREATE` were run.
 The `AS OF`/read holds will be selected as though a fresh `CREATE` were run.
 Existing `COMMENT`s and `GRANT`s will be copied.
