@@ -77,7 +77,7 @@ mod spines {
     pub type RowValBuilder<V, T, R> =
         ArcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
 
-    /// Key-only `Row` spine. `DC` is the diff container, see [`RowLayout`].
+    /// Key-only `Row` spine. `DC` is the diff container, see `RowLayout`.
     pub type RowSpine<T, R, DC = ColumnationStack<R>> =
         Spine<ArcBatch<OrdKeyBatch<RowLayout<((Row, ()), T, R), DC>>>>;
     pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;

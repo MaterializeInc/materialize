@@ -899,17 +899,18 @@ mod columnar_impls {
 
     use super::{NUMERIC_AGG_WIDTH_USIZE, NumericAgg, OrderedNumericAgg};
 
-    /// The raw parts of a [`NumericAgg`], in the order `Decimal::to_raw_parts` returns them.
-    type Parts = (u32, i32, u8, [u16; NUMERIC_AGG_WIDTH_USIZE]);
+    /// Width of the coefficient column. One unit wider than the decimal's coefficient so
+    /// that each element is 56 bytes, a whole number of `u64` words. The indexed byte
+    /// store pads every column to whole words and cannot decode an element width that
+    /// does not divide that padding.
+    const LSU_COLUMN_WIDTH: usize = NUMERIC_AGG_WIDTH_USIZE + 1;
+    /// The raw parts of a [`NumericAgg`], in the order `Decimal::to_raw_parts` returns
+    /// them, with the coefficient units zero-padded to [`LSU_COLUMN_WIDTH`].
+    type Parts = (u32, i32, u8, [u16; LSU_COLUMN_WIDTH]);
     /// One column per raw part. The coefficient units use `Vec<[u16; N]>` directly rather
     /// than the array's own columnar container, which would add per-element offsets to a
     /// fixed-width value.
-    type PartsContainer = (
-        Vec<u32>,
-        Vec<i32>,
-        Vec<u8>,
-        Vec<[u16; NUMERIC_AGG_WIDTH_USIZE]>,
-    );
+    type PartsContainer = (Vec<u32>, Vec<i32>, Vec<u8>, Vec<[u16; LSU_COLUMN_WIDTH]>);
     type PartsBorrowed<'a> = <PartsContainer as Borrow>::Borrowed<'a>;
 
     impl Columnar for OrderedNumericAgg {
@@ -991,14 +992,19 @@ mod columnar_impls {
         #[inline(always)]
         fn get(&self, index: usize) -> Self::Ref {
             let (digits, exponent, bits, lsu) = self.0.get(index);
-            OrderedNumericAgg(NumericAgg::from_raw_parts(*digits, *exponent, *bits, *lsu))
+            let mut units = [0u16; NUMERIC_AGG_WIDTH_USIZE];
+            units.copy_from_slice(&lsu[..NUMERIC_AGG_WIDTH_USIZE]);
+            OrderedNumericAgg(NumericAgg::from_raw_parts(*digits, *exponent, *bits, units))
         }
     }
 
     impl Push<OrderedNumericAgg> for OrderedNumericAggs {
         #[inline(always)]
         fn push(&mut self, item: OrderedNumericAgg) {
-            let parts: Parts = item.0.to_raw_parts();
+            let (digits, exponent, bits, units) = item.0.to_raw_parts();
+            let mut lsu = [0u16; LSU_COLUMN_WIDTH];
+            lsu[..NUMERIC_AGG_WIDTH_USIZE].copy_from_slice(&units);
+            let parts: Parts = (digits, exponent, bits, lsu);
             self.0.push(parts);
         }
     }
@@ -1165,6 +1171,18 @@ mod tests {
 
         let bytes: Vec<&[u8]> = borrowed.as_bytes().map(|(_align, bytes)| bytes).collect();
         let decoded = BorrowedOf::<OrderedNumericAgg>::from_bytes(&mut bytes.into_iter());
+        assert_eq!(decoded.len(), values.len());
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(decoded.get(index), *value);
+        }
+
+        // The indexed store pads each column to whole words, so decoding through it
+        // also checks that the column layout tolerates that padding.
+        let mut words = Vec::new();
+        columnar::bytes::indexed::encode(&mut words, &borrowed);
+        columnar::bytes::indexed::validate::<BorrowedOf<OrderedNumericAgg>>(&words).unwrap();
+        let store = columnar::bytes::indexed::DecodedStore::new(&words);
+        let decoded = BorrowedOf::<OrderedNumericAgg>::from_store(&store, &mut 0);
         assert_eq!(decoded.len(), values.len());
         for (index, value) in values.iter().enumerate() {
             assert_eq!(decoded.get(index), *value);

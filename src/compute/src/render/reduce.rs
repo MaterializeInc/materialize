@@ -2024,6 +2024,8 @@ type AccumCount = mz_ore::Overflowing<i128>;
     Deserialize,
     Columnar
 )]
+// The columnar container orders references with this derived `Ord`, which must agree with
+// the owned `Ord`. It does because every field's reference type is its owned type.
 #[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 enum Accum {
     /// Accumulates boolean values.
@@ -2728,5 +2730,111 @@ mod tests {
         acc.plus_equals(&datum_to_accumulator(&func, Datum::from(-1.1e31_f64)));
         let datum = finalize_accum(&func, &acc, Diff::from(2_i64));
         assert_eq!(datum, Datum::from(0.0_f64));
+    }
+
+    /// Accumulators of every variant, in zero, accumulated, and negated states.
+    fn sample_accums() -> Vec<Accum> {
+        let mut cx = numeric::cx_datum();
+        let mut numeric = |s: &str| Datum::from(cx.parse(s).unwrap());
+        let cases: Vec<(AggregateFunc, Vec<Datum>)> = vec![
+            (AggregateFunc::Count, vec![Datum::Null, Datum::Int64(5)]),
+            (
+                AggregateFunc::SumInt64,
+                vec![Datum::Int64(-7), Datum::Int64(i64::MAX)],
+            ),
+            (
+                AggregateFunc::SumUInt16,
+                vec![Datum::UInt16(3), Datum::Null],
+            ),
+            (
+                AggregateFunc::Any,
+                vec![Datum::True, Datum::False, Datum::Null],
+            ),
+            (
+                AggregateFunc::SumFloat64,
+                vec![
+                    Datum::from(1.5_f64),
+                    Datum::from(f64::NAN),
+                    Datum::from(f64::NEG_INFINITY),
+                ],
+            ),
+            (
+                AggregateFunc::SumNumeric,
+                vec![
+                    numeric("-12345.678"),
+                    numeric("9e39"),
+                    numeric("NaN"),
+                    numeric("Infinity"),
+                    Datum::Null,
+                ],
+            ),
+        ];
+        let mut accums = Vec::new();
+        for (func, datums) in cases {
+            let mut sum = accumulable_zero(&func);
+            accums.push(sum);
+            for datum in datums {
+                let accum = datum_to_accumulator(&func, datum);
+                sum.plus_equals(&accum);
+                accums.push(accum);
+                accums.push(accum.multiply(&Diff::from(-1_i64)));
+            }
+            accums.push(sum);
+        }
+        accums
+    }
+
+    #[mz_ore::test]
+    fn accum_columnar_round_trip() {
+        use columnar::bytes::indexed::{DecodedStore, encode};
+        use columnar::{AsBytes, Borrow, BorrowedOf, FromBytes, Index, Len};
+        use differential_dataflow::trace::implementations::BatchContainer;
+
+        let accums = sample_accums();
+        let container = Accum::as_columns(accums.iter());
+        assert_eq!(container.len(), accums.len());
+        let borrowed = container.borrow();
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(borrowed.get(index)), *accum);
+        }
+        for (i, a) in accums.iter().enumerate() {
+            for (j, b) in accums.iter().enumerate() {
+                assert_eq!(borrowed.get(i).cmp(&borrowed.get(j)), a.cmp(b));
+            }
+        }
+
+        let bytes: Vec<&[u8]> = borrowed.as_bytes().map(|(_align, bytes)| bytes).collect();
+        let decoded = BorrowedOf::<Accum>::from_bytes(&mut bytes.into_iter());
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(decoded.get(index)), *accum);
+        }
+        // NOTE: the `i128` columns cannot be `validate`d, see the `Overflowing<i128>` test in
+        // `mz_ore`, so this only decodes.
+        let mut words = Vec::new();
+        encode(&mut words, &borrowed);
+        let decoded = BorrowedOf::<Accum>::from_store(&DecodedStore::new(&words), &mut 0);
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(decoded.get(index)), *accum);
+        }
+
+        // The arrangement's diff container, holding whole `(Vec<Accum>, Diff)` diffs.
+        let diffs: Vec<(Vec<Accum>, Diff)> = accums
+            .chunks(3)
+            .map(|chunk| (chunk.to_vec(), Diff::ONE))
+            .collect();
+        let mut coltainer = Coltainer::<(Vec<Accum>, Diff)>::default();
+        for diff in &diffs {
+            coltainer.push_own(diff);
+        }
+        assert_eq!(coltainer.len(), diffs.len());
+        for (index, diff) in diffs.iter().enumerate() {
+            assert_eq!(
+                <Coltainer<(Vec<Accum>, Diff)>>::into_owned(coltainer.index(index)),
+                *diff
+            );
+        }
+        let mut sum = <Coltainer<(Vec<Accum>, Diff)>>::into_owned(coltainer.index(0));
+        sum.plus_equals(&sum.clone().multiply(&Diff::from(-1_i64)));
+        assert!(sum.is_zero());
     }
 }

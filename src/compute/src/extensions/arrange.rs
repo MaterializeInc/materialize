@@ -499,11 +499,10 @@ where
     }
 }
 
-impl<'scope, T, R, DC> ArrangementSize for Arranged<'scope, RowAgent<T, R, DC>>
+impl<'scope, T, DC> ArrangementSize for Arranged<'scope, RowAgent<T, DC::Owned, DC>>
 where
     T: MzTimestamp,
-    R: Semigroup + Ord + 'static,
-    DC: BatchContainer<Owned = R> + HeapSize,
+    DC: BatchContainer<Owned: Semigroup + 'static> + HeapSize,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |batch| {

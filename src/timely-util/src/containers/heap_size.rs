@@ -29,9 +29,10 @@ impl<T: Columnation> HeapSize for ColumnationStack<T> {
 
 impl<C: Columnar> HeapSize for Coltainer<C> {
     fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
-        // Columnar containers expose their contents as byte slices but not their spare
-        // capacity, so each slice reports its length as both size and capacity. The
-        // capacity is therefore a lower bound.
+        // Columnar containers expose their contents as byte slices, one per column, and each
+        // non-empty column is one `Vec` allocation, so the callback count is right. They do
+        // not expose spare capacity, so each slice reports its length as both size and
+        // capacity, and the capacity is a lower bound.
         for (_align, bytes) in self.container.borrow().as_bytes() {
             callback(bytes.len(), bytes.len());
         }

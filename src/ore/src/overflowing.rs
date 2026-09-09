@@ -803,5 +803,16 @@ mod test {
         for (index, value) in values.iter().enumerate() {
             assert_eq!(decoded.get(index), *value);
         }
+
+        // NOTE: columnar's `i128` store does not implement `element_sizes`, so the indexed
+        // store can be decoded but not `validate`d for this type.
+        let mut words = Vec::new();
+        ::columnar::bytes::indexed::encode(&mut words, &borrowed);
+        let store = ::columnar::bytes::indexed::DecodedStore::new(&words);
+        let decoded = BorrowedOf::<Overflowing<i128>>::from_store(&store, &mut 0);
+        assert_eq!(decoded.len(), values.len());
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(decoded.get(index), *value);
+        }
     }
 }
