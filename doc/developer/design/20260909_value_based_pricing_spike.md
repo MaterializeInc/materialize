@@ -35,11 +35,24 @@ controller keep provisioned size close to consumption so the two do not diverge.
 Derived from the size map in `misc/python/materialize/workload_replay/config.py`
 (credits per provisioned GiB-hour = `credits_per_hour / memory_limit_GiB`):
 
+> [!WARNING]
+> **Provenance.** That file is the fixture used to replay captured production
+> workloads, not the authoritative production size map, which lives in cloud
+> infrastructure rather than this repo. It carries real cloud size names and
+> plausible allocations, and `6400cc` sharing both its memory and its credits
+> with `3200cc` is a tell that the largest entries are approximations or
+> aliases. The *shape* of the finding below (credits proportional to provisioned
+> memory within a family) is robust to that: it holds across four independent
+> families and dozens of sizes, which no fixture would reproduce by accident.
+> The exact constants, and especially the cap behaviour at the top of each
+> ladder, must be re-derived from the production map before any pricing decision
+> rests on them.
+
 | family | sizes | mem GiB range | credits per provisioned GiB-hour |
 | --- | --- | --- | --- |
 | `cc` | `25cc` .. `1200cc` | 3.79 .. 181.93 | 0.06596 (constant) |
 | `cc` | `1600cc`, `3200cc` | 235 .. 470 | 0.06809 |
-| `cc` | `6400cc`, `128C`, `256C`, `512C` | 470 (capped) | 0.06809 .. rising |
+| `cc` | `6400cc`, `128C`, `256C`, `512C` | 470 (capped) | 0.06809 (see warning) |
 | `M.1` | `nano` .. `3xlarge` | 3.79 .. 181.93 | 0.19789 (constant) |
 | `M.1` | `4xlarge`, `8xlarge` | 235 .. 470 | 0.20426 |
 | `M.1` | `16xlarge` .. `128xlarge` | 470 (capped) | 0.40851 .. 3.26809 |
@@ -73,27 +86,54 @@ on resident memory under-bills them by up to 16x.
 
 Caveat B is answered by the choice of integrand in Finding 2.
 
-## Finding 2: the metering pipeline already exists, and already measures the right thing
+## Finding 2: the metering pipeline already exists, and `heap_bytes` is the integrand
 
 `ServiceProcessMetrics` (`src/orchestrator/src/lib.rs:153`) carries
 `heap_bytes` and `heap_limit` alongside `memory_bytes` and `disk_bytes`.
 `src/orchestrator-kubernetes/src/lib.rs:1585` computes
 `heap_bytes = clusterd's own memory_bytes + swap_bytes`, read from clusterd's
-internal-HTTP usage endpoint rather than from cAdvisor. `heap_limit` is the
-size's RAM + swap.
+`/api/usage-metrics` endpoint rather than from cAdvisor.
 
-That distinction matters:
+Be precise about what that is, because it is easy to assume it is more than it
+is. `Collector::collect` (`src/clusterd/src/usage_metrics.rs:29`) fills those
+two fields from `/proc/self/status`: `memory_bytes = VmRSS` and
+`swap_bytes = VmSwap`. So `heap_bytes` is **the clusterd process's resident set
+plus its swapped-out pages**. It is *not* allocator-accounted. `heap_limit` is
+the cgroup's memory + swap limit, further reduced by the in-process memory
+limiter when one is configured.
 
-* `memory_bytes` from the pod metrics API is **container RSS**. jemalloc does not
-  eagerly return freed pages, so RSS is closer to a high-water mark than to
-  current demand. Billing on it would charge users for allocator retention and
-  would barely fall when a dataflow is dropped.
-* `heap_bytes` is **allocator-accounted, spill-inclusive**. It falls when state
-  is released, and it counts swapped-out arrangements, which is exactly what
-  Caveat B needs.
+Two reasons still make it the right billable integrand, neither of which is
+"it measures logical bytes":
 
-`heap_bytes` is therefore the billable integrand, and it is already plumbed all
-the way to SQL: `mz_internal.mz_cluster_replica_metrics_history` carries
+* **It counts swap.** `memory_bytes` from the pod metrics API does not, and
+  Caveat B is exactly the case where the resource being sold is spill capacity.
+  A metric blind to swap under-bills the top of each ladder by up to 16x.
+* **It is the same quantity that decides whether the replica lives.** The memory
+  limiter "obtains the current memory utilization from proc stats"
+  (`src/compute/src/memory_limiter.rs`) and terminates the process when the
+  burst budget is exhausted. Billing on an allocator-accounted measure while
+  killing on RSS would charge a user less than the resource that can kill their
+  cluster, which is not defensible. Billing and enforcement should agree on
+  what "memory used" means.
+
+**The risk this leaves open.** jemalloc does not eagerly return freed pages, so
+RSS is closer to a high-water mark than to current demand: dropping a large
+arrangement may not lower `heap_bytes` promptly. Under consumption-based pricing
+that means a user can keep paying for state they have released, which is the
+single most likely source of "my bill did not drop when I dropped the view"
+complaints. This is *not* solved by the choice above and must be quantified
+before repricing. It is measurable today without new plumbing:
+`jemalloc_allocated`, `jemalloc_resident` and `jemalloc_retained` are already
+registered as Prometheus metrics (`src/prof/src/jemalloc.rs:133`), so the
+allocated-versus-resident gap and its decay after a drop can be characterised
+across the fleet now. If the gap turns out to be large or slow to decay, the
+options are to bill on a floor-and-decay model, to make the metering endpoint
+also report `jemalloc_allocated`, or to tune the allocator's page-return
+behaviour so the enforcement metric tracks demand more closely (which would fix
+this for billing and provisioning at the same time).
+
+`heap_bytes` is already plumbed all the way to SQL:
+`mz_internal.mz_cluster_replica_metrics_history` carries
 `(replica_id, process_id, cpu_nano_cores, memory_bytes, disk_bytes, occurred_at,
 heap_bytes, heap_limit)`, appended by
 `Controller::record_replica_metrics` (`src/controller/src/lib.rs:645`) on a
@@ -338,6 +378,9 @@ witness for every writer.
   invoice changes.
 * A defined, written-down answer for every incomplete metering bucket, with the
   incompleteness visible in the record rather than smoothed away.
+* A characterised gap between allocator-allocated bytes and resident bytes, and
+  its decay after a large drop, before any invoice depends on the resident
+  measure.
 * The rollout is bill-neutral by construction: the first shipped state
   reproduces today's invoice exactly, and repricing is a config change.
 * A cluster with `ON MEMORY` converges to the smallest size in its family that
@@ -476,10 +519,17 @@ real de-risking step for Finding 3.
   invoice and charges an hour of steady 10 GiB the same as an hour with one
   60-second spike.
 
-* **Bill on RSS (`memory_bytes`) rather than `heap_bytes`.** Rejected. RSS
-  includes allocator retention, so it lags releases and would charge users for
-  jemalloc's page-return policy; it also excludes swap, which under-bills the
-  spill-oriented top of each ladder by up to 16x (Caveat B).
+* **Bill on container RSS (`memory_bytes`) rather than `heap_bytes`.** Rejected,
+  but only because it excludes swap and so under-bills the spill-oriented top of
+  each ladder by up to 16x (Caveat B). Both quantities are resident-set
+  measures, so this choice does not address allocator retention either way.
+
+* **Bill on `jemalloc_allocated` rather than resident bytes.** Tempting: it is a
+  genuinely logical measure and would drop promptly when state is released. Not
+  chosen for now because it would diverge from the metric the memory limiter
+  enforces on, so a user could be terminated for memory they were not billed
+  for. Worth revisiting *together with* the limiter's accounting, since changing
+  both at once keeps billing and enforcement aligned.
 
 * **CPU-seconds as the dimension.** Rejected. Memory is the binding constraint
   for materialized state; CPU is near-idle on many steady workloads, so the
@@ -502,24 +552,32 @@ real de-risking step for Finding 3.
    `GiB-hours + CPU-hours` price is more honest and is a much larger commercial
    change. The data in Finding 1 rules out the third option (one flat rate).
 
-2. **Should a swap GiB-hour cost the same as a RAM GiB-hour?** `heap_bytes`
+2. **How large is the allocator-retention gap, and how fast does it decay?**
+   This is the highest-priority unknown, because a slow decay makes
+   consumption-based pricing feel broken to the user who just dropped a view and
+   saw no change. Measurable now from the existing jemalloc metrics (Finding 2).
+   If the gap is bad, does the fix belong in billing (a decay model), in the
+   metering endpoint (report allocated bytes too), or in the allocator's
+   page-return tuning (which would also improve provisioning)?
+
+3. **Should a swap GiB-hour cost the same as a RAM GiB-hour?** `heap_bytes`
    deliberately counts both, which is what makes the spill-oriented sizes bill at
    all. But swap is materially cheaper to provide, and charging the same rate
    removes the user's incentive to use it. A two-tier rate is possible since
    `disk_bytes` and `memory_bytes` arrive separately; it costs a second rate to
    explain.
 
-3. **Is the learned scale-down floor the right mechanism**, or should a failed
+4. **Is the learned scale-down floor the right mechanism**, or should a failed
    scale-down instead trigger exponential backoff on the retry interval? The
    floor is stable and cheap but permanently forecloses a size that might fit
    after the workload shrinks; backoff keeps retrying at a cost.
 
-4. **`SignalRequest` growing a parameterized field.** It is three bools today,
+5. **`SignalRequest` growing a parameterized field.** It is three bools today,
    and the peak-utilization window makes it carry data. Acceptable, or should the
    window be a dyncfg in `ConfigSignals` instead, giving up per-cluster
    `SCALE DOWN AFTER`?
 
-5. **What does a bill-neutral rollout do about a *tightly* provisioned cluster?**
+6. **What does a bill-neutral rollout do about a *tightly* provisioned cluster?**
    Value-based pricing lowers most bills, but a cluster running at 95%
    utilization with a spiky peak could bill *more* under a mean-consumption
    metric than under its provisioned rate if the floor is set below 1.0 and the
@@ -527,12 +585,12 @@ real de-risking step for Finding 3.
    below provisioned-times-floor; nothing protects against billing above it. Does
    the billable quantity need a ceiling at `provisioned_gib` too?
 
-6. **Interaction with blue-green and 0dt upgrades.** During a 0dt upgrade the new
+7. **Interaction with blue-green and 0dt upgrades.** During a 0dt upgrade the new
    environment's controller provisions nothing (its catalog writes are gated in
    read-only mode), so `ON MEMORY` is inert there, matching `ON HYDRATION`. But
    the *metering* side runs in both environments during the overlap. Which one
    owns the billing record for the overlap window?
 
-7. **Does `ReconfigurationRecord` need an `initiator`?** `scaling.in_flight_target`
+8. **Does `ReconfigurationRecord` need an `initiator`?** `scaling.in_flight_target`
    is the narrower change and is probably sufficient, but an explicit initiator
    would also let the introspection view tell a user why their cluster resized.
