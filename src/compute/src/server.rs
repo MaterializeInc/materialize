@@ -920,7 +920,14 @@ impl<'w> Worker<'w> {
             // these collections when it reconnects to a replica.
             //
             // TODO(database-issues#8152): Consider resolving this with controller-side reconciliation instead.
-            if let Some(config) = old_instance_config {
+            //
+            // The interactive runtime installs no logging dataflow and so hosts none of these
+            // traces (see `ActiveComputeState::initialize_logging`). It receives the same
+            // `CreateInstance` config as its peer, naming every logging index, and serves peeks on
+            // those ids from the sharing registry rather than from a local trace. There is nothing
+            // of its own to pad.
+            let hosts_logging = compute_state.role() != ComputeRuntimeRole::Interactive;
+            if let Some(config) = old_instance_config.filter(|_| hosts_logging) {
                 for id in config.logging.index_logs.values() {
                     let trace = compute_state
                         .traces
