@@ -269,6 +269,43 @@ where
         self.ready.pop_front().map_or(Step::Progress, Step::Output)
     }
 
+    /// Materialize a passed-through output for timestamp advancement.
+    /// The merge's input reservation also covers this input-sized body.
+    pub(super) async fn read_output(
+        &mut self,
+        chunk: ColumnChunk<D, T, R>,
+    ) -> ColumnChunk<D, T, R> {
+        if matches!(chunk, ColumnChunk::Spilled(..)) {
+            if self.reservation.is_none() {
+                self.reservation = Some(Arc::new(
+                    Arc::clone(&self.budget.bytes)
+                        .acquire_many_owned(self.required)
+                        .await
+                        .expect("read budget remains open"),
+                ));
+            }
+            let depth = chunk.depth();
+            let ColumnChunk::Spilled(body, _) = chunk else {
+                unreachable!()
+            };
+            let handle = Arc::clone(&body.handle);
+            let reservation = Arc::clone(self.reservation.as_ref().expect("admitted output"));
+            let task = mz_ore::task::spawn(|| "column_advance_read", async move {
+                ReadResult {
+                    buffers: [Some(handle.read_async().await), None],
+                    _reservation: reservation,
+                }
+            });
+            let ReadResult { mut buffers, .. } = task.await;
+            ColumnChunk::Resident(
+                std::rc::Rc::new(Column::Align(buffers[0].take().expect("read output"))),
+                depth,
+            )
+        } else {
+            chunk
+        }
+    }
+
     async fn finish_reads(&mut self) {
         if let Some(task) = &mut self.pending {
             let ReadResult { buffers, .. } = task.await;
@@ -339,6 +376,7 @@ mod tests {
             bytes,
             mz_ore::pool::ChunkHints { depth: 1 },
             codec,
+            false,
         );
         pool.set_spill_threads(0);
         pool.set_budget(0);

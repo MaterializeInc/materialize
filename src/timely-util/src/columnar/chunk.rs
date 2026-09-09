@@ -253,6 +253,7 @@ fn with_scratch<Out>(f: impl FnOnce(&mut Vec<u64>) -> Out) -> Out {
 /// of the columnar merge machinery.
 const COMMIT_BYTES: usize = 2 << 20;
 
+pub mod asynchronous;
 pub mod merge;
 
 /// Bodies smaller than this stay resident: the pool's smallest size class is
