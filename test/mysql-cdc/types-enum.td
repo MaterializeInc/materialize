@@ -108,4 +108,4 @@ $ skip-if
 SELECT true
 
 ! SELECT * FROM enum_type;
-contains:incompatible schema change: column f1 of source table public.enum_type was altered upstream
+contains:incompatible schema change on public.enum_type: the type of column "f1" changed upstream

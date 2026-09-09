@@ -157,7 +157,7 @@ ALTER TABLE alter_column_type_1 MODIFY f2 int;
 INSERT INTO alter_column_type_1 VALUES (3, 23);
 
 ! select * from alter_column_type_1;
-contains:incompatible schema change
+contains:incompatible schema change on public.alter_column_type_1: the type of column "f2" changed upstream
 
 > SELECT * from alter_column_type_2;
 2
@@ -167,7 +167,7 @@ ALTER TABLE alter_column_type_2 MODIFY f1 int;
 INSERT INTO alter_column_type_2 VALUES (2048);
 
 ! select * from alter_column_type_2;
-contains:incompatible schema change
+contains:incompatible schema change on public.alter_column_type_2: the type of column "f1" changed upstream
 
 #
 # Drop NOT NULL
@@ -180,7 +180,8 @@ ALTER TABLE alter_drop_nullability MODIFY f1 INTEGER;
 INSERT INTO alter_drop_nullability VALUES (NULL);
 
 ! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
-contains:incompatible schema change
+contains:incompatible schema change on public.alter_drop_nullability: the NOT NULL constraint on column "f1" was dropped upstream
+hint:WITH (EXCLUDE ALL CONSTRAINTS)
 
 # We have guaranteed that this column is not null so the optimizer eagerly
 # returns the empty set.
@@ -217,7 +218,8 @@ ALTER TABLE alter_drop_pk DROP PRIMARY KEY;
 INSERT INTO alter_drop_pk VALUES (1);
 
 ! SELECT f1 FROM alter_drop_pk;
-contains:incompatible schema change
+contains:incompatible schema change on public.alter_drop_pk: PRIMARY KEY constraint "PRIMARY" (f1) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('PRIMARY')) before the upstream drop
 
 
 #
@@ -247,7 +249,8 @@ ALTER TABLE alter_cycle_pk ADD PRIMARY KEY(f1);
 INSERT INTO alter_cycle_pk VALUES (2);
 
 ! SELECT * FROM alter_cycle_pk;
-contains:incompatible schema change
+contains:incompatible schema change on public.alter_cycle_pk: PRIMARY KEY constraint "PRIMARY" (f1)
+hint:EXCLUDE CONSTRAINTS ('PRIMARY')
 
 #
 # Cycle PK off (no pk, pk, no pk)
@@ -276,7 +279,8 @@ ALTER TABLE alter_drop_unique DROP INDEX f1;
 INSERT INTO alter_drop_unique VALUES (1);
 
 ! SELECT f1 FROM alter_drop_unique;
-contains:incompatible schema change
+contains:incompatible schema change on public.alter_drop_unique: UNIQUE constraint "f1" (f1) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('f1')) before the upstream drop
 
 
 #
@@ -317,7 +321,7 @@ ALTER TABLE alter_decimal MODIFY COLUMN f1 DECIMAL(6,1);
 INSERT INTO alter_decimal VALUES (12345.6);
 
 ! SELECT * FROM alter_decimal;
-contains:altered
+contains:incompatible schema change on public.alter_decimal: the type of column "f1" changed upstream
 
 
 #

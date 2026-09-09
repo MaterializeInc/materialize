@@ -8,8 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeSet;
+use std::fmt;
 
-use anyhow::bail;
+use mz_ore::str::StrExt;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::SqlColumnType;
 #[cfg(any(test, feature = "proptest"))]
@@ -19,6 +20,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use self::proto_my_sql_column_desc::Meta;
+use crate::schema_change::{SchemaChange, SchemaChangeError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_mysql_util.rs"));
 
@@ -93,24 +95,16 @@ impl MySqlTableDesc {
         &self,
         other: &MySqlTableDesc,
         binlog_full_metadata: bool,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), SchemaChangeError> {
         if self == other {
             return Ok(());
         }
 
-        let table = format!("{}.{}", self.schema_name, self.name);
-
         if self.schema_name != other.schema_name || self.name != other.name {
-            bail!(
-                "source table {} was renamed or replaced upstream (it is now {}.{}). \
-                 Materialize binds a table to the upstream table's identity and cannot \
-                 follow this change. To resume ingesting, create a replacement table \
-                 against the new upstream table in a new versioned schema and swap your \
-                 views to it.",
-                table,
-                other.schema_name,
-                other.name,
-            );
+            return Err(self.schema_change(SchemaChange::TableRenamed {
+                schema_name: other.schema_name.clone(),
+                name: other.name.clone(),
+            }));
         }
 
         // In the case that we don't have full binlog row metadata, `columns` is ordered by the
@@ -140,17 +134,9 @@ impl MySqlTableDesc {
                 // We could not find a column in the incoming row that matches this
                 // descriptor column. This is an error as the column is not ignored
                 // (ignored columns have already been skipped).
-                anyhow::anyhow!(
-                    "column {} of source table {} was dropped or renamed upstream. \
-                     To resume ingesting, create a replacement table in a new versioned \
-                     schema (its snapshot captures the current upstream schema), swap \
-                     your views to it, and drop this table. To make a planned column \
-                     drop a non-event, create the replacement table with \
-                     WITH (EXCLUDE COLUMNS (\"{}\")) before the upstream drop.",
-                    self_column.name,
-                    table,
-                    self_column.name,
-                )
+                self.schema_change(SchemaChange::ColumnDropped {
+                    column: self_column.name.clone(),
+                })
             };
             let wire_idx = match wire_idx {
                 Some(idx) => idx,
@@ -161,6 +147,9 @@ impl MySqlTableDesc {
                 .get(wire_idx)
                 .ok_or_else(dropped_column_error)?;
             if !self_column.is_compatible(other_column) {
+                if self_column.name != other_column.name {
+                    return Err(dropped_column_error());
+                }
                 let nullability_only_change =
                     match (&self_column.column_type, &other_column.column_type) {
                         (Some(self_type), Some(other_type)) => {
@@ -172,30 +161,11 @@ impl MySqlTableDesc {
                         }
                         _ => false,
                     };
+                let column = self_column.name.clone();
                 if nullability_only_change {
-                    bail!(
-                        "the NOT NULL constraint on column {} of source table {} was \
-                         dropped upstream. Materialize relies on this constraint and \
-                         cannot continue ingesting the table. To resume ingesting, create \
-                         a replacement table in a new versioned schema (its snapshot \
-                         captures the current upstream schema, where the column is \
-                         nullable), swap your views to it, and drop this table. To make \
-                         planned constraint drops a non-event, create the replacement \
-                         table with WITH (EXCLUDE ALL CONSTRAINTS).",
-                        self_column.name,
-                        table,
-                    );
+                    return Err(self.schema_change(SchemaChange::NotNullDropped { column }));
                 }
-                bail!(
-                    "column {} of source table {} was altered upstream (its type, \
-                     nullability, or type metadata changed incompatibly). To ingest the \
-                     column as text regardless of its upstream type, create a replacement \
-                     table with WITH (TEXT COLUMNS (\"{}\")) in a new versioned schema and \
-                     swap your views to it.",
-                    self_column.name,
-                    table,
-                    self_column.name,
-                );
+                return Err(self.schema_change(SchemaChange::ColumnTypeChanged { column }));
             }
         }
         // Our keys are all still present in exactly the same shape.
@@ -207,30 +177,24 @@ impl MySqlTableDesc {
         // single unique key of just the column a then it's compatible because {a} ⊆ {a, b} and
         // {a} ⊆ {a, c}.
         if let Some(key) = self.keys.difference(&other.keys).next() {
-            // MySQL names the primary key's index literally "PRIMARY".
-            let kind = if key.is_primary {
-                "PRIMARY KEY"
+            let still_exists = other.keys.iter().any(|k| k.name == key.name);
+            let change = if still_exists {
+                SchemaChange::KeyAltered { key: key.clone() }
             } else {
-                "UNIQUE"
+                SchemaChange::KeyDropped { key: key.clone() }
             };
-            bail!(
-                "{} constraint \"{}\" ({}) on source table {} was dropped or altered \
-                 upstream. Materialize relies on this constraint and cannot continue \
-                 ingesting the table. To resume ingesting, create a replacement table in \
-                 a new versioned schema (its snapshot captures the current upstream \
-                 schema, without this constraint), swap your views to it, and drop this \
-                 table. To make a planned constraint drop a non-event, create the \
-                 replacement table with WITH (EXCLUDE CONSTRAINTS ('{}')) before the \
-                 upstream drop.",
-                kind,
-                key.name,
-                key.columns.join(", "),
-                table,
-                key.name,
-            );
+            return Err(self.schema_change(change));
         }
 
         Ok(())
+    }
+
+    pub fn schema_change(&self, change: SchemaChange) -> SchemaChangeError {
+        SchemaChangeError {
+            schema_name: self.schema_name.clone(),
+            name: self.name.clone(),
+            change,
+        }
     }
 }
 
@@ -418,5 +382,22 @@ impl RustType<ProtoMySqlKeyDesc> for MySqlKeyDesc {
             is_primary: proto.is_primary,
             columns: proto.columns,
         })
+    }
+}
+
+impl fmt::Display for MySqlKeyDesc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // MySQL names the primary key's index literally "PRIMARY".
+        let kind = if self.is_primary {
+            "PRIMARY KEY"
+        } else {
+            "UNIQUE"
+        };
+        write!(
+            f,
+            "{kind} constraint {} ({})",
+            self.name.quoted(),
+            self.columns.join(", ")
+        )
     }
 }

@@ -12,6 +12,8 @@
 mod tunnel;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use aws_rds::RdsTokenError;
 pub use tunnel::{
     Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT,
@@ -24,6 +26,9 @@ pub use desc::{
     MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc, ProtoMySqlColumnDesc, ProtoMySqlKeyDesc,
     ProtoMySqlTableDesc,
 };
+
+pub mod schema_change;
+pub use schema_change::{SchemaChange, SchemaChangeError};
 
 mod replication;
 pub use replication::{
@@ -50,7 +55,7 @@ pub use partition::{PartitionParams, partition_table};
 
 mod aws_rds;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnsupportedDataType {
     pub column_type: String,
     pub qualified_table_name: String,
