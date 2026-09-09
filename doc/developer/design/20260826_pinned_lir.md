@@ -220,7 +220,7 @@ CLONE OBJECTS FROM CLUSTER src_cluster INTO SCHEMA [tgt_database.]tgt_schema IN 
 ```
 
 We propose this bulk DDL as opposed to a single-object `CLONE OBJECT` command because cloning one object at a time raises subtle questions about the mapping of global ids that a bulk clone makes clear.
-Also, we can make the bulk `CLONE OBJECTS` atomic.
+Also, we can make the bulk `CLONE OBJECTS` atomic: either all objects are cloned, or none.
 
 The mz-deploy workflow with `CLONE OBJECTS` will look like the following, when cloning objects `o_1` through `o_n` but defining new objects `o_n+1` through `o_m`:
 
@@ -283,7 +283,6 @@ ALTER CLUSTER c SET (REPLICATION FACTOR = 1);
 -- after everything is satisfactory... they should update their mz-deploy and let it do a blue/green
 DROP SCHEMA s CASCDE;
 DROP CLUSTER c;
-
 ```
 
 In this development case, all views referenced in any cluster object are automatically cloned into the new schema.
@@ -352,12 +351,15 @@ It lives in `CatalogState` (alongside the `CatalogItem`'s entry), or as a sideca
 This part of the catalog seems to be in flux, but `CatalogState` seems right---pinned plans should be stored with their associated IDs.
 
 Storing a pointer to a persist shard holding the JSON-serialized LIR plan instead of putting the full plan in the catalog itself offers several benefits.
-First, we can decode and migrate plans in parallel.
-Second, we don't need to send a serialized plan to clusters---we can just point them at persist.
-Third, it means that the catalog doesn't scale with object _size_ (though of course it scales with object _count_).
+First, we can decode and migrate plans in parallel (up to some bound so as not to overwhelm any part of the system).
+Second, it means that the catalog doesn't scale with object _size_ (though of course it scales with object _count_).
 
 Plans should be written eagerly.
-Migration can occur when we load a plan, but that means writing a new persist shard with the migrated plan.
+Migration can occur when we load a plan, but that means overwriting the persist shard with the migrated plan (when `environmentd` moves from read-only to read-write).
+
+### What about system ids?
+
+We will not pin plans for builtin indexes.
 
 ## Open questions
 
@@ -382,3 +384,8 @@ I think the best approach here is to improve the default LIR-based `EXPLAIN PLAN
 ### How does this interact with the expression cache?
 
 We will likely be able to use pinned LIR to deprecate the expression cache, but there should be no interference at first---though we will want to carefully prioritize which we consult (LIR first, then fall back to the cache).
+
+### What granularity should pinned plans have persist shards?
+
+We do not want to write all of our plans into the shard for all of our durable state, as that makes reading and writing our durable catalog scale with object count and plan size, rather than just object count.
+But do we have a separate shard for every plannable object, or just parts within some designated shard?
