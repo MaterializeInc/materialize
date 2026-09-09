@@ -723,7 +723,7 @@ The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-
 
 ## `mz_object_hydration_history`
 
-{{< warn-if-unreleased v26.40 >}}
+{{< warn-if-unreleased v26.42 >}}
 
 The `mz_object_hydration_history` table records completed hydration of indexes and
 materialized views, with one row for each time a dataflow hydrated on a replica.
@@ -743,8 +743,8 @@ logical timestamp, so the recorded finish can precede the latest process's finis
 [`mz_object_global_ids`](#mz_object_global_ids) to reach the index or
 materialized view. To recover the name and size of a replica that has since been
 replaced, join [`mz_cluster_replica_history`](#mz_cluster_replica_history). For
-how to use these columns to choose a cluster size, see [Cluster
-sizing](/clusters/sizing/).
+how to use these columns to choose a cluster size, see [Optimize cluster
+size](/clusters/sizing/).
 
 <!-- RELATION_SPEC mz_internal.mz_object_hydration_history -->
 | Field          | Type                         | Meaning                                                                                                                  |
@@ -759,7 +759,7 @@ sizing](/clusters/sizing/).
 
 ## `mz_replica_hydration_history`
 
-{{< warn-if-unreleased v26.41 >}}
+{{< warn-if-unreleased v26.42 >}}
 
 The `mz_replica_hydration_history` table records successful replica hydration
 episodes. An episode begins when a maintained compute dataflow is installed on
@@ -778,7 +778,7 @@ compare `peak_memory_bytes` against
 which is also per process. Join
 [`mz_cluster_replica_history`](#mz_cluster_replica_history) for the size the
 episode ran at, since that row survives the replica. For how to use these
-columns to choose a cluster size, see [Cluster sizing](/clusters/sizing/).
+columns to choose a cluster size, see [Optimize cluster size](/clusters/sizing/).
 
 <!-- RELATION_SPEC mz_internal.mz_replica_hydration_history -->
 | Field               | Type                         | Meaning                                                                                                                  |

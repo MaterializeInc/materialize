@@ -1,68 +1,42 @@
 ---
-title: "Cluster sizing"
-description: "Pick a cluster size by measuring what hydration actually needed, then sizing down."
+title: "Optimize cluster size"
+description: "Optimize your cluster size by observing the resources it requires to hydrate."
 menu:
   main:
     parent: "clusters"
     weight: 5
-    name: "Cluster sizing"
+    name: "Optimize cluster size"
     identifier: "cluster-sizing"
 ---
 
-A cluster's [size](/sql/create-cluster/#available-sizes) fixes the CPU, memory,
-and scratch disk available to every replica of that cluster, and on Materialize
-Cloud it fixes the [cost](/materialize-cloud/billing/#compute). The size you
-need is set by the most expensive thing the cluster does, and for most clusters
-that is [hydration](/fundamentals/concepts/hydration/) rather than steady state.
+A cluster's [size](/sql/create-cluster/#available-sizes) defines the CPU,
+memory, and scratch disk available to every replica. On Materialize Cloud, this
+determines the [cost](/materialize-cloud/billing/#compute) of the cluster.
+Clusters should be provisioned for peak resource usage, to ensure that they can
+handle the load placed on them. For most clusters, peak resource usage happens
+during [hydration](/fundamentals/concepts/hydration/).
 
-Hydration is also the part you cannot predict from the query text. How much
-memory a join or an aggregation needs depends on the data: key distribution,
-skew, and how much history the inputs carry. So rather than estimate, start at a
-size that hydrates comfortably, measure what hydration needed, and then size
-down.
+This guide will walk you through how to estimate resources required for
+hydration. Before reading this guide, make sure you understand the [lifecycle of
+a cluster](/fundamentals/concepts/clusters/#lifecycle-of-a-cluster).
 
-{{% include-headless "/headless/cluster-lifecycle" %}}
-
-## Why hydration sets the size
-
-Steady state is the cheap part of a cluster's life. Once a dataflow is hydrated
-it holds its arrangements and applies incoming updates, and its memory tracks
-the size of the state it maintains. Hydration is different: the replica rebuilds
-that state from the storage layer, which means reading the inputs and building
-the intermediate arrangements that produce it. Peak memory during hydration is
-therefore higher than steady-state memory, often around twice as high, and the
-same holds for the time it takes.
-
-That gap decides two things at once:
-
-- **A cluster that cannot hydrate serves nothing.** A replica that exceeds its
-  memory allocation is restarted, and it then attempts the same hydration again.
-  An undersized cluster does not degrade gracefully into a slow cluster: it
-  restarts in a loop and never reaches the point where it can answer queries.
-
-- **A cluster sized for steady state may not survive a restart.** The size that
-  holds a hydrated dataflow can be too small to rebuild it. Restarts are not
-  exceptional (a resize, a version upgrade, or a new index all trigger
-  hydration), so the size has to cover the rebuild, not just the result.
-
-Both point the same way: choose a size that hydrates, then reduce it with
-evidence.
+{{< note >}}
+Hydration rebuilds a dataflow's in-memory state from the storage layer, which
+takes more memory than maintaining that state afterwards. The size that holds a
+hydrated cluster is therefore not always the size that can rebuild it, and a
+replica that runs out of memory while hydrating restarts and tries again rather
+than running slower.
+{{< /note >}}
 
 ## Start large, then size down
 
-The procedure below oversizes the cluster deliberately for one hydration, reads
-what that hydration needed from the catalog, and uses those numbers to pick a
-steady-state size.
-
-Steps 3 through 5 read the durable hydration history relations:
-
-{{< warn-if-unreleased v26.41 >}}
+This guide assumes you are running Materialize v26.42 or later. v26.42 included
+improvements to allow you to track peak resource usage during hydration.
 
 ### 1. Create the cluster at a generous size
 
 Pick a size you are confident can hydrate the workload, even if it is clearly
-more than steady state needs. Oversizing costs money for as long as the cluster
-runs at that size. Undersizing costs a hydration that never completes.
+more than steady state needs.
 
 ```mzsql
 CREATE CLUSTER analytics (SIZE = '400cc');
@@ -85,8 +59,7 @@ WHERE c.name = 'analytics' AND h.hydrated IS NOT TRUE;
 
 An empty result means every object on the cluster is hydrated. A row with a
 `NULL` `replica_id` is an object that has not attached to a replica yet, which
-`IS NOT TRUE` catches along with `hydrated = false`. See [Lifecycle of a
-cluster](#lifecycle-of-a-cluster) for the states that follow.
+`IS NOT TRUE` catches along with `hydrated = false`.
 
 <a name="read-what-the-last-hydration-needed"></a>
 
@@ -120,27 +93,9 @@ ORDER BY h.started_at DESC;
 (1 row)
 ```
 
-The join to
-[`mz_internal.mz_cluster_replica_history`](/sql/system-catalog/mz_internal/#mz_cluster_replica_history)
-is what makes the numbers usable for sizing: it supplies the size the episode
-ran at, and it keeps that row after the replica is gone. Hydration history
-itself stores only the replica ID, and a resize replaces the replica, so joining
-[`mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
-instead would drop exactly the episodes you want to compare against.
-
-Two columns need reading with care:
-
-- `object_count` counts every maintained dataflow in the episode, which includes
-  the system introspection dataflows each replica runs. It is normally a few
-  dozen higher than the number of objects you created, and it is not the number
-  of rows the per-object table holds for that replica.
-
-- `peak_memory_bytes` and `peak_disk_bytes` are the largest values reported by
-  any single process of the replica, not the sum across processes. Memory and
-  disk limits apply per process, so the maximum is what answers whether any
-  process came close to its limit. See [Reading the recorded
-  numbers](#reading-the-recorded-numbers) for what the peaks do and do not
-  cover.
+Compare `peak_memory` against the memory the candidate size provides, which
+[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
+reports per process, and leave headroom for the inputs to grow.
 
 To find which object dominated the episode, read the per-object table,
 [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history).
@@ -175,87 +130,22 @@ LIMIT 5;
 
 Every replica records its own rows, so a cluster with a replication factor
 above one, or one that has been resized, returns a row per object per replica.
-The per-object table carries no resource columns, because peaks are measured per
-process and a process runs many dataflows at once. Use it to find the object
-whose hydration dominates the episode, then attribute the episode's peak to that
-object's cluster placement. If one object accounts for most of the episode, [move
-it to its own
+If one object accounts for most of the episode, [move it to its own
 cluster](/fundamentals/concepts/hydration/#hydration-strategies) so its
 hydration peak stops dictating the size of everything else.
 
-### 4. Choose a steady-state size
+### 4. Size down
 
-The episode's peak memory is what the smaller size has to fit, with headroom for
-data growth. The following query reports, per cluster, the largest peak still in
-the history and the smallest size whose per-process memory keeps that peak under
-75%:
-
-```mzsql
-WITH observed AS (
-    SELECT
-        rh.cluster_name AS cluster,
-        max(h.peak_memory_bytes) AS peak_memory_bytes
-    FROM mz_internal.mz_replica_hydration_history AS h
-    JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
-    WHERE h.peak_memory_bytes IS NOT NULL
-    GROUP BY rh.cluster_name
-)
-SELECT
-    o.cluster,
-    pg_size_pretty(o.peak_memory_bytes) AS peak_hydration_memory,
-    (
-        SELECT s.size
-        FROM mz_catalog.mz_cluster_replica_sizes AS s
-        WHERE o.peak_memory_bytes <= s.memory_bytes * 0.75
-        ORDER BY s.memory_bytes
-        LIMIT 1
-    ) AS smallest_size_with_headroom
-FROM observed AS o
-ORDER BY o.cluster;
-```
-
-```none
-  cluster  | peak_hydration_memory | smallest_size_with_headroom
------------+-----------------------+-----------------------------
- analytics | 11 GB                 | 100cc
-(1 row)
-```
-
-The 75% in that query is a starting point, not a guarantee. Raise the headroom
-when the inputs are growing, when the workload is seasonal, or when the cluster
-also serves ad-hoc `SELECT` queries, since those compete for the same memory and
-are not part of a hydration episode.
-
-Treat the result as the next size to try rather than the final answer. Sizing
-down changes the thing you measured: fewer workers per replica changes how the
-work is distributed, so the peak at `100cc` is not the peak at `400cc` divided
-by four. Step down one size at a time and re-measure after each step.
-
-{{< tip >}}
-If a cluster's peak is dominated by hydration and its steady state is much
-cheaper, you can keep it small and let it borrow capacity only while it
-hydrates. An [`AUTO SCALING STRATEGY (ON
-HYDRATION)`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
-provisions an extra burst replica at a larger size whenever the cluster has
-un-hydrated objects, including after a restart or an upgrade, and removes it once
-a steady-size replica catches up. You then pay the hydration size only for the
-duration of hydration.
-{{< /tip >}}
-
-### 5. Size down and confirm
-
-A resize is graceful by default: Materialize hydrates replicas at the new size
-alongside the current ones before retiring them, and rolls the resize back if
-they do not hydrate within the reconfiguration timeout. See [resizing
-process](/sql/alter-cluster/#resizing-process) for the details and how to change
-that behavior.
+Once you have found the appropriate size, you can downsize by altering the
+cluster:
 
 ```mzsql
 ALTER CLUSTER analytics SET (SIZE = '100cc');
 ```
 
-That rollback is what makes stepping down safe to try: a size that cannot
-rebuild the state leaves the cluster where it was rather than serving nothing.
+`ALTER CLUSTER` operations are graceful. This means the smaller cluster will
+hydrate in parallel, and Materialize will cut over to the smaller cluster when
+it is ready.
 
 The resize also hydrates the whole workload again, which produces exactly the
 measurement you need to confirm the new size. Re-run the query from [step
@@ -268,12 +158,6 @@ measurement you need to confirm the new size. Re-run the query from [step
  r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 11 GB       | 2438 MB
 (2 rows)
 ```
-
-This is the outcome to look for, and it is also the point of measuring rather
-than estimating. Peak memory barely moved, so `100cc` holds the workload with
-the headroom the previous step asked for. Hydration got three times slower, which
-is the cost of the smaller size, and whether that matters depends on how long
-you can tolerate a restart taking.
 
 If the new size is too small, no completed episode is recorded for the new
 replica at all. Only successful hydration is recorded, so an out-of-memory
@@ -295,14 +179,14 @@ that hydrated, and take a smaller step, or reduce the peak itself with one of
 the [hydration
 strategies](/fundamentals/concepts/hydration/#hydration-strategies).
 
-## Reading the recorded numbers
+## How should I interpret the hydration metrics?
 
 Hydration history is a best-effort record, not an audit log. Where it is
 approximate, it is approximate in ways that matter for sizing:
 
 - **Only successful episodes are recorded.** There is no row for a hydration
   that was killed, canceled, or is still running, and `status` is currently
-  always `hydrated`. A missing row is a signal in its own right, as in step 5,
+  always `hydrated`. A missing row is a signal in its own right, as in step 4,
   but it is never a measurement of a failure.
 
 - **Short-lived objects can be missed entirely.** Recording works by sampling
@@ -315,10 +199,6 @@ approximate, it is approximate in ways that matter for sizing:
   episode is recorded, so post-hydration work can raise them, and a later
   episode can inherit an earlier episode's mark. For sizing this errs the safe
   way: the recorded value is never below the true hydration peak.
-
-- **A peak can be `NULL`.** The values depend on what the platform exposes
-  (a cgroup memory peak, and a scratch filesystem or swap peak), so they are
-  absent rather than zero when a deployment does not report them.
 
 - **Timestamps can carry clock skew.** On a multi-process replica the endpoints
   of an interval come from different process clocks, so a recorded duration
@@ -334,10 +214,7 @@ approximate, it is approximate in ways that matter for sizing:
 - **Rows are retained for 30 days by default.** Sizing decisions should come
   from the recent history rather than the earliest episode still stored.
 
-Both tables live in the [`mz_internal`](/sql/system-catalog/mz_internal/)
-schema, which is not part of Materialize's stable interface.
-
-## If hydration history is empty
+## What should I do if hydration history is empty?
 
 Recording is controlled by the `hydration_history_collection_interval` system
 parameter, which sets how often Materialize samples replicas for completed
@@ -376,6 +253,18 @@ replica or Materialize restart. The metrics history survives restarts, but at
 roughly one sample a minute it can miss a hydration spike entirely, and it does
 not tell you which episode a sample belonged to. That is why these are a
 fallback rather than the basis for a sizing decision.
+
+## How do I speed up hydration?
+
+Hydration speed scales with cluster size, so a cluster can borrow capacity for
+hydration alone rather than running at the larger size permanently. An [`AUTO
+SCALING STRATEGY (ON
+HYDRATION)`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
+provisions an extra burst replica at a larger size whenever the cluster has
+un-hydrated objects, and removes it once a steady-size replica catches up.
+
+To reduce the work hydration has to do in the first place, see [hydration
+strategies](/fundamentals/concepts/hydration/#hydration-strategies).
 
 ## Related pages
 

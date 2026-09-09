@@ -68,7 +68,7 @@ For upsert sources, snapshotting is a resource-intensive operation that can requ
 When sizing a cluster, budget for hydration memory on top of the steady-state
 cost. Rather than estimating that budget, start at a size that hydrates
 comfortably and size down once you have measured what hydration needed: see
-[Cluster sizing](/clusters/sizing/).
+[Optimize cluster size](/clusters/sizing/).
 
 The table below summarizes, per object type, when each object hydrates and
 the memory it uses. For more on hydration, including strategies to reduce its

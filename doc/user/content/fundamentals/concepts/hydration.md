@@ -36,7 +36,7 @@ already run. Materialize records completed hydration episodes durably, per
 object and per replica, including the resource high-water marks observed for
 each replica episode. Those records outlive the replica restart or resize that
 produced them, which is what makes them usable for sizing a cluster. See
-[Cluster sizing](/clusters/sizing/).
+[Optimize cluster size](/clusters/sizing/).
 
 ## Hydration strategies
 
