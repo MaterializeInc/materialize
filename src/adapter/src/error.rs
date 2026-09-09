@@ -800,6 +800,7 @@ impl AdapterError {
             ),
             AdapterError::Dataflow(e) => match &**e {
                 DataflowError::EvalError(e) => e.hint(),
+                DataflowError::SourceError(e) => e.hint.as_ref().map(|hint| hint.to_string()),
                 _ => None,
             },
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => Some(

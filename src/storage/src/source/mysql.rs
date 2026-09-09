@@ -315,6 +315,7 @@ impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         let m = err.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
+            hint: None,
             error: match &err {
                 DefiniteError::ValueDecodeError(_) => SourceErrorDetails::Other(m),
                 DefiniteError::TableTruncated(_) => SourceErrorDetails::Other(m),

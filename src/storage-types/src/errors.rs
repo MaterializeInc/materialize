@@ -376,18 +376,21 @@ impl Display for UpsertError {
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceError {
     pub error: SourceErrorDetails,
+    pub hint: Option<Box<str>>,
 }
 
 impl RustType<ProtoSourceError> for SourceError {
     fn into_proto(&self) -> ProtoSourceError {
         ProtoSourceError {
             error: Some(self.error.into_proto()),
+            hint: self.hint.as_ref().map(|hint| hint.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoSourceError) -> Result<Self, TryFromProtoError> {
         Ok(SourceError {
             error: proto.error.into_rust_if_some("ProtoSourceError::error")?,
+            hint: proto.hint.map(Into::into),
         })
     }
 }
@@ -895,6 +898,7 @@ mod columnation {
                                 SourceErrorDetails::Other(self.string_region.copy(string))
                             }
                         },
+                        hint: err.hint.as_ref().map(|hint| self.string_region.copy(hint)),
                     };
                     let reference = self.source_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
