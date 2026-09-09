@@ -84,30 +84,6 @@ impl LiteralConstraints {
             Self::distribute_and_over_or(&mut mfp)?;
             Self::unary_and(&mut mfp);
 
-            /// The above preparation might make the MFP more complicated, so we'll later want to
-            /// either undo the preparation transformations or get back to `orig_mfp`.
-            fn undo_preparation(
-                mfp: &mut MapFilterProject,
-                orig_mfp: &MapFilterProject,
-                relation: &MirRelationExpr,
-                relation_type: ReprRelationType,
-            ) {
-                // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
-                // (It undoes the latter 2 through `MirScalarExp::reduce`.)
-                LiteralConstraints::canonicalize_predicates(mfp, relation, relation_type);
-                // undo inline_literal_constraints
-                mfp.optimize();
-                // We can usually undo, but sometimes not (see comment on `distribute_and_over_or`),
-                // so in those cases we might have a more complicated MFP than the original MFP
-                // (despite the removal of the literal constraints and/or contradicting OR args).
-                // So let's use the simpler one.
-                if LiteralConstraints::predicates_size(orig_mfp)
-                    < LiteralConstraints::predicates_size(mfp)
-                {
-                    *mfp = orig_mfp.clone();
-                }
-            }
-
             let removed_contradicting_or_args = Self::remove_impossible_or_args(&mut mfp)?;
 
             // todo: We might want to also call `canonicalize_equivalences`,
@@ -122,7 +98,7 @@ impl LiteralConstraints {
                     // We didn't find a usable index, so no chance to remove literal constraints.
                     // But, we might have removed contradicting OR args.
                     if removed_contradicting_or_args {
-                        undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ);
+                        Self::undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ);
                     } else {
                         // We didn't remove anything, so let's go with the original MFP.
                         mfp = orig_mfp;
@@ -136,7 +112,7 @@ impl LiteralConstraints {
                     {
                         // We were able to remove the literal constraints or contradicting OR args,
                         // so we would like to use this new MFP, so we try undoing the preparation.
-                        undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ.clone());
+                        Self::undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ.clone());
                     } else {
                         // We were not able to remove the literal constraint, so `mfp` is
                         // equivalent to `orig_mfp`, but `orig_mfp` is often simpler (or the same).
@@ -223,82 +199,113 @@ impl LiteralConstraints {
     /// key fields of the index. Extra predicates inside the OR arguments are ok.
     ///
     /// Returns (idx_id, idx_key, values to lookup in the index).
+    // Checks whether an index with the specified key can be used to speed up the given filter.
+    // See comment of `IndexMatch`.
+    fn match_index(key: &[MirScalarExpr], or_args: &Vec<MirScalarExpr>) -> IndexMatch {
+        if key.is_empty() {
+            // Nothing to do with an index that has an empty key.
+            return IndexMatch::UnusableNoSubset;
+        }
+        if !key.iter().all_unique() {
+            // This is a weird index. Why does it have duplicate key expressions?
+            return IndexMatch::UnusableNoSubset;
+        }
+        let mut literal_values = Vec::new();
+        let mut inv_cast_any = false;
+        // This starts with all key fields of the index.
+        // At the end, it will contain a subset S of index key fields such that if the index had
+        // only S as its key, then the index would be usable.
+        let mut usable_key_fields = key.iter().collect::<BTreeSet<_>>();
+        let mut usable = true;
+        for or_arg in or_args {
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            for key_field in key {
+                let and_args = or_arg.and_or_args(And.into());
+                // Let's find a constraint for this key field
+                if let Some((literal, inv_cast)) = and_args
+                    .iter()
+                    .find_map(|and_arg| and_arg.expr_eq_literal(key_field))
+                {
+                    // (Note that the above find_map can find only 0 or 1 result, because
+                    // of `remove_impossible_or_args`.)
+                    packer.push(literal.unpack_first());
+                    inv_cast_any |= inv_cast;
+                } else {
+                    // There is an `or_arg` where we didn't find a constraint for a key field,
+                    // so the index is unusable. Throw out the field from the usable fields.
+                    usable = false;
+                    usable_key_fields.remove(key_field);
+                    if usable_key_fields.is_empty() {
+                        return IndexMatch::UnusableNoSubset;
+                    }
+                }
+            }
+            literal_values.push(row);
+        }
+        if usable {
+            // We should deduplicate, because a constraint can be duplicated by
+            // `distribute_and_over_or`. For example: `IN ('l1', 'l2') AND (a > 0 OR a < 5)`:
+            // the 2 args of the OR will cause the IN constraints to be duplicated. This doesn't
+            // alter the meaning of the expression when evaluated as a filter, but if we extract
+            // those literals 2 times into `literal_values` then the Peek code will look up
+            // those keys from the index 2 times, leading to duplicate results.
+            literal_values.sort();
+            literal_values.dedup();
+            IndexMatch::Usable(literal_values, inv_cast_any)
+        } else {
+            if usable_key_fields.is_empty() {
+                IndexMatch::UnusableNoSubset
+            } else {
+                IndexMatch::UnusableTooWide(usable_key_fields.into_iter().cloned().collect_vec())
+            }
+        }
+    }
+
+    /// The preparation that literal detection needs (see the `Get` case of
+    /// [LiteralConstraints::action]) might make the MFP more complicated, so
+    /// afterwards we want to either undo it or get back to `orig_mfp`.
+    fn undo_preparation(
+        mfp: &mut MapFilterProject,
+        orig_mfp: &MapFilterProject,
+        relation: &MirRelationExpr,
+        relation_type: ReprRelationType,
+    ) {
+        // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
+        // (It undoes the latter 2 through `MirScalarExp::reduce`.)
+        Self::canonicalize_predicates(mfp, relation, relation_type);
+        // undo inline_literal_constraints
+        mfp.optimize();
+        // We can usually undo, but sometimes not (see comment on `distribute_and_over_or`),
+        // so in those cases we might have a more complicated MFP than the original MFP
+        // (despite the removal of the literal constraints and/or contradicting OR args).
+        // So let's use the simpler one.
+        if Self::predicates_size(orig_mfp) < Self::predicates_size(mfp) {
+            *mfp = orig_mfp.clone();
+        }
+    }
+
+    /// Detects literal constraints in an MFP on top of a Get of `id`, and a matching index that can
+    /// be used to speed up the Filter of the MFP.
+    ///
+    /// For example, if there is an index on `(f1, f2)`, and the Filter is
+    /// `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`, it returns `Some([f1, f2], [[3,5], [7,9]])`.
+    ///
+    /// We can use an index if each argument of the OR includes a literal constraint on each of the
+    /// key fields of the index. Extra predicates inside the OR arguments are ok.
+    ///
+    /// Returns (idx_id, idx_key, values to lookup in the index).
     fn detect_literal_constraints(
         mfp: &MapFilterProject,
         get_id: GlobalId,
         transform_ctx: &mut TransformCtx,
     ) -> Option<(GlobalId, Vec<MirScalarExpr>, Vec<Row>)> {
-        // Checks whether an index with the specified key can be used to speed up the given filter.
-        // See comment of `IndexMatch`.
-        fn match_index(key: &[MirScalarExpr], or_args: &Vec<MirScalarExpr>) -> IndexMatch {
-            if key.is_empty() {
-                // Nothing to do with an index that has an empty key.
-                return IndexMatch::UnusableNoSubset;
-            }
-            if !key.iter().all_unique() {
-                // This is a weird index. Why does it have duplicate key expressions?
-                return IndexMatch::UnusableNoSubset;
-            }
-            let mut literal_values = Vec::new();
-            let mut inv_cast_any = false;
-            // This starts with all key fields of the index.
-            // At the end, it will contain a subset S of index key fields such that if the index had
-            // only S as its key, then the index would be usable.
-            let mut usable_key_fields = key.iter().collect::<BTreeSet<_>>();
-            let mut usable = true;
-            for or_arg in or_args {
-                let mut row = Row::default();
-                let mut packer = row.packer();
-                for key_field in key {
-                    let and_args = or_arg.and_or_args(And.into());
-                    // Let's find a constraint for this key field
-                    if let Some((literal, inv_cast)) = and_args
-                        .iter()
-                        .find_map(|and_arg| and_arg.expr_eq_literal(key_field))
-                    {
-                        // (Note that the above find_map can find only 0 or 1 result, because
-                        // of `remove_impossible_or_args`.)
-                        packer.push(literal.unpack_first());
-                        inv_cast_any |= inv_cast;
-                    } else {
-                        // There is an `or_arg` where we didn't find a constraint for a key field,
-                        // so the index is unusable. Throw out the field from the usable fields.
-                        usable = false;
-                        usable_key_fields.remove(key_field);
-                        if usable_key_fields.is_empty() {
-                            return IndexMatch::UnusableNoSubset;
-                        }
-                    }
-                }
-                literal_values.push(row);
-            }
-            if usable {
-                // We should deduplicate, because a constraint can be duplicated by
-                // `distribute_and_over_or`. For example: `IN ('l1', 'l2') AND (a > 0 OR a < 5)`:
-                // the 2 args of the OR will cause the IN constraints to be duplicated. This doesn't
-                // alter the meaning of the expression when evaluated as a filter, but if we extract
-                // those literals 2 times into `literal_values` then the Peek code will look up
-                // those keys from the index 2 times, leading to duplicate results.
-                literal_values.sort();
-                literal_values.dedup();
-                IndexMatch::Usable(literal_values, inv_cast_any)
-            } else {
-                if usable_key_fields.is_empty() {
-                    IndexMatch::UnusableNoSubset
-                } else {
-                    IndexMatch::UnusableTooWide(
-                        usable_key_fields.into_iter().cloned().collect_vec(),
-                    )
-                }
-            }
-        }
-
         let or_args = Self::get_or_args(mfp);
 
         let index_matches = transform_ctx
             .indexes
             .indexes_on(get_id)
-            .map(|(index_id, key)| (index_id, key.to_owned(), match_index(key, &or_args)))
+            .map(|(index_id, key)| (index_id, key.to_owned(), Self::match_index(key, &or_args)))
             .collect_vec();
 
         let result = index_matches
@@ -325,7 +332,7 @@ impl LiteralConstraints {
                             assert!(!usable_subset.is_empty());
                             // Determine literal values that we would get if the index was on
                             // `usable_subset`.
-                            let literal_values = match match_index(&usable_subset, &or_args) {
+                            let literal_values = match Self::match_index(&usable_subset, &or_args) {
                                 IndexMatch::Usable(literal_vals, _) => literal_vals,
                                 _ => unreachable!(), // `usable_subset` would make the index usable.
                             };
