@@ -3572,38 +3572,70 @@ FROM commented",
     }
 });
 
-pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_source_references",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_SOURCE_REFERENCES_OID,
-    desc: RelationDesc::builder()
-        .with_column("source_id", SqlScalarType::String.nullable(false))
-        .with_column("namespace", SqlScalarType::String.nullable(true))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column(
-            "updated_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .with_column(
-            "columns",
-            SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true),
-        )
-        .finish(),
-    column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "source_reference",
-        description: "External references tracked by sources",
-        links: &const {
-            [OntologyLink {
-                name: "references_source",
-                target: "source",
-                properties: LinkProperties::fk("source_id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("source_id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_source_references",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SOURCE_REFERENCES_OID,
+        desc: RelationDesc::builder()
+            .with_column("source_id", SqlScalarType::String.nullable(false))
+            .with_column("namespace", SqlScalarType::String.nullable(true))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column(
+                "updated_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column(
+                "columns",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true),
+            )
+            .finish(),
+        column_comments: BTreeMap::new(),
+        // Dropping a source removes its `SourceReferences` record (see
+        // `Op::DropObjects` in the catalog's `transact`), so no filter against
+        // surviving items is needed here.
+        //
+        // A reference that records no columns reads as NULL rather than an
+        // empty array, which is what `array_agg` over no rows returns.
+        // `WITH ORDINALITY` keeps the upstream column order.
+        //
+        // `updated_at` is an `EpochMillis`, serialized as `{"millis": <u64>}`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL source_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL updated_at
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'source') AS source_id,
+    reference->>'namespace' AS namespace,
+    reference->>'name' AS name,
+    to_timestamp(((data->'value'->'updated_at'->>'millis')::float8) / 1000.0) AS updated_at,
+    (
+        SELECT array_agg(c.value ORDER BY c.ord)
+        FROM jsonb_array_elements_text(reference->'columns')
+             WITH ORDINALITY AS c(value, ord)
+    ) AS columns
+FROM
+    mz_internal.mz_catalog_raw,
+    jsonb_array_elements(data->'value'->'references') AS reference
+WHERE data->>'kind' = 'SourceReferences'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "source_reference",
+            description: "External references tracked by sources",
+            links: &const {
+                [OntologyLink {
+                    name: "references_source",
+                    target: "source",
+                    properties: LinkProperties::fk("source_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("source_id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 
 pub static MZ_WEBHOOKS_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
