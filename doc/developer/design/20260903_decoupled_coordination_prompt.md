@@ -145,3 +145,5 @@ upstream or other branches without asking.
   owns storage capability accounting and critical since handles. The fixed
   critical-reader identity and epoch fencing support handover, not independent
   owners aggregating their local holds.
+
+Re-read this prompt when compaction happens!
