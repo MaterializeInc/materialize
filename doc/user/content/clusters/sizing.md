@@ -1,5 +1,5 @@
 ---
-title: "Optimize cluster size"
+title: "Optimize cluster sizes for hydration"
 description: "Optimize your cluster size by observing the resources it requires to hydrate."
 menu:
   main:
