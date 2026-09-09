@@ -800,6 +800,10 @@ class KafkaSinkCommentsOnType(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""
+                # A secret sharing the type's name, created first:
+                # the DOC ON migration must bind the type, not
+                # whichever same-named item is older.
+                > CREATE SECRET sink_comments_point AS 'x'
                 > CREATE TYPE sink_comments_point AS (x integer, y integer)
                 > COMMENT ON TYPE sink_comments_point IS 'comment on type sink_comments_point'
                 > CREATE TABLE sink_comments_type_tbl (a int)
