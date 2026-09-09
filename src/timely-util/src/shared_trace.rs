@@ -262,7 +262,10 @@ struct Attachment<B: BatchReader> {
 /// arranging worker's thread only.
 pub struct SharedSpine<Tr: Trace> {
     inner: Tr,
-    attachment: RefCell<Option<Attachment<Tr::Batch>>>,
+    /// The publication points this trace backs. One trace may be published under several ids, as
+    /// the logging dataflow's single shared error arrangement is, so this is a list rather than a
+    /// slot: attaching a second point must not silently detach the first.
+    attachment: RefCell<Vec<Attachment<Tr::Batch>>>,
     /// The frontiers the local `TraceBox` last requested. The inner trace gets their meet with the
     /// readers' holds.
     local_logical: Antichain<Tr::Time>,
@@ -271,7 +274,7 @@ pub struct SharedSpine<Tr: Trace> {
 }
 
 impl<Tr: Trace> SharedSpine<Tr> {
-    /// Attaches this trace to `shared`, replacing any earlier attachment.
+    /// Attaches this trace to `shared`, in addition to any points it is already attached to.
     ///
     /// Publishes the current chain and frontiers, and seeds every importer already registered on
     /// `shared` with them. `activator` should schedule the operator that drives this trace, so a
@@ -310,31 +313,41 @@ impl<Tr: Trace> SharedSpine<Tr> {
             );
             queue.activate();
         }
-        *self.attachment.borrow_mut() = Some(Attachment {
-            shared,
+        let entry = Attachment {
+            shared: Arc::clone(&shared),
             on_seal: Box::new(on_seal),
-        });
+        };
+        let mut attachments = self.attachment.borrow_mut();
+        match attachments
+            .iter()
+            .position(|attached| Arc::ptr_eq(&attached.shared, &shared))
+        {
+            Some(index) => attachments[index] = entry,
+            None => attachments.push(entry),
+        }
     }
 
-    /// The publication point, if attached.
+    /// The first publication point this trace backs, if any.
     pub fn shared(&self) -> Option<Arc<Shared<Tr::Batch>>> {
         self.attachment
             .borrow()
-            .as_ref()
+            .first()
             .map(|attachment| Arc::clone(&attachment.shared))
     }
 
     /// Mirrors the inner trace's frontiers into the view.
     fn publish_frontiers(&mut self) {
-        let attachment = self.attachment.borrow();
-        let Some(attachment) = attachment.as_ref() else {
+        let attachments = self.attachment.borrow();
+        if attachments.is_empty() {
             return;
-        };
+        }
         let logical = self.inner.get_logical_compaction().to_owned();
         let physical = self.inner.get_physical_compaction().to_owned();
-        let mut state = attachment.shared.lock();
-        state.logical = logical;
-        state.physical = physical;
+        for attachment in attachments.iter() {
+            let mut state = attachment.shared.lock();
+            state.logical = logical.clone();
+            state.physical = physical.clone();
+        }
     }
 
     /// Mirrors the inner trace's chain and frontiers into the view.
@@ -343,10 +356,10 @@ impl<Tr: Trace> SharedSpine<Tr> {
     /// the same lock as the chain, so a reader registering concurrently either seeds a chain
     /// containing that batch or receives it through its queue, never neither.
     fn publish_chain(&mut self, arrived: Option<Tr::Batch>) {
-        let attachment = self.attachment.borrow();
-        let Some(attachment) = attachment.as_ref() else {
+        let attachments = self.attachment.borrow();
+        if attachments.is_empty() {
             return;
-        };
+        }
         let chain = &mut self.chain_scratch;
         chain.clear();
         self.inner.map_batches(|batch| chain.push(batch.clone()));
@@ -354,53 +367,80 @@ impl<Tr: Trace> SharedSpine<Tr> {
         let logical = self.inner.get_logical_compaction().to_owned();
         let physical = self.inner.get_physical_compaction().to_owned();
 
-        let (advanced, live) = {
-            let mut state = attachment.shared.lock();
-            // Swap, so the old chain's reference counts drop outside the lock.
-            std::mem::swap(&mut state.chain, chain);
-            let advanced = state.upper != upper;
-            state.upper = upper.clone();
-            state.logical = logical;
-            state.physical = physical;
-            let live = if arrived.is_some() {
-                state.live_queues()
-            } else {
-                Vec::new()
+        for attachment in attachments.iter() {
+            // Built before the lock and swapped in, so neither the allocation nor the old chain's
+            // reference count drops happen while the lock is held.
+            let mut next = chain.clone();
+            let (advanced, live) = {
+                let mut state = attachment.shared.lock();
+                std::mem::swap(&mut state.chain, &mut next);
+                let advanced = state.upper != upper;
+                state.upper = upper.clone();
+                state.logical = logical.clone();
+                state.physical = physical.clone();
+                let live = if arrived.is_some() {
+                    state.live_queues()
+                } else {
+                    Vec::new()
+                };
+                (advanced, live)
             };
-            (advanced, live)
-        };
-        chain.clear();
+            drop(next);
 
-        if let Some(batch) = arrived {
-            for queue in &live {
-                queue.push([
-                    Replay::Batch(batch.clone()),
-                    Replay::Frontier(upper.clone()),
-                ]);
-                queue.activate();
+            if let Some(batch) = &arrived {
+                for queue in &live {
+                    queue.push([
+                        Replay::Batch(batch.clone()),
+                        Replay::Frontier(upper.clone()),
+                    ]);
+                    queue.activate();
+                }
+            }
+            if advanced {
+                (attachment.on_seal)();
             }
         }
-        if advanced {
-            (attachment.on_seal)();
-        }
+        chain.clear();
     }
 
     /// Applies the meet of the local and the readers' holds to the inner trace.
     fn apply_holds(&mut self) {
         let attachment = self.attachment.borrow();
-        let (remote_logical, remote_physical) = match attachment.as_ref() {
-            Some(attachment) => {
-                let state = attachment.shared.lock();
-                (
-                    state.remote_logical.frontier().to_owned(),
-                    state.remote_physical.frontier().to_owned(),
-                )
-            }
-            None => (Antichain::new(), Antichain::new()),
-        };
-        drop(attachment);
+        // Reading the holds and publishing the frontier they produce happen under one acquisition,
+        // and the inner trace is touched only afterwards. A reader that registers before us is
+        // counted in the meet. One that registers after us sees the frontier we are about to apply,
+        // and `reader_at` refuses an `as_of` below it. So no reader is ever admitted at a time the
+        // trace is about to coalesce away, which a read-then-release-then-apply order permits for
+        // the length of the merge it runs.
+        //
+        // Publishing the target before applying it means the point can briefly advertise a `since`
+        // ahead of the trace's own. That refuses a reader the trace could still have served, which
+        // is the safe direction. The reverse admits a reader the trace cannot serve.
+        //
+        // Points are locked in address order, so two traces sharing a pair of points cannot
+        // deadlock. The critical section is antichain arithmetic, never merge work.
+        let mut ordered: Vec<_> = attachment.iter().collect();
+        ordered.sort_unstable_by_key(|attached| Arc::as_ptr(&attached.shared));
+        let mut guards: Vec<_> = ordered
+            .iter()
+            .map(|attached| attached.shared.lock())
+            .collect();
+
+        // The meet runs across every point, since a reader of any of them holds this one trace.
+        let mut remote_logical = Antichain::new();
+        let mut remote_physical = Antichain::new();
+        for state in guards.iter() {
+            remote_logical = remote_logical.meet(&state.remote_logical.frontier().to_owned());
+            remote_physical = remote_physical.meet(&state.remote_physical.frontier().to_owned());
+        }
         // The empty antichain is the identity of `meet`: a side with no holds constrains nothing.
         let logical = self.local_logical.meet(&remote_logical);
+        for state in guards.iter_mut() {
+            state.logical = logical.clone();
+        }
+        drop(guards);
+        drop(attachment);
+
         if self.inner.get_logical_compaction() != logical.borrow() {
             self.inner.set_logical_compaction(logical.borrow());
         }
@@ -467,7 +507,7 @@ impl<Tr: Trace> Trace for SharedSpine<Tr> {
         let minimum = Antichain::from_elem(Tr::Time::minimum());
         SharedSpine {
             inner: Tr::new(info, logging, activator),
-            attachment: RefCell::new(None),
+            attachment: RefCell::new(Vec::new()),
             local_logical: minimum.clone(),
             local_physical: minimum,
             chain_scratch: Vec::new(),
@@ -500,18 +540,17 @@ impl<Tr: Trace> Trace for SharedSpine<Tr> {
 
 impl<Tr: Trace> Drop for SharedSpine<Tr> {
     fn drop(&mut self) {
-        let Some(attachment) = self.attachment.take() else {
-            return;
-        };
-        let live = {
-            let mut state = attachment.shared.lock();
-            state.closed = true;
-            state.writer_activator = None;
-            state.live_queues()
-        };
-        for queue in live {
-            queue.push([Replay::Frontier(Antichain::new())]);
-            queue.activate();
+        for attachment in self.attachment.take() {
+            let live = {
+                let mut state = attachment.shared.lock();
+                state.closed = true;
+                state.writer_activator = None;
+                state.live_queues()
+            };
+            for queue in live {
+                queue.push([Replay::Frontier(Antichain::new())]);
+                queue.activate();
+            }
         }
     }
 }
