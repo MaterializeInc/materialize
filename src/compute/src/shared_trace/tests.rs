@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::input::Input;
@@ -20,8 +20,8 @@ use mz_row_spine::{RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
 
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::cursor::Navigable;
+use differential_dataflow::trace::{BatchReader, TraceReader};
 use timely::progress::Antichain;
 
 use crate::extensions::arrange::MzArrange;
@@ -29,7 +29,7 @@ use crate::typedefs::RowRowSpine;
 
 use super::*;
 
-/// How long [`SharedTraceHandle::snapshot_at`] waits for a seal before failing the test.
+/// How long [`SharedReaderExt::snapshot_at`] waits for a seal before failing the test.
 ///
 /// Generous, because it only has to exceed the time a correct publisher takes to step. A test that
 /// hits it has wedged, and the assertion reports which frontier stalled rather than leaving the
@@ -38,17 +38,17 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// An owned, consistent snapshot of a published arrangement: an immutable chain.
 ///
-/// The result of [`SharedTraceHandle::snapshot_at`]. Holding it pins the chain's batches, keeping
+/// The result of [`SharedReaderExt::snapshot_at`]. Holding it pins the chain's batches, keeping
 /// their memory alive even as the publishing worker merges.
-pub(crate) struct TraceSnapshot<Tr: TraceReader> {
-    chain: Vec<Tr::Batch>,
+pub(crate) struct TraceSnapshot<B> {
+    chain: Vec<B>,
 }
 
-impl<Tr: TraceReader> TraceSnapshot<Tr> {
+impl<B: BatchReader + Clone> TraceSnapshot<B> {
     /// A cursor merging the snapshot's batch cursors, with the batches as its storage.
-    pub(crate) fn cursor(&self) -> (CursorList<<Tr::Batch as Navigable>::Cursor>, Vec<Tr::Batch>)
+    pub(crate) fn cursor(&self) -> (CursorList<B::Cursor>, Vec<B>)
     where
-        Tr::Batch: Navigable,
+        B: Navigable,
     {
         cursor_list(self.chain.clone())
     }
@@ -77,16 +77,26 @@ impl<Tr: TraceReader> Published<Tr> {
     }
 }
 
-impl<Tr: TraceReader> SharedTraceHandle<Tr> {
+/// Test-only observations on a publication point reached through one of its readers.
+///
+/// `SharedReader` is defined in `mz-timely-util`, so these cannot be inherent methods here.
+pub(crate) trait SharedReaderExt<B: BatchReader> {
     /// The published arrangement's current `(since, upper)` frontiers, read under the state lock.
-    pub(crate) fn frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
-        self.reader.shared().frontiers()
-    }
+    fn frontiers(&self) -> (Antichain<B::Time>, Antichain<B::Time>);
 
     /// Takes a consistent snapshot of the published arrangement as of `time`, waiting until `upper`
     /// passes `time`.
-    ///
-    /// Production reads go through [`SharedTraceHandle::import_snapshot_at`], which is notification
+    fn snapshot_at(&self, time: &B::Time) -> Option<TraceSnapshot<B>>
+    where
+        B::Time: Debug;
+}
+
+impl<B: BatchReader + Clone> SharedReaderExt<B> for SharedReader<B> {
+    fn frontiers(&self) -> (Antichain<B::Time>, Antichain<B::Time>) {
+        self.shared().frontiers()
+    }
+
+    /// Production reads go through [`SharedReader::import_frontier_core`], which is notification
     /// driven and never parks a worker. This waits by polling, so it must not be called from a
     /// timely worker thread: a worker blocked here cannot step, and on a single-worker test that
     /// includes the publisher it is waiting for.
@@ -98,12 +108,12 @@ impl<Tr: TraceReader> SharedTraceHandle<Tr> {
     /// returning coalesced results.
     ///
     /// Panics once the wait exceeds [`SNAPSHOT_TIMEOUT`], naming the frontiers it was waiting on.
-    pub(crate) fn snapshot_at(&self, time: &Tr::Time) -> Option<TraceSnapshot<Tr>>
+    fn snapshot_at(&self, time: &B::Time) -> Option<TraceSnapshot<B>>
     where
-        Tr::Time: Debug,
+        B::Time: Debug,
     {
         let deadline = Instant::now() + SNAPSHOT_TIMEOUT;
-        let shared = self.reader.shared();
+        let shared = self.shared();
         loop {
             let (since, upper) = shared.frontiers();
             // `upper` not less-equal `time` means all updates at `time` are sealed.
@@ -142,7 +152,7 @@ where
     Tr::Time: timely::order::TotalOrder,
     Arranged<'a, TraceAgent<Tr>>: PublishArrangement<Tr>,
 {
-    let published = Published::new(arranged.stream.scope().peers());
+    let published = Published::new();
     PublishArrangement::adopt(arranged, &published, || {});
     published
 }
@@ -292,7 +302,7 @@ fn snapshot_at_waits_until_upper_passes_time() {
     let key = |k: i32| Row::pack_slice(&[Datum::Int32(k)]);
     let val = |v: &str| Row::pack_slice(&[Datum::String(v)]);
 
-    let (handle_tx, handle_rx) = mpsc::channel::<SharedTraceHandle<RowRowSpine<Timestamp, Diff>>>();
+    let (handle_tx, handle_rx) = mpsc::channel::<SharedOksHandle>();
     // The reader raises this once it has its snapshot, so the publisher knows it can stop
     // stepping. A retained trace handle keeps the dataflow from quiescing, so the publisher
     // never finishes on its own until this fires.
@@ -398,7 +408,7 @@ fn tick(
 fn publish_without_readers_does_not_pin_compaction() {
     timely::execute_directly(move |worker| {
         // Keep a writer handle (a plain `TraceAgent` clone) alongside the publication, and mint no
-        // `SharedTraceHandle` until after compaction: that keeps `logical_holds` empty, so the
+        // `SharedReader` until after compaction: that keeps `logical_holds` empty, so the
         // publisher has zero registered reader holds throughout.
         let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
@@ -744,60 +754,6 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
     });
 }
 
-/// A publisher on a two-worker runtime (`peers() == 2`) hands its handle to an importer on a
-/// single-threaded runtime (`peers() == 1`). Pairwise import assumes both sides shard keys the
-/// same way, which requires equal total peers, so `import_snapshot_at` must assert and panic
-/// rather than silently reading the wrong shard.
-///
-/// Ported from the differential-dataflow primitive's own `tests/sharing.rs`
-/// `import_asserts_equal_peers`.
-#[mz_ore::test]
-#[should_panic(expected = "peers")]
-fn import_asserts_equal_peers() {
-    use std::sync::mpsc;
-
-    let (handle_tx, handle_rx) = mpsc::channel::<SharedTraceHandle<RowRowSpine<Timestamp, Diff>>>();
-    // `execute` requires a `Sync` closure; `mpsc::Sender` is not `Sync`.
-    let handle_tx = Mutex::new(handle_tx);
-
-    // Publisher runtime: two worker threads, so the publishing scope's `peers()` is 2. The
-    // publisher's `peers` is captured when `adopt_fresh` creates the placeholder, from the
-    // scope's `peers()`, so
-    // sending the handle before the dataflow ever steps is enough; only worker 0 sends, the
-    // others publish redundantly (mirroring real SPMD dataflows) but nobody reads their handles.
-    timely::execute(timely::Config::process(2), move |worker| {
-        let (published, _input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
-            let arranged = collection.mz_arrange::<
-                ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >("peers oks");
-            let published = adopt_fresh(&arranged);
-            (published, input, arranged.trace.clone())
-        });
-        if worker.index() == 0 {
-            handle_tx.lock().unwrap().send(published.handle()).unwrap();
-        }
-    })
-    .expect("publisher runtime failed to start");
-
-    let handle = handle_rx.recv().expect("publisher did not send a handle");
-
-    // Importer runtime: single-threaded (`execute_directly` never spawns worker threads), so
-    // `peers()` is 1, mismatching the publisher's 2. `import_snapshot_at` runs on this same
-    // thread, so its panic unwinds directly into the test rather than being swallowed at a
-    // thread boundary.
-    timely::execute_directly(move |worker| {
-        worker.dataflow::<Timestamp, _, _>(|scope| {
-            let as_of = Antichain::from_elem(Timestamp::from(0_u64));
-            let until = Antichain::from_elem(Timestamp::from(1_u64));
-            let _imported = handle.import_snapshot_at(scope, "Import", as_of, until);
-        });
-    });
-}
-
 /// A live reader's cut floor bounds the spine's merging, and with no reader the publisher lets it
 /// merge freely.
 ///
@@ -1030,7 +986,7 @@ fn live_import_does_not_pin_merging() {
         // registration.
         let handle = imported.handle();
         worker.dataflow::<Timestamp, _, _>(|scope| {
-            let arranged = handle.import_snapshot_at(
+            let arranged = handle.import_frontier_core(
                 scope.clone(),
                 "live import",
                 Antichain::from_elem(Timestamp::from(4_u64)),
@@ -1165,8 +1121,8 @@ fn join_over_single_sourced_import_matches_direct() {
         let probe = ProbeHandle::new();
         worker.dataflow::<Timestamp, _, _>(|scope| {
             let arr_a =
-                ha.import_snapshot_at(scope.clone(), "import A", as_of.clone(), until.clone());
-            let arr_b = hb.import_snapshot_at(scope.clone(), "import B", as_of, until);
+                ha.import_frontier_core(scope.clone(), "import A", as_of.clone(), until.clone());
+            let arr_b = hb.import_frontier_core(scope.clone(), "import B", as_of, until);
             let joined = arr_a.join_core(arr_b, |key, v1, v2| {
                 let row = Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
                 Some(row)
@@ -1255,7 +1211,7 @@ fn empty_seal_advances_import_frontier_to_completion() {
         let until = Timestamp::from(2_u64);
         let probe = ProbeHandle::new();
         worker.dataflow::<Timestamp, _, _>(|scope| {
-            let arr = handle.import_snapshot_at(
+            let arr = handle.import_frontier_core(
                 scope.clone(),
                 "bounded snap",
                 Antichain::from_elem(Timestamp::from(0_u64)),
