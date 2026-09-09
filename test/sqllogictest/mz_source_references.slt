@@ -1,0 +1,60 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_source_references.
+
+mode cockroach
+
+reset-server
+
+# The auction house load generator generates multiple source references.
+statement ok
+CREATE SOURCE lg_auction IN CLUSTER quickstart FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+
+query TTT
+SELECT r.namespace, r.name, r.columns::text
+FROM mz_internal.mz_source_references r
+JOIN mz_catalog.mz_sources s ON s.id = r.source_id
+WHERE s.name = 'lg_auction'
+ORDER BY r.name
+----
+auction  accounts  {id,org_id,balance}
+auction  auctions  {id,seller,item,end_time}
+auction  bids  {id,buyer,auction_id,amount,bid_time}
+auction  organizations  {id,name}
+auction  users  {id,org_id,name}
+
+# A single-output load generator records the reference but no column list.
+statement ok
+CREATE SOURCE lg_counter IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER
+
+query TTT
+SELECT r.namespace, r.name, (r.columns IS NULL)::text
+FROM mz_internal.mz_source_references r
+JOIN mz_catalog.mz_sources s ON s.id = r.source_id
+WHERE s.name = 'lg_counter'
+----
+counter  counter  true
+
+# Dropping a source retracts its references.
+statement ok
+DROP SOURCE lg_auction CASCADE
+
+query I
+SELECT count(*) FROM mz_internal.mz_source_references
+----
+1
+
+statement ok
+DROP SOURCE lg_counter CASCADE
+
+query I
+SELECT count(*) FROM mz_internal.mz_source_references
+----
+0
