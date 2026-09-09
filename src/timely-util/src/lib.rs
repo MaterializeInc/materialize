@@ -26,6 +26,7 @@ pub mod containers;
 pub mod hash;
 pub mod operator;
 pub mod order;
+pub mod out_of_core;
 pub mod pact;
 pub mod panic;
 pub mod pool_config;

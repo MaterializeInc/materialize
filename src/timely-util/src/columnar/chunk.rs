@@ -400,6 +400,14 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         }
     }
 
+    /// Borrow resident metadata, or scope a copy-out read to this callback.
+    pub(crate) fn with_column<Out>(&self, logic: impl FnOnce(&Column<(D, T, R)>) -> Out) -> Out {
+        match self {
+            Self::Resident(column, _) => logic(column),
+            Self::Spilled(..) => logic(&self.clone().into_column()),
+        }
+    }
+
     /// True when the body lives in the pool.
     pub fn is_spilled(&self) -> bool {
         matches!(self, ColumnChunk::Spilled(_, _))
@@ -421,7 +429,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     }
 
     /// The first and last data items, from resident state only.
-    fn data_span(&self) -> (columnar::Ref<'_, D>, columnar::Ref<'_, D>) {
+    pub(crate) fn data_span(&self) -> (columnar::Ref<'_, D>, columnar::Ref<'_, D>) {
         match self {
             ColumnChunk::Resident(col, _) => {
                 let data = col.borrow().0;

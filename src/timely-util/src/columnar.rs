@@ -23,6 +23,7 @@ pub mod builder_input;
 pub mod chunk;
 pub mod consolidate;
 pub mod merge_batcher;
+pub mod payload;
 pub mod unload;
 
 use std::hash::Hash;
