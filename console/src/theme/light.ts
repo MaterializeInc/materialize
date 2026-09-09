@@ -14,12 +14,14 @@
  */
 
 import { BasePalette, ComponentOverrides, ThemeColors, ThemeShadows } from ".";
+import { accentHue, accentPalettes } from "./accent";
 import colors from "./colors";
 
 const base: BasePalette = {
+  accentHue,
   accent: {
-    purple: colors.purple[600],
-    brightPurple: colors.purple[500],
+    purple: accentPalettes.light.primary,
+    brightPurple: accentPalettes.light.bright,
     darkGreen: colors.green[450],
     indigo: colors.indigo[50],
     green: colors.green[500],
@@ -38,7 +40,8 @@ const base: BasePalette = {
   background: {
     // robinclowers: I added this based on Parker's design for the new navigation hover
     // style. There may be a better / more idomatic way to fit it into our color system.
-    accent: "rgba(90, 52, 203, 0.08)",
+    accent: accentPalettes.light.wash,
+    accentActive: accentPalettes.activeWash,
     primary: colors.white,
     secondary: colors.gray[50],
     tertiary: colors.gray[100],
@@ -113,6 +116,6 @@ export const lightShadows: ThemeShadows = {
   `,
   input: {
     error: "0px 0px 0px 2px hsla(343, 95%, 46%, 0.24)",
-    focus: "0px 0px 0px 2px hsla(257, 100%, 65%, 0.24)",
+    focus: accentPalettes.light.focusRing,
   },
 };

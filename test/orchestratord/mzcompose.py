@@ -1748,7 +1748,7 @@ class ConsoleAppearance(Modification):
     # The operator copies the Materialize CR's `consoleAppearance` into the
     # console's `app-config.json`, which is how the console learns which
     # instance it is pointed at.
-    APPEARANCE = {"displayName": "prod"}
+    APPEARANCE = {"displayName": "prod", "accentColor": "orange"}
 
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:

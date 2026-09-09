@@ -47,7 +47,7 @@ export function importAppConfig(): {
       mode: SelfManagedAuthMode;
     };
     balancerd_dns_names?: string[];
-    appearance?: { displayName?: string };
+    appearance?: { displayName?: string; accentColor?: string };
   };
   return {
     auth: json.auth,

@@ -257,8 +257,8 @@
       },
       {
         "name": "privateKeyAlgorithm",
-        "type": "CertificatePrivateKeyAlgorithm",
-        "description": "Optional algorithm to use for the private key. If not specified, a recommended default will be chosen.",
+        "type": "Enum",
+        "description": "Optional algorithm to use for the private key. If not specified, a recommended default will be chosen.\n\nValid values:\n- `RSA`\n- `ECDSA`\n- `Ed25519`",
         "default": null,
         "required": false,
         "deprecated": false
@@ -342,6 +342,14 @@
   [
     "ConsoleAppearance",
     [
+      {
+        "name": "accentColor",
+        "type": "Enum",
+        "description": "The hue the console accents its interface with. This recolors accented\nelements such as the active navigation item, primary buttons, links and\nfocus rings. Colors that carry meaning, such as the red of an error or\nthe green of a healthy object, are left alone.\n\nDefaults to Materialize purple.\n\nValid values:\n- `blue`\n- `orange`\n- `purple`",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
       {
         "name": "displayName",
         "type": "String",

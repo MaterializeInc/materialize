@@ -2824,7 +2824,7 @@ mod tests {
 
     use super::v1alpha1::{Materialize, MaterializeSpec, MaterializeStatus};
     use super::{DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION, RolloutRequestTimeout};
-    use crate::crd::ConsoleAppearance;
+    use crate::crd::{ConsoleAccentColor, ConsoleAppearance};
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
@@ -3488,6 +3488,7 @@ mod tests {
         let hash = mz.generate_rollout_hash();
         mz.spec.console_appearance = Some(ConsoleAppearance {
             display_name: Some("prod".to_owned()),
+            accent_color: Some(ConsoleAccentColor::Orange),
         });
         assert_eq!(mz.generate_rollout_hash(), hash);
     }
