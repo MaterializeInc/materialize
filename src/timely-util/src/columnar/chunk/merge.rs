@@ -55,6 +55,17 @@ impl ReadBudget {
         }
     }
 
+    pub(super) async fn reserve(&self, bytes: usize) -> Arc<OwnedSemaphorePermit> {
+        let bytes = u32::try_from(bytes).expect("merge inputs fit u32");
+        assert!(bytes <= self.capacity, "merge inputs exceed read admission");
+        Arc::new(
+            Arc::clone(&self.bytes)
+                .acquire_many_owned(bytes)
+                .await
+                .expect("read admission remains open"),
+        )
+    }
+
     /// Bytes currently reserved, including cancelled reads still in flight.
     pub fn reserved_bytes(&self) -> usize {
         usize::try_from(self.capacity).expect("u32 fits usize") - self.bytes.available_permits()
@@ -267,43 +278,6 @@ where
         self.retire_inputs();
         ColumnChunk::push_bounded(output, depth, &mut self.ready);
         self.ready.pop_front().map_or(Step::Progress, Step::Output)
-    }
-
-    /// Materialize a passed-through output for timestamp advancement.
-    /// The merge's input reservation also covers this input-sized body.
-    pub(super) async fn read_output(
-        &mut self,
-        chunk: ColumnChunk<D, T, R>,
-    ) -> ColumnChunk<D, T, R> {
-        if matches!(chunk, ColumnChunk::Spilled(..)) {
-            if self.reservation.is_none() {
-                self.reservation = Some(Arc::new(
-                    Arc::clone(&self.budget.bytes)
-                        .acquire_many_owned(self.required)
-                        .await
-                        .expect("read budget remains open"),
-                ));
-            }
-            let depth = chunk.depth();
-            let ColumnChunk::Spilled(body, _) = chunk else {
-                unreachable!()
-            };
-            let handle = Arc::clone(&body.handle);
-            let reservation = Arc::clone(self.reservation.as_ref().expect("admitted output"));
-            let task = mz_ore::task::spawn(|| "column_advance_read", async move {
-                ReadResult {
-                    buffers: [Some(handle.read_async().await), None],
-                    _reservation: reservation,
-                }
-            });
-            let ReadResult { mut buffers, .. } = task.await;
-            ColumnChunk::Resident(
-                std::rc::Rc::new(Column::Align(buffers[0].take().expect("read output"))),
-                depth,
-            )
-        } else {
-            chunk
-        }
     }
 
     async fn finish_reads(&mut self) {
