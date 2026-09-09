@@ -21,6 +21,12 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not new design requirements or a reason to reopen agreed decisions.
 
+- Maintained protection: milestone 1 remains active. The protected-MV path is an
+  implementation checkpoint, not completion across maintained object types. Make
+  source/sink recovery requirements constrain catalog authorization even when
+  local controller accounting is absent, and bring maintained compute compaction
+  under committed permission. Follow the milestone's requirement-derivation and
+  recovery-semantics boundaries rather than prescribing new records for every type.
 - Publication scaling: publish_read_protection emits one catalog op per record,
   while Transaction::get_op_updates scans accumulated pending updates after each
   op. This creates quadratic work on the coordinator loop. Address that path and
@@ -32,12 +38,12 @@ priorities, not new design requirements or a reason to reopen agreed decisions.
   setting. Revisit whether the checker is forcing unnecessary production semantics.
   Preserve full catalog comparison, including protection records, without adding
   further special cases to make the harness pass.
-- Ownership transition: finish the protected-MV milestone's production validation,
-  then prioritize a real catalog subscriber over more standalone APIs. In that
-  transition, address prepare_state's reliance on locally installed collections
-  and make the writer-side responsibility for complete maintained requirements
-  explicit. An MV's requirement is a separate sequencer op today. These are
-  transitional dependencies, not evidence that the current single-owner path fails.
+- Ownership transition: after milestone 1, prioritize a real catalog subscriber
+  over more standalone APIs. In that transition, address prepare_state's reliance
+  on locally installed collections and make the writer-side responsibility for
+  complete maintained requirements explicit. An MV's requirement is a separate
+  sequencer op today. These are transitional dependencies, not evidence that the
+  current single-owner path fails.
 
 Keep the draft PR description accurate about what is implemented and what remains,
 with validation status in the PR rather than the design log.
