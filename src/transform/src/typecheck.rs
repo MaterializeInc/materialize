@@ -1508,11 +1508,10 @@ impl Typecheck {
                 Literal(row, typ) => {
                     let typ = typ.clone();
                     if let Ok(row) = row {
-                        // A literal's row holds exactly one datum.
-                        let datum = row.unpack_first();
+                        let datums = row.unpack();
                         row_difference_with_column_types(
                             source,
-                            &[datum],
+                            &datums,
                             std::slice::from_ref(&typ),
                         )?;
                     }
