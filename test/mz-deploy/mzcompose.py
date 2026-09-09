@@ -1227,6 +1227,76 @@ def workflow_dev(c: Composition, parser: WorkflowArgumentParser) -> None:
         ), f"refused dev run must not insert a manifest row, got: {rows}"
 
 
+def workflow_structured_types(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Types that `mz_columns` cannot spell survive `lock` and `compile`.
+
+    `mz_columns.type` reports the bare tokens `record`, `list`, and `map` for an
+    anonymous composite or container, dropping the field list and the element
+    type. Neither can be turned back into a column, so the contract records the
+    real structure instead.
+
+    Verifies against a live catalog what unit tests cannot: that the capture
+    query recovers the full type, and that the recovered type reconstructs into
+    a relation the planner accepts.
+    """
+    setup_base(c)
+
+    # An upstream object mz-deploy does not own, carrying one column of every
+    # shape the catalog renders lossily.
+    c.sql(
+        """
+        CREATE SCHEMA upstream;
+        CREATE TABLE upstream.leaf (a int4 NOT NULL, b text);
+        CREATE VIEW upstream.wide AS
+            SELECT
+                __r AS payload,
+                NULL::int8 list AS tags,
+                NULL::numeric(38,2) AS amount
+            FROM (SELECT l.a, l.b, __n AS nested FROM upstream.leaf l, upstream.leaf __n) __r;
+        GRANT USAGE ON SCHEMA upstream TO deploy_user;
+        GRANT SELECT ON upstream.wide TO deploy_user;
+        """,
+        user="mz_system",
+        port=6877,
+    )
+
+    project_dir = PROJECTS_DIR / "structured-types" / "v1"
+    types_lock = project_dir / "types.lock"
+    if types_lock.exists():
+        types_lock.unlink()
+
+    result = run_mz_deploy(c, "structured-types/v1", "lock")
+    assert result.returncode == 0, f"lock failed: {result.stderr}"
+    assert types_lock.exists(), f"expected {types_lock} to be created"
+    contents = types_lock.read_text()
+
+    for expected in [
+        # The record's fields, not the bare token `record`.
+        '{ name = "a", type = "integer", nullable = false }',
+        '{ name = "b", type = "text", nullable = true }',
+        # A nested record keeps its own fields.
+        '{ name = "nested", type = "record", nullable = false, fields = [',
+        # The list's element type, not the bare token `list`.
+        '{ name = "tags", type = "list", nullable = true, of = { type = "bigint" } }',
+        # The modifier `mz_columns.type` drops.
+        'type = "numeric(39,2)"',
+    ]:
+        assert expected in contents, f"missing {expected!r} in types.lock:\n{contents}"
+
+    # The captured contract has to reconstruct: `compile` stubs every external
+    # dependency into its private catalog before typechecking the project.
+    result = run_mz_deploy(c, "structured-types/v1", "compile")
+    assert (
+        result.returncode == 0
+    ), f"compile over structured external types failed: {result.stderr}"
+
+    # Capture is deterministic, so a second lock is a no-op.
+    run_mz_deploy(c, "structured-types/v1", "lock")
+    assert (
+        types_lock.read_text() == contents
+    ), "re-locking changed types.lock; capture is not deterministic"
+
+
 def workflow_system_deps(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test that system-catalog objects are accepted as 2-part dependencies.
 
