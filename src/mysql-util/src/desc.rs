@@ -131,9 +131,6 @@ impl MySqlTableDesc {
             };
 
             let dropped_column_error = || {
-                // We could not find a column in the incoming row that matches this
-                // descriptor column. This is an error as the column is not ignored
-                // (ignored columns have already been skipped).
                 self.build_schema_change_error(SchemaChange::ColumnDropped {
                     column: self_column.name.clone(),
                 })
