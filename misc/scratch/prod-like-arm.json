@@ -1,7 +1,7 @@
 {
     "name": "production-like ARM",
     "launch_script": "true",
-    "instance_type": "r6g.4xlarge",
+    "instance_type": "r8g.4xlarge",
     "size_gb": 200,
     "tags": {}
 }
