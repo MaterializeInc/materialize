@@ -26,10 +26,16 @@
 
 use crate::client::connection::TypeInfoClient;
 use crate::client::errors::ConnectionError;
+use crate::client::{humanized_type, quote_identifier};
 use crate::project::ir::object_id::ObjectId;
 use crate::types::{ColumnType, DataType, ObjectKind, Types};
+use crate::verbose;
+use itertools::Itertools;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Columns probed per `pg_typeof` statement.
+const PROBE_CHUNK: usize = 32;
 
 /// Per-object payload returned by the catalog query in `query_types_for_objects`.
 #[derive(Deserialize)]
@@ -42,6 +48,8 @@ struct CatalogObjectInfo {
 #[derive(Deserialize)]
 struct CatalogColumnInfo {
     name: String,
+    /// `format_type` output: the scalar spelling with its modifiers, or a
+    /// pseudo-type token for a type the catalog cannot spell.
     r#type: String,
     nullable: bool,
     position: i64,
@@ -49,6 +57,101 @@ struct CatalogColumnInfo {
 }
 
 impl TypeInfoClient<'_> {
+    /// Replace pseudo-type tokens in `tables` with the column's real type.
+    ///
+    /// `mz_columns` reports `record`, `list`, and `map` for types it cannot
+    /// spell, discarding a record's fields and a container's element type.
+    /// `pg_typeof` is the only surface that describes them, and it is a
+    /// plan-time constant (`mz_sql::func`), so wrapping the column in a scalar
+    /// subquery types it without reading any rows.
+    ///
+    /// Unlike the rest of `lock`, this reads through a cluster and needs
+    /// `SELECT` on the dependency. A failure therefore leaves the column at its
+    /// pseudo token and warns, rather than failing the lock: reconstruction
+    /// reports a precise error later, and only if something depends on the
+    /// column.
+    async fn resolve_pseudo_types(
+        &self,
+        lossy: &[(ObjectId, String)],
+        tables: &mut BTreeMap<ObjectId, BTreeMap<String, ColumnType>>,
+    ) {
+        let mut unresolved: Vec<String> = Vec::new();
+        for chunk in lossy.chunks(PROBE_CHUNK) {
+            let resolved = match self.probe_types(chunk).await {
+                Ok(resolved) => resolved,
+                // One bad column poisons its whole statement, so fall back to
+                // probing the chunk's columns one at a time.
+                Err(err) => {
+                    verbose!("batched type probe failed, retrying per column: {}", err);
+                    let mut resolved = Vec::new();
+                    for target in chunk {
+                        resolved.push(match self.probe_types(std::slice::from_ref(target)).await {
+                            Ok(one) => one.into_iter().next().flatten(),
+                            Err(err) => {
+                                verbose!(
+                                    "type probe for {}.{} failed: {}",
+                                    target.0,
+                                    target.1,
+                                    err
+                                );
+                                None
+                            }
+                        });
+                    }
+                    resolved
+                }
+            };
+
+            for ((object, column), rendered) in chunk.iter().zip_eq(resolved) {
+                let resolved = rendered
+                    .as_deref()
+                    .and_then(|r| humanized_type::parse(r).ok());
+                match resolved {
+                    Some(r#type) => {
+                        if let Some(col) = tables.get_mut(object).and_then(|c| c.get_mut(column)) {
+                            col.r#type = r#type;
+                        }
+                    }
+                    None => unresolved.push(format!("{}.{}", object, column)),
+                }
+            }
+        }
+
+        if !unresolved.is_empty() {
+            crate::cli::progress::warn(&format!(
+                "could not determine the full type of {}; re-run `mz-deploy lock` with access to these objects, or typechecking will report them as unreconstructible",
+                unresolved.join(", ")
+            ));
+        }
+    }
+
+    /// `pg_typeof` for each target, in order, as one statement.
+    async fn probe_types(
+        &self,
+        targets: &[(ObjectId, String)],
+    ) -> Result<Vec<Option<String>>, ConnectionError> {
+        let projections: Vec<String> = targets
+            .iter()
+            .enumerate()
+            .map(|(i, (object, column))| {
+                format!(
+                    "pg_typeof((SELECT {} FROM {} LIMIT 0)) AS t{}",
+                    quote_identifier(column),
+                    qualified_name(object),
+                    i
+                )
+            })
+            .collect();
+        let rows = self
+            .client
+            .query(&format!("SELECT {}", projections.join(", ")), &[])
+            .await?;
+        let Some(row) = rows.first() else {
+            return Ok(vec![None; targets.len()]);
+        };
+        Ok((0..targets.len()).map(|i| row.get(i)).collect())
+    }
+
     /// Resolve the column schema, kind, and comments for `objects` plus
     /// `source_tables` in a single catalog query.
     ///
@@ -122,7 +225,7 @@ impl TypeInfoClient<'_> {
                         'columns', COALESCE( \
                             jsonb_agg(jsonb_build_object( \
                                 'name', c.name, \
-                                'type', c.type, \
+                                'type', pg_catalog.format_type(c.type_oid, c.type_mod), \
                                 'nullable', c.nullable, \
                                 'position', c.position::int8, \
                                 'comment', col_comment.comment \
@@ -151,6 +254,7 @@ impl TypeInfoClient<'_> {
         let mut kinds = BTreeMap::new();
         let mut comments = BTreeMap::new();
         let mut found = BTreeSet::new();
+        let mut lossy: Vec<(ObjectId, String)> = Vec::new();
 
         for row in &rows {
             let db: Option<String> = row.get("db");
@@ -181,10 +285,14 @@ impl TypeInfoClient<'_> {
 
             let mut columns = BTreeMap::new();
             for col in info.columns {
+                let r#type = DataType::Named(col.r#type);
+                if r#type.is_pseudo_token() {
+                    lossy.push((oid.clone(), col.name.clone()));
+                }
                 columns.insert(
                     col.name,
                     ColumnType {
-                        r#type: DataType::Named(col.r#type),
+                        r#type,
                         nullable: col.nullable,
                         position: usize::try_from(col.position).unwrap_or(0),
                         comment: col.comment,
@@ -194,6 +302,8 @@ impl TypeInfoClient<'_> {
             tables.insert(oid.clone(), columns);
             found.insert(oid);
         }
+
+        self.resolve_pseudo_types(&lossy, &mut tables).await;
 
         let missing: Vec<ObjectId> = all_oids
             .iter()
@@ -209,5 +319,23 @@ impl TypeInfoClient<'_> {
             },
             missing,
         ))
+    }
+}
+
+/// Quote an object for use in a query, dropping the database for the two-part
+/// system-schema form.
+fn qualified_name(object: &ObjectId) -> String {
+    match object.database() {
+        Some(db) => format!(
+            "{}.{}.{}",
+            quote_identifier(db),
+            quote_identifier(object.schema()),
+            quote_identifier(object.object()),
+        ),
+        None => format!(
+            "{}.{}",
+            quote_identifier(object.schema()),
+            quote_identifier(object.object()),
+        ),
     }
 }
