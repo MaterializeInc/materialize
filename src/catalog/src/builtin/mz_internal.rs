@@ -5234,7 +5234,7 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
         ),
         (
             "object_count",
-            "The number of maintained compute dataflows in the hydration episode.",
+            "The number of maintained compute dataflows in the hydration episode. Includes the replica's system introspection dataflows, so it exceeds the number of indexes and materialized views you created.",
         ),
         (
             "peak_memory_bytes",
