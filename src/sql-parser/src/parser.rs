@@ -2989,6 +2989,7 @@ impl<'a> Parser<'a> {
                 SESSION,
                 SSH,
                 SSL,
+                STORAGE,
                 URL,
                 USER,
                 USERNAME,
@@ -3102,6 +3103,10 @@ impl<'a> Parser<'a> {
                     MODE => ConnectionOptionName::SslMode,
                     _ => unreachable!(),
                 },
+                STORAGE => {
+                    self.expect_keyword(PROVIDER)?;
+                    ConnectionOptionName::StorageProvider
+                }
                 URL => ConnectionOptionName::Url,
                 // TYPE => ConnectionOptionName::CatalogType,
                 WAREHOUSE => ConnectionOptionName::Warehouse,
