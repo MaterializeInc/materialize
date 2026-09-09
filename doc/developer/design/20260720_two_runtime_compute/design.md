@@ -1422,17 +1422,22 @@ decision rather than a patch.
   200 MiB baseline with no consistent sign. The `ManyIndexesIdle` feature benchmark, 200
   published one-key indexes against a single-runtime image on one build, put clusterd's
   resident memory within 2% in two of three nightly runs and 16% above in the third.
-* **An interactive reader more than doubles maintenance's arrangement-maintenance
-  CPU.** Back-to-back one-shot joins over a published index leave the index's batch
-  count, heap size, and capacity byte-identical to a quiet arm, so the merge schedule
-  is untouched and nothing extra is retained. What changes is the work:
-  `mz_arrangement_maintenance_seconds_total` under `role="maintenance"` ran 0.160
-  CPU-seconds per second while 509 joins were in flight, against 0.080 and 0.057 in
-  the quiet arms either side, and the interactive runtime's own arrangement
-  maintenance stayed three orders of magnitude below that. Every
+* **An attached reader roughly doubles maintenance's arrangement-maintenance CPU, and
+  the charge saturates at the first one.** Back-to-back one-shot joins over a published
+  index leave the index's batch count, heap size, and capacity byte-identical to a quiet
+  arm, so the merge schedule is untouched and nothing extra is retained. What changes is
+  the work: `mz_arrangement_maintenance_seconds_total` under `role="maintenance"` ran
+  0.13 to 0.16 CPU-seconds per second with readers attached against 0.05 to 0.07 quiet,
+  while the interactive runtime's own arrangement maintenance stayed three orders of
+  magnitude below that. Sweeping reader concurrency 1, 2 and 4, and adding an arm at
+  concurrency 4 against a join a hundred times smaller, moves it 0.164, 0.144, 0.143,
+  0.129: flat, and falling slightly as the workers get busier, since merge work is
+  opportunistic `exert`. So it is not per read, per row, per dataflow install, or per
+  reader, but a fixed 6 to 10% of one core for having any reader attached. That is about
+  1% of what the reads themselves cost the process, so it bounds nothing. Every
   `set_physical_compaction` and `exert` on a `SharedSpine` runs `apply_holds` and then
-  `publish_chain`, and each read mints and releases a handle that moves
-  `remote_physical`, which is the obvious suspect but is not confirmed.
+  `publish_chain`, and a reader's handle moves `remote_physical`, which is the obvious
+  suspect but is not confirmed.
 * **Storage introspection is patched into maintenance introspection.** A
   pre-existing coupling, where storage's introspection is merged into the compute
   runtime's introspection, is inherited unchanged by the split. It complicates
