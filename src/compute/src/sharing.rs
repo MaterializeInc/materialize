@@ -327,6 +327,42 @@ impl ArrangementSharingRegistry {
         Some((slot.oks.handle(), slot.errs.handle()))
     }
 
+    /// How far the readers' holds keep the publishing runtime from compacting, over every
+    /// arrangement published on `worker_index`.
+    ///
+    /// Returns the largest gap in milliseconds between an arrangement's requested and applied
+    /// logical compaction frontiers, and how many arrangements have any gap at all. Aliases share
+    /// their target's points, so points are counted once rather than once per id. A point whose
+    /// requested frontier is empty is counted as held but contributes no gap: its collection is
+    /// being dropped and has no finite frontier left to subtract from.
+    pub(crate) fn hold_gaps(&self, worker_index: usize) -> (u64, usize) {
+        let inner = self.lock();
+        let mut seen = BTreeSet::new();
+        let mut max_gap = 0;
+        let mut held = 0;
+        for slots in inner.map.values() {
+            let Some(Some(slot)) = slots.get(worker_index) else {
+                continue;
+            };
+            if !seen.insert(Arc::as_ptr(slot)) {
+                continue;
+            }
+            let (applied, requested) = slot.oks.logical_frontiers();
+            match (applied.as_option(), requested.as_option()) {
+                (Some(applied), Some(requested)) => {
+                    let gap = u64::from(*requested).saturating_sub(u64::from(*applied));
+                    if gap > 0 {
+                        held += 1;
+                        max_gap = max_gap.max(gap);
+                    }
+                }
+                (Some(_), None) => held += 1,
+                _ => {}
+            }
+        }
+        (max_gap, held)
+    }
+
     /// The accumulated `oks` logical holds registered against `id` on `worker_index`, if published.
     ///
     /// Test-only. Minting a handle to observe the published frontiers cannot distinguish a live

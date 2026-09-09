@@ -844,6 +844,18 @@ metrics:
   - response_type
   source: src/compute-client/src/metrics.rs
   visibility: internal
+- name: mz_compute_shared_arrangement_held_count
+  help: How many of the shared arrangements this worker publishes are kept from compacting by the importing runtime or a reader.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_shared_arrangement_hold_gap_ms
+  help: The largest gap, over the shared arrangements this worker publishes, between the compaction frontier it was told to apply and the one it applied.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_connection_status
   help: Count of completed network connections, by status
   labels:

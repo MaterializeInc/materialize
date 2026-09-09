@@ -1380,6 +1380,25 @@ impl<'a> ActiveComputeState<'a> {
                 .replica_expiration_remaining_seconds
                 .set(remaining)
         }
+
+        // Only the publishing runtime is held back, and only it has slots in the registry under its
+        // own worker ordinal. Reporting from the interactive runtime as well would repeat the same
+        // numbers under a second `role` label, so its series stays at zero: an extra zero leaves a
+        // `sum` or a `max` over the label correct, where a duplicate would not.
+        if self.compute_state.role() != ComputeRuntimeRole::Interactive {
+            let (gap, held) = self
+                .compute_state
+                .sharing_registry
+                .hold_gaps(self.timely_worker.index());
+            self.compute_state
+                .metrics
+                .shared_arrangement_hold_gap_ms
+                .set(gap);
+            self.compute_state
+                .metrics
+                .shared_arrangement_held_count
+                .set(u64::cast_from(held));
+        }
     }
 
     /// Gives `peek` a turn on the worker if this activation's budget has one left, and queues it
