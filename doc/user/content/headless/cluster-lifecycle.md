@@ -146,4 +146,3 @@ initial state of the upstream system before the states above apply. See
 [Troubleshooting](/transform-data/freshness-troubleshooting/) for how to
 diagnose a cluster that is not progressing through these states.
 {{< /note >}}
-
