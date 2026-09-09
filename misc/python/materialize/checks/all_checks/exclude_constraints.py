@@ -22,7 +22,7 @@ class ExcludeConstraints(Check):
     upstream constraints must remain a non-event across them."""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v26.39.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v26.41.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""
@@ -105,8 +105,11 @@ class ExcludeConstraints(Check):
             30 10
 
             # The excluded UNIQUE constraint was not recorded as a key, so only
-            # the PRIMARY KEY remains on t1; t2 recorded no constraints at all,
-            # so every column is nullable.
+            # the PRIMARY KEY remains on t1.
+            > SELECT key FROM (SHOW INDEXES ON exclude_constraints_t1);
+            {id}
+
+            # t2 recorded no constraints at all, so every column is nullable.
             > SELECT nullable FROM mz_columns WHERE id = (SELECT id FROM mz_tables WHERE name = 'exclude_constraints_t2');
             true
             true
