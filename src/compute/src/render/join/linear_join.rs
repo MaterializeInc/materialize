@@ -194,9 +194,9 @@ impl YieldSpec {
 
 /// Different forms the streamed data might take.
 enum JoinedFlavor<'scope, T: RenderTimestamp> {
-    /// The join's source input as a collection edge, before it enters the first
-    /// stage. `differential_join` forms its arrangement key off the edge, so a
-    /// columnar source flows in without a `ColumnarToVec` decode.
+    /// The join's source input, before it enters the first stage.
+    /// `differential_join` forms its arrangement key off the edge, so a columnar source
+    /// needs no decode.
     Edge(CollectionEdge<'scope, T>),
     /// The intra-operator multi-stage accumulator. `mz_join_core` is
     /// `Vec`-internal, so the accumulator is a bare `VecCollection`, not a
@@ -310,8 +310,7 @@ where
                 stage_plan,
                 &mut errors,
             );
-            // Update joined results and capture any errors. `mz_join_core`
-            // produces a `Vec` collection, the intra-operator accumulator.
+            // Update joined results and capture any errors.
             joined = JoinedFlavor::Collection(stream);
         }
 
@@ -321,11 +320,8 @@ where
         // The result is either the source edge (single-input join, no stages) or
         // the `Vec` accumulator (after one or more stages); it is never arranged.
         let ok_edge = if let Some(closure) = linear_plan.final_closure {
-            // The finalization closure computes fresh output rows, so build them into
-            // a `ConsolidatingColumnBuilder` (owned give), matching the prior
-            // `ConsolidatingContainerBuilder` and folding within-batch duplicates. A
-            // source edge is decoded to `Vec` first (`into_vec` is the identity on the
-            // `Vec` arm); the accumulator is already a `VecCollection`.
+            // The finalization closure computes fresh output rows, so the owned give
+            // into the consolidating builder is a move.
             let input = match joined {
                 JoinedFlavor::Edge(edge) => edge.into_vec(),
                 JoinedFlavor::Collection(collection) => collection,
@@ -352,11 +348,9 @@ where
             errors.push(errs);
             CollectionEdge::Columnar(updates)
         } else {
-            // Identity finalization: the raw output is the result, encoded to the
-            // columnar edge via the sanctioned leaf-encode, non-consolidating to match
-            // the raw output. A columnar source (single-input join) is already an edge
-            // and passes through with no round-trip; the `Vec` accumulator and a `Vec`
-            // source encode via `vec_to_columnar`.
+            // With identity finalization the raw output is the result, encoded here
+            // non-consolidating to match it. A columnar source (single-input join)
+            // is already an edge and passes straight through.
             match joined {
                 JoinedFlavor::Edge(CollectionEdge::Columnar(c)) => CollectionEdge::Columnar(c),
                 JoinedFlavor::Edge(CollectionEdge::Vec(s)) => {
