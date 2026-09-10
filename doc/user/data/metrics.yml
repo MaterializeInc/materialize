@@ -2701,6 +2701,10 @@ metrics:
   - worker_id
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_stale_shard_count
+  help: count of shards on this process whose persisted state version is behind this process's build version; per-process, so summing across processes counts (shard, process) pairs, not distinct shards
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_apply_spine_fast_path
   help: count of spine diff applications that hit the fast path
   source: src/persist-client/src/internal/metrics.rs

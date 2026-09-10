@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use bytes::Bytes;
@@ -314,6 +315,15 @@ impl StateVersions {
                 shard_metrics
                     .inline_part_count
                     .set(u64::cast_from(size_metrics.inline_part_count));
+                shard_metrics.stale.store(
+                    new_state
+                        .state
+                        .collections
+                        .version
+                        .cmp_precedence(&self.cfg.build_version)
+                        .is_lt(),
+                    Ordering::Relaxed,
+                );
 
                 let spine_metrics = new_state.collections.trace.spine_metrics();
                 shard_metrics

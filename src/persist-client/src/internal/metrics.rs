@@ -12,6 +12,7 @@
 use async_stream::stream;
 use mz_persist_types::stats::PartStatsMetrics;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::{OnceCell, OwnedSemaphorePermit, Semaphore};
@@ -24,8 +25,8 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
-    DeleteOnDropGauge, IntCounter, MakeCollector, MetricsRegistry, UIntGauge, UIntGaugeVec, raw,
+    ComputedGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter,
+    MakeCollector, MetricsRegistry, UIntGauge, UIntGaugeVec, raw,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -35,7 +36,7 @@ use mz_persist::metrics::{BlobHedgeMetrics, ColumnarMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use mz_postgres_client::metrics::PostgresClientMetrics;
-use prometheus::core::{AtomicU64, Collector, Desc, GenericGauge};
+use prometheus::core::{AtomicI64, AtomicU64, Collector, Desc, GenericGauge};
 use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
@@ -1260,7 +1261,11 @@ pub struct ShardsMetrics {
     // Unlike all the other metrics in here, ShardsMetrics intentionally uses
     // the DeleteOnDrop wrappers. A process might stop using a shard (drop all
     // handles to it) but e.g. the set of commands never changes.
-    _count: ComputedIntGauge,
+    //
+    // The process-level shard aggregates (`mz_persist_shard_count`,
+    // `mz_persist_stale_shard_count`) are not fields here: they live in a
+    // `ShardsAggregateMetrics` collector that the registry owns, sharing this
+    // struct's `shards` map so one scrape walk feeds both.
     encoded_rollup_size: mz_ore::metrics::UIntGaugeVec,
     encoded_diff_size: mz_ore::metrics::IntCounterVec,
     hollow_batch_count: mz_ore::metrics::UIntGaugeVec,
@@ -1298,19 +1303,8 @@ pub struct ShardsMetrics {
 impl ShardsMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         let shards = Arc::new(Mutex::new(BTreeMap::new()));
-        let shards_count = Arc::clone(&shards);
+        registry.register_collector(ShardsAggregateMetrics::new(Arc::clone(&shards)));
         ShardsMetrics {
-            _count: registry.register_computed_gauge(
-                metric!(
-                    name: "mz_persist_shard_count",
-                    help: "count of all active shards on this process",
-                ),
-                move || {
-                    let mut ret = 0;
-                    Self::compute(&shards_count, |_m| ret += 1);
-                    ret
-                },
-            ),
             encoded_rollup_size: registry.register(metric!(
                 name: "mz_persist_shard_rollup_size_bytes",
                 help: "total encoded rollup size by shard",
@@ -1492,6 +1486,61 @@ impl ShardsMetrics {
     }
 }
 
+/// Process-level gauges derived from the shards map, collected in a single walk.
+///
+/// Each is the sum of a per-shard quantity, so a `register_computed_gauge`
+/// closure apiece would lock and walk the map once per gauge per scrape. This
+/// collector shares [`ShardsMetrics`]'s `shards` map and folds all of them in
+/// one pass instead.
+#[derive(Debug)]
+struct ShardsAggregateMetrics {
+    shards: Arc<Mutex<BTreeMap<ShardId, Weak<ShardMetrics>>>>,
+    count: GenericGauge<AtomicI64>,
+    stale_count: GenericGauge<AtomicI64>,
+}
+
+impl ShardsAggregateMetrics {
+    fn new(shards: Arc<Mutex<BTreeMap<ShardId, Weak<ShardMetrics>>>>) -> Self {
+        ShardsAggregateMetrics {
+            shards,
+            count: MakeCollector::make_collector(metric!(
+                name: "mz_persist_shard_count",
+                help: "count of all active shards on this process",
+            )),
+            stale_count: MakeCollector::make_collector(metric!(
+                name: "mz_persist_stale_shard_count",
+                help: "count of shards on this process whose persisted state version \
+                       is behind this process's build version; per-process, so summing \
+                       across processes counts (shard, process) pairs, not distinct shards",
+            )),
+        }
+    }
+}
+
+impl Collector for ShardsAggregateMetrics {
+    fn desc(&self) -> Vec<&Desc> {
+        let mut descs = self.count.desc();
+        descs.extend(self.stale_count.desc());
+        descs
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        let mut count = 0;
+        let mut stale_count = 0;
+        ShardsMetrics::compute(&self.shards, |m| {
+            count += 1;
+            if m.stale.load(Ordering::Relaxed) {
+                stale_count += 1;
+            }
+        });
+        self.count.set(count);
+        self.stale_count.set(stale_count);
+        let mut families = self.count.collect();
+        families.extend(self.stale_count.collect());
+        families
+    }
+}
+
 #[derive(Debug)]
 pub struct ShardMetrics {
     pub shard_id: ShardId,
@@ -1525,6 +1574,10 @@ pub struct ShardMetrics {
     pub compact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub compacting_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub noncompact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    // Not a registered per-shard series: this feeds the process-level
+    // `mz_persist_stale_shard_count` computed gauge, which sums it across shards
+    // instead of exporting one series per shard.
+    pub stale: AtomicBool,
 }
 
 impl ShardMetrics {
@@ -1616,6 +1669,7 @@ impl ShardMetrics {
             noncompact_batches: shards_metrics
                 .noncompact_batches
                 .get_delete_on_drop_metric(vec![shard, name.to_string()]),
+            stale: AtomicBool::new(false),
         }
     }
 
@@ -3134,5 +3188,41 @@ pub fn encode_ts_metric<T: Codec64>(ts: &Antichain<T>) -> i64 {
     match ts.elements().first() {
         Some(ts) => i64::from_le_bytes(Codec64::encode(ts)),
         None => i64::MAX,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn shards_aggregate_metrics_one_pass() {
+        let registry = MetricsRegistry::new();
+        let shards = ShardsMetrics::new(&registry);
+        let agg = ShardsAggregateMetrics::new(Arc::clone(&shards.shards));
+        let a = shards.shard(&ShardId::new(), "a");
+        let b = shards.shard(&ShardId::new(), "b");
+
+        // collect() recomputes both gauges from a single walk of the map.
+        agg.collect();
+        assert_eq!(agg.count.get(), 2);
+        assert_eq!(agg.stale_count.get(), 0);
+
+        a.stale.store(true, Ordering::Relaxed);
+        agg.collect();
+        assert_eq!(agg.count.get(), 2);
+        assert_eq!(agg.stale_count.get(), 1);
+
+        b.stale.store(true, Ordering::Relaxed);
+        agg.collect();
+        assert_eq!(agg.stale_count.get(), 2);
+
+        // Flipping back and dropping a handle both lower the counts: the gauge
+        // is recomputed, not ticked.
+        a.stale.store(false, Ordering::Relaxed);
+        drop(b);
+        agg.collect();
+        assert_eq!(agg.count.get(), 1);
+        assert_eq!(agg.stale_count.get(), 0);
     }
 }

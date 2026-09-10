@@ -633,6 +633,9 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     notifier: StateWatchNotifier<T>,
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
+    // Retained only to keep this shard's per-shard series registered for as long
+    // as the state is cached; nothing reads it through this handle anymore. Don't
+    // drop it as "unused" without moving that lifetime guarantee elsewhere.
     shard_metrics: Arc<ShardMetrics>,
     update_semaphore: AwaitableState<Option<tokio::time::Instant>>,
     /// A [SchemaCacheMaps<K, V>], but stored as an Any so the `: Codec` bounds
