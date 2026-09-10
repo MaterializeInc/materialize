@@ -44,6 +44,20 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Select the packed byte layout for the accumulable reduce's arrangement diff.
+///
+/// The accumulators are stored at their natural widths instead of at the size of
+/// the widest enum variant, so a group's diff shrinks to the sum of its slot
+/// sizes. Read at operator construction time, so flips take effect on dataflows
+/// created after the change.
+pub const ENABLE_PACKED_ACCUMULABLE_DIFF: Config<bool> = Config::new(
+    "enable_packed_accumulable_diff",
+    false,
+    "Select the packed byte layout for the accumulable reduce's arrangement diff, instead of a \
+     vector of fixed-size accumulator enums.",
+    ParameterScope::Replica,
+);
+
 /// Use the column-paged merge batcher code path at arrange sites. When
 /// `true`, arrange operators use `Col2ValPagedBatcher` (in
 /// `mz_timely_util::columnar`) and `RowRowColPagedBuilder` (in
@@ -791,6 +805,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_ERROR_DISTINCT)
+        .add(&ENABLE_PACKED_ACCUMULABLE_DIFF)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
         .add(&ENABLE_CORRECTION_V2)

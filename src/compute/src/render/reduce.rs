@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use columnation::{Columnation, CopyRegion};
+use columnation::{Columnation, CopyRegion, Region};
 use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
@@ -24,9 +24,11 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchValOwn};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
-use differential_dataflow::{Data, VecCollection};
+use differential_dataflow::{Data, ExchangeData, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, ENABLE_PACKED_ACCUMULABLE_DIFF, TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
@@ -35,7 +37,7 @@ use mz_compute_types::plan::reduce::{
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_expr::{AggregateFunc, EvalError, SafeMfpPlan};
 use mz_ore::cast::CastLossy;
-use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
+use mz_repr::adt::numeric::{self, NUMERIC_AGG_WIDTH_USIZE, Numeric, NumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnation::ColumnationChunker;
@@ -1357,6 +1359,39 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     fn build_accumulable<'s>(
         &self,
         collection: VecCollection<'s, T, (Row, Row), Diff>,
+        plan: AccumulablePlan,
+        key_arity: usize,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
+    ) -> (
+        RowRowArrangement<'s, T>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
+    ) {
+        // we must have called this function with something to reduce
+        if plan.full_aggrs.len() == 0
+            || plan.simple_aggrs.len() + plan.distinct_aggrs.len() != plan.full_aggrs.len()
+        {
+            self.error_logger().soft_panic_or_log(
+                "Incorrect numbers of aggregates in accummulable reduction rendering",
+                &format!(
+                    "full_aggrs={}, simple_aggrs={}, distinct_aggrs={}",
+                    plan.full_aggrs.len(),
+                    plan.simple_aggrs.len(),
+                    plan.distinct_aggrs.len(),
+                ),
+            );
+        }
+
+        if ENABLE_PACKED_ACCUMULABLE_DIFF.get(&self.config_set) {
+            self.build_accumulable_with::<Accums>(collection, plan, key_arity, mfp_after)
+        } else {
+            self.build_accumulable_with::<Vec<Accum>>(collection, plan, key_arity, mfp_after)
+        }
+    }
+
+    /// Renders [`Self::build_accumulable`] over the arrangement diff type `D`.
+    fn build_accumulable_with<'s, D: AccumulableDiff>(
+        &self,
+        collection: VecCollection<'s, T, (Row, Row), Diff>,
         AccumulablePlan {
             full_aggrs,
             simple_aggrs,
@@ -1370,37 +1405,17 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     ) {
         let collection_scope = collection.scope();
 
-        // we must have called this function with something to reduce
-        if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
-            self.error_logger().soft_panic_or_log(
-                "Incorrect numbers of aggregates in accummulable reduction rendering",
-                &format!(
-                    "full_aggrs={}, simple_aggrs={}, distinct_aggrs={}",
-                    full_aggrs.len(),
-                    simple_aggrs.len(),
-                    distinct_aggrs.len(),
-                ),
-            );
-        }
-
         // Some of the aggregations may have the `distinct` bit set, which means that they'll
         // need to be extracted from `collection` and be subjected to `distinct` with `key`.
         // Other aggregations can be directly moved in to the `diff` field.
         //
-        // In each case, the resulting collection should have `data` shaped as `(key, ())`
-        // and a `diff` that is a vector with length `3 * aggrs.len()`. The three values are
-        // generally the count, and then two aggregation-specific values. The size could be
-        // reduced if we want to specialize for the aggregations.
+        // In each case, the resulting collection has `data` shaped as `(key, ())`
+        // and a `diff` holding one accumulator per aggregate plus the record count.
 
-        // Instantiate a default vector for diffs with the correct types at each
+        // Instantiate a default set of diffs with the correct types at each
         // position.
-        let zero_diffs: (Vec<_>, Diff) = (
-            full_aggrs
-                .iter()
-                .map(|f| accumulable_zero(&f.func))
-                .collect(),
-            Diff::ZERO,
-        );
+        let zero_diffs: (D, Diff) = (D::zero(&full_aggrs), Diff::ZERO);
+        let layout = zero_diffs.0.layout();
 
         let mut to_aggregate = Vec::new();
         if simple_aggrs.len() > 0 {
@@ -1408,6 +1423,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             let collection = collection.clone();
             let easy_cases = collection.explode_one({
                 let zero_diffs = zero_diffs.clone();
+                let layout = layout.clone();
                 move |(key, row)| {
                     let mut diffs = zero_diffs.clone();
                     // Try to unpack only the datums we need. Unfortunately, since we
@@ -1422,7 +1438,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             datum = row_iter.next().unwrap();
                         }
                         let datum = datum.1;
-                        diffs.0[*datum_index] = datum_to_accumulator(&aggr.func, datum);
+                        diffs.0.set(
+                            &layout,
+                            *datum_index,
+                            datum_to_accumulator(&aggr.func, datum),
+                        );
                         diffs.1 = Diff::ONE;
                     }
                     ((key, ()), diffs)
@@ -1455,10 +1475,15 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 .as_collection(move |key_val_iter, _| pairer.split(key_val_iter))
                 .explode_one({
                     let zero_diffs = zero_diffs.clone();
+                    let layout = layout.clone();
                     move |(key, row)| {
                         let datum = row.iter().next().unwrap();
                         let mut diffs = zero_diffs.clone();
-                        diffs.0[datum_index] = datum_to_accumulator(&aggr.func, datum);
+                        diffs.0.set(
+                            &layout,
+                            datum_index,
+                            datum_to_accumulator(&aggr.func, datum),
+                        );
                         diffs.1 = Diff::ONE;
                         ((key, ()), diffs)
                     }
@@ -1479,6 +1504,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         let full_aggrs2 = full_aggrs.clone();
+        let mut accums1 = Vec::new();
+        let mut accums2 = Vec::new();
 
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
@@ -1487,7 +1514,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 ColumnationChunker<_>,
                 RowBatcher<_, _>,
                 RowBuilder<_, _>,
-                RowSpine<_, (Vec<Accum>, Diff)>,
+                RowSpine<_, (D, Diff)>,
             >(
                 "ArrangeAccumulable [val: empty]",
             );
@@ -1498,6 +1525,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 {
                     move |key, input, output| {
                         let (ref accums, total) = input[0].1;
+                        let accums = accums.as_accums(&mut accums1);
 
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums1.borrow();
@@ -1523,6 +1551,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 "AccumulableErrorCheck",
                 move |key, input, output| {
                     let (ref accums, total) = input[0].1;
+                    let accums = accums.as_accums(&mut accums2);
                     for (aggr, accum) in err_full_aggrs.iter().zip_eq(accums) {
                         // We first test here if inputs without net-positive records are present,
                         // producing an error to the logs and to the query output if that is the case.
@@ -2269,6 +2298,461 @@ impl Columnation for Accum {
     type InnerRegion = CopyRegion<Self>;
 }
 
+/// A packed sequence of [`Accum`]s, one per aggregate.
+///
+/// Slots sit back to back, each a one-byte tag naming the [`Accum`] variant
+/// followed by that variant's fixed-size payload:
+///
+/// | tag | variant | payload fields | payload bytes |
+/// |-----|---------|----------------|---------------|
+/// | 0 | `Bool` | `trues`, `falses` | 16 |
+/// | 1 | `SimpleNumber` | `accum: i128`, `non_nulls` | 24 |
+/// | 2 | `Float` | `accum: i128`, `pos_infs`, `neg_infs`, `nans`, `non_nulls` | 48 |
+/// | 3 | `Numeric` | `digits: u32`, `exponent: i32`, `bits: u8`, `lsu: [u16; NUMERIC_AGG_WIDTH]`, `pos_infs`, `neg_infs`, `nans`, `non_nulls` | 95 |
+///
+/// Counters are the `i64` inside a [`Diff`], the `Numeric` fields are
+/// [`dec::Decimal::to_raw_parts`], and every integer is little-endian and read
+/// unaligned. Payloads are written field by field rather than as struct bytes,
+/// so no padding enters the encoding.
+///
+/// The layout is self-delimiting and carries no count header: a decoder reads a
+/// tag, consumes that tag's payload, and stops when the bytes run out.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+struct Accums(Vec<u8>);
+
+impl Accums {
+    const TAG_BOOL: u8 = 0;
+    const TAG_SIMPLE_NUMBER: u8 = 1;
+    const TAG_FLOAT: u8 = 2;
+    const TAG_NUMERIC: u8 = 3;
+
+    /// Packs `accums` into slots, in order.
+    fn pack(accums: impl IntoIterator<Item = Accum>) -> Accums {
+        let mut bytes = Vec::new();
+        for accum in accums {
+            let start = bytes.len();
+            bytes.resize(start + Self::slot_len(Self::tag(&accum)), 0);
+            Self::write_slot(&mut bytes[start..], &accum);
+        }
+        Accums(bytes)
+    }
+
+    /// Decodes the slots, in order.
+    fn decode(&self) -> impl Iterator<Item = Accum> + '_ {
+        let mut offset = 0;
+        std::iter::from_fn(move || {
+            if offset >= self.0.len() {
+                return None;
+            }
+            let len = Self::slot_len(self.0[offset]);
+            let accum = Self::decode_slot(&self.0[offset..]);
+            offset += len;
+            Some(accum)
+        })
+    }
+
+    /// Byte offset of every slot, in order.
+    fn slot_offsets(&self) -> Vec<usize> {
+        let mut offsets = Vec::new();
+        let mut offset = 0;
+        while offset < self.0.len() {
+            offsets.push(offset);
+            offset += Self::slot_len(self.0[offset]);
+        }
+        offsets
+    }
+
+    /// The tag naming `accum`'s variant.
+    fn tag(accum: &Accum) -> u8 {
+        match accum {
+            Accum::Bool { .. } => Self::TAG_BOOL,
+            Accum::SimpleNumber { .. } => Self::TAG_SIMPLE_NUMBER,
+            Accum::Float { .. } => Self::TAG_FLOAT,
+            Accum::Numeric { .. } => Self::TAG_NUMERIC,
+        }
+    }
+
+    /// Encoded length of a slot with tag `tag`, tag byte included.
+    fn slot_len(tag: u8) -> usize {
+        let payload = match tag {
+            Self::TAG_BOOL => 2 * 8,
+            Self::TAG_SIMPLE_NUMBER => 16 + 8,
+            Self::TAG_FLOAT => 16 + 4 * 8,
+            Self::TAG_NUMERIC => 4 + 4 + 1 + 2 * NUMERIC_AGG_WIDTH_USIZE + 4 * 8,
+            tag => panic!("invalid Accums slot tag: {tag}"),
+        };
+        1 + payload
+    }
+
+    /// Encodes `accum` into `dst`, which must be at least the slot's length.
+    fn write_slot(dst: &mut [u8], accum: &Accum) {
+        let mut w = SlotWriter { dst, pos: 0 };
+        match accum {
+            Accum::Bool { trues, falses } => {
+                w.u8(Self::TAG_BOOL);
+                w.diff(*trues);
+                w.diff(*falses);
+            }
+            Accum::SimpleNumber { accum, non_nulls } => {
+                w.u8(Self::TAG_SIMPLE_NUMBER);
+                w.count(*accum);
+                w.diff(*non_nulls);
+            }
+            Accum::Float {
+                accum,
+                pos_infs,
+                neg_infs,
+                nans,
+                non_nulls,
+            } => {
+                w.u8(Self::TAG_FLOAT);
+                w.count(*accum);
+                w.diff(*pos_infs);
+                w.diff(*neg_infs);
+                w.diff(*nans);
+                w.diff(*non_nulls);
+            }
+            Accum::Numeric {
+                accum,
+                pos_infs,
+                neg_infs,
+                nans,
+                non_nulls,
+            } => {
+                let (digits, exponent, bits, lsu) = accum.0.to_raw_parts();
+                w.u8(Self::TAG_NUMERIC);
+                w.u32(digits);
+                w.i32(exponent);
+                w.u8(bits);
+                w.lsu(&lsu);
+                w.diff(*pos_infs);
+                w.diff(*neg_infs);
+                w.diff(*nans);
+                w.diff(*non_nulls);
+            }
+        }
+        debug_assert_eq!(w.pos, Self::slot_len(Self::tag(accum)));
+    }
+
+    /// Decodes the slot at the start of `bytes`.
+    fn decode_slot(bytes: &[u8]) -> Accum {
+        let tag = bytes[0];
+        // Bound the reader to this slot so that a field list that disagrees
+        // with `slot_len` panics instead of reading into the next slot.
+        let mut r = SlotReader {
+            src: &bytes[..Self::slot_len(tag)],
+            pos: 1,
+        };
+        let accum = match tag {
+            Self::TAG_BOOL => Accum::Bool {
+                trues: r.diff(),
+                falses: r.diff(),
+            },
+            Self::TAG_SIMPLE_NUMBER => Accum::SimpleNumber {
+                accum: r.count(),
+                non_nulls: r.diff(),
+            },
+            Self::TAG_FLOAT => Accum::Float {
+                accum: r.count(),
+                pos_infs: r.diff(),
+                neg_infs: r.diff(),
+                nans: r.diff(),
+                non_nulls: r.diff(),
+            },
+            Self::TAG_NUMERIC => {
+                let digits = r.u32();
+                let exponent = r.i32();
+                let bits = r.u8();
+                let lsu = r.lsu();
+                Accum::Numeric {
+                    accum: OrderedDecimal(NumericAgg::from_raw_parts(digits, exponent, bits, lsu)),
+                    pos_infs: r.diff(),
+                    neg_infs: r.diff(),
+                    nans: r.diff(),
+                    non_nulls: r.diff(),
+                }
+            }
+            tag => panic!("invalid Accums slot tag: {tag}"),
+        };
+        debug_assert_eq!(r.pos, Self::slot_len(tag));
+        accum
+    }
+}
+
+impl IsZero for Accums {
+    fn is_zero(&self) -> bool {
+        self.decode().all(|accum| accum.is_zero())
+    }
+}
+
+impl Semigroup for Accums {
+    fn plus_equals(&mut self, rhs: &Self) {
+        // An empty value stands in for the identity, matching differential's
+        // `Semigroup` and `IsZero` impls for `Vec<R>`: an empty vector is zero,
+        // and adding to it adopts the other side.
+        if self.0.is_empty() {
+            self.0.clone_from(&rhs.0);
+            return;
+        }
+        if rhs.0.is_empty() {
+            return;
+        }
+
+        let mut offset = 0;
+        while offset < self.0.len() {
+            let tag = self.0[offset];
+            let len = Self::slot_len(tag);
+            // NOTE: both sides descend from the same plan's aggregate list, so
+            // their slots line up. Misalignment means a diff built elsewhere
+            // reached this arrangement, and adding through it would silently
+            // corrupt the accumulation.
+            let aligned = rhs.0.len() >= offset + len && rhs.0[offset] == tag;
+            if !aligned {
+                mz_ore::soft_panic_or_log!("Accums slot mismatch at offset {offset}");
+                return;
+            }
+
+            let mut accum = Self::decode_slot(&self.0[offset..]);
+            accum.plus_equals(&Self::decode_slot(&rhs.0[offset..]));
+            Self::write_slot(&mut self.0[offset..offset + len], &accum);
+            offset += len;
+        }
+    }
+}
+
+impl Multiply<Diff> for Accums {
+    type Output = Self;
+
+    fn multiply(mut self, factor: &Diff) -> Self {
+        let mut offset = 0;
+        while offset < self.0.len() {
+            let len = Self::slot_len(self.0[offset]);
+            let accum = Self::decode_slot(&self.0[offset..]).multiply(factor);
+            Self::write_slot(&mut self.0[offset..offset + len], &accum);
+            offset += len;
+        }
+        self
+    }
+}
+
+impl Columnation for Accums {
+    type InnerRegion = AccumsRegion;
+}
+
+/// Region for [`Accums`], deferring to the region of its backing bytes.
+#[derive(Default)]
+struct AccumsRegion {
+    inner: <Vec<u8> as Columnation>::InnerRegion,
+}
+
+impl Region for AccumsRegion {
+    type Item = Accums;
+
+    unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+        Accums(unsafe { self.inner.copy(&item.0) })
+    }
+
+    fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    fn reserve_items<'a, I>(&mut self, items: I)
+    where
+        Self: 'a,
+        I: Iterator<Item = &'a Self::Item> + Clone,
+    {
+        self.inner.reserve_items(items.map(|accums| &accums.0));
+    }
+
+    fn reserve_regions<'a, I>(&mut self, regions: I)
+    where
+        Self: 'a,
+        I: Iterator<Item = &'a Self> + Clone,
+    {
+        self.inner.reserve_regions(regions.map(|r| &r.inner));
+    }
+
+    fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+        self.inner.heap_size(callback);
+    }
+}
+
+/// Cursor writing little-endian fields into one [`Accums`] slot.
+struct SlotWriter<'a> {
+    dst: &'a mut [u8],
+    pos: usize,
+}
+
+impl SlotWriter<'_> {
+    fn bytes(&mut self, bytes: &[u8]) {
+        self.dst[self.pos..self.pos + bytes.len()].copy_from_slice(bytes);
+        self.pos += bytes.len();
+    }
+
+    fn u8(&mut self, v: u8) {
+        self.bytes(&v.to_le_bytes());
+    }
+
+    fn u32(&mut self, v: u32) {
+        self.bytes(&v.to_le_bytes());
+    }
+
+    fn i32(&mut self, v: i32) {
+        self.bytes(&v.to_le_bytes());
+    }
+
+    fn diff(&mut self, v: Diff) {
+        self.bytes(&v.into_inner().to_le_bytes());
+    }
+
+    fn count(&mut self, v: AccumCount) {
+        self.bytes(&v.into_inner().to_le_bytes());
+    }
+
+    fn lsu(&mut self, lsu: &[u16; NUMERIC_AGG_WIDTH_USIZE]) {
+        for unit in lsu {
+            self.bytes(&unit.to_le_bytes());
+        }
+    }
+}
+
+/// Cursor reading little-endian fields from one [`Accums`] slot.
+struct SlotReader<'a> {
+    src: &'a [u8],
+    pos: usize,
+}
+
+impl SlotReader<'_> {
+    fn array<const N: usize>(&mut self) -> [u8; N] {
+        let bytes = self.src[self.pos..self.pos + N].try_into().unwrap();
+        self.pos += N;
+        bytes
+    }
+
+    fn u8(&mut self) -> u8 {
+        u8::from_le_bytes(self.array())
+    }
+
+    fn u16(&mut self) -> u16 {
+        u16::from_le_bytes(self.array())
+    }
+
+    fn u32(&mut self) -> u32 {
+        u32::from_le_bytes(self.array())
+    }
+
+    fn i32(&mut self) -> i32 {
+        i32::from_le_bytes(self.array())
+    }
+
+    fn diff(&mut self) -> Diff {
+        Diff::from(i64::from_le_bytes(self.array()))
+    }
+
+    fn count(&mut self) -> AccumCount {
+        AccumCount::from(i128::from_le_bytes(self.array()))
+    }
+
+    fn lsu(&mut self) -> [u16; NUMERIC_AGG_WIDTH_USIZE] {
+        let mut lsu = [0; NUMERIC_AGG_WIDTH_USIZE];
+        for unit in lsu.iter_mut() {
+            *unit = self.u16();
+        }
+        lsu
+    }
+}
+
+/// The diff type of the accumulable reduce's input arrangement, holding one
+/// [`Accum`] per aggregate in the plan's `full_aggrs` order.
+trait AccumulableDiff:
+    Semigroup + Multiply<Diff, Output = Self> + Default + Ord + Columnation + ExchangeData
+{
+    /// Where each aggregate's accumulator sits within a value.
+    ///
+    /// Fixed by the plan's aggregate list, so it is computed once from
+    /// [`Self::zero`] and handed to every [`Self::set`] rather than
+    /// rediscovered per row.
+    type Layout: Clone + 'static;
+
+    /// The accumulator identities for `aggrs`, in order.
+    fn zero(aggrs: &[LirAggregateExpr]) -> Self;
+
+    /// The layout of `self` and of every value cloned from it.
+    fn layout(&self) -> Self::Layout;
+
+    /// Overwrites the accumulator at `idx`, which must already hold the same
+    /// [`Accum`] variant as `accum`. `layout` must come from [`Self::layout`]
+    /// on this value or one it was cloned from.
+    fn set(&mut self, layout: &Self::Layout, idx: usize, accum: Accum);
+
+    /// The accumulators, in aggregate order.
+    ///
+    /// `scratch` backs the returned slice for implementations that have to
+    /// materialize; whatever it held is discarded.
+    fn as_accums<'a>(&'a self, scratch: &'a mut Vec<Accum>) -> &'a [Accum];
+}
+
+impl AccumulableDiff for Vec<Accum> {
+    type Layout = ();
+
+    fn zero(aggrs: &[LirAggregateExpr]) -> Self {
+        aggrs
+            .iter()
+            .map(|aggr| accumulable_zero(&aggr.func))
+            .collect()
+    }
+
+    fn layout(&self) -> Self::Layout {}
+
+    fn set(&mut self, _layout: &Self::Layout, idx: usize, accum: Accum) {
+        self[idx] = accum;
+    }
+
+    fn as_accums<'a>(&'a self, _scratch: &'a mut Vec<Accum>) -> &'a [Accum] {
+        self
+    }
+}
+
+impl AccumulableDiff for Accums {
+    type Layout = Vec<usize>;
+
+    fn zero(aggrs: &[LirAggregateExpr]) -> Self {
+        Accums::pack(aggrs.iter().map(|aggr| accumulable_zero(&aggr.func)))
+    }
+
+    fn layout(&self) -> Self::Layout {
+        self.slot_offsets()
+    }
+
+    fn set(&mut self, layout: &Self::Layout, idx: usize, accum: Accum) {
+        let offset = layout[idx];
+        let tag = Accums::tag(&accum);
+        // A tag change would resize the slot and shift every slot after it, so
+        // refuse the write rather than corrupt the layout.
+        if self.0[offset] != tag {
+            mz_ore::soft_panic_or_log!("Accums slot mismatch at index {idx}");
+            return;
+        }
+        Accums::write_slot(&mut self.0[offset..offset + Accums::slot_len(tag)], &accum);
+    }
+
+    fn as_accums<'a>(&'a self, scratch: &'a mut Vec<Accum>) -> &'a [Accum] {
+        scratch.clear();
+        scratch.extend(self.decode());
+        scratch
+    }
+}
+
 /// Monoids for in-place compaction of monotonic streams.
 mod monoids {
 
@@ -2631,95 +3115,4 @@ mod window_agg_helpers {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The saturating conversion that `float_to_fixed_point` replaces. Used to
-    /// assert that the new wrapping conversion agrees on the in-range values
-    /// where the old conversion was already correct.
-    #[allow(clippy::as_conversions)]
-    fn saturating_convert(n: f64) -> i128 {
-        (n * FLOAT_SCALE) as i128
-    }
-
-    #[mz_ore::test]
-    fn float_to_fixed_point_matches_saturating_in_range() {
-        // For values whose scaled magnitude comfortably fits in an `i128`, the
-        // wrapping conversion must produce exactly the same result the previous
-        // saturating cast did.
-        let cases = [
-            0.0,
-            -0.0,
-            1.0,
-            -1.0,
-            0.1,
-            -0.1,
-            0.5,
-            -0.5,
-            3.25,
-            -3.25,
-            123456.789,
-            -123456.789,
-            1e10,
-            -1e10,
-            1e20,
-            -1e20,
-            5e30, // large, but scaled magnitude still fits comfortably in i128
-            -5e30,
-        ];
-        for n in cases {
-            assert_eq!(
-                float_to_fixed_point(n),
-                saturating_convert(n),
-                "mismatch for n = {n}"
-            );
-        }
-    }
-
-    #[mz_ore::test]
-    fn float_to_fixed_point_truncates_toward_zero() {
-        // 1.75 * 2^24 = 29360128, exactly representable.
-        assert_eq!(float_to_fixed_point(1.75), 29_360_128);
-        assert_eq!(float_to_fixed_point(-1.75), -29_360_128);
-
-        // Fractional results truncate toward zero, matching the previous cast.
-        let frac = 0.123_456_7_f64;
-        assert_eq!(float_to_fixed_point(frac), saturating_convert(frac));
-        assert_eq!(float_to_fixed_point(-frac), saturating_convert(-frac));
-        assert_eq!(float_to_fixed_point(-frac), -float_to_fixed_point(frac));
-    }
-
-    #[mz_ore::test]
-    fn float_to_fixed_point_subnormals_round_to_zero() {
-        assert_eq!(float_to_fixed_point(0.0), 0);
-        assert_eq!(float_to_fixed_point(-0.0), 0);
-        assert_eq!(float_to_fixed_point(f64::MIN_POSITIVE / 2.0), 0);
-        assert_eq!(float_to_fixed_point(5e-324), 0); // smallest subnormal
-    }
-
-    #[mz_ore::test]
-    fn float_to_fixed_point_cancels_large_finite_values() {
-        // Regression test for database-issues#11265: large finite values that
-        // individually overflow the fixed-point domain must still sum to the
-        // correct result when their mathematical sum is representable. The
-        // previous saturating conversion produced `i128::MAX + i128::MIN == -1`.
-        for &n in &[1.1e31_f64, 1e32, 5e33, 1e284] {
-            assert_eq!(
-                float_to_fixed_point(n).wrapping_add(float_to_fixed_point(-n)),
-                0,
-                "n = {n} did not cancel with -n"
-            );
-        }
-    }
-
-    #[mz_ore::test]
-    fn float_to_fixed_point_sum_via_accumulator() {
-        // Exercise the full accumulate-then-finalize path for the reported case.
-        let func = AggregateFunc::SumFloat64;
-        let mut acc = accumulable_zero(&func);
-        acc.plus_equals(&datum_to_accumulator(&func, Datum::from(1.1e31_f64)));
-        acc.plus_equals(&datum_to_accumulator(&func, Datum::from(-1.1e31_f64)));
-        let datum = finalize_accum(&func, &acc, Diff::from(2_i64));
-        assert_eq!(datum, Datum::from(0.0_f64));
-    }
-}
+mod tests;

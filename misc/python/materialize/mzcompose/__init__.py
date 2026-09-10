@@ -284,6 +284,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_columnar_merge_batcher", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the packed accumulable diff layout, which
+        # is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_packed_accumulable_diff", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value

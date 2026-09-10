@@ -274,6 +274,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
     enable_off_thread_optimization
+    enable_packed_accumulable_diff
     enable_password_auth
     enable_paused_cluster_readhold_downgrade
     enable_persist_streaming_compaction
