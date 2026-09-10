@@ -1,0 +1,154 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_object_global_ids.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = true
+----
+COMPLETE 0
+
+statement ok
+CREATE SCHEMA gids
+
+statement ok
+SET search_path = gids
+
+# Setup multiple user items with one global ID.
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+CREATE VIEW v AS SELECT a FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT count(*) AS c FROM t
+
+statement ok
+CREATE INDEX t_idx ON t (a)
+
+statement ok
+CREATE SECRET pw AS 'hunter2'
+
+statement ok
+CREATE CONNECTION kc TO KAFKA (BROKER 'kafka:9092', SASL MECHANISMS 'PLAIN', SASL USERNAME 'u', SASL PASSWORD = SECRET pw) WITH (VALIDATE = false)
+
+statement ok
+CREATE TYPE custom_list AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
+
+statement ok
+CREATE TABLE lg_tbl FROM SOURCE lg (REFERENCE counter)
+
+# Assert that every user item's ID is equal to its global ID.
+query TTB rowsort
+SELECT o.name, count(*), bool_and(g.global_id = g.id)
+FROM mz_internal.mz_object_global_ids g
+JOIN mz_objects o ON o.id = g.id
+JOIN mz_schemas s ON s.id = o.schema_id
+WHERE s.name = 'gids'
+GROUP BY o.name
+----
+custom_list  1  true
+kc  1  true
+lg  1  true
+lg_tbl  1  true
+mv  1  true
+pw  1  true
+t  1  true
+t_idx  1  true
+v  1  true
+
+# Setup a table that will have multiple versions
+statement ok
+CREATE TABLE versioned (a int)
+
+# A new column adds a version, and each version has its own GlobalId.
+statement ok
+ALTER TABLE versioned ADD COLUMN b text
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_tables WHERE name = 'versioned')
+----
+2
+
+statement ok
+ALTER TABLE versioned ADD COLUMN c int
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_tables WHERE name = 'versioned')
+----
+3
+
+# Assert that temporary objects are included.
+
+statement ok
+CREATE TEMPORARY VIEW tv AS SELECT a FROM t
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_views WHERE name = 'tv')
+----
+1
+
+
+# Assert builtin items are included.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_views WHERE name = 'mz_object_fully_qualified_names')
+----
+1
+
+query T
+SELECT count(*) > 0
+FROM mz_internal.mz_object_global_ids g
+JOIN mz_functions f ON f.id = g.id
+WHERE f.name = 'parse_catalog_id'
+----
+true
+
+# mz_analytics is a runtime-alterable builtin. Assert it has exactly one row.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_connections WHERE name = 'mz_analytics')
+----
+1
+
+# Introspection source indexes are recorded in their own durable collection.
+query T
+SELECT count(*) > 0 FROM mz_internal.mz_object_global_ids WHERE id LIKE 'si%'
+----
+true
+
+# Assert that dropped items leave no rows.
+
+# Drop the temporary view explicitly since it's not in the `gids` schema.
+statement ok
+DROP VIEW tv
+
+statement ok
+DROP SCHEMA gids CASCADE
+
+query T
+SELECT count(*) FROM mz_internal.mz_object_global_ids WHERE id LIKE 'u%'
+----
+0
