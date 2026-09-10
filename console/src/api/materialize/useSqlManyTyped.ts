@@ -28,7 +28,7 @@ type ExtractResultTypes<Q extends KeyedQueries> = {
  * Executes an array of Kysely queries in a single API call.
  *
  * @param queries - an object where each value is a Kysely CompiledQuery
- * @param options - optional cluster and replica values
+ * @param options - optional cluster, replica and transaction isolation values
  *
  * @returns a `SqlApiResponse` with an extra `results` property, which is an object with
  * the same keys as the input `queries`, and the value is the typed result of that query.
@@ -38,9 +38,14 @@ export function useSqlManyTyped<Q extends KeyedQueries>(
   options: UseSqlApiRequestOptions & {
     cluster?: string;
     replica?: string;
+    /**
+     * Defaults to "strict serializable" (see `buildSessionVariables`). One
+     * level applies to the whole request, not per query.
+     */
+    transactionIsolation?: SqlRequest["transactionIsolation"];
   } = {},
 ) {
-  const { cluster, replica, ...rest } = options;
+  const { cluster, replica, transactionIsolation, ...rest } = options;
 
   const request = React.useMemo((): SqlRequest | undefined => {
     if (!queries) return undefined;
@@ -51,8 +56,9 @@ export function useSqlManyTyped<Q extends KeyedQueries>(
       })),
       cluster: cluster ?? CATALOG_SERVER_CLUSTER,
       replica: replica,
+      transactionIsolation,
     };
-  }, [queries, cluster, replica]);
+  }, [queries, cluster, replica, transactionIsolation]);
   const inner = useSqlMany(
     queries && Object.keys(queries).length > 0 ? request : undefined,
     rest,
