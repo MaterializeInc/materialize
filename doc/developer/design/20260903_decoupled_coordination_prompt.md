@@ -7,61 +7,101 @@ Working PR: https://github.com/MaterializeInc/materialize/pull/38696
 Bookmark: decoupled-coordination
 Remote: origin, pointing to the contributor fork, not upstream
 
-Read the design and its implementation log, then inspect the current code,
-worktree, and remote bookmark. Preserve existing work and account for progress
-from other sessions. Use the latest handoff and current code to identify the
-active milestone in the design's Implementation and verification section. Choose
-the next coherent piece toward its observable outcome, briefly explain that
-choice, then implement and verify it. Historical proposals and next steps are
-context, not a cumulative task list.
+Read the design and doc/developer/design/20260903_decoupled_coordination_log.md,
+then inspect the current code, worktree, and remote bookmark. Preserve existing
+work and account for progress from other sessions. Use the latest handoff and
+current code to identify the active milestone in the design's Implementation and
+verification section. Choose the next coherent piece toward its observable outcome,
+briefly explain that choice, then implement and verify it. Historical proposals
+and next steps are context, not a cumulative task list.
 
 Current steering
 
 Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
-priorities, not new design requirements or a reason to reopen agreed decisions.
+priorities, not additional design requirements.
 
-- Maintained protection: milestone 1 remains active. The protected-MV path is an
-  implementation checkpoint, not completion across maintained object types. Make
-  source/sink recovery requirements constrain catalog authorization even when
-  local controller accounting is absent, and bring maintained compute compaction
-  under committed permission. Follow the milestone's requirement-derivation and
-  recovery-semantics boundaries rather than prescribing new records for every type.
-- Publication scaling: publish_read_protection emits one catalog op per record,
-  while Transaction::get_op_updates scans accumulated pending updates after each
-  op. This creates quadratic work on the coordinator loop. Address that path and
-  measure publication cost at representative collection counts, including DDL
-  latency and retained history. Do not infer scalability from the small recovery
-  demonstration or make a general catalog redesign a prerequisite.
-- Consistency-check coupling: check_catalog_state_quiesced changes the publication
-  interval, and ddl_revision introduces a production conflict exception for that
-  setting. Revisit whether the checker is forcing unnecessary production semantics.
-  Preserve full catalog comparison, including protection records, without adding
-  further special cases to make the harness pass.
-- Ownership transition: after milestone 1, prioritize a real catalog subscriber
-  over more standalone APIs. In that transition, address prepare_state's reliance
-  on locally installed collections and make the writer-side responsibility for
-  complete maintained requirements explicit. An MV's requirement is a separate
-  sequencer op today. These are transitional dependencies, not evidence that the
-  current single-owner path fails.
+Milestone 1 remains active. Source/sink authorization and maintained compute
+permission are connected. What remains is removing machinery that grew beyond
+the design, recovery liveness, and performance evidence. Items 1 and 2 remove
+code and should go first.
+
+Items 1 and 2 are paused for the first-installation authority and infeasible
+reconstruction decisions described in the latest handoff. A hard upper bound
+does not by itself guarantee a readable installation timestamp.
+
+1. Permission as an as_of constraint: the design now settles that committed
+   permission is a hard upper constraint on installation `as_of`, applied in
+   as-of selection. Remove the read-only wait loop in index authorization and
+   the per-second re-delivery of all index bounds. Read-only bootstrap then
+   installs within permission on every cluster without waiting on the writer,
+   which also resolves the blocked-cluster prewarming question. Keep concurrent
+   drops during bootstrap correct.
+2. Index bound birth records: an index bound record at birth always says MIN and
+   carries no information. Let an index's bound appear at first publication, and
+   remove the lifecycle threading through item, system-mapping, introspection,
+   and cluster mutation paths together with the whole-catalog `index_ids` scans
+   in validation. Fold as-of authorization into ordinary publication so CREATE
+   INDEX is one durable commit and `ship_new_dataflow` no longer commits from
+   inside an implication batch. Keep monotonicity and no-regression.
+3. Test-only production surface: `freeze`/`freeze_at`, `FrozenReadonly`,
+   `Command::CatalogDumpSnapshot`, `dump_upper`, the `mz-catalog-upper` header,
+   and `publish_interval = 0` as a pause switch exist for the testdrive
+   consistency checker and test workflows. Decide once, with Aljoscha, what the
+   checker actually needs, then remove the rest. Do not add further diagnostic
+   surface to production traits or the coordinator command enum.
+4. Publication scaling: per-tick work and transaction validation must scale with
+   changed records, not with all collections or items. Then finish representative
+   measurements using the existing workflow, including DDL latency, subscriber
+   lag, and retained history, and record the numbers in the PR. Distinguish
+   publication overhead from workload and observer costs. Do not make a general
+   catalog redesign a prerequisite.
+5. Add a targeted test for final sink execution as-of selection using aggregate
+   readability rather than policy permission, including ungoverned collections.
+6. History: the 09-09 commits, including `wip: Integrate maintained recovery
+   protection`, are not yet one coherent story. Squash them before milestone 2
+   work begins.
+7. Ownership transition: prioritize a production maintained-lifecycle subscriber
+   over more standalone APIs. The bound-only `CatalogSubscriber` is not that
+   outcome and should either grow into it or take a narrower name. Address
+   creator-local plans, prepare_state's reliance on locally installed collections,
+   and writer-side responsibility for complete maintained requirements: the
+   sequencer supplies an MV's requirement as its own op, and the transaction
+   validates but does not derive it. These are transitional dependencies, not
+   evidence that the current single-owner path fails.
 
 Keep the draft PR description accurate about what is implemented and what remains,
 with validation status in the PR rather than the design log.
 
-Prefer connecting existing pieces through the active milestone's production path
-over adding further standalone APIs. Preparatory work is appropriate when it
-unblocks that path. Let integration evidence refine intermediate interfaces
-rather than adding machinery to preserve them.
+Standing rules
+
+- No production trait methods, coordinator commands, or system-variable semantics
+  whose only consumer is a test harness. Bring the need to Aljoscha first.
+- A durable record is added only when it carries information that cannot be
+  derived from existing catalog state or durable progress. A record whose value
+  is constant at birth is a signal to look again.
+- Milestone 2 starts with MV compute installation from committed state and a real
+  catalog subscriber. Client protection stays in milestone 3. Do not pull its
+  machinery forward.
+
+Prefer changes that remove a dependency on the originating adapter and demonstrate
+that through a production path. Preparatory work is appropriate when it unblocks
+that path. Temporary interfaces may be replaced as integration clarifies the
+boundary. Do not add parallel machinery merely to preserve them or keep milestone
+boundaries tidy. Keep maintained requirements object-owned and client protection
+incarnation-scoped, without durable per-query or per-SQL-session bookkeeping.
 
 Treat the design as the agreed boundaries, not a prescribed mechanism. Prefer
 the smallest coherent solution that preserves the full capability. Incremental
 progress is fine, but do not mistake an intermediate step for completion.
 Implementation choices within the agreed boundaries do not require renewed
-design approval.
+design approval. Catalog fields, leases, protocol messages, planning placement,
+and process topology remain implementation choices.
 
 Bring discoveries, consequential tradeoffs, and scope growth to me, Aljoscha.
 Pause affected work when guidance is needed rather than silently narrowing
-scope, adding machinery, or changing an agreed boundary.
+scope, adding machinery, or changing an agreed boundary. Bring disproportionate
+implementation cost to me even when the implementation conforms to the design.
 
 Follow repository instructions and skills. Verify at the changed boundaries,
 and seek independent review when the risk warrants it.
@@ -87,7 +127,8 @@ message and change description explaining the outcome, rationale, and validation
 status, not the chronology of attempts. If blocked, report the blocker rather
 than claiming completion.
 
-Append only a minimal dated handoff to the design's log: consequential findings
+Append only a minimal dated handoff to
+doc/developer/design/20260903_decoupled_coordination_log.md: consequential findings
 or decisions, unresolved questions, and the next useful step. Do not record
 validation status there at all: CI results, pending checks, formatting or
 compile checks, tool availability, and review outcomes are reconstructible from
@@ -107,3 +148,16 @@ that others have built on. Report validation failures honestly.
 Keep the existing PR as a draft. Do not merge, mark it ready, or push to
 upstream or other branches without asking.
 ```
+
+## Code navigation
+
+- [Catalog implications](../../../src/adapter/src/coord/catalog_implications.rs)
+  derive effects from committed changes. MV and metric-sink compute installation
+  still have sequencer-side paths.
+- [Compute protocol](../../../src/compute-client/src/protocol/command.rs) mixes
+  lifecycle and query commands. [Transport](../../../src/service/src/transport.rs)
+  replaces the active client on a new connection.
+- [StorageCollections](../../../src/storage-client/src/storage_collections.rs)
+  owns storage capability accounting and critical since handles. The fixed
+  critical-reader identity and epoch fencing support handover, not independent
+  owners aggregating their local holds.
