@@ -311,10 +311,11 @@ function passesMagnitudeFloor(own: bigint, maxOwn: bigint): boolean {
 
 /**
  * Builds the address tree and own/transitive stats from raw introspection
- * rows. `operators` must contain at most one root (an address of length 1);
- * more than one throws. An empty `operators` list (a dropped or transient
- * dataflow) is valid input, not an error: it returns a single-node
- * placeholder structure instead.
+ * rows. A non-empty `operators` must contain exactly one root (an address of
+ * length 1); any other count throws, including zero, which a partial read of
+ * a dataflow being dropped can produce. An empty `operators` list (a dropped
+ * or transient dataflow) is valid input, not an error: it returns a
+ * single-node placeholder structure instead.
  */
 export function buildDataflowStructure(
   operators: OperatorRow[],
@@ -539,12 +540,11 @@ export function buildDataflowStructure(
 }
 
 /**
- * A view shows exactly one scope's direct children. Anything deeper is
- * rolled up into its child's box, addressed at that box's depth (viewRoot's
- * depth + 1). representativeInView is the general form of that projection,
- * exported for translating arbitrary structure addresses (search matches,
- * LIR members) into the box that would represent them in a given view, or
- * null if the address isn't inside viewRootAddress's subtree at all.
+ * The box a view would show `address` as: a direct child of viewRoot, or, if
+ * an expanded scope contains the address, a child one level below the
+ * deepest such scope. Null if the address isn't inside viewRootAddress's
+ * subtree at all. Exported for translating arbitrary structure addresses
+ * (search matches, LIR members) into what the view actually draws for them.
  */
 export function representativeInView(
   address: Address,
@@ -602,10 +602,10 @@ function representative(address: Address, expanded: Set<NodeId>): NodeId {
 // instead of the outer half landing on the region's own node (indistinguishable
 // from every other port sharing that scope) or the inner half dangling.
 //
-// A port only ever renders for viewRoot's own boundary: every other scope in
-// a view is shown as a collapsed box (never "expanded"), so any crossing at
-// its boundary rolls up into that box instead, exactly like a normal channel
-// endpoint landing inside it would.
+// A port renders for the boundary of any expanded scope, which is viewRoot
+// plus whatever regions are expanded in place. A collapsed box's own boundary
+// gets none: a crossing there rolls up into the box instead, exactly like a
+// normal channel endpoint landing inside it would.
 function endpointId(
   structure: DataflowStructure,
   address: Address,
@@ -644,9 +644,12 @@ function endpointId(
 }
 
 /**
- * Renders exactly one scope's direct children, each either a leaf operator or
- * a box summarizing a whole nested subtree (never expanded in place).
- * Double-clicking a box navigates to a new view rooted there instead.
+ * Renders `viewRoot`'s direct children, each either a leaf operator or a box
+ * summarizing a whole nested subtree. Every id in `expandedScopes` is
+ * additionally materialized in place: its own children are emitted too,
+ * carrying `parentId`, and its boundary crossings become ports the same way
+ * viewRoot's do. `expandedScopes` must name regions inside viewRoot's
+ * subtree; an empty set renders one scope's children and nothing deeper.
  */
 export function deriveVisibleGraph(
   structure: DataflowStructure,

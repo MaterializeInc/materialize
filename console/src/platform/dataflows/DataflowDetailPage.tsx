@@ -25,7 +25,7 @@ import { isInsufficientPrivilegeError } from "~/api/materialize/executeSql";
 import ErrorBox from "~/components/ErrorBox";
 import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
-import { absoluteClusterPath } from "~/platform/routeHelpers";
+import { absoluteClusterPath, replicaSearch } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { useRegionSlug } from "~/store/environments";
 
@@ -217,9 +217,10 @@ const DataflowDetailPage = () => {
   const [pendingFitIds, setPendingFitIds] = React.useState<string[] | null>(
     null,
   );
-  // Persist independently of `selection`: closing (X) clears the selection
-  // itself, so the next click naturally reopens the panel, but collapsing
-  // should keep the panel out of the way across subsequent clicks too.
+  // Persist independently of `selection`: clearing the selection (a click on
+  // empty canvas) takes the panel away with it and the next click reopens
+  // it, whereas collapsing should keep the panel out of the way across
+  // subsequent clicks too.
   const [lirPanelCollapsed, setLirPanelCollapsed] = React.useState(false);
   const [detailPanelCollapsed, setDetailPanelCollapsed] = React.useState(false);
 
@@ -276,9 +277,6 @@ const DataflowDetailPage = () => {
     setMatchIndex(0);
     setLirHighlight(null);
   }
-
-  const centerRef = React.useRef<((id: string) => void) | null>(null);
-  const fitRef = React.useRef<((ids: string[]) => void) | null>(null);
 
   // Navigates to the scope that makes every given address directly visible
   // (as itself, or as the box that rolls it up), then fits the view to
@@ -362,10 +360,18 @@ const DataflowDetailPage = () => {
     [data, focusOn],
   );
 
+  // Walks every node in the structure, so it is built once per structure
+  // rather than per selection: three handlers below resolve a LIR key
+  // through it.
+  const lirEntries = React.useMemo(
+    () => (data ? lirIndex(data.structure) : null),
+    [data],
+  );
+
   const selectLirGroup = React.useCallback(
     (key: string) => {
-      if (!data) return;
-      const entry = lirIndex(data.structure).get(key);
+      if (!data || !lirEntries) return;
+      const entry = lirEntries.get(key);
       if (!entry) return;
       setSelection({
         kind: "lirGroup",
@@ -378,7 +384,7 @@ const DataflowDetailPage = () => {
         },
       });
     },
-    [data, setSelection],
+    [data, lirEntries, setSelection],
   );
 
   const onLirGroupClick = React.useCallback(
@@ -392,9 +398,9 @@ const DataflowDetailPage = () => {
   // necessarily in view yet.
   const onSelectLir = React.useCallback(
     (exportId: string, lirId: string) => {
-      if (!data) return;
+      if (!data || !lirEntries) return;
       const key = `${exportId}/${lirId}`;
-      const entry = lirIndex(data.structure).get(key);
+      const entry = lirEntries.get(key);
       if (!entry) return;
       const addresses = entry.memberIds
         .map((id) => data.structure.nodes.get(id)?.address)
@@ -430,7 +436,7 @@ const DataflowDetailPage = () => {
         urlParams.set("select", selectionParamValue(lirSelection));
       });
     },
-    [data, updateSearchParams],
+    [data, lirEntries, updateSearchParams],
   );
 
   const allMatches = React.useMemo(
@@ -519,7 +525,7 @@ const DataflowDetailPage = () => {
       };
     }
     if (kind === "lirGroup") {
-      const entry = lirIndex(data.structure).get(id);
+      const entry = lirEntries?.get(id);
       if (!entry) return null;
       return {
         kind: "lirGroup",
@@ -533,7 +539,14 @@ const DataflowDetailPage = () => {
       };
     }
     return null;
-  }, [data, visibleGraph, selectParam, labelById, resolveNodeSelection]);
+  }, [
+    data,
+    visibleGraph,
+    selectParam,
+    labelById,
+    lirEntries,
+    resolveNodeSelection,
+  ]);
 
   // Back/forward (and opening a shared link directly, which react-router
   // also reports as "POP") can restore a selection the current viewport
@@ -648,7 +661,7 @@ const DataflowDetailPage = () => {
             value={dataflowId ?? ""}
             onChange={(e) =>
               navigate(
-                `${absoluteClusterPath(regionSlug, cluster)}/dataflows/${e.target.value}?replica=${replicaName}`,
+                `${absoluteClusterPath(regionSlug, cluster)}/dataflows/${e.target.value}${replicaSearch(replicaName)}`,
               )
             }
             flex="1"
@@ -745,8 +758,6 @@ const DataflowDetailPage = () => {
                 cacheKey={structureKey ?? ""}
                 decorations={decorations}
                 showLirGroups={filters.showLirGroups}
-                centerRef={centerRef}
-                fitRef={fitRef}
                 fitOnIds={pendingFitIds}
                 onFit={() => setPendingFitIds(null)}
                 selectedId={

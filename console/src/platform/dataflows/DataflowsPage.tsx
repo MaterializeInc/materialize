@@ -26,9 +26,11 @@ import { isInsufficientPrivilegeError } from "~/api/materialize/executeSql";
 import ErrorBox from "~/components/ErrorBox";
 import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
+import { replicaSearch } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
+import { formatCount } from "./nodeStyle";
 import { UsagePrivilegeAlert } from "./UsagePrivilegeAlert";
 
 const DataflowsPage = () => {
@@ -70,23 +72,30 @@ const DataflowsPage = () => {
   if (exportParams) {
     if (exportLoading) return <Spinner />;
     if (dataflowId !== null) {
-      return <Navigate to={`${dataflowId}?replica=${replicaName}`} replace />;
+      return (
+        <Navigate to={`${dataflowId}${replicaSearch(replicaName)}`} replace />
+      );
     }
   }
   const permissionError =
     isInsufficientPrivilegeError(databaseError) ||
     isInsufficientPrivilegeError(exportDatabaseError);
 
-  // The export resolved cleanly but no dataflow is running for it on this
-  // replica. Surface that above the list, which still renders below.
+  // Either way the list below still renders, so a failed deep-link leaves
+  // the user somewhere useful. The two cases read differently though: no
+  // running dataflow is an ordinary answer about this replica, while a
+  // failed lookup means the question wasn't answered at all and must not be
+  // reported as an absence.
+  const exportResolved = exportParams !== undefined && !exportLoading;
+  const exportLookupFailed = exportResolved && !!exportError;
   const exportHasNoDataflow =
-    exportParams !== undefined &&
-    !exportLoading &&
-    !exportError &&
-    dataflowId === null;
+    exportResolved && !exportError && dataflowId === null;
   return (
     <MainContentContainer width="100%">
       <VStack alignItems="stretch">
+        {exportLookupFailed && (
+          <ErrorBox message="There was an error finding this object's dataflow" />
+        )}
         {exportHasNoDataflow && (
           <ErrorBox message="This object has no running dataflow on the selected replica." />
         )}
@@ -114,16 +123,18 @@ const DataflowsPage = () => {
                 <Th>Name</Th>
                 <Th isNumeric>Records</Th>
                 <Th isNumeric>Size</Th>
-                <Th isNumeric>Scheduled</Th>
+                <Th isNumeric>Elapsed</Th>
               </Tr>
             </Thead>
             <Tbody>
               {(data ?? []).map((d) => (
                 <Tr key={d.id}>
                   <Td>
-                    <Link to={`${d.id}?replica=${replicaName}`}>{d.name}</Link>
+                    <Link to={`${d.id}${replicaSearch(replicaName)}`}>
+                      {d.name}
+                    </Link>
                   </Td>
-                  <Td isNumeric>{d.records.toString()}</Td>
+                  <Td isNumeric>{formatCount(d.records)}</Td>
                   <Td isNumeric>{formatBytesShort(d.size)}</Td>
                   <Td isNumeric>{formatElapsedNs(d.elapsedNs)}</Td>
                 </Tr>

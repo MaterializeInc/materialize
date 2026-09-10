@@ -65,11 +65,14 @@ export const formatBytesShort = (bytes: bigint) => {
  * seconds collapses every sub-second duration to "0s" and can't
  * distinguish e.g. 1.4s from 1.6s, which matters for a dataflow operator's
  * own (as opposed to subtree) elapsed time -- often sub-second even when
- * its ancestors run for minutes.
+ * its ancestors run for minutes. Only an exact zero reads as "0s": a real
+ * but sub-millisecond duration is distinct information (the operator ran)
+ * and gets "<1ms" rather than rounding away to look idle.
  */
 export function formatElapsedNs(ns: bigint): string {
   const seconds = Number(ns) / 1e9;
   if (seconds === 0) return "0s";
+  if (seconds < 0.0005) return "<1ms";
   if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
   if (seconds < 10) return `${seconds.toFixed(1)}s`;
   return `${Math.round(seconds)}s`;
