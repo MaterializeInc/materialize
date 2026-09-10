@@ -112,7 +112,7 @@ Both private and public access are supported, and you choose at provisioning: a 
 
 ### How do upgrades work?
 
-About weekly, similar to our cloud service, driven from our control plane.
+About weekly (could be more frequent), similar to our cloud service, driven from our control plane.
 
 ## Other clouds
 
