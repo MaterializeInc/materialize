@@ -209,9 +209,16 @@ const IndexTable = (props: IndexTableProps) => {
   const flags = useFlags();
   const indexPath = useBuildIndexPath();
   const regionSlug = useRegionSlug();
-  const dataflowVisualizerEnabled = flags["visualization-features"];
   const { colors } = useTheme<MaterializeTheme>();
   const { cluster } = props;
+  // The visualizer link needs the owning cluster, which resolves
+  // asynchronously, so the flag alone doesn't decide whether the column
+  // exists. Header and body both gate on this one value, or they disagree
+  // on the column count while the cluster is still in flight.
+  const dataflowsPath =
+    flags["visualization-features"] && cluster
+      ? `${absoluteClusterPath(regionSlug, cluster)}/dataflows`
+      : undefined;
 
   return (
     <>
@@ -223,7 +230,7 @@ const IndexTable = (props: IndexTableProps) => {
             <Th>Type</Th>
             <Th>Heap Utilization</Th>
             <Th>Freshness</Th>
-            {dataflowVisualizerEnabled && <Th></Th>}
+            {dataflowsPath && <Th></Th>}
           </Tr>
         </Thead>
         <Tbody>
@@ -283,17 +290,17 @@ const IndexTable = (props: IndexTableProps) => {
                   )}
                 </Td>
                 <Td>{formattedLag}</Td>
-                {dataflowVisualizerEnabled && cluster && (
+                {dataflowsPath && (
                   <Td width="16">
                     <OverflowMenu
                       items={[
                         {
-                          visible: dataflowVisualizerEnabled,
+                          visible: true,
                           render: () => (
                             <MenuItem
                               key="dataflow-visualizer"
                               as={Link}
-                              to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows?export=${i.id}`}
+                              to={`${dataflowsPath}?export=${i.id}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                               }}

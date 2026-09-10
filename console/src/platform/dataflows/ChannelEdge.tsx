@@ -19,7 +19,11 @@ import React from "react";
 import { MaterializeTheme } from "~/theme";
 
 import type { PortPeer } from "./dataflowGraph";
-import { HIGHLIGHT_COLORS, prettyPrintChannelType } from "./nodeStyle";
+import {
+  formatCount,
+  HIGHLIGHT_COLORS,
+  prettyPrintChannelType,
+} from "./nodeStyle";
 
 export type ChannelEdgeData = {
   messagesSent: bigint;
@@ -74,7 +78,7 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
   const prettyTypes = channelTypes.map(prettyPrintChannelType);
   const tooltip = idle
     ? prettyTypes.join(", ") || "unknown channel type"
-    : `${messagesSent} records / ${batchesSent} batches` +
+    : `${formatCount(messagesSent)} records / ${formatCount(batchesSent)} batches` +
       (prettyTypes.length > 0 ? ` · ${prettyTypes.join(", ")}` : "");
   // Only an unambiguous (single-landing) side gets a one-click button here;
   // see the sourceLandings/targetLandings doc comment for why a fan-out

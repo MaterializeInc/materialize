@@ -173,6 +173,35 @@ describe("NodeDetailPanel edge view", () => {
     );
     expect(onSelectNode).toHaveBeenCalledWith("port-1");
   });
+
+  // Every landing on one side carries the collapsed box's own address and
+  // differs only in the inner port it resolved to, so keying rows by address
+  // alone collapses them onto one React key.
+  it("lists every landing on a side, including several inside the same box", async () => {
+    const onJumpTo = vi.fn();
+    const landing = (port: string): PortPeer => ({
+      address: [1, 2],
+      label: `input ${port}`,
+      messagesSent: 4n,
+      batchesSent: 1n,
+      channelTypes: ["rows"],
+      peerPortId: `[1,2,0]:in:${port}`,
+    });
+    const first = landing("0");
+    const second = landing("1");
+    await renderPanel(
+      {
+        kind: "edge",
+        edge: { ...edge, targetLandings: [first, second] },
+      },
+      { onJumpTo },
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /input 0/ }));
+    expect(onJumpTo).toHaveBeenCalledWith(first);
+    await userEvent.click(screen.getByRole("button", { name: /input 1/ }));
+    expect(onJumpTo).toHaveBeenCalledWith(second);
+  });
 });
 
 describe("NodeDetailPanel skew gating", () => {

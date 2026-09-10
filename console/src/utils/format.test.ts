@@ -26,6 +26,12 @@ describe("formatElapsedNs", () => {
     expect(formatElapsedNs(257_000_000n)).toEqual("257ms");
   });
 
+  it("distinguishes a sub-millisecond duration from having never run", () => {
+    expect(formatElapsedNs(1_000n)).toEqual("<1ms");
+    expect(formatElapsedNs(499_999n)).toEqual("<1ms");
+    expect(formatElapsedNs(500_000n)).toEqual("1ms");
+  });
+
   it("shows single-digit-second durations with one decimal place", () => {
     expect(formatElapsedNs(1_400_000_000n)).toEqual("1.4s");
     expect(formatElapsedNs(1_600_000_000n)).toEqual("1.6s");

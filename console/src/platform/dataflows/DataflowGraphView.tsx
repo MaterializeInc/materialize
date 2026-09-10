@@ -91,16 +91,10 @@ export interface DataflowGraphViewProps {
   // the preceding click/click of the double-click has already opened the
   // port's own detail panel instead, same as a single click would.
   onJumpToPeer?: (peer: PortPeer) => void;
-  centerRef?: React.MutableRefObject<((id: string) => void) | null>;
-  // A node to center on once its layout position exists (e.g. right after an
-  // expand triggered by jumping to it). Centering an id whose ancestors were
-  // just expanded can't happen synchronously: layout runs in a worker, so
-  // this id is retried across renders until its position shows up.
-  centerOnId?: string | null;
-  onCentered?: () => void;
-  // Fits the viewport around a whole set of nodes (e.g. every operator
-  // belonging to one LIR id), as opposed to centerRef's single-node zoom.
-  fitRef?: React.MutableRefObject<((ids: string[]) => void) | null>;
+  // Nodes to fit the viewport around (e.g. every operator belonging to one
+  // LIR id, or a region and its children right after expanding it). Fitting
+  // can't happen synchronously with the request: layout runs in a worker, so
+  // these ids are retried across renders until their positions show up.
   fitOnIds?: string[] | null;
   onFit?: () => void;
   // Toggled from the toolbar; grouping is computed here (from the same
@@ -115,47 +109,32 @@ export interface DataflowGraphViewProps {
   onToggleExpand: (id: NodeId) => void;
 }
 
-// Exposes centering/fitting callbacks through refs once React Flow context
-// exists.
-const CenterHelper = ({
-  centerRef,
+// Fitting needs React Flow's context, which only exists below <ReactFlow>,
+// while the requests to fit arrive as a prop on this component. This bridges
+// the two: it renders nothing and only publishes the callback on a ref the
+// component itself reads.
+const FitHelper = ({
   fitRef,
 }: {
-  centerRef: React.MutableRefObject<((id: string) => void) | null>;
-  fitRef?: React.MutableRefObject<((ids: string[]) => void) | null>;
+  fitRef: React.MutableRefObject<((ids: string[]) => void) | null>;
 }) => {
   const reactFlow = useReactFlow();
   React.useEffect(() => {
     // Assigning to the ref inside an effect is safe: it never runs during
-    // render, so the parent's ref just receives the latest centering callback.
+    // render, so the ref just receives the latest fit callback.
     // eslint-disable-next-line react-compiler/react-compiler
-    centerRef.current = (id: string) => {
-      const internal = reactFlow.getInternalNode(id);
-      if (!internal) return;
-      const { x, y } = internal.internals.positionAbsolute;
-      const width = internal.measured?.width ?? 0;
-      const height = internal.measured?.height ?? 0;
-      reactFlow.setCenter(x + width / 2, y + height / 2, {
-        zoom: 1,
+    fitRef.current = (ids: string[]) => {
+      void reactFlow.fitView({
+        nodes: ids.map((id) => ({ id })),
         duration: 300,
+        padding: 0.3,
+        maxZoom: 1,
       });
     };
-    if (fitRef) {
-      // eslint-disable-next-line react-compiler/react-compiler
-      fitRef.current = (ids: string[]) => {
-        void reactFlow.fitView({
-          nodes: ids.map((id) => ({ id })),
-          duration: 300,
-          padding: 0.3,
-          maxZoom: 1,
-        });
-      };
-    }
     return () => {
-      centerRef.current = null;
-      if (fitRef) fitRef.current = null;
+      fitRef.current = null;
     };
-  }, [reactFlow, centerRef, fitRef]);
+  }, [reactFlow, fitRef]);
   return null;
 };
 
@@ -219,10 +198,6 @@ export const DataflowGraphView = ({
   onEdgeClick,
   onPaneClick,
   onJumpToPeer,
-  centerRef,
-  centerOnId,
-  onCentered,
-  fitRef,
   fitOnIds,
   onFit,
   showLirGroups,
@@ -297,17 +272,7 @@ export const DataflowGraphView = ({
     [positions, parentOf],
   );
 
-  React.useEffect(() => {
-    if (!centerOnId || !positions?.[centerOnId]) return;
-    // CenterHelper assigns centerRef.current in its own mount effect; on the
-    // rare commit where that hasn't run yet, skip without marking the
-    // request consumed (onCentered stays uncalled) so the next positions or
-    // centerOnId change gets another chance, rather than silently dropping
-    // the jump forever.
-    if (!centerRef?.current) return;
-    centerRef.current(centerOnId);
-    onCentered?.();
-  }, [centerOnId, positions, centerRef, onCentered]);
+  const fitRef = React.useRef<((ids: string[]) => void) | null>(null);
 
   React.useEffect(() => {
     if (!fitOnIds || fitOnIds.length === 0) return;
@@ -316,10 +281,14 @@ export const DataflowGraphView = ({
     // behind a filter) doesn't block the fit indefinitely.
     const present = fitOnIds.filter((id) => positions?.[id]);
     if (present.length === 0) return;
-    if (!fitRef?.current) return;
+    // FitHelper assigns fitRef.current in its own mount effect; on the rare
+    // commit where that hasn't run yet, skip without marking the request
+    // consumed (onFit stays uncalled) so the next positions or fitOnIds
+    // change gets another chance, rather than silently dropping the fit.
+    if (!fitRef.current) return;
     fitRef.current(present);
     onFit?.();
-  }, [fitOnIds, positions, fitRef, onFit]);
+  }, [fitOnIds, positions, onFit]);
 
   const nodes: Node[] = React.useMemo(() => {
     if (!positions) return [];
@@ -571,7 +540,7 @@ export const DataflowGraphView = ({
           // nodes can render as an almost-blank minimap.
           nodeStrokeColor={colors.border.secondary}
         />
-        {centerRef && <CenterHelper centerRef={centerRef} fitRef={fitRef} />}
+        <FitHelper fitRef={fitRef} />
         <ViewportGuard
           focusedScope={focusedScope}
           nodes={visible.nodes}

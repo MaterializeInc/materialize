@@ -55,14 +55,28 @@ export const DataflowToolbar = ({
   regionExpanded,
 }: DataflowToolbarProps) => {
   const skewDisabled = workerCount <= 1;
+  // The input is typed into locally and debounced into `filters` below, so
+  // the two disagree for up to 300ms by design. That makes a `filters.search`
+  // this component didn't type indistinguishable from a pending keystroke
+  // unless the last pushed value is tracked separately: without
+  // `pushedSearch`, a caller resetting filters (on a dataflow or replica
+  // switch, see DataflowDetailPage) reads as a stale keystroke and gets
+  // pushed straight back, leaving the old search in force.
   const [search, setSearch] = React.useState(filters.search);
+  const [pushedSearch, setPushedSearch] = React.useState(filters.search);
+  if (filters.search !== pushedSearch && filters.search !== search) {
+    // Adopted render-phase, not via effect, so the input never renders once
+    // holding the old text under the new filters.
+    setPushedSearch(filters.search);
+    setSearch(filters.search);
+  }
   // Debounce search input into the filters object.
   React.useEffect(() => {
     if (search === filters.search) return;
-    const timeout = setTimeout(
-      () => onFiltersChange({ ...filters, search }),
-      300,
-    );
+    const timeout = setTimeout(() => {
+      setPushedSearch(search);
+      onFiltersChange({ ...filters, search });
+    }, 300);
     return () => clearTimeout(timeout);
   }, [search, filters, onFiltersChange]);
   return (

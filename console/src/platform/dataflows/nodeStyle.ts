@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import colors from "~/theme/colors";
-import { formatBytesShort } from "~/utils/format";
+import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
 import type { LirGroupNode, VisibleNode } from "./dataflowGraph";
 
@@ -112,10 +112,6 @@ export function formatSkew(ratio: number): string {
   return ratio === 0 ? "no data" : ratio.toFixed(2);
 }
 
-export function formatElapsed(ns: bigint): string {
-  return `${Math.round(Number(ns) / 1e9)}s`;
-}
-
 const countFormatter = new Intl.NumberFormat("default");
 
 // A raw bigint quantity (records, schedules, messages) renders as an
@@ -123,6 +119,15 @@ const countFormatter = new Intl.NumberFormat("default");
 // Not for identifiers (operator ids, addresses), which aren't quantities.
 export function formatCount(n: bigint): string {
   return countFormatter.format(n);
+}
+
+// The same digits, split into the formatter's own parts, for a caller that
+// needs to treat grouping separators differently from digits (see
+// NodeDetailPanel's GroupedCount). The separator is locale-dependent -- a
+// comma, a period, or a narrow no-break space -- so it has to come from the
+// formatter rather than a split on a hardcoded character.
+export function formatCountParts(n: bigint): Intl.NumberFormatPart[] {
+  return countFormatter.formatToParts(n);
 }
 
 // Duration, records, and size share one line, not three: a canvas node's
@@ -134,7 +139,7 @@ export const statLines = (node: VisibleNode) => {
   const stats = node.stats;
   if (!stats) return lines;
   const parts: string[] = [];
-  if (stats.elapsedNs > 0n) parts.push(formatElapsed(stats.elapsedNs));
+  if (stats.elapsedNs > 0n) parts.push(formatElapsedNs(stats.elapsedNs));
   if (stats.arrangementRecords > 0n) {
     parts.push(`${formatCount(stats.arrangementRecords)} r`);
     parts.push(formatBytesShort(stats.arrangementSize));

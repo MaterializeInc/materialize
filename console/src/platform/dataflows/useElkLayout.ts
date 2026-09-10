@@ -20,6 +20,15 @@ import React from "react";
 import type { LirGrouping, VisibleGraph } from "./dataflowGraph";
 import { extractPositions, type Positions, toElkGraph } from "./elkGraph";
 
+// Every distinct cacheKey holds a full position map for its graph, and the
+// key folds in the filter and expansion state (see DataflowGraphView's
+// layoutKey), so a session that toggles hide-idle and expands regions on a
+// large dataflow would otherwise accumulate one map per combination for as
+// long as the page is mounted. Bounded as an LRU: the point of the cache is
+// that walking back up a drill-down path, or flipping a filter off and on,
+// doesn't re-run layout, and that only needs the recent keys.
+const LAYOUT_CACHE_LIMIT = 32;
+
 export function useElkLayout(
   graph: VisibleGraph | null,
   cacheKey: string,
@@ -47,10 +56,24 @@ export function useElkLayout(
     };
   }, []);
 
+  // Map iterates in insertion order, so re-inserting on a hit moves the key
+  // to the young end and the eviction below always drops the oldest.
+  const remember = React.useCallback((key: string, positions: Positions) => {
+    const cache = cacheRef.current;
+    cache.delete(key);
+    cache.set(key, positions);
+    while (cache.size > LAYOUT_CACHE_LIMIT) {
+      const oldest = cache.keys().next();
+      if (oldest.done) break;
+      cache.delete(oldest.value);
+    }
+  }, []);
+
   React.useEffect(() => {
     if (!graph) return;
     const cached = cacheRef.current.get(cacheKey);
     if (cached) {
+      remember(cacheKey, cached);
       setState({ key: cacheKey, positions: cached, error: null });
       return;
     }
@@ -62,7 +85,7 @@ export function useElkLayout(
         // Drop responses for superseded requests.
         if (requestId !== requestIdRef.current) return;
         const positions = extractPositions(layouted);
-        cacheRef.current.set(cacheKey, positions);
+        remember(cacheKey, positions);
         setState({ key: cacheKey, positions, error: null });
       },
       (error: unknown) => {
@@ -70,7 +93,7 @@ export function useElkLayout(
         setState({ key: cacheKey, positions: null, error: String(error) });
       },
     );
-  }, [graph, cacheKey, retryNonce, grouping]);
+  }, [graph, cacheKey, retryNonce, grouping, remember]);
 
   return {
     positions: state.key === cacheKey ? state.positions : null,
