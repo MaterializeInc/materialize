@@ -813,11 +813,10 @@ mod tests {
 
     use super::*;
 
-    /// Re-encode `column` as the `Align` variant, so a caller can drive the
-    /// chunker over serialized input.
+    /// Re-encode `column` as the `Align` variant, to drive the chunker over serialized
+    /// input.
     ///
-    /// `into_bytes` writes whole `u64` words and `Align` wants them as words,
-    /// read back in native byte order to match how they were written.
+    /// `into_bytes` writes whole `u64` words, read back in native byte order.
     fn serialize<C: Columnar>(column: &Column<C>) -> Column<C> {
         let mut bytes: Vec<u8> = Vec::new();
         column.into_bytes(&mut bytes);
@@ -880,10 +879,8 @@ mod tests {
 
     #[mz_ore::test]
     fn serialized_input_is_consolidated() {
-        // The chunker reads its input through `Column::borrow`, so a
-        // serialized input has to consolidate exactly like a typed one. Callers
-        // hand it whatever an upstream edge delivered, which is serialized
-        // whenever the data crossed an exchange.
+        // Callers hand the chunker whatever the upstream edge delivered, which is
+        // serialized once the data crossed an exchange.
         let mut input: Column<(u64, u64, i64)> = Default::default();
         for tuple in [
             (2u64, 0u64, 1i64),

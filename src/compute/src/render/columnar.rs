@@ -300,17 +300,13 @@ where
 
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
-/// Mirrors the `Vec` arm's [`CollectionExt::consolidate_named`], but keeps the
-/// data columnar throughout: a [`ColumnChunker`] sorts and consolidates the
-/// input columns and a [`ColumnMergeBatcher`] merges them under a
-/// [`columnar_consolidate_exchange`] pact. Both hold their data in [`Column`],
-/// and the batcher's chunks already carry the collection's own shape, so
-/// nothing on this path visits a record or materializes an owned [`Row`]. The
-/// exchange pact still re-encodes per record, see the TODO at the pact.
+/// A [`ColumnChunker`] sorts and consolidates the input columns and a
+/// [`ColumnMergeBatcher`] merges them, both holding their data in [`Column`], so nothing
+/// outside the exchange pact visits a record or materializes an owned [`Row`].
 ///
-/// This uses [`consolidate_pact`], not `mz_arrange_core`. A consolidate emits a
-/// consolidated collection, so building and reading back a maintained trace
-/// would be wasted work.
+/// Uses [`consolidate_pact`] rather than `mz_arrange_core`: a consolidate emits a
+/// consolidated collection, so building and reading back a maintained trace would be
+/// wasted work.
 pub fn columnar_consolidate<'scope, T>(
     collection: ColumnarCollection<'scope, T, Row, Diff>,
     name: &str,
@@ -318,16 +314,9 @@ pub fn columnar_consolidate<'scope, T>(
 where
     T: RenderTimestamp,
 {
-    // Route on a fixed-seed AHash of the row, not on `Hashable`'s FNV default:
-    // worker assignment is `hash % workers`, so the low bits decide the split,
-    // and FNV diffuses them poorly. `consolidate_named` owns this rationale, and
-    // this path has to hash the same way to distribute as evenly.
-    //
-    // TODO: This pact re-serializes every record into a per-destination
-    // `ColumnBuilder`, the one remaining full re-encode on this path. Routing a
-    // column in bulk needs contiguous ranges of records sharing a destination,
-    // which the exchange function cannot identify from a hash per record, so
-    // bulk routing needs a different formulation and is left as future work.
+    // TODO: This pact re-serializes every record into a per-destination `ColumnBuilder`,
+    // the one remaining full re-encode on this path. Bulk routing needs contiguous ranges
+    // of records sharing a destination, which a per-record hash cannot identify.
     let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
@@ -338,15 +327,12 @@ where
         _,
     >(collection.inner, exchange, name);
 
-    // Flatten the sealed chain into one container per chunk, which is what a
-    // downstream edge carries. This moves containers and visits no record.
+    // Flatten the sealed chain into one container per chunk, moving containers and
+    // visiting no record.
     //
-    // TODO: This ships a whole sealed snapshot in one activation, an un-fueled
-    // burst hazard on large consolidations. It is the same behavior as the
-    // `Vec` arm's `consolidate_named` unpack (see
-    // `mz_timely_util::operator::consolidate_named`), not new here. A future
-    // fuel fix should cover both arms, so the burst is not fixed on one and
-    // left on the other.
+    // TODO: This ships a whole sealed snapshot in one activation, an un-fueled burst
+    // hazard on large consolidations. `consolidate_named`'s unpack does the same, so a
+    // fuel fix has to cover both.
     consolidated
         .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
@@ -603,20 +589,14 @@ mod tests {
         let row1 = Row::pack_slice(&[Datum::Int32(1)]);
         let row2 = Row::pack_slice(&[Datum::Int32(2)]);
         let row3 = Row::pack_slice(&[Datum::Int32(3)]);
-        // Accumulation and cancellation across two distinct timestamps:
-        // `row1` accumulates to two at t=0 and to one at t=1 (kept separate by
-        // time); `row2` cancels at t=0 and `row3` cancels at t=1, so both are
-        // absent from the output.
+        // `row1` accumulates at t=0 and again at t=1, kept apart by time. `row2` cancels
+        // at t=0 and `row3` at t=1, so neither reaches the output.
         let expected = vec![
             (row1.clone(), Timestamp::from(0_u64), Diff::from(2)),
             (row1.clone(), Timestamp::from(1_u64), Diff::ONE),
         ];
 
-        // The columnar arm keeps the `Columnar` variant. No-ColumnarToVec is a
-        // by-inspection property: `consolidate_named`'s columnar arm calls
-        // `columnar_consolidate` (native `ColumnMergeBatcher` merge), never
-        // `columnar_to_vec`. The `into_vec` below is the capture harness
-        // decoding for the test only, not part of the consolidate.
+        // The `into_vec` below belongs to the capture harness, not to the consolidate.
         let (vec_captured, col_captured) = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();

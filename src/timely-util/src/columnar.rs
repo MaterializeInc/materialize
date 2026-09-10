@@ -309,21 +309,14 @@ where
     d.hashed()
 }
 
-/// Routes a `(D, T, R)` column for consolidation, by a fixed-seed AHash of its
-/// data column.
+/// Routes a `(D, T, R)` column for consolidation, by a fixed-seed AHash of its data column.
 ///
-/// Worker assignment is `hash % workers`, so the low bits alone decide the
-/// split, and the [`Hashable`] default the other exchange functions use (FNV)
-/// diffuses them poorly. [`CollectionExt::consolidate_named`] owns that
-/// rationale; this is the columnar counterpart of its exchange and has to hash
-/// the same way to distribute as evenly. The seed is fixed, so routing is
-/// identical across builds and replicas.
+/// Worker assignment is `hash % workers`, so the low bits alone decide the split and the
+/// [`Hashable`] default (FNV) the other exchange functions use diffuses them poorly. The
+/// seed is fixed, so routing is identical across builds and replicas.
 ///
-/// Spelled as a function rather than a closure over the hasher state: the
-/// argument is higher-ranked in its lifetime, which closure inference cannot
-/// express here.
-///
-/// [`CollectionExt::consolidate_named`]: crate::operator::CollectionExt::consolidate_named
+/// Spelled as a function rather than a closure over the hasher state, because the argument
+/// is higher-ranked in its lifetime and closure inference cannot express that.
 pub fn columnar_consolidate_exchange<D, T, R>((d, _, _): &Ref<'_, (D, T, R)>) -> u64
 where
     D: Columnar,
