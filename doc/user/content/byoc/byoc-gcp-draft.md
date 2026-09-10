@@ -6,7 +6,7 @@ description = "Run Materialize inside your own GCP project while Materialize man
 parent = "byoc"
 name = "GCP"
 identifier = "byoc-gcp"
-weight = 60
+weight = 50
 +++
 
 {{< warning >}}
@@ -116,7 +116,7 @@ About weekly, similar to our cloud service, driven from our control plane.
 
 ## Other clouds
 
-BYOC is in development on AWS and GCP; Azure is on the roadmap. See [BYOC on AWS](/byoc/byoc-aws-draft/).
+BYOC is in development, on GCP first with AWS to follow; Azure is on the roadmap. See [BYOC on AWS](/byoc/byoc-aws-draft/).
 
 ## Need help?
 
