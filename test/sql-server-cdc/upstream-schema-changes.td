@@ -163,4 +163,39 @@ ALTER TABLE bar DROP COLUMN name, location;
 ! SELECT * FROM bar1;
 contains:Incompatible schema change
 
+$ sql-server-execute name=sql-server
+CREATE TABLE uq (id INT NOT NULL CONSTRAINT uq_pk PRIMARY KEY, wallet VARCHAR(64) NOT NULL CONSTRAINT uq_wallet UNIQUE);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'uq', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO uq VALUES (1, 'a');
+CREATE TABLE addk (id INT NOT NULL CONSTRAINT addk_pk PRIMARY KEY, wallet VARCHAR(64) NOT NULL);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'addk', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO addk VALUES (1, 'a');
+
+> CREATE TABLE uq FROM SOURCE sql_server_src (REFERENCE dbo.uq);
+> CREATE TABLE addk FROM SOURCE sql_server_src (REFERENCE dbo.addk);
+
+> SELECT * FROM uq;
+1 a
+
+$ sql-server-execute name=sql-server
+ALTER TABLE addk ADD CONSTRAINT addk_wallet UNIQUE (wallet);
+INSERT INTO addk VALUES (2, 'b');
+ALTER TABLE addk DROP CONSTRAINT addk_wallet;
+INSERT INTO addk VALUES (3, 'b');
+
+> SELECT * FROM addk;
+1 a
+2 b
+3 b
+
+$ sql-server-execute name=sql-server
+ALTER TABLE uq DROP CONSTRAINT uq_wallet;
+
+! SELECT * FROM uq;
+contains:incompatible schema change on dbo.uq: UNIQUE constraint "uq_wallet" (wallet) was dropped upstream
+hint:CREATE TABLE v2."uq"
+
+> SELECT details->'hints'->>0 LIKE '%CREATE TABLE v2."uq"%' FROM mz_internal.mz_source_statuses WHERE name = 'uq';
+true
+
 > DROP SOURCE sql_server_src CASCADE;

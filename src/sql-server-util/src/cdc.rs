@@ -74,7 +74,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tiberius::numeric::Numeric;
 
-use crate::desc::{SqlServerQualifiedTableName, SqlServerTableRaw};
+use crate::desc::{SqlServerQualifiedTableName, SqlServerTableConstraintRaw, SqlServerTableRaw};
 use crate::inspect::DDLEvent;
 use crate::{Client, SqlServerCdcMetrics, SqlServerError, TransactionIsolationLevel};
 
@@ -351,6 +351,29 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                         }
                     }
 
+                    let tables = crate::inspect::get_tables_for_capture_instance(
+                        self.client,
+                        self.capture_instances.keys().map(|instance| instance.as_ref()),
+                    )
+                    .await?;
+                    let names: Vec<_> = tables
+                        .iter()
+                        .map(|table| (Arc::clone(&table.schema_name), Arc::clone(&table.name)))
+                        .collect();
+                    let mut constraints =
+                        crate::inspect::get_constraints_for_tables(self.client, names.iter())
+                            .await?;
+                    for table in tables {
+                        let constraints = constraints
+                            .remove(&(Arc::clone(&table.schema_name), Arc::clone(&table.name)))
+                            .unwrap_or_default();
+                        yield CdcEvent::Schema {
+                            capture_instance: Arc::clone(&table.capture_instance.name),
+                            table,
+                            constraints,
+                        };
+                    }
+
                     // Increment our LSN (`get_changes` is inclusive).
                     //
                     // TODO(sql_server2): We should occassionally check to see how close the LSN we
@@ -456,6 +479,11 @@ pub enum CdcEvent {
         table: SqlServerQualifiedTableName,
         /// DDL event
         ddl_event: DDLEvent,
+    },
+    Schema {
+        capture_instance: Arc<str>,
+        table: SqlServerTableRaw,
+        constraints: Vec<SqlServerTableConstraintRaw>,
     },
 }
 

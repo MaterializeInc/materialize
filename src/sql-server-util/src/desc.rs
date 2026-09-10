@@ -39,6 +39,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::desc::proto_sql_server_table_constraint::ConstraintType;
+use crate::schema_change::{KeyRef, SchemaChange, SchemaChangeError};
 use crate::{SqlServerDecodeError, SqlServerError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_sql_server_util.rs"));
@@ -124,6 +125,46 @@ impl SqlServerTableDesc {
     pub fn decoder(&self, desc: &RelationDesc) -> Result<SqlServerRowDecoder, SqlServerError> {
         let decoder = SqlServerRowDecoder::try_new(self, desc)?;
         Ok(decoder)
+    }
+
+    pub fn check_constraint_compatibility(
+        &self,
+        other: &SqlServerTableDesc,
+    ) -> Result<(), SchemaChangeError> {
+        let spans_excluded_column = |constraint: &&SqlServerTableConstraint| {
+            constraint.column_names.iter().any(|name| {
+                self.columns
+                    .iter()
+                    .any(|c| c.is_excluded() && c.name.as_ref() == name.as_str())
+            })
+        };
+        for constraint in self
+            .constraints
+            .iter()
+            .filter(|c| !spans_excluded_column(c))
+        {
+            let key = KeyRef::from(constraint);
+            let other_constraint = other
+                .constraints
+                .iter()
+                .find(|c| c.constraint_name == constraint.constraint_name);
+            let change = match other_constraint {
+                None => SchemaChange::KeyDropped { key },
+                Some(other_constraint)
+                    if other_constraint.constraint_type != constraint.constraint_type
+                        || other_constraint.column_names != constraint.column_names =>
+                {
+                    SchemaChange::KeyAltered { key }
+                }
+                Some(_) => continue,
+            };
+            return Err(SchemaChangeError {
+                schema_name: self.schema_name.to_string(),
+                name: self.name.to_string(),
+                change,
+            });
+        }
+        Ok(())
     }
 }
 
