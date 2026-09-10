@@ -1172,9 +1172,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         .try_into()
                         .expect("must fit");
                     bucketed = true;
-                    // Temporal bucketing consumes and produces a `Vec` edge, so
-                    // decode here. This is the sanctioned leaf decode where a
-                    // `Vec`-internal operator meets the columnar edge.
+                    // Temporal bucketing is `Vec`-internal, so decode here.
                     let oks = oks.into_vec();
                     CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
                         oks.inner,
@@ -1226,14 +1224,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
         CollectionEdge<'scope, T>,
     ) {
-        // This operator implements a `map_fallible`, but produces columnar updates for the ok
-        // stream. The `map_fallible` cannot be used here because the closure cannot return
-        // references, which is what we need to push into columnar streams. Instead, we use a
-        // bespoke operator that also optimizes reuse of allocations across individual updates.
+        // Spelled out rather than `map_fallible`, whose closure cannot return the references a
+        // columnar stream is pushed from. The ok output is columnar in both arms, because the
+        // arrangement key and value always are; the passthrough keeps its input's variant.
         //
-        // The two arms differ only in how records are read from the input container and in the
-        // variant of the passthrough output, which preserves the input variant. The ok output is
-        // columnar in both arms, since the arrangement key/value is always columnar.
+        // The arena is per-activation and cleared per row, so the capacity it retains never
+        // outlives a scheduling invocation.
         let (ok_stream, err_stream, passthrough) = match oks {
             CollectionEdge::Vec(oks) => {
                 let mut builder =
@@ -1252,9 +1248,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     let mut val_buf = Row::default();
                     let mut datums = DatumVec::new();
                     move |_frontiers| {
-                        // Scoped to the activation so the arena's retained capacity does not
-                        // outlive a single scheduling invocation; cleared per row to reuse it
-                        // within the batch.
                         let mut temp_storage = RowArena::new();
                         let mut ok_output = ok_output.activate();
                         let mut err_output = err_output.activate();
@@ -1296,8 +1289,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 let (err_output, err_stream) = builder.new_output();
                 let mut err_output = OutputBuilder::from(err_output);
                 let (passthrough_output, passthrough_stream) = builder.new_output();
-                // The passthrough forwards the input `Column` unchanged; its builder's container
-                // type must match the input so `give_container` can hand the batch through.
+                // The builder's container type must match the input, so `give_container` can
+                // hand the batch through untouched.
                 let mut passthrough_output = OutputBuilder::<
                     _,
                     CapacityContainerBuilder<Column<(Row, T, Diff)>>,
@@ -1309,9 +1302,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     let mut val_buf = Row::default();
                     let mut datums = DatumVec::new();
                     move |_frontiers| {
-                        // Scoped to the activation so the arena's retained capacity does not
-                        // outlive a single scheduling invocation; cleared per row to reuse it
-                        // within the batch.
                         let mut temp_storage = RowArena::new();
                         let mut ok_output = ok_output.activate();
                         let mut err_output = err_output.activate();
@@ -1319,8 +1309,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         input.for_each(|time, data| {
                             let mut ok_session = ok_output.session_with_builder(&time);
                             let mut err_session = err_output.session(&time);
-                            // Rows are read from the borrowed column, never materialized as
-                            // owned `Row`s. Times and diffs are owned only on the error path.
+                            // Rows stay borrowed; only the error path owns a time and diff.
                             for (row, t, d) in data.borrow().into_index_iter() {
                                 temp_storage.clear();
                                 let datums = datums.borrow_with(row);
@@ -1593,10 +1582,7 @@ mod tests {
         updates
     }
 
-    // `DataflowErrorSer` is not `Ord`, so project the error to its debug string
-    // to get a stable, comparable ordering. The time and diff still ride along,
-    // so this verifies the columnar arm's `into_owned` on the error path
-    // reconstructs the same `(time, diff)` as the `Vec` arm.
+    // `DataflowErrorSer` is not `Ord`, so order by the error's debug string.
     fn extract_err(captured: Captured<ErrUpdate>) -> Vec<(String, Timestamp, Diff)> {
         let mut updates: Vec<_> = captured
             .extract()
@@ -1608,10 +1594,8 @@ mod tests {
         updates
     }
 
-    /// Arranges `rows` (each stamped with its own time) as both a `Vec` edge and
-    /// the equivalent columnar edge, keyed by `key`, and returns the sorted ok
-    /// and err outputs of each arm plus whether the columnar arm kept the
-    /// columnar passthrough variant.
+    /// Arranges `rows` through both edge arms, returning each arm's sorted ok and err output
+    /// plus whether the columnar arm kept its passthrough variant.
     fn arrange_both_arms(
         rows: Vec<(Row, u64)>,
         key: Vec<LirScalarExpr>,
@@ -1675,9 +1659,8 @@ mod tests {
         )
     }
 
-    // Uniform two-column rows so `Column(0)` keys and full-row thinning are in
-    // bounds for every record. Times span three distinct values so the columnar
-    // arm's per-record time handling is exercised, not just t=0.
+    // Uniform two columns so `Column(0)` and full-row thinning are in bounds, over three
+    // distinct times so per-record time handling is exercised.
     fn test_rows() -> Vec<(Row, u64)> {
         vec![
             (Row::pack_slice(&[Datum::Int32(1), Datum::String("a")]), 0),
@@ -1687,18 +1670,8 @@ mod tests {
         ]
     }
 
-    /// The columnar arm of the arrange input produces the same arranged contents
-    /// as the `Vec` arm and keeps the columnar passthrough variant.
-    ///
-    /// What this proves: correctness of the columnar key-forming path (a mangled
-    /// key or dropped record would diverge from the `Vec` arm) and that the
-    /// columnar arm actually ran (the passthrough stays `Columnar`).
-    ///
-    /// What it does NOT prove: absence of a silent decode. A hypothetical
-    /// `columnar_to_vec` on the ok path would yield identical contents and still
-    /// return a `Columnar` passthrough. The no-decode property holds by code
-    /// inspection: the columnar arm reads records via `into_index_iter` on the
-    /// borrowed column and never calls `into_vec`.
+    /// Agreeing contents do not rule out a silent `columnar_to_vec` on the ok path. That the
+    /// arm never decodes holds by inspection, not by this test.
     #[mz_ore::test]
     fn arrange_collection_arms_agree() {
         let (ok_vec, ok_col, err_vec, err_col, col_is_columnar) =
@@ -1713,10 +1686,7 @@ mod tests {
         assert!(err_vec.is_empty() && err_col.is_empty());
     }
 
-    /// A key expression that always errors drives every record onto the error
-    /// path, exercising the columnar arm's `into_owned` reconstruction of the
-    /// error's `(time, diff)`. The two arms must agree on the errors, and the ok
-    /// output must be empty on both.
+    /// A key expression that always errors drives every record onto the error path.
     #[mz_ore::test]
     fn arrange_collection_arms_agree_on_error_path() {
         let key = vec![LirScalarExpr::literal(
