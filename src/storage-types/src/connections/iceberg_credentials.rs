@@ -21,14 +21,16 @@
 //! builds the catalog but keeps it private, so this module asks the server directly.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, anyhow};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use iceberg::TableIdent;
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN};
+use iceberg::io::{GCS_TOKEN, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN};
 use iceberg_catalog_rest::{StorageCredential, TokenProvider};
-use iceberg_storage_opendal::{AwsCredential, ProvideCredential};
+use iceberg_storage_opendal::{AwsCredential, GcsCredential, GcsToken, ProvideCredential};
 use mz_ore::error::ErrorExt;
 use reqsign_core::time::Timestamp;
 use reqwest::StatusCode;
@@ -41,49 +43,152 @@ use crate::connections::IcebergAccessDelegation;
 
 /// The `X-Iceberg-Access-Delegation` header, spelled for requests Materialize issues itself
 /// rather than through the catalog client, which takes it as a `header.*` catalog property.
-const ICEBERG_ACCESS_DELEGATION_HEADER: &str = "X-Iceberg-Access-Delegation";
+const ICEBERG_ACCESS_DELEGATION_HEADER: HeaderName =
+    HeaderName::from_static("x-iceberg-access-delegation");
 
 /// Property name for the most common way catalogs report when vended S3 credentials expire.
 /// Catalogs are not required to send it.
 const S3_SESSION_TOKEN_EXPIRES_AT_MS: &str = "s3.session-token-expires-at-ms";
 
+/// Property name for when a vended GCS token expires, in epoch milliseconds.
+///
+/// NOTE: no `-ms` suffix, unlike [`S3_SESSION_TOKEN_EXPIRES_AT_MS`], even though both carry
+/// milliseconds. The spelling comes from Iceberg's `GCPProperties`, not from analogy with the S3
+/// property.
+const GCS_TOKEN_EXPIRES_AT: &str = "gcs.oauth2.token-expires-at";
+
 /// How far ahead of a reported expiry to re-fetch a vended credential.
+///
+/// NOTE: must stay comfortably above reqsign's own refresh buffers, which are 120s for a GCS
+/// token. A GCS token handed back inside that window fails signing outright, because a vended
+/// credential carries no service account for reqsign to fall back on.
 const VENDED_CREDENTIAL_REFRESH_BUFFER: Duration = Duration::from_secs(900);
 
 /// How long to trust a vended credential that reports no expiry.
 ///
-/// A catalog that omits [`S3_SESSION_TOKEN_EXPIRES_AT_MS`] leaves nothing to schedule against, and
-/// a credential held past its real lifetime fails every S3 request until the dataflow restarts. So
+/// A catalog that omits the expiry property leaves nothing to schedule against, and a credential
+/// held past its real lifetime fails every storage request until the dataflow restarts. So
 /// re-fetch on a short interval instead: each one is a single REST call against a credential the
 /// sink is already using.
 // TODO SS-449: make this a dyncfg
 const VENDED_CREDENTIAL_DEFAULT_TTL: Duration = Duration::from_secs(300);
 
+/// A storage credential that a REST catalog can vend.
+///
+/// Implementors carry the object store's notion of a credential and know which
+/// `storage-credentials` properties encode it. Everything else about vending, including the fetch,
+/// the caching, and the refresh schedule, is shared by [`VendedCredentialLoader`].
+pub(super) trait VendedCredential: Clone + Debug + Send + Sync + Unpin + 'static {
+    /// The object store this credential authenticates against, for diagnostics.
+    const STORE: &'static str;
+
+    /// Builds the credential from one entry of a catalog's `storage-credentials`.
+    fn from_vended(vended: &StorageCredential) -> reqsign_core::Result<Self>;
+
+    /// When the credential expires, if the catalog reported it.
+    fn expires_at(&self) -> Option<Timestamp>;
+}
+
+impl VendedCredential for AwsCredential {
+    const STORE: &'static str = "S3";
+
+    fn from_vended(vended: &StorageCredential) -> reqsign_core::Result<Self> {
+        Ok(AwsCredential {
+            access_key_id: required(vended, S3_ACCESS_KEY_ID)?,
+            secret_access_key: required(vended, S3_SECRET_ACCESS_KEY)?,
+            session_token: vended.config.get(S3_SESSION_TOKEN).cloned(),
+            expires_in: vended_expires_at(vended, S3_SESSION_TOKEN_EXPIRES_AT_MS)?,
+        })
+    }
+
+    fn expires_at(&self) -> Option<Timestamp> {
+        self.expires_in
+    }
+}
+
+impl VendedCredential for GcsCredential {
+    const STORE: &'static str = "GCS";
+
+    fn from_vended(vended: &StorageCredential) -> reqsign_core::Result<Self> {
+        Ok(GcsCredential::with_token(GcsToken {
+            access_token: required(vended, GCS_TOKEN)?,
+            expires_at: vended_expires_at(vended, GCS_TOKEN_EXPIRES_AT)?,
+        }))
+    }
+
+    fn expires_at(&self) -> Option<Timestamp> {
+        self.token.as_ref().and_then(|token| token.expires_at)
+    }
+}
+
+/// Reads a property a vended credential cannot do without.
+fn required(vended: &StorageCredential, prop: &str) -> reqsign_core::Result<String> {
+    vended.config.get(prop).cloned().ok_or_else(|| {
+        reqsign_core::Error::credential_invalid(format!(
+            "vended Iceberg storage credential for prefix {} is missing {prop}",
+            vended.prefix
+        ))
+    })
+}
+
+/// Reads an expiry property, which catalogs are not required to send.
+fn vended_expires_at(
+    vended: &StorageCredential,
+    prop: &str,
+) -> reqsign_core::Result<Option<Timestamp>> {
+    let Some(raw) = vended.config.get(prop) else {
+        debug!(
+            prefix = vended.prefix,
+            prop, "Iceberg catalog vended a storage credential with no expiry"
+        );
+        return Ok(None);
+    };
+    let millis = raw.parse::<i64>().map_err(|e| {
+        reqsign_core::Error::credential_invalid(format!(
+            "vended Iceberg storage credential for prefix {} has an unparseable {prop}",
+            vended.prefix
+        ))
+        .with_source(e)
+    })?;
+    Ok(Some(Timestamp::from_millisecond(millis)?))
+}
+
 #[derive(Debug)]
-pub(super) struct VendedCredentialLoader {
+pub(super) struct VendedCredentialLoader<C> {
     client: reqwest::Client,
     credential_endpoint: Url,
     token: Arc<dyn TokenProvider>,
-    cached: Mutex<Option<(AwsCredential, Instant)>>,
+    /// Every header this request needs beyond the bearer token, resolved once.
+    headers: HeaderMap,
+    cached: Mutex<Option<(C, Instant)>>,
 }
 
-impl VendedCredentialLoader {
+impl<C: VendedCredential> VendedCredentialLoader<C> {
+    /// `headers` are the headers the catalog client puts on its own requests, which this one
+    /// bypasses. The delegation header is added here rather than expected in `headers`, since
+    /// asking the catalog to vend is the whole point of this request.
     pub(super) fn new(
         client: reqwest::Client,
         credential_endpoint: Url,
         token: Arc<dyn TokenProvider>,
+        mut headers: HeaderMap,
     ) -> Self {
+        headers.insert(
+            ICEBERG_ACCESS_DELEGATION_HEADER,
+            HeaderValue::from_static(IcebergAccessDelegation::VendedCredentials.as_header_value()),
+        );
         Self {
             client,
             credential_endpoint,
             token,
+            headers,
             cached: Mutex::new(None),
         }
     }
 
     /// Fetches a fresh credential from the catalog, paired with the instant at which it should be
     /// re-fetched.
-    async fn fetch(&self) -> reqsign_core::Result<(AwsCredential, Instant)> {
+    async fn fetch(&self) -> reqsign_core::Result<(C, Instant)> {
         let token = self.token.token().await.map_err(|e| {
             reqsign_core::Error::credential_invalid(
                 "failed to obtain a catalog token for vended Iceberg storage credentials",
@@ -95,10 +200,7 @@ impl VendedCredentialLoader {
             .client
             .get(self.credential_endpoint.clone())
             .bearer_auth(token)
-            .header(
-                ICEBERG_ACCESS_DELEGATION_HEADER,
-                IcebergAccessDelegation::VendedCredentials.as_header_value(),
-            )
+            .headers(self.headers.clone())
             .send()
             .await
             .map_err(|e| {
@@ -149,7 +251,7 @@ impl VendedCredentialLoader {
                 "Iceberg catalog vended multiple storage credentials; using the longest prefix"
             );
         }
-        let credential = response
+        let vended = response
             .storage_credentials
             .into_iter()
             .max_by_key(|credential| credential.prefix.len())
@@ -160,53 +262,14 @@ impl VendedCredentialLoader {
                 ))
             })?;
 
-        let missing = |prop: &str| {
-            reqsign_core::Error::credential_invalid(format!(
-                "vended Iceberg storage credential for prefix {} is missing {prop}",
-                credential.prefix
-            ))
-        };
-        let access_key_id = credential
-            .config
-            .get(S3_ACCESS_KEY_ID)
-            .ok_or_else(|| missing(S3_ACCESS_KEY_ID))?
-            .clone();
-        let secret_access_key = credential
-            .config
-            .get(S3_SECRET_ACCESS_KEY)
-            .ok_or_else(|| missing(S3_SECRET_ACCESS_KEY))?
-            .clone();
-
-        let expires_in = credential
-            .config
-            .get(S3_SESSION_TOKEN_EXPIRES_AT_MS)
-            .map(|raw| {
-                let millis = raw.parse::<i64>().map_err(|e| {
-                    reqsign_core::Error::credential_invalid(format!(
-                        "vended Iceberg storage credential for prefix {} has an unparseable \
-                         {S3_SESSION_TOKEN_EXPIRES_AT_MS}",
-                        credential.prefix
-                    ))
-                    .with_source(e)
-                })?;
-                Timestamp::from_millisecond(millis)
-            })
-            .transpose()?;
-
-        Ok((
-            AwsCredential {
-                access_key_id,
-                secret_access_key,
-                session_token: credential.config.get(S3_SESSION_TOKEN).cloned(),
-                expires_in,
-            },
-            refresh_deadline(expires_in),
-        ))
+        let credential = C::from_vended(&vended)?;
+        let refresh_at = refresh_deadline(credential.expires_at());
+        Ok((credential, refresh_at))
     }
 }
 
-impl ProvideCredential for VendedCredentialLoader {
-    type Credential = AwsCredential;
+impl<C: VendedCredential> ProvideCredential for VendedCredentialLoader<C> {
+    type Credential = C;
 
     async fn provide_credential(
         &self,
@@ -215,7 +278,7 @@ impl ProvideCredential for VendedCredentialLoader {
         // The lock is deliberately held across the fetch. `create_operator` builds a fresh
         // OpenDAL `Operator` for every file operation, so reqsign's own credential cache never
         // outlives a single call and this cache is all that stands between the sink and one
-        // catalog round trip per S3 request. Serializing here means a stale entry costs one
+        // catalog round trip per storage request. Serializing here means a stale entry costs one
         // refetch rather than one per in-flight operation.
         let mut cached = self.cached.lock().await;
 
@@ -225,7 +288,16 @@ impl ProvideCredential for VendedCredentialLoader {
             return Ok(Some(credential.clone()));
         }
 
-        let (credential, refresh_at) = self.fetch().await?;
+        // The chain reqsign consults reports only that credential loading failed, without a
+        // cause, so log the real one here or it is lost.
+        let (credential, refresh_at) = self.fetch().await.inspect_err(|e| {
+            warn!(
+                store = C::STORE,
+                endpoint = %self.credential_endpoint,
+                error = %e,
+                "failed to refresh vended Iceberg storage credentials"
+            );
+        })?;
         *cached = Some((credential.clone(), refresh_at));
         Ok(Some(credential))
     }
@@ -327,11 +399,13 @@ fn table_credentials_url(
 /// Resolves the REST endpoint that vends storage credentials for `table`.
 ///
 /// Takes a round trip to the catalog's `config` endpoint, because the resource path carries a
-/// request prefix that only the server knows.
+/// request prefix that only the server knows. `headers` are the headers the catalog client puts
+/// on its own requests, which this one bypasses.
 pub(super) async fn table_credentials_endpoint(
     uri: &Url,
     client: &reqwest::Client,
     token: &Arc<dyn TokenProvider>,
+    headers: &HeaderMap,
     warehouse: Option<&str>,
     table: &TableIdent,
 ) -> Result<Url, anyhow::Error> {
@@ -344,6 +418,7 @@ pub(super) async fn table_credentials_endpoint(
     let response = client
         .get(config_endpoint.clone())
         .bearer_auth(bearer)
+        .headers(headers.clone())
         .send()
         .await
         .with_context(|| {
@@ -386,6 +461,131 @@ mod tests {
         CatalogConfigResponse {
             defaults: to_map(defaults),
             overrides: to_map(overrides),
+        }
+    }
+
+    fn vended(prefix: &str, config: &[(&str, &str)]) -> StorageCredential {
+        StorageCredential {
+            prefix: prefix.to_string(),
+            config: config
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_aws_credential_from_vended() {
+        let credential = AwsCredential::from_vended(&vended(
+            "s3://bucket/warehouse",
+            &[
+                (S3_ACCESS_KEY_ID, "key"),
+                (S3_SECRET_ACCESS_KEY, "secret"),
+                (S3_SESSION_TOKEN, "session"),
+                (S3_SESSION_TOKEN_EXPIRES_AT_MS, "1700000000000"),
+            ],
+        ))
+        .expect("complete credential");
+        assert_eq!(credential.access_key_id, "key");
+        assert_eq!(credential.secret_access_key, "secret");
+        assert_eq!(credential.session_token.as_deref(), Some("session"));
+        assert_eq!(
+            credential.expires_at(),
+            Some(Timestamp::from_millisecond(1700000000000).unwrap())
+        );
+
+        // A catalog need not report an expiry, and long-lived static keys have no session token.
+        let credential = AwsCredential::from_vended(&vended(
+            "s3://bucket/warehouse",
+            &[(S3_ACCESS_KEY_ID, "key"), (S3_SECRET_ACCESS_KEY, "secret")],
+        ))
+        .expect("credential without expiry");
+        assert_eq!(credential.session_token, None);
+        assert_eq!(credential.expires_at(), None);
+
+        // A credential missing either key is unusable, and says which one.
+        let err = AwsCredential::from_vended(&vended(
+            "s3://bucket/warehouse",
+            &[(S3_ACCESS_KEY_ID, "key")],
+        ))
+        .expect_err("incomplete credential");
+        assert!(
+            err.to_string().contains(S3_SECRET_ACCESS_KEY),
+            "unexpected error: {err}"
+        );
+
+        // A malformed expiry is an error rather than a silently ignored property: treating it as
+        // absent would fall back to the default TTL and hide a catalog bug.
+        let err = AwsCredential::from_vended(&vended(
+            "s3://bucket/warehouse",
+            &[
+                (S3_ACCESS_KEY_ID, "key"),
+                (S3_SECRET_ACCESS_KEY, "secret"),
+                (S3_SESSION_TOKEN_EXPIRES_AT_MS, "soon"),
+            ],
+        ))
+        .expect_err("unparseable expiry");
+        assert!(
+            err.to_string().contains("unparseable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_gcs_credential_from_vended() {
+        let credential = GcsCredential::from_vended(&vended(
+            "gs://bucket/warehouse",
+            &[
+                (GCS_TOKEN, "ya29.token"),
+                (GCS_TOKEN_EXPIRES_AT, "1700000000000"),
+            ],
+        ))
+        .expect("complete credential");
+        // A vended credential is a bare token: reqsign has no service account to fall back on.
+        assert!(credential.service_account.is_none());
+        let token = credential.token.as_ref().expect("token");
+        assert_eq!(token.access_token, "ya29.token");
+        assert_eq!(
+            credential.expires_at(),
+            Some(Timestamp::from_millisecond(1700000000000).unwrap())
+        );
+
+        let credential =
+            GcsCredential::from_vended(&vended("gs://bucket/warehouse", &[(GCS_TOKEN, "tok")]))
+                .expect("credential without expiry");
+        assert_eq!(credential.expires_at(), None);
+
+        let err = GcsCredential::from_vended(&vended(
+            "gs://bucket/warehouse",
+            &[(GCS_TOKEN_EXPIRES_AT, "1700000000000")],
+        ))
+        .expect_err("credential without a token");
+        assert!(
+            err.to_string().contains(GCS_TOKEN),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_refresh_deadline() {
+        // No reported expiry falls back to the fixed interval.
+        let deadline = refresh_deadline(None);
+        assert!(deadline > Instant::now());
+        assert!(deadline <= Instant::now() + VENDED_CREDENTIAL_DEFAULT_TTL);
+
+        // A comfortably distant expiry is refreshed a buffer ahead of it.
+        let lifetime = Duration::from_secs(3600);
+        let deadline = refresh_deadline(Some(Timestamp::now() + lifetime));
+        let expected = Instant::now() + lifetime - VENDED_CREDENTIAL_REFRESH_BUFFER;
+        assert!(
+            deadline <= expected && deadline > expected - Duration::from_secs(60),
+            "deadline is not a buffer ahead of the expiry"
+        );
+
+        // An expiry inside the buffer, or already past, is refreshed on the next call rather
+        // than yielding a deadline reqsign would reject anyway.
+        for offset in [VENDED_CREDENTIAL_REFRESH_BUFFER / 2, Duration::from_secs(0)] {
+            assert!(refresh_deadline(Some(Timestamp::now() + offset)) <= Instant::now());
         }
     }
 

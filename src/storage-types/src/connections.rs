@@ -37,7 +37,8 @@ use iceberg_catalog_rest::{
     RestCatalogBuilder, TokenProvider,
 };
 use iceberg_storage_opendal::{
-    AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
+    AwsCredential, CustomAwsCredentialLoader, CustomGcsCredentialLoader, OpenDalStorageFactory,
+    ProvideCredential,
 };
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
@@ -103,9 +104,11 @@ pub mod string_or_secret;
 const OAUTH2_PARAM_SCOPE: &str = "scope";
 
 const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
-/// Requests catalog-vended storage credentials. `iceberg-rust` turns `header.*` catalog
-/// properties into headers on every REST request, the same way the Iceberg Java client
-/// carries this one.
+/// The prefix marking a catalog property that `iceberg-rust` turns into a header on every REST
+/// request, the same convention the Iceberg Java client uses.
+const REST_CATALOG_HEADER_PROP_PREFIX: &str = "header.";
+/// Requests catalog-vended storage credentials, carried as a header by way of
+/// [`REST_CATALOG_HEADER_PROP_PREFIX`].
 const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "header.X-Iceberg-Access-Delegation";
 
 /// A credential loader that wraps an aws-sdk-rust credentials provider for use with
@@ -1018,6 +1021,79 @@ impl IcebergCatalogConnection<InlinedConnection> {
         Ok(Arc::new(catalog))
     }
 
+    /// Collects the headers `iceberg-rust` puts on every catalog request out of the `header.*`
+    /// props it takes them from.
+    ///
+    /// The credential endpoints Materialize calls directly bypass the catalog client, so without
+    /// this they would reach the same server missing headers it may require, `x-goog-user-project`
+    /// on a GCP-hosted catalog among them.
+    fn catalog_headers(props: &BTreeMap<String, String>) -> Result<HeaderMap, anyhow::Error> {
+        props
+            .iter()
+            .filter_map(|(k, v)| {
+                k.strip_prefix(REST_CATALOG_HEADER_PROP_PREFIX)
+                    .map(|name| (name, v))
+            })
+            .map(|(name, value)| {
+                let name = HeaderName::try_from(name)
+                    .with_context(|| format!("invalid Iceberg catalog header name: {name}"))?;
+                let value = HeaderValue::try_from(value)
+                    .with_context(|| format!("invalid Iceberg catalog header value for {name}"))?;
+                Ok((name, value))
+            })
+            .collect()
+    }
+
+    /// Resolves the endpoint that vends storage credentials for `table`, or `None` if this
+    /// connection has no use for one.
+    ///
+    /// A loader built on the returned endpoint takes sole responsibility for storage credentials,
+    /// so `None` is the signal to leave the catalog's static `storage-credentials` props in force.
+    /// It means either that the connection did not ask for delegation, or that the caller named no
+    /// table, and the specification scopes vended credentials to a single table.
+    async fn vended_credential_endpoint(
+        &self,
+        rest: &RestIcebergCatalog,
+        client: &reqwest::Client,
+        token: &Arc<dyn TokenProvider>,
+        headers: &HeaderMap,
+        table: Option<&TableIdent>,
+    ) -> Result<Option<Url>, anyhow::Error> {
+        match (&rest.access_delegation, table) {
+            (Some(IcebergAccessDelegation::VendedCredentials), Some(table)) => Ok(Some(
+                iceberg_credentials::table_credentials_endpoint(
+                    &self.uri,
+                    client,
+                    token,
+                    headers,
+                    rest.warehouse.as_deref(),
+                    table,
+                )
+                .await?,
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    /// Builds a GCS storage factory, refreshing vended credentials from `endpoint` if there is one.
+    fn gcs_storage_factory(
+        endpoint: Option<Url>,
+        client: &reqwest::Client,
+        token: &Arc<dyn TokenProvider>,
+        headers: &HeaderMap,
+    ) -> OpenDalStorageFactory {
+        OpenDalStorageFactory::Gcs {
+            customized_credential_load: endpoint.map(|endpoint| {
+                CustomGcsCredentialLoader::new(iceberg_credentials::VendedCredentialLoader::new(
+                    client.clone(),
+                    endpoint,
+                    Arc::clone(token),
+                    headers.clone(),
+                ))
+            }),
+        }
+    }
+
     async fn connect_rest(
         &self,
         rest: &RestIcebergCatalog,
@@ -1118,31 +1194,10 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     oauth_params.into_iter().collect(),
                 ));
 
-                // Installing a loader hands it sole responsibility for S3 credentials: OpenDAL
-                // replaces its whole provider chain, including the static keys parsed out of the
-                // catalog's vended `storage-credentials` props. So only install one when the
-                // connection asked for delegation and we know which table to refresh, and let the
-                // static props serve every other case.
-                let customized_credential_load = match (&rest.access_delegation, table) {
-                    (Some(IcebergAccessDelegation::VendedCredentials), Some(table)) => {
-                        let endpoint = iceberg_credentials::table_credentials_endpoint(
-                            &self.uri,
-                            &client,
-                            &token,
-                            rest.warehouse.as_deref(),
-                            table,
-                        )
-                        .await?;
-                        Some(CustomAwsCredentialLoader::new(
-                            iceberg_credentials::VendedCredentialLoader::new(
-                                client.clone(),
-                                endpoint,
-                                Arc::clone(&token),
-                            ),
-                        ))
-                    }
-                    _ => None,
-                };
+                let headers = Self::catalog_headers(&props)?;
+                let endpoint = self
+                    .vended_credential_endpoint(rest, &client, &token, &headers, table)
+                    .await?;
 
                 (
                     // The catalog tells us where the data lives but not what
@@ -1155,14 +1210,26 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         // `iceberg-rust` wires into the same FileIO.
                         // N.B. This is not confirmed to work with other catalog & storage implementations.
                         IcebergStorageProvider::S3 => OpenDalStorageFactory::S3 {
-                            customized_credential_load,
+                            customized_credential_load: endpoint.map(|endpoint| {
+                                CustomAwsCredentialLoader::new(
+                                    iceberg_credentials::VendedCredentialLoader::new(
+                                        client.clone(),
+                                        endpoint,
+                                        Arc::clone(&token),
+                                        headers.clone(),
+                                    ),
+                                )
+                            }),
                         },
-                        // Both take their credentials from the catalog's
-                        // config, which `iceberg-rust` forwards to `opendal`
-                        // the same way. Neither has an equivalent of the S3
-                        // credential loader, so vended credentials for these
-                        // stores only work through those props.
-                        IcebergStorageProvider::Gcs => OpenDalStorageFactory::Gcs,
+                        IcebergStorageProvider::Gcs => {
+                            Self::gcs_storage_factory(endpoint, &client, &token, &headers)
+                        }
+                        // ADLS takes its credentials from the catalog's config, which
+                        // `iceberg-rust` forwards to `opendal` the same way. OpenDAL's Azure
+                        // service does not go through reqsign's credential provider
+                        // abstraction, so there is no hook to wrap: vended credentials for
+                        // ADLS work only through those static props, and stop working when
+                        // they expire.
                         IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls,
                     },
                     // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
@@ -1193,18 +1260,31 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     );
                 }
 
+                // The service account authenticates catalog requests whether or not the catalog
+                // vends storage credentials, and doubles as the token source for refreshing them.
+                let token: Arc<dyn TokenProvider> = Arc::new(GcpTokenProvider { service_account });
+                let headers = Self::catalog_headers(&props)?;
+                let endpoint = self
+                    .vended_credential_endpoint(rest, &client, &token, &headers, table)
+                    .await?;
+
                 (
-                    OpenDalStorageFactory::Gcs,
-                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(
-                        Arc::new(GcpTokenProvider { service_account }),
-                    )),
+                    // A GCP-hosted catalog vends GCS credentials, so the storage provider is not
+                    // in question here the way it is for a generic REST catalog.
+                    //
+                    // NOTE: with delegation the service account key above stops governing storage
+                    // and only authenticates the catalog. That is not a change in precedence:
+                    // OpenDAL already preferred the vended token over a credential file, and a
+                    // loader only keeps that token from expiring.
+                    Self::gcs_storage_factory(endpoint, &client, &token, &headers),
+                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(token)),
                 )
             }
         };
 
-        // `iceberg-rust` turns `header.*` props into headers on every REST request, so
-        // connection asked for delegation.
-        // than falling back to their configured storage credentials.
+        // Inserted after the storage factory is built, so that the loaders above carry only the
+        // headers the catalog client would send on an ordinary request. Each adds this one itself,
+        // since the credentials endpoint is the one request that always asks for delegation.
         if let Some(delegation) = &rest.access_delegation {
             props.insert(
                 REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
@@ -3539,6 +3619,31 @@ impl AwsPrivatelinkConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn test_catalog_headers() {
+        let props = BTreeMap::from_iter(
+            [
+                (REST_CATALOG_PROP_URI, "https://catalog.example"),
+                (REST_CATALOG_PROP_WAREHOUSE, "wh"),
+                ("header.x-goog-user-project", "some-project"),
+                (REST_CATALOG_PROP_ACCESS_DELEGATION, "vended-credentials"),
+            ]
+            .map(|(k, v)| (k.to_string(), v.to_string())),
+        );
+
+        // Only `header.*` props become headers, and the prefix is stripped. Header names are
+        // matched case-insensitively, so the delegation prop's mixed-case spelling still lands.
+        let headers = IcebergCatalogConnection::catalog_headers(&props).expect("valid headers");
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers["x-goog-user-project"], "some-project");
+        assert_eq!(headers["x-iceberg-access-delegation"], "vended-credentials");
+
+        // A prop whose name is not a legal header is an error rather than a dropped header: it
+        // would otherwise mean silently talking to the catalog differently than asked.
+        let props = BTreeMap::from([("header.bad name".to_string(), "v".to_string())]);
+        assert!(IcebergCatalogConnection::catalog_headers(&props).is_err());
+    }
 
     #[mz_ore::test]
     fn test_check_service_name() {
