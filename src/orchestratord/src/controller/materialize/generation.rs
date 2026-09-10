@@ -77,9 +77,9 @@ pub const V161: Version = Version::new(0, 161, 0);
 /// `--orchestrator-kubernetes-priority-class-name`. Older images reject the
 /// unknown argument and fail to start, so the flag is only forwarded at or
 /// above this version.
-static V26_40_0: LazyLock<Version> = LazyLock::new(|| Version {
+static V26_42_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
-    minor: 40,
+    minor: 42,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -816,7 +816,7 @@ fn create_environmentd_statefulset_object(
             scheduler_name
         ));
     }
-    if mz.meets_minimum_version(&V26_40_0) {
+    if mz.meets_minimum_version(&V26_42_0) {
         if let Some(priority_class_name) = &config.clusterd_priority_class_name {
             args.push(format!(
                 "--orchestrator-kubernetes-priority-class-name={priority_class_name}"
