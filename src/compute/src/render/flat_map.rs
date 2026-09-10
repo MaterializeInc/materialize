@@ -85,9 +85,8 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
 
 /// Output ok-session container builder for [`flat_map_stage`].
 ///
-/// Consolidating like the err builder, but emits `Column<(Row, T, Diff)>` so
-/// the FlatMap output travels as the columnar edge. Output rows are freshly
-/// built by the mfp, so the owned give into staging is a move, not a new alloc.
+/// Consolidating like the err builder, but emits `Column<(Row, T, Diff)>`. The mfp builds
+/// each output row fresh, so the owned give into staging is a move.
 type FlatMapOk<T> = ConsolidatingColumnBuilder<Row, T, Diff>;
 /// Output err-session container builder for [`flat_map_stage`].
 type FlatMapErr<T> = ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
@@ -479,8 +478,7 @@ mod tests {
         assert_eq!(vec_updates, extract_sorted_columns(col_captured));
     }
 
-    /// Decodes a capture of the columnar FlatMap output into sorted owned
-    /// `(row, time, diff)` updates.
+    /// Decodes a capture of the columnar output into sorted `(row, time, diff)` updates.
     fn extract_sorted_columns(
         captured: std::sync::mpsc::Receiver<
             timely::dataflow::operators::capture::Event<Timestamp, Column<(Row, Timestamp, Diff)>>,
@@ -508,10 +506,8 @@ mod tests {
 
     #[mz_ore::test]
     fn flat_map_output_consolidates_within_batch() {
-        // Two distinct input rows whose table-function expansions overlap once
-        // the mfp projects away the differing `stop` column. The overlapping
-        // output rows land at the same time in one batch, so the consolidating
-        // columnar output builder must fold them into summed diffs.
+        // Two input rows whose expansions overlap once the mfp projects away the
+        // differing `stop` column, so the output builder has duplicates to fold.
         let captured = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();
@@ -521,8 +517,7 @@ mod tests {
                     LirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
                 ];
                 let func = TableFunc::GenerateSeriesInt64;
-                // Project to only the generated value (column 2), collapsing the
-                // two input rows' distinct (start, stop) prefixes.
+                // Project to the generated value alone, collapsing the distinct prefixes.
                 let mfp = MapFilterProject::<LirScalarExpr>::new(3)
                     .project(vec![2])
                     .into_plan()
@@ -539,9 +534,7 @@ mod tests {
                     usize::MAX,
                 );
                 let captured = oks.capture();
-                // Both rows at t=0: generate_series(1, 2) -> {1, 2},
-                // generate_series(1, 3) -> {1, 2, 3}. Generated 1 and 2 appear on
-                // both, so they must fold to a diff of two.
+                // Both at t=0: {1, 2} and {1, 2, 3}, so 1 and 2 fold to a diff of two.
                 input.advance_to(Timestamp::from(0_u64));
                 input.update(input_row(2), Diff::ONE);
                 input.update(input_row(3), Diff::ONE);
