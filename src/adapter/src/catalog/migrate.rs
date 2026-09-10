@@ -154,6 +154,7 @@ pub(crate) async fn migrate(
         ast_rewrite_create_sink_partition_strategy(stmt)?;
         ast_rewrite_sql_server_constraints(stmt)?;
         ast_rewrite_add_missing_index_ids(tx, stmt)?;
+        ast_rewrite_add_missing_doc_on_ids(tx, stmt)?;
         ast_rewrite_kafka_metadata_refresh_intervals(stmt)?;
         ast_rewrite_small_commit_intervals(stmt)?;
         ast_rewrite_strip_builtin_version_pins(stmt)?;
@@ -1042,6 +1043,108 @@ fn ast_rewrite_add_missing_index_ids(
     Ok(())
 }
 
+/// Add missing item IDs to `DOC ON` references in CREATE SINK statements.
+///
+/// `DOC ON TYPE x` and `DOC ON COLUMN x.c` used to persist a type reference
+/// as a bare qualified name, unlike a relation in the same position, because
+/// name resolution suppressed ids for types. Resolution now prints the id
+/// (see `NameResolver::resolve_doc_on_name`); this rewrites stored statements
+/// to match, so `create_sql` reference extraction (`mz_object_dependencies`)
+/// recovers the sink's edge to the type.
+///
+/// References that already carry an id are skipped, so this is idempotent and
+/// safe to run every boot.
+fn ast_rewrite_add_missing_doc_on_ids(
+    tx: &Transaction<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    if !matches!(stmt, Statement::CreateSink(_)) {
+        return Ok(());
+    }
+    rewrite_doc_on_ids(stmt, |name| {
+        let parts = &name.0;
+        let (db_name, schema_name, item_name) = match parts.len() {
+            3 => (Some(&parts[0]), &parts[1], &parts[2]),
+            // Names in ambient schemas denote builtin types, which are resolved
+            // through the system object mappings.
+            2 => (None, &parts[0], &parts[1]),
+            _ => panic!("invalid doc on reference: {name:?}"),
+        };
+        let db_id = db_name.map(|db_name| {
+            let db = tx.get_databases().find(|db| db.name == db_name.as_str());
+            let db = db.unwrap_or_else(|| panic!("missing database in doc on reference: {name:?}"));
+            db.id
+        });
+        let schema = tx
+            .get_schemas()
+            .find(|s| s.name == schema_name.as_str() && s.database_id == db_id);
+        let schema =
+            schema.unwrap_or_else(|| panic!("missing schema in doc on reference: {name:?}"));
+
+        let user_type = tx.get_items().find(|i| {
+            i.name == item_name.as_str()
+                && i.schema_id == schema.id
+                // A type may share its (schema, name) with a secret, connection, sink,
+                // or function, so explicitly filter on Type.
+                && i.item_type() == CatalogItemType::Type
+        });
+        if let Some(item) = user_type {
+            return Some(item.id.to_string());
+        }
+        // A bare name in an ambient schema denotes a builtin type (an explicit
+        // `DOC ON TYPE int4`, or a DOC ON injected by purification after mz_system
+        // commented on one). Builtin types are not durable items, so the lookup
+        // above cannot find them; their ids live in the system object mappings.
+        let builtin_type = tx.get_system_object_mappings().find(|m| {
+            m.description.schema_name == schema.name
+                && m.description.object_type == CatalogItemType::Type
+                && m.description.object_name == item_name.as_str()
+        });
+        let builtin_type =
+            builtin_type.unwrap_or_else(|| panic!("missing type in doc on reference: {name:?}"));
+        Some(builtin_type.unique_identifier.catalog_id.to_string())
+    });
+    Ok(())
+}
+
+/// Replaces every bare `DOC ON` reference in `stmt` for which `lookup`
+/// returns an id with the `[id AS name]` form. `None` leaves the reference as
+/// a name.
+fn rewrite_doc_on_ids(
+    stmt: &mut Statement<Raw>,
+    lookup: impl FnMut(&mz_sql::ast::UnresolvedItemName) -> Option<String>,
+) {
+    use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
+    use mz_sql::ast::{ColumnName, DocOnIdentifier, RawItemName, UnresolvedItemName};
+
+    struct Rewriter<F> {
+        lookup: F,
+    }
+
+    impl<'ast, F> VisitMut<'ast, Raw> for Rewriter<F>
+    where
+        F: FnMut(&UnresolvedItemName) -> Option<String>,
+    {
+        fn visit_doc_on_identifier_mut(&mut self, node: &mut DocOnIdentifier<Raw>) {
+            let name = match node {
+                DocOnIdentifier::Type(name) => name,
+                DocOnIdentifier::Column(ColumnName {
+                    relation,
+                    column: _,
+                }) => relation,
+            };
+            if let RawItemName::Name(unresolved) = name {
+                if let Some(id) = (self.lookup)(unresolved) {
+                    let unresolved = unresolved.clone();
+                    *name = RawItemName::Id(id, unresolved, None);
+                }
+            }
+        }
+    }
+
+    stmt.visit_mut(&mut Rewriter { lookup });
+}
+
 /// Strips the `VERSION` qualifier from by-id references to non-user (builtin)
 /// items.
 ///
@@ -1229,5 +1332,64 @@ mod tests {
         );
         assert!(!out.contains("VERSION"), "unexpected version: {out}");
         assert!(out.contains("s518"), "reference dropped: {out}");
+    }
+
+    fn add_doc_on_ids(
+        sql: &str,
+        lookup: impl FnMut(&mz_sql::ast::UnresolvedItemName) -> Option<String>,
+    ) -> String {
+        let mut stmt = mz_sql::parse::parse(sql)
+            .expect("test sql parses")
+            .into_element()
+            .ast;
+        rewrite_doc_on_ids(&mut stmt, lookup);
+        stmt.to_ast_string_stable()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn adds_ids_to_bare_doc_on_references() {
+        // The persisted shape of a sink from before types printed ids in DOC
+        // ON positions: relations carry ids, the type and its column carry
+        // bare names.
+        let out = add_doc_on_ids(
+            r#"CREATE SINK "materialize"."public"."s" FROM [u1 AS "materialize"."public"."t"] INTO KAFKA CONNECTION [u2 AS "materialize"."public"."kc"] (TOPIC = 'top') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION [u3 AS "materialize"."public"."csr"] (DOC ON TYPE "materialize"."public"."point" = 'p', DOC ON COLUMN "materialize"."public"."point"."x" = 'x', DOC ON TYPE "pg_catalog"."int4" = 'i') ENVELOPE UPSERT"#,
+            |name| match name.0.len() {
+                3 => {
+                    assert_eq!(name.0[2].as_str(), "point", "unexpected lookup: {name:?}");
+                    Some("u9".into())
+                }
+                2 => {
+                    assert_eq!(name.0[1].as_str(), "int4", "unexpected lookup: {name:?}");
+                    Some("s23".into())
+                }
+                _ => panic!("unexpected lookup: {name:?}"),
+            },
+        );
+        assert!(
+            out.contains(r#"DOC ON TYPE [u9 AS "materialize"."public"."point"]"#),
+            "type reference not rewritten: {out}"
+        );
+        assert!(
+            out.contains(r#"DOC ON COLUMN [u9 AS "materialize"."public"."point"]."x""#),
+            "column reference not rewritten: {out}"
+        );
+        assert!(
+            out.contains(r#"DOC ON TYPE [s23 AS "pg_catalog"."int4"]"#),
+            "builtin type reference not rewritten: {out}"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn leaves_id_doc_on_references_untouched() {
+        let out = add_doc_on_ids(
+            r#"CREATE SINK "materialize"."public"."s" FROM [u1 AS "materialize"."public"."t"] INTO KAFKA CONNECTION [u2 AS "materialize"."public"."kc"] (TOPIC = 'top') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION [u3 AS "materialize"."public"."csr"] (DOC ON TYPE [u4 AS "materialize"."public"."point"] = 'p', DOC ON COLUMN [u1 AS "materialize"."public"."t"]."c1" = 'c') ENVELOPE UPSERT"#,
+            |name| panic!("id reference must not be resolved: {name:?}"),
+        );
+        assert!(
+            out.contains(r#"DOC ON TYPE [u4 AS "materialize"."public"."point"]"#),
+            "id reference altered: {out}"
+        );
     }
 }

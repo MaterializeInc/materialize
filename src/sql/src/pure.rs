@@ -429,10 +429,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 id: *object_id,
                 qualifiers: item.name().qualifiers.clone(),
                 full_name: catalog.resolve_full_name(item.name()),
-                print_id: !matches!(
-                    item.item_type(),
-                    CatalogItemType::Func | CatalogItemType::Type
-                ),
+                print_id: !matches!(item.item_type(), CatalogItemType::Func),
                 version: RelationVersionSelector::Latest,
             };
 
