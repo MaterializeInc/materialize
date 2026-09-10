@@ -1489,19 +1489,7 @@ mod tests {
         updates
     }
 
-<<<<<<< HEAD
     // `DataflowErrorSer` is not `Ord`, so order by the error's debug string.
-||||||| parent of eb2cc1db2a (compute: finish the collapse's end state)
-    // `DataflowErrorSer` is not `Ord`, so project the error to its debug string
-    // to get a stable, comparable ordering. The time and diff still ride along,
-    // so this verifies the columnar arm's `into_owned` on the error path
-    // reconstructs the same `(time, diff)` as the `Vec` arm.
-=======
-    // `DataflowErrorSer` is not `Ord`, so project the error to its debug string
-    // to get a stable, comparable ordering. The time and diff still ride along,
-    // so an assertion on the result also covers `into_owned`'s reconstruction of
-    // them on the error path.
->>>>>>> eb2cc1db2a (compute: finish the collapse's end state)
     fn extract_err(captured: Captured<ErrUpdate>) -> Vec<(String, Timestamp, Diff)> {
         let mut updates: Vec<_> = captured
             .extract()
@@ -1741,34 +1729,8 @@ mod tests {
         assert_eq!(extract_row_updates(captured), expected);
     }
 
-<<<<<<< HEAD
     /// Keying by column 0 and thinning the value to column 1 reconstructs the original
-    /// two-column row. The `into_vec` below belongs to the capture harness.
-||||||| parent of eb2cc1db2a (compute: finish the collapse's end state)
-    /// The shared arrangement->collection materialization carries the columnar
-    /// edge. Reduce, Threshold, and bucketed TopK emit arrangements; when their
-    /// result is demanded as a collection it flows through
-    /// `as_specific_collection`, so those outputs are columnar with
-    /// no `ColumnarToVec`.
-    ///
-    /// Correctness: the materialized rows must equal the arranged input. Keying
-    /// by column 0 and thinning the value to column 1 reconstructs the original
-    /// two-column row. No-decode is a by-inspection property: the fueled path
-    /// builds a `ColumnBuilder` via `flat_map_ok` and never calls
-    /// `columnar_to_vec`; the `into_vec` below is the capture harness only.
-=======
-    /// The shared arrangement->collection materialization carries the columnar
-    /// edge. Reduce, Threshold, and bucketed TopK emit arrangements; when their
-    /// result is demanded as a collection it flows through
-    /// `as_specific_collection`, so those outputs are columnar with
-    /// no `ColumnarToVec`.
-    ///
-    /// Correctness: the materialized rows must equal the arranged input. Keying
-    /// by column 0 and thinning the value to column 1 reconstructs the original
-    /// two-column row. No-decode is a by-inspection property: the fueled path
-    /// builds a `ColumnBuilder` via `flat_map_ok` and never calls
-    /// `columnar_to_vec`; the decode below is the capture harness only.
->>>>>>> eb2cc1db2a (compute: finish the collapse's end state)
+    /// two-column row. The decode below belongs to the capture harness.
     #[mz_ore::test]
     fn as_specific_collection_materializes_columnar() {
         let rows = test_rows();

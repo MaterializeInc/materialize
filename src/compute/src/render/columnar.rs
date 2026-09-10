@@ -47,9 +47,7 @@ use crate::render::errors::DataflowErrorSer;
 /// container is [`Column<(D, T, R)>`] instead of `Vec<(D, T, R)>`.
 pub type ColumnarCollection<'scope, T, D, R> = Collection<'scope, T, Column<(D, T, R)>>;
 
-/// A dataflow edge between Plan nodes: a columnar collection of `(Row, Diff)`
-/// updates. Every producer emits this representation. A row-based producer
-/// re-encodes to it at its output leaf via [`vec_to_columnar`].
+/// A dataflow edge between Plan nodes: a columnar collection of `(Row, Diff)` updates.
 pub type CollectionEdge<'scope, T> = ColumnarCollection<'scope, T, Row, Diff>;
 
 /// Concatenates a collection of columnar edges.
@@ -202,27 +200,9 @@ where
 
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
-<<<<<<< HEAD
 /// A [`ColumnChunker`] sorts and consolidates the input columns and a
 /// [`ColumnMergeBatcher`] merges them, both holding their data in [`Column`], so nothing
 /// outside the exchange pact visits a record or materializes an owned [`Row`].
-||||||| parent of eb2cc1db2a (compute: finish the collapse's end state)
-/// Mirrors the `Vec` arm's `CollectionExt::consolidate_named`, but keeps the
-/// data columnar throughout: a [`ColumnChunker`] sorts and consolidates the
-/// input columns and a [`ColumnMergeBatcher`] merges them under a
-/// [`columnar_consolidate_exchange`] pact. Both hold their data in [`Column`],
-/// and the batcher's chunks already carry the collection's own shape, so
-/// nothing on this path visits a record or materializes an owned [`Row`]. The
-/// exchange pact still re-encodes per record, see the TODO at the pact.
-=======
-/// Mirrors the row-based `CollectionExt::consolidate_named`, but keeps the
-/// data columnar throughout: a [`ColumnChunker`] sorts and consolidates the
-/// input columns and a [`ColumnMergeBatcher`] merges them under a
-/// [`columnar_consolidate_exchange`] pact. Both hold their data in [`Column`],
-/// and the batcher's chunks already carry the collection's own shape, so
-/// nothing on this path visits a record or materializes an owned [`Row`]. The
-/// exchange pact still re-encodes per record, see the TODO at the pact.
->>>>>>> eb2cc1db2a (compute: finish the collapse's end state)
 ///
 /// Uses [`consolidate_pact`] rather than `mz_arrange_core`: a consolidate emits a
 /// consolidated collection, so building and reading back a maintained trace would be
@@ -250,24 +230,9 @@ where
     // Flatten the sealed chain into one container per chunk, moving containers and
     // visiting no record.
     //
-<<<<<<< HEAD
     // TODO: This ships a whole sealed snapshot in one activation, an un-fueled burst
     // hazard on large consolidations. `consolidate_named`'s unpack does the same, so a
     // fuel fix has to cover both.
-||||||| parent of eb2cc1db2a (compute: finish the collapse's end state)
-    // TODO: This ships a whole sealed snapshot in one activation, an un-fueled
-    // burst hazard on large consolidations. It is the same behavior as the
-    // `Vec` arm's `consolidate_named` unpack (see
-    // `mz_timely_util::operator::consolidate_named`), not new here. A future
-    // fuel fix should cover both arms, so the burst is not fixed on one and
-    // left on the other.
-=======
-    // TODO: This ships a whole sealed snapshot in one activation, an un-fueled
-    // burst hazard on large consolidations. It is the same behavior as the
-    // row-based `mz_timely_util::operator::consolidate_named` unpack, not new
-    // here. A future fuel fix should cover both, so the burst is not fixed on
-    // one and left on the other.
->>>>>>> eb2cc1db2a (compute: finish the collapse's end state)
     consolidated
         .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
@@ -288,12 +253,8 @@ where
 
 /// Repacks a row-based collection into columnar batches.
 ///
-/// The sanctioned leaf encode from `Vec` to the columnar edge, visible in
-/// rendered dataflows as a `VecToColumnar` operator. Row-serializing leaves
-/// (sinks, `LetRec`, temporal bucketing, join internals, TopK fallible-limit)
-/// stay `Vec`-shaped internally and encode to the columnar edge at their
-/// boundary through this pass. Repacking copies row bytes but allocates no
-/// per-record `Row`s.
+/// The leaf encode described in the module docs, named `VecToColumnar` in a rendered
+/// dataflow. Repacking copies row bytes and allocates no per-record `Row`.
 pub fn vec_to_columnar<'scope, T>(
     collection: VecCollection<'scope, T, Row, Diff>,
 ) -> ColumnarCollection<'scope, T, Row, Diff>
@@ -321,11 +282,8 @@ where
 
 /// Decodes columnar batches into a row-based collection.
 ///
-/// The sanctioned leaf decode from the columnar edge to `Vec`, visible in
-/// rendered dataflows as a `ColumnarToVec` operator. Row-serializing leaves
-/// (sinks, `LetRec`, temporal bucketing, join internals, TopK fallible-limit)
-/// decode the columnar edge at their boundary through this pass. Decoding
-/// allocates an owned [`Row`] per record, so it stays confined to those leaf
+/// The leaf decode described in the module docs, named `ColumnarToVec` in a rendered
+/// dataflow. It allocates an owned [`Row`] per record, which is why it stays at those
 /// boundaries.
 pub fn columnar_to_vec<'scope, T>(
     collection: ColumnarCollection<'scope, T, Row, Diff>,
