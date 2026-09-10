@@ -1091,10 +1091,10 @@ fn ast_rewrite_add_missing_doc_on_ids(
         if let Some(item) = user_type {
             return Some(item.id.to_string());
         }
-        // There does exist a rare case where `mz_system` can `COMMENT ON` a builtin type (e.g.
-        // int4) and if a sink was created with reference to that type, then the sink's stored
-        // statement wouldn't contain the ID of that type. Thus we get the builtin type's ID from
-        // its GidMapping.
+        // A bare name in an ambient schema denotes a builtin type (an explicit
+        // `DOC ON TYPE int4`, or a DOC ON injected by purification after mz_system
+        // commented on one). Builtin types are not durable items, so the lookup
+        // above cannot find them; their ids live in the system object mappings.
         let builtin_type = tx.get_system_object_mappings().find(|m| {
             m.description.schema_name == schema.name
                 && m.description.object_type == CatalogItemType::Type

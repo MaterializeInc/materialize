@@ -857,7 +857,7 @@ class KafkaSinkCommentsOnType(Check):
                 #
                 # NOTE: the version guard must name the first release that
                 # prints ids in DOC ON positions.
-                >[version>=2604100] SELECT s.name
+                >[version>=2604200] SELECT s.name
                   FROM mz_internal.mz_object_dependencies d
                   JOIN mz_sinks s ON s.id = d.object_id
                   WHERE d.referenced_object_id IN

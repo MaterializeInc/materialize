@@ -74,7 +74,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
 # extraction (mz_object_dependencies) recovers the edge; a bare name would
 # silently drop out. The guard names the first release that prints ids in
 # DOC ON positions
->[version>=2604100] SELECT count(*) FROM mz_internal.mz_object_dependencies
+>[version>=2604200] SELECT count(*) FROM mz_internal.mz_object_dependencies
   WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'sink1')
     AND referenced_object_id = (SELECT id FROM mz_types WHERE name = 'point');
 1
