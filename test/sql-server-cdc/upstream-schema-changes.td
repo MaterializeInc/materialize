@@ -198,4 +198,60 @@ hint:CREATE TABLE v2."uq"
 > SELECT details->'hints'->>0 LIKE '%CREATE TABLE v2."uq"%' FROM mz_internal.mz_source_statuses WHERE name = 'uq';
 true
 
+$ sql-server-execute name=sql-server
+CREATE TABLE multi (id INT NOT NULL CONSTRAINT multi_pk PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, c INT NOT NULL, CONSTRAINT multi_uq_a UNIQUE (a), CONSTRAINT multi_uq_bc UNIQUE (b, c));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'multi', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO multi VALUES (1, 10, 100, 1000);
+CREATE TABLE excl (id INT NOT NULL CONSTRAINT excl_pk PRIMARY KEY, a INT NOT NULL, meta VARCHAR(32) NOT NULL, CONSTRAINT excl_uq_meta UNIQUE (meta));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'excl', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO excl VALUES (1, 10, 'x');
+CREATE TABLE alt (id INT NOT NULL CONSTRAINT alt_pk PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, CONSTRAINT alt_uq UNIQUE (a));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'alt', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO alt VALUES (1, 10, 100);
+
+> CREATE TABLE multi FROM SOURCE sql_server_src (REFERENCE dbo.multi);
+> CREATE TABLE excl FROM SOURCE sql_server_src (REFERENCE dbo.excl) WITH (EXCLUDE COLUMNS = (meta));
+> CREATE TABLE alt FROM SOURCE sql_server_src (REFERENCE dbo.alt);
+
+> SELECT * FROM multi;
+1 10 100 1000
+
+> SELECT * FROM excl;
+1 10
+
+> SELECT * FROM alt;
+1 10 100
+
+# Dropping one of several constraints names that constraint, with its columns
+# in key order, and the hint names it as the constraint to exclude.
+$ sql-server-execute name=sql-server
+ALTER TABLE multi DROP CONSTRAINT multi_uq_bc;
+INSERT INTO multi VALUES (2, 20, 100, 1000);
+
+! SELECT * FROM multi;
+contains:incompatible schema change on dbo.multi: UNIQUE constraint "multi_uq_bc" (b, c) was dropped upstream
+hint:EXCLUDE CONSTRAINTS ('multi_uq_bc')
+
+# A constraint over an excluded column was never recorded as a key, so dropping
+# it is a non-event.
+$ sql-server-execute name=sql-server
+ALTER TABLE excl DROP CONSTRAINT excl_uq_meta;
+INSERT INTO excl VALUES (2, 20, 'x');
+
+> SELECT * FROM excl;
+1 10
+2 20
+
+# Recreating a constraint under the same name over different columns is
+# reported as an alteration. The statements run as one batch so a poll cannot
+# observe the intermediate state where the constraint is simply gone.
+$ sql-server-execute name=sql-server split-lines=false
+ALTER TABLE alt DROP CONSTRAINT alt_uq;
+ALTER TABLE alt ADD CONSTRAINT alt_uq UNIQUE (b);
+INSERT INTO alt VALUES (2, 10, 200);
+
+! SELECT * FROM alt;
+contains:incompatible schema change on dbo.alt: UNIQUE constraint "alt_uq" (a) was renamed or recreated upstream
+hint:EXCLUDE CONSTRAINTS ('alt_uq')
+
 > DROP SOURCE sql_server_src CASCADE;
