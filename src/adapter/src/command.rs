@@ -84,12 +84,15 @@ pub struct CopyFromStdinWriter {
 #[derive(Debug)]
 pub struct CatalogSnapshot {
     pub catalog: Arc<Catalog>,
+    /// A certified durable prefix, when explicitly requested.
+    pub durable_upper: Option<Result<mz_repr::Timestamp, AdapterError>>,
 }
 
 #[derive(Debug)]
 pub enum Command {
     CatalogSnapshot {
         tx: oneshot::Sender<CatalogSnapshot>,
+        include_durable_upper: bool,
     },
 
     Startup {
@@ -632,7 +635,7 @@ impl Transmittable for StartupResponse {
     }
 }
 
-/// The response to [`SessionClient::dump_catalog`](crate::SessionClient::dump_catalog).
+/// A JSON-encoded catalog snapshot.
 #[derive(Debug, Clone)]
 pub struct CatalogDump(String);
 

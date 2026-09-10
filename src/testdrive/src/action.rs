@@ -22,11 +22,9 @@ use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_adapter::catalog::{Catalog, ConnCatalog, DebugAwsContext};
-use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_catalog::durable::BootstrapArgs;
+use mz_catalog::durable::{BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder};
 use mz_ccsr::SubjectVersion;
 use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
 use mz_ore::error::ErrorExt;
@@ -441,64 +439,33 @@ impl State {
 
         Ok(())
     }
-    /// Makes of copy of the durable catalog and runs a function on its
-    /// state. Returns `None` if there's no catalog information in the State.
-    pub async fn with_catalog_copy<F, T>(
+    /// Opens a live read-only durable handle for diagnostic snapshot acquisition.
+    /// Returns `None` if no durable catalog location is configured.
+    pub async fn open_catalog_copy(
         &self,
-        system_parameter_defaults: BTreeMap<String, String>,
-        build_info: &'static BuildInfo,
-        bootstrap_args: &BootstrapArgs,
-        enable_expression_cache_override: Option<bool>,
-        f: F,
-    ) -> Result<Option<T>, anyhow::Error>
-    where
-        F: FnOnce(ConnCatalog) -> T,
-    {
-        async fn persist_client(
-            persist_consensus_url: SensitiveUrl,
-            persist_blob_url: SensitiveUrl,
-            persist_clients: &PersistClientCache,
-        ) -> Result<PersistClient, anyhow::Error> {
-            let persist_location = PersistLocation {
-                blob_uri: persist_blob_url,
-                consensus_uri: persist_consensus_url,
-            };
-            Ok(persist_clients.open(persist_location).await?)
-        }
-
-        if let Some(CatalogConfig {
+    ) -> Result<Option<(PersistClient, Box<dyn DurableCatalogState>)>, anyhow::Error> {
+        let Some(CatalogConfig {
             persist_consensus_url,
             persist_blob_url,
         }) = &self.materialize.catalog_config
-        {
-            let persist_client = persist_client(
-                persist_consensus_url.clone(),
-                persist_blob_url.clone(),
-                &self.persist_clients,
-            )
+        else {
+            return Ok(None);
+        };
+        let persist_client = self
+            .persist_clients
+            .open(PersistLocation {
+                blob_uri: persist_blob_url.clone(),
+                consensus_uri: persist_consensus_url.clone(),
+            })
             .await?;
-            let aws_context = DebugAwsContext {
-                aws_account_id: self.materialize.aws_account_id.clone(),
-                aws_external_id_prefix: self.materialize.aws_external_id_prefix.clone(),
-                aws_connection_role_arn: self.materialize.aws_connection_role_arn.clone(),
-            };
-            let catalog = Catalog::open_debug_read_only_persist_catalog_config(
-                persist_client,
-                SYSTEM_TIME.clone(),
-                self.materialize.environment_id.clone(),
-                system_parameter_defaults,
-                build_info,
-                bootstrap_args,
-                enable_expression_cache_override,
-                Some(aws_context),
-            )
+        let storage = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(self.materialize.environment_id.organization_id())
+            .with_version(self.build_info.version.parse().expect("invalid version"))
+            .build()
+            .await?
+            .open_read_only(&self.materialize.bootstrap_args)
             .await?;
-            let res = f(catalog.for_session(&Session::dummy()));
-            catalog.expire().await;
-            Ok(Some(res))
-        } else {
-            Ok(None)
-        }
+        Ok(Some((persist_client, storage)))
     }
 
     pub fn aws_endpoint(&self) -> &str {

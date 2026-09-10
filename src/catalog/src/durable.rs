@@ -39,7 +39,7 @@ pub use crate::durable::objects::{
     SourceReference, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
     SystemObjectDescription, SystemObjectMapping, UnfinalizedShard, managed_cluster_replica_name,
 };
-pub use crate::durable::persist::shard_id;
+pub use crate::durable::persist::{CatalogSnapshotReader, shard_id};
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 use crate::durable::transaction::TransactionBatch;
 pub use crate::durable::transaction::{DryRunTransaction, Transaction};
@@ -282,6 +282,16 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
 
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
+}
+
+/// Owned durable input for independent catalog reconstruction, with no persist handles.
+#[derive(Debug)]
+pub struct CatalogSnapshot {
+    pub snapshot: Snapshot,
+    pub updates: Vec<memory::objects::StateUpdate>,
+    pub upper: Timestamp,
+    pub deployment_generation: u64,
+    pub is_bootstrap_complete: bool,
 }
 
 /// A read-write API for the durable catalog state.

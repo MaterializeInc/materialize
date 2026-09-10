@@ -123,6 +123,71 @@ pub struct OpenCatalogResult {
 }
 
 impl Catalog {
+    fn diagnostic_state_config(config: &StateConfig) -> StateConfig {
+        StateConfig {
+            unsafe_mode: config.unsafe_mode,
+            all_features: config.all_features,
+            build_info: config.build_info,
+            environment_id: config.environment_id.clone(),
+            read_only: config.read_only,
+            now: config.now.clone(),
+            boot_ts: config.boot_ts,
+            skip_migrations: true,
+            cluster_replica_sizes: config.cluster_replica_sizes.clone(),
+            builtin_system_cluster_config: config.builtin_system_cluster_config.clone(),
+            builtin_catalog_server_cluster_config: config
+                .builtin_catalog_server_cluster_config
+                .clone(),
+            builtin_probe_cluster_config: config.builtin_probe_cluster_config.clone(),
+            builtin_support_cluster_config: config.builtin_support_cluster_config.clone(),
+            builtin_analytics_cluster_config: config.builtin_analytics_cluster_config.clone(),
+            system_parameter_defaults: config.system_parameter_defaults.clone(),
+            remote_system_parameters: None,
+            availability_zones: config.availability_zones.clone(),
+            egress_addresses: config.egress_addresses.clone(),
+            aws_principal_context: config.aws_principal_context.clone(),
+            aws_privatelink_availability_zones: config.aws_privatelink_availability_zones.clone(),
+            http_host_name: config.http_host_name.clone(),
+            connection_context: config.connection_context.clone(),
+            builtin_item_migration_config: mz_catalog::config::BuiltinItemMigrationConfig {
+                persist_client: config.persist_client.clone(),
+                read_only: config.builtin_item_migration_config.read_only,
+                force_migration: None,
+            },
+            persist_client: config.persist_client.clone(),
+            enable_expression_cache_override: Some(false),
+            helm_chart_version: config.helm_chart_version.clone(),
+            external_login_password_mz_system: None,
+            license_key: config.license_key.clone(),
+        }
+    }
+
+    pub(crate) async fn reconstruct_state(
+        &self,
+        input: mz_catalog::durable::CatalogSnapshot,
+    ) -> Result<CatalogState, AdapterError> {
+        let mut config = Self::diagnostic_state_config(&self.diagnostic_config);
+        config.system_parameter_defaults = self.state.system_config().defaults();
+        config.boot_ts = input.upper;
+        let before = input.snapshot;
+        let mut txn = mz_catalog::durable::DryRunTransaction::from_snapshot(
+            before.clone(),
+            input.upper,
+            input.is_bootstrap_complete,
+            false,
+        )?;
+        let (result, cleanup) =
+            Self::initialize_state_from_updates(config, input.updates, txn.transaction_mut(), None)
+                .await?;
+        drop(cleanup);
+        if txn.current_snapshot() != before {
+            return Err(AdapterError::Internal(
+                "catalog reconstruction requires durable changes".into(),
+            ));
+        }
+        Ok(result.state)
+    }
+
     /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
     /// external to a [mz_catalog::durable::DurableCatalogState]
     /// (for example: no [mz_secrets::SecretsReader]).
@@ -130,6 +195,26 @@ impl Catalog {
         config: StateConfig,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
     ) -> Result<InitializeStateResult, AdapterError> {
+        let deploy_generation = storage.get_deployment_generation().await?;
+        let updates = storage.sync_to_current_updates().await?;
+        let mut txn = storage.transaction().await?;
+        let boot_ts = config.boot_ts;
+        let (result, cleanup) =
+            Self::initialize_state_from_updates(config, updates, &mut txn, Some(deploy_generation))
+                .await?;
+        txn.commit(boot_ts).await?;
+        cleanup.await;
+        Ok(result)
+    }
+
+    /// Reconstructs the full catalog using owned input and a caller-owned transaction.
+    /// A missing deployment generation replays committed live state without restart migrations.
+    async fn initialize_state_from_updates(
+        config: StateConfig,
+        mut updates: Vec<StateUpdate>,
+        txn: &mut Transaction<'_>,
+        deploy_generation: Option<u64>,
+    ) -> Result<(InitializeStateResult, BoxFuture<'static, ()>), AdapterError> {
         for builtin_role in BUILTIN_ROLES {
             assert!(
                 is_reserved_name(builtin_role.name),
@@ -172,7 +257,10 @@ impl Catalog {
             comments: Arc::new(CommentsMap::default()),
             source_references: imbl::OrdMap::new(),
             storage_metadata: Arc::new(StorageMetadata::default()),
+            collection_compaction_bounds: Default::default(),
             maintained_read_requirements: Default::default(),
+            maintained_input_requirements: Default::default(),
+            read_protection_changes: Default::default(),
             catalog_read_protection_enabled: false,
             temporary_namespaces: Default::default(),
             mock_authentication_nonce: Default::default(),
@@ -200,16 +288,13 @@ impl Catalog {
             license_key: config.license_key,
         };
 
-        let deploy_generation = storage.get_deployment_generation().await?;
-
-        let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
-        let mut txn = storage.transaction().await?;
 
-        // Migrate/update durable data before we start loading the in-memory catalog.
-        let new_builtin_collections = {
+        // Diagnostic replay must preserve pending replicas and builtin desired state,
+        // which restart reconciliation is allowed to change.
+        let new_builtin_collections = if deploy_generation.is_some() {
             migrate::durable_migrate(
-                &mut txn,
+                txn,
                 state.config.environment_id.organization_id(),
                 config.boot_ts,
             )?;
@@ -222,7 +307,7 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let new_builtin_collections = add_new_remove_old_builtin_items_migration(&mut txn)?;
+            let new_builtin_collections = add_new_remove_old_builtin_items_migration(txn)?;
             let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
                 system_cluster: config.builtin_system_cluster_config,
                 catalog_server_cluster: config.builtin_catalog_server_cluster_config,
@@ -231,21 +316,48 @@ impl Catalog {
                 analytics_cluster: config.builtin_analytics_cluster_config,
             };
             add_new_remove_old_builtin_clusters_migration(
-                &mut txn,
+                txn,
                 &builtin_bootstrap_cluster_config_map,
                 config.boot_ts,
             )?;
-            add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
+            add_new_remove_old_builtin_introspection_source_migration(txn)?;
             reconcile_builtin_cluster_replicas(
-                &mut txn,
+                txn,
                 &builtin_bootstrap_cluster_config_map,
                 config.boot_ts,
             )?;
-            add_new_remove_old_builtin_roles_migration(&mut txn)?;
-            remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            remove_pending_cluster_replicas_migration(&mut txn, config.boot_ts)?;
+            add_new_remove_old_builtin_roles_migration(txn)?;
+            remove_invalid_config_param_role_defaults_migration(txn)?;
+            remove_pending_cluster_replicas_migration(txn, config.boot_ts)?;
 
             new_builtin_collections
+        } else {
+            let mut mappings: BTreeMap<_, _> = txn
+                .get_system_object_mappings()
+                .map(|mapping| (mapping.description, mapping.unique_identifier.fingerprint))
+                .collect();
+            let compatible = BUILTINS::iter().all(|builtin| {
+                let description = SystemObjectDescription {
+                    schema_name: builtin.schema().to_string(),
+                    object_type: builtin.catalog_item_type(),
+                    object_name: builtin.name().to_string(),
+                };
+                let fingerprint = if builtin.runtime_alterable() {
+                    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL.into()
+                } else {
+                    builtin.fingerprint()
+                };
+                mappings.remove(&description).as_ref() == Some(&fingerprint)
+            });
+            if !compatible
+                || !mappings.is_empty()
+                || get_migration_version(txn).as_ref() != Some(&config.build_info.semver_version())
+            {
+                return Err(AdapterError::Internal(
+                    "catalog reconstruction requires a builtin schema migration".into(),
+                ));
+            }
+            Vec::new()
         };
 
         let op_updates = txn.get_and_commit_op_updates();
@@ -453,7 +565,7 @@ impl Catalog {
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
-        let last_seen_version = get_migration_version(&txn);
+        let last_seen_version = get_migration_version(txn);
 
         // Latch the mode at environment birth. Changing startup defaults must not
         // adopt existing collections whose required history may already be gone.
@@ -479,7 +591,7 @@ impl Catalog {
         let (builtin_table_update, _catalog_updates) = if !config.skip_migrations {
             let migrate_result = migrate::migrate(
                 &mut state,
-                &mut txn,
+                txn,
                 &mut local_expr_cache,
                 item_updates,
                 config.now,
@@ -542,14 +654,20 @@ impl Catalog {
         }
 
         // Migrate builtin items.
-        let schema_migration_result = builtin_schema_migration::run(
-            config.build_info,
-            deploy_generation,
-            &mut txn,
-            config.builtin_item_migration_config,
-        )
-        .await?;
+        let schema_migration_result = match deploy_generation {
+            Some(deploy_generation) => {
+                builtin_schema_migration::run(
+                    config.build_info,
+                    deploy_generation,
+                    txn,
+                    config.builtin_item_migration_config,
+                )
+                .await?
+            }
+            None => Default::default(),
+        };
 
+        txn.finalize_index_compaction_bounds();
         let state_updates = txn.get_and_commit_op_updates();
 
         // When initializing/bootstrapping, we don't use the catalog updates but
@@ -564,23 +682,21 @@ impl Catalog {
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
         // Bump the migration version immediately before committing.
-        set_migration_version(&mut txn, config.build_info.semver_version())?;
+        set_migration_version(txn, config.build_info.semver_version())?;
 
-        txn.commit(config.boot_ts).await?;
-
-        // Now that the migration is durable, run any requested deferred cleanup.
-        schema_migration_result.cleanup_action.await;
-
-        Ok(InitializeStateResult {
-            state,
-            migrated_storage_collections_0dt: schema_migration_result.replaced_items,
-            new_builtin_collections: new_builtin_collections.into_iter().collect(),
-            builtin_table_updates,
-            last_seen_version,
-            expr_cache_handle,
-            cached_global_exprs,
-            uncached_local_exprs: local_expr_cache.into_uncached_exprs(),
-        })
+        Ok((
+            InitializeStateResult {
+                state,
+                migrated_storage_collections_0dt: schema_migration_result.replaced_items,
+                new_builtin_collections: new_builtin_collections.into_iter().collect(),
+                builtin_table_updates,
+                last_seen_version,
+                expr_cache_handle,
+                cached_global_exprs,
+                uncached_local_exprs: local_expr_cache.into_uncached_exprs(),
+            },
+            schema_migration_result.cleanup_action,
+        ))
     }
 
     /// Opens or creates a catalog that stores data at `path`.
@@ -597,6 +713,7 @@ impl Catalog {
     pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
         async move {
             let mut storage = config.storage;
+            let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config.state));
 
             let InitializeStateResult {
                 state,
@@ -619,8 +736,8 @@ impl Catalog {
             let catalog = Catalog {
                 state,
                 expr_cache_handle,
+                diagnostic_config,
                 transient_revision: 1,
-                ddl_revision: 1,
                 shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
@@ -800,7 +917,14 @@ impl Catalog {
 
             let read_only_tx = storage.transaction().await?;
 
-            mz_controller::Controller::new(config, envd_epoch, read_only, &read_only_tx).await
+            mz_controller::Controller::new(
+                config,
+                envd_epoch,
+                read_only,
+                self.state().catalog_read_protection_enabled(),
+                &read_only_tx,
+            )
+            .await
         };
 
         self.initialize_storage_state(&controller.storage_collections)

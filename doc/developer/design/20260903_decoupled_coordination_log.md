@@ -471,3 +471,19 @@ header, and frozen catalog mode are removed once no test needs them.
 
 Milestone 1 remains active. Next: resume index simplification under these rules,
 then the checker move and changed-record publication.
+
+### 2026-09-09: Measurement accounting and index-fixture scope
+
+Persist's shard diff-byte counter measures consensus state metadata, not catalog
+row payload. Separate committed packed-row counters classify protection and other
+catalog traffic without adding durable records or another catalog mode.
+
+A large identical-index population on one view produces quadratic notice work,
+retained notices, and dependency checking. Cache-miss implication reconstruction
+also repeats optimization on the coordinator. Proposed scope split, awaiting
+Aljoscha: use independent constant-view inputs for publication measurements, retain
+the duplicate-index stress case, and address the broader planning/notice cost with
+lifecycle work. Do not suppress slow-message diagnostics to make that case pass.
+
+Milestone 1 remains active. Next: resolve that scope split and finish payload-aware
+CI measurements.

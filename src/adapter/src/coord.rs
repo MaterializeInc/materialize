@@ -169,6 +169,7 @@ use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::read_holds::ReadHold;
+use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{S3SinkFormat, StorageSinkDesc};
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
@@ -202,10 +203,12 @@ use crate::coord::appends::{
     PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
+use crate::coord::compaction_bound_subscriber::CompactionBoundSubscriber;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
 use crate::coord::peek::PendingPeek;
+use crate::coord::read_protection::CATALOG_SUBSCRIPTION_INTERVAL;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
@@ -242,6 +245,7 @@ pub(crate) mod timestamp_selection;
 pub mod catalog_implications;
 mod caught_up;
 mod command_handler;
+mod compaction_bound_subscriber;
 mod ddl;
 pub(crate) mod group_sync;
 mod hydration_history;
@@ -1319,6 +1323,7 @@ pub struct Config {
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub compaction_bound_subscriber: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
     pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
     pub all_features: bool,
@@ -2063,6 +2068,9 @@ pub struct Coordinator {
     /// read their catalog as long as needed. In the future we would like this
     /// to be a pTVC, but for now this is sufficient.
     catalog: Arc<Catalog>,
+    compaction_bound_subscriber: Option<CompactionBoundSubscriber>,
+    /// Changed records retained until publication succeeds, including failed attempts.
+    read_protection_pending: BTreeSet<GlobalId>,
 
     /// A client for persist. Initially, this is only used for reading stashed
     /// peek responses out of batches.
@@ -2651,6 +2659,7 @@ impl Coordinator {
             .catalog()
             .system_config()
             .enable_storage_introspection_logs();
+        self.restore_compute_read_protection().await?;
         for instance in self.catalog.clusters() {
             self.controller.create_cluster(
                 instance.id,
@@ -2735,7 +2744,7 @@ impl Coordinator {
         // `bootstrap_dataflow_plans`.
         let bootstrap_as_ofs_start = Instant::now();
         info!("startup: coordinator init: bootstrap: dataflow as-of bootstrapping beginning");
-        let dataflow_read_holds = self.bootstrap_dataflow_as_ofs().await;
+        let dataflow_read_holds = self.bootstrap_dataflow_as_ofs().await?;
         info!(
             "startup: coordinator init: bootstrap: dataflow as-of bootstrapping complete in {:?}",
             bootstrap_as_ofs_start.elapsed()
@@ -3488,6 +3497,14 @@ impl Coordinator {
                         .relation_desc()
                         .expect("sinks can only be built on items with descs")
                         .into_owned();
+                    let as_of = if self.catalog().state().catalog_read_protection_enabled() {
+                        self.catalog().state().maintained_read_requirements()[&sink.global_id()]
+                            .frontier
+                            .into_iter()
+                            .collect()
+                    } else {
+                        Antichain::from_elem(Timestamp::minimum())
+                    };
                     let collection_desc = CollectionDescription {
                         // TODO(sinks): make generic once we have more than one sink type.
                         desc: KAFKA_PROGRESS_DESC.clone(),
@@ -3501,7 +3518,7 @@ impl Coordinator {
                                         .clone()
                                         .into_inline_connection(self.catalog().state()),
                                     envelope: sink.envelope,
-                                    as_of: Antichain::from_elem(Timestamp::minimum()),
+                                    as_of,
                                     with_snapshot: sink.with_snapshot,
                                     version: sink.version,
                                     from_storage_metadata: (),
@@ -4060,10 +4077,12 @@ impl Coordinator {
     /// This method expects all storage collections and dataflow plans to be available, so it must
     /// run after [`Coordinator::bootstrap_storage_collections`] and
     /// [`Coordinator::bootstrap_dataflow_plans`].
-    async fn bootstrap_dataflow_as_ofs(&mut self) -> BTreeMap<GlobalId, ReadHold> {
+    async fn bootstrap_dataflow_as_ofs(
+        &mut self,
+    ) -> Result<BTreeMap<GlobalId, ReadHold>, AdapterError> {
         let mut catalog_ids = Vec::new();
         let mut dataflows = Vec::new();
-        let mut read_policies = BTreeMap::new();
+        let mut read_policies: BTreeMap<GlobalId, ReadPolicy> = BTreeMap::new();
         for entry in self.catalog.entries() {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
@@ -4089,10 +4108,27 @@ impl Coordinator {
             }
         }
 
+        self.sync_compute_read_protection().await?;
+        let mut index_bounds: BTreeMap<_, _> = self
+            .catalog()
+            .state()
+            .collection_compaction_bounds()
+            .iter()
+            .map(|(&id, bound)| (id, bound.clone()))
+            .collect();
+        if let Some(subscriber) = &self.compaction_bound_subscriber {
+            index_bounds.extend(
+                subscriber
+                    .bounds()
+                    .iter()
+                    .map(|(&id, bound)| (id, bound.clone())),
+            );
+        }
         let read_ts = self.get_local_read_ts().await;
         let read_holds = as_of_selection::run(
             &mut dataflows,
             &read_policies,
+            &index_bounds,
             &*self.controller.storage_collections,
             read_ts,
             self.controller.read_only(),
@@ -4103,7 +4139,7 @@ impl Coordinator {
             catalog.set_physical_plan(id, plan);
         }
 
-        read_holds
+        Ok(read_holds)
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
@@ -4221,6 +4257,8 @@ impl Coordinator {
                 .catalog_read_protection_publish_interval();
             let publication_timer = tokio::time::sleep(publication_delay);
             tokio::pin!(publication_timer);
+            let subscription_timer = tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL);
+            tokio::pin!(subscription_timer);
 
             loop {
                 let delay = self
@@ -4241,12 +4279,22 @@ impl Coordinator {
                     // before receiving a new batch of commands.
                     biased;
 
+                    // Polling a pinned Sleep is cancellation-safe. Following committed permission
+                    // does not depend on the savepoint's publication setting.
+                    _ = subscription_timer.as_mut(),
+                        if self.compaction_bound_subscriber.is_some() => {
+                        if let Err(error) = self.sync_compute_read_protection().await {
+                            warn!(%error, "unable to follow catalog read protection");
+                        }
+                        subscription_timer.set(tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL));
+                    }
+
                     // Polling a pinned Sleep is cancellation-safe. Bootstrap restores execution holds
                     // before this runs. Give publication a turn even under continuous load,
                     // but schedule from completion so a slow commit cannot monopolize us.
                     _ = publication_timer.as_mut(),
                         if self.catalog().state().catalog_read_protection_enabled()
-                            && !self.controller.read_only() && !publication_delay.is_zero() => {
+                            && !self.controller.read_only() => {
                         if let Err(error) = self.publish_read_protection().await {
                             warn!(%error, "unable to publish catalog read protection");
                         }
@@ -4449,6 +4497,9 @@ impl Coordinator {
             // down the oracle workers.
             if let Some(sweep) = self.hydration_history_sweep.take() {
                 sweep.abort_and_wait().await;
+            }
+            if let Some(subscriber) = self.compaction_bound_subscriber.take() {
+                subscriber.expire().await;
             }
 
             // Try and cleanup as a best effort. There may be some async tasks out there holding a
@@ -4687,8 +4738,7 @@ impl Coordinator {
     ) {
         let read_holds = self.acquire_read_holds(id_bundle);
         let since = read_holds.least_valid_read();
-        df_desc.set_as_of(since);
-
+        df_desc.set_as_of(since.clone());
         self.ship_dataflow_and_notice_builtin_table_updates(
             df_desc,
             instance,
@@ -5101,6 +5151,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         mut storage,
+        compaction_bound_subscriber,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -5513,6 +5564,9 @@ pub fn serve(
                 let mut coord = Coordinator {
                     controller,
                     catalog,
+                    compaction_bound_subscriber: compaction_bound_subscriber
+                        .map(CompactionBoundSubscriber::new),
+                    read_protection_pending: BTreeSet::new(),
                     internal_cmd_tx,
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),

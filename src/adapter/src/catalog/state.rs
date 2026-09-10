@@ -57,7 +57,7 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector, Timestamp,
     VersionedRelationDesc,
 };
 use mz_secrets::InMemorySecretsController;
@@ -156,8 +156,16 @@ pub struct CatalogState {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) source_references: imbl::OrdMap<CatalogItemId, SourceReferences>,
     pub(super) storage_metadata: Arc<StorageMetadata>,
+    #[serde(serialize_with = "serialize_collection_compaction_bounds")]
+    pub(super) collection_compaction_bounds: imbl::OrdMap<GlobalId, Antichain<Timestamp>>,
     #[serde(serialize_with = "serialize_maintained_read_requirements")]
-    pub(super) maintained_read_requirements: Arc<BTreeMap<GlobalId, MaintainedReadRequirement>>,
+    pub(super) maintained_read_requirements: imbl::OrdMap<GlobalId, MaintainedReadRequirement>,
+    /// Non-completed requirement edges, ordered by input, frontier, and owner.
+    #[serde(skip)]
+    pub(super) maintained_input_requirements: imbl::OrdSet<(GlobalId, Timestamp, GlobalId)>,
+    /// IDs whose read protection must be reconsidered after applied catalog changes.
+    #[serde(skip)]
+    pub(super) read_protection_changes: imbl::OrdSet<GlobalId>,
     pub(super) catalog_read_protection_enabled: bool,
     pub(super) mock_authentication_nonce: Option<String>,
 
@@ -483,7 +491,10 @@ impl CatalogState {
             comments: Arc::new(CommentsMap::default()),
             source_references: Default::default(),
             storage_metadata: Arc::new(StorageMetadata::default()),
+            collection_compaction_bounds: Default::default(),
             maintained_read_requirements: Default::default(),
+            maintained_input_requirements: Default::default(),
+            read_protection_changes: Default::default(),
             catalog_read_protection_enabled: false,
             license_key: ValidatedLicenseKey::for_tests(),
             mock_authentication_nonce: Default::default(),
@@ -2901,9 +2912,29 @@ impl CatalogState {
         &self.storage_metadata
     }
 
+    /// Returns committed compaction permission for maintained storage and compute collections.
+    pub fn collection_compaction_bounds(&self) -> &imbl::OrdMap<GlobalId, Antichain<Timestamp>> {
+        &self.collection_compaction_bounds
+    }
+
     /// Returns the durable maintained read requirements, keyed by output ID.
-    pub fn maintained_read_requirements(&self) -> &BTreeMap<GlobalId, MaintainedReadRequirement> {
+    pub fn maintained_read_requirements(
+        &self,
+    ) -> &imbl::OrdMap<GlobalId, MaintainedReadRequirement> {
         &self.maintained_read_requirements
+    }
+
+    /// Returns the earliest committed requirement for an input, excluding the given owners.
+    pub fn maintained_read_frontier(
+        &self,
+        input: GlobalId,
+        excluding: &BTreeSet<GlobalId>,
+    ) -> Option<Timestamp> {
+        // System(0) is the minimum GlobalId, so the range includes every owner.
+        self.maintained_input_requirements
+            .range((input, Timestamp::MIN, GlobalId::System(0))..)
+            .take_while(|(id, _, _)| *id == input)
+            .find_map(|(_, frontier, owner)| (!excluding.contains(owner)).then_some(*frontier))
     }
 
     /// Whether this environment was initialized with catalog-backed recovery protection.
@@ -3118,13 +3149,27 @@ impl OptimizerCatalog for Catalog {
 }
 
 impl Catalog {
+    /// Drains IDs whose read protection may have changed since the last drain.
+    pub fn take_read_protection_changes(&mut self) -> BTreeSet<GlobalId> {
+        std::mem::take(&mut self.state.read_protection_changes)
+            .into_iter()
+            .collect()
+    }
+
     pub fn as_optimizer_catalog(self: Arc<Self>) -> Arc<dyn OptimizerCatalog> {
         self
     }
 }
 
+fn serialize_collection_compaction_bounds<S: serde::Serializer>(
+    bounds: &imbl::OrdMap<GlobalId, Antichain<Timestamp>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    mz_ore::serde::map_key_to_string(bounds, serializer)
+}
+
 fn serialize_maintained_read_requirements<S: serde::Serializer>(
-    requirements: &BTreeMap<GlobalId, MaintainedReadRequirement>,
+    requirements: &imbl::OrdMap<GlobalId, MaintainedReadRequirement>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     let entries = requirements
@@ -3136,6 +3181,154 @@ fn serialize_maintained_read_requirements<S: serde::Serializer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn storage_permission_projects_only_shard_backed_bounds() {
+        use mz_catalog::durable::objects::{CollectionCompactionBound, StorageCollectionMetadata};
+        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+        use mz_ore::cast::CastFrom;
+        use mz_persist_client::ShardId;
+
+        let storage = GlobalId::User(1);
+        let compute = GlobalId::User(2);
+        let mapping = StorageCollectionMetadata {
+            id: storage,
+            shard: ShardId::new(),
+        };
+        let permission = |id| {
+            StateUpdateKind::CollectionCompactionBound(CollectionCompactionBound {
+                id,
+                frontier: Some(Timestamp::from(10)),
+            })
+        };
+        for mapping_first in [false, true] {
+            let mut state = CatalogState::empty_test();
+            let mut updates = vec![
+                permission(storage),
+                StateUpdateKind::StorageCollectionMetadata(mapping.clone()),
+            ];
+            if mapping_first {
+                updates.reverse();
+            }
+            updates.push(permission(compute));
+            for (i, kind) in updates.into_iter().enumerate() {
+                let _ = state
+                    .apply_updates(
+                        vec![StateUpdate {
+                            kind,
+                            ts: Timestamp::from(u64::cast_from(i) + 1),
+                            diff: StateDiff::Addition,
+                        }],
+                        &mut LocalExpressionCache::Closed,
+                    )
+                    .await;
+            }
+            assert_eq!(state.collection_compaction_bounds().len(), 2);
+            assert_eq!(
+                state.storage_metadata().compaction_bounds,
+                BTreeMap::from([(storage, Antichain::from_elem(Timestamp::from(10)))])
+            );
+            assert_eq!(
+                std::mem::take(&mut state.read_protection_changes),
+                imbl::OrdSet::from_iter([storage, compute])
+            );
+            assert_eq!(
+                serialize_collection_compaction_bounds(
+                    state.collection_compaction_bounds(),
+                    serde_json::value::Serializer,
+                )
+                .expect("can serialize collection compaction bounds"),
+                serde_json::to_value(BTreeMap::from([
+                    (
+                        storage.to_string(),
+                        Antichain::from_elem(Timestamp::from(10))
+                    ),
+                    (
+                        compute.to_string(),
+                        Antichain::from_elem(Timestamp::from(10))
+                    ),
+                ]))
+                .expect("can serialize expected collection compaction bounds")
+            );
+            let snapshot = state.clone();
+            let _ = state
+                .apply_updates(
+                    vec![StateUpdate {
+                        kind: StateUpdateKind::StorageCollectionMetadata(mapping.clone()),
+                        ts: Timestamp::from(4),
+                        diff: StateDiff::Retraction,
+                    }],
+                    &mut LocalExpressionCache::Closed,
+                )
+                .await;
+            assert!(state.storage_metadata().compaction_bounds.is_empty());
+            assert_eq!(state.collection_compaction_bounds().len(), 2);
+            assert_eq!(
+                std::mem::take(&mut state.read_protection_changes),
+                imbl::OrdSet::from_iter([storage])
+            );
+            assert!(
+                snapshot
+                    .storage_metadata()
+                    .compaction_bounds
+                    .contains_key(&storage)
+            );
+            let mut old = permission(compute);
+            for frontier in [Some(Timestamp::from(20)), None] {
+                let new = StateUpdateKind::CollectionCompactionBound(CollectionCompactionBound {
+                    id: compute,
+                    frontier,
+                });
+                let _ = state
+                    .apply_updates(
+                        vec![
+                            StateUpdate {
+                                kind: old,
+                                ts: Timestamp::from(5),
+                                diff: StateDiff::Retraction,
+                            },
+                            StateUpdate {
+                                kind: new.clone(),
+                                ts: Timestamp::from(5),
+                                diff: StateDiff::Addition,
+                            },
+                        ],
+                        &mut LocalExpressionCache::Closed,
+                    )
+                    .await;
+                assert_eq!(
+                    state.collection_compaction_bounds().get(&compute),
+                    Some(&frontier.into_iter().collect())
+                );
+                assert_eq!(
+                    snapshot.collection_compaction_bounds().get(&compute),
+                    Some(&Antichain::from_elem(Timestamp::from(10)))
+                );
+                assert!(state.storage_metadata().compaction_bounds.is_empty());
+                old = new;
+            }
+            let _ = state
+                .apply_updates(
+                    vec![StateUpdate {
+                        kind: old,
+                        ts: Timestamp::from(6),
+                        diff: StateDiff::Retraction,
+                    }],
+                    &mut LocalExpressionCache::Closed,
+                )
+                .await;
+            assert!(!state.collection_compaction_bounds().contains_key(&compute));
+            assert!(
+                snapshot
+                    .collection_compaction_bounds()
+                    .contains_key(&compute)
+            );
+            assert_eq!(
+                state.read_protection_changes,
+                imbl::OrdSet::from_iter([compute])
+            );
+        }
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn maintained_read_requirements_apply_snapshot_update_drop() {
@@ -3169,8 +3362,23 @@ mod tests {
             .await;
         assert_eq!(
             state.maintained_read_requirements(),
-            &BTreeMap::from([(initial.id, initial.clone())])
+            &imbl::OrdMap::from_iter([(initial.id, initial.clone())])
         );
+        assert_eq!(
+            serialize_maintained_read_requirements(
+                state.maintained_read_requirements(),
+                serde_json::value::Serializer,
+            )
+            .expect("can serialize maintained read requirements"),
+            serde_json::to_value(BTreeMap::from([(
+                initial.id.to_string(),
+                (&initial.inputs, initial.frontier),
+            )]))
+            .expect("can serialize expected maintained read requirements")
+        );
+        let serialized = serde_json::to_value(&state).expect("can serialize catalog state");
+        assert!(serialized.get("maintained_input_requirements").is_none());
+        assert!(serialized.get("read_protection_changes").is_none());
         let snapshot = state.clone();
 
         let _ = state
@@ -3186,12 +3394,22 @@ mod tests {
             .await;
         assert_eq!(
             state.maintained_read_requirements(),
-            &BTreeMap::from([(completed.id, completed.clone())])
+            &imbl::OrdMap::from_iter([(completed.id, completed.clone())])
         );
         assert_eq!(
             snapshot.maintained_read_requirements(),
-            &BTreeMap::from([(initial.id, initial)])
+            &imbl::OrdMap::from_iter([(initial.id, initial.clone())])
         );
+        for input in &initial.inputs {
+            assert_eq!(
+                state.maintained_read_frontier(*input, &BTreeSet::new()),
+                None
+            );
+            assert_eq!(
+                snapshot.maintained_read_frontier(*input, &BTreeSet::new()),
+                initial.frontier
+            );
+        }
 
         let _ = state
             .apply_updates(
@@ -3200,6 +3418,175 @@ mod tests {
             )
             .await;
         assert!(state.maintained_read_requirements().is_empty());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn read_protection_changes_and_requirement_projection() {
+        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+
+        Catalog::with_debug(|mut catalog| async move {
+            catalog.take_read_protection_changes();
+            let input = GlobalId::User(100);
+            let other_input = GlobalId::User(101);
+            let first = MaintainedReadRequirement {
+                id: GlobalId::User(102),
+                inputs: BTreeSet::from([input]),
+                frontier: Some(Timestamp::from(10)),
+            };
+            let second = MaintainedReadRequirement {
+                id: GlobalId::User(103),
+                ..first.clone()
+            };
+            let later = MaintainedReadRequirement {
+                id: GlobalId::User(104),
+                frontier: Some(Timestamp::from(20)),
+                ..first.clone()
+            };
+            let update = |requirement, diff| StateUpdate {
+                kind: StateUpdateKind::MaintainedReadRequirement(requirement),
+                ts: Timestamp::MIN,
+                diff,
+            };
+            let _ = catalog
+                .state
+                .apply_updates(
+                    vec![
+                        update(first.clone(), StateDiff::Addition),
+                        update(second.clone(), StateDiff::Addition),
+                        update(later.clone(), StateDiff::Addition),
+                    ],
+                    &mut LocalExpressionCache::Closed,
+                )
+                .await;
+            let snapshot = catalog.state.clone();
+            assert_eq!(
+                catalog.take_read_protection_changes(),
+                BTreeSet::from([input, first.id, second.id, later.id])
+            );
+            assert!(catalog.take_read_protection_changes().is_empty());
+            for (excluding, expected) in [
+                (BTreeSet::new(), first.frontier),
+                (BTreeSet::from([first.id]), second.frontier),
+                (BTreeSet::from([first.id, second.id]), later.frontier),
+                (BTreeSet::from([first.id, second.id, later.id]), None),
+            ] {
+                assert_eq!(
+                    catalog.state.maintained_read_frontier(input, &excluding),
+                    expected
+                );
+            }
+            assert_eq!(
+                catalog
+                    .state
+                    .maintained_read_frontier(other_input, &BTreeSet::new()),
+                None
+            );
+
+            let moved = MaintainedReadRequirement {
+                inputs: BTreeSet::from([other_input]),
+                frontier: Some(Timestamp::from(30)),
+                ..first.clone()
+            };
+            let _ = catalog
+                .state
+                .apply_updates(
+                    vec![
+                        update(first.clone(), StateDiff::Retraction),
+                        update(moved.clone(), StateDiff::Addition),
+                    ],
+                    &mut LocalExpressionCache::Closed,
+                )
+                .await;
+            assert_eq!(
+                catalog.take_read_protection_changes(),
+                BTreeSet::from([input, other_input, first.id])
+            );
+            assert_eq!(
+                catalog
+                    .state
+                    .maintained_read_frontier(input, &BTreeSet::new()),
+                second.frontier
+            );
+            assert_eq!(
+                catalog
+                    .state
+                    .maintained_read_frontier(other_input, &BTreeSet::new()),
+                moved.frontier
+            );
+            assert_eq!(
+                snapshot.maintained_read_requirements().get(&first.id),
+                Some(&first)
+            );
+            assert_eq!(
+                snapshot.maintained_read_frontier(other_input, &BTreeSet::new()),
+                None
+            );
+            assert_eq!(
+                snapshot.read_protection_changes.len(),
+                4,
+                "draining does not mutate snapshots"
+            );
+
+            let completed = MaintainedReadRequirement {
+                frontier: None,
+                ..moved.clone()
+            };
+            for (old, new) in [(moved, Some(completed.clone())), (completed, None)] {
+                let mut updates = vec![update(old, StateDiff::Retraction)];
+                if let Some(new) = new {
+                    updates.push(update(new, StateDiff::Addition));
+                }
+                let _ = catalog
+                    .state
+                    .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                    .await;
+                assert_eq!(
+                    catalog.take_read_protection_changes(),
+                    BTreeSet::from([other_input, first.id])
+                );
+                assert_eq!(
+                    catalog
+                        .state
+                        .maintained_read_frontier(other_input, &BTreeSet::new()),
+                    None
+                );
+            }
+            let _ = catalog
+                .state
+                .apply_updates(
+                    vec![update(second.clone(), StateDiff::Retraction)],
+                    &mut LocalExpressionCache::Closed,
+                )
+                .await;
+            assert_eq!(
+                catalog
+                    .state
+                    .maintained_read_frontier(input, &BTreeSet::new()),
+                later.frontier
+            );
+            assert_eq!(
+                catalog.take_read_protection_changes(),
+                BTreeSet::from([input, second.id])
+            );
+
+            let _ = catalog
+                .state
+                .apply_updates(
+                    vec![
+                        update(later.clone(), StateDiff::Retraction),
+                        update(later, StateDiff::Addition),
+                    ],
+                    &mut LocalExpressionCache::Closed,
+                )
+                .await;
+            assert!(
+                catalog.take_read_protection_changes().is_empty(),
+                "consolidated no-op is unchanged"
+            );
+            catalog.expire().await;
+        })
+        .await;
     }
 
     async fn create_collection_input_item(
@@ -3246,6 +3633,71 @@ mod tests {
             .await
             .expect("can create test item");
         global_id
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn read_protection_changes_include_item_versions() {
+        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+
+        Catalog::with_debug(|mut catalog| async move {
+            catalog.take_read_protection_changes();
+            let id = create_collection_input_item(
+                &mut catalog,
+                "t",
+                "CREATE TABLE materialize.public.t (a int)",
+            )
+            .await;
+            assert_eq!(catalog.take_read_protection_changes(), BTreeSet::from([id]));
+            let original = catalog
+                .state
+                .durable_item(catalog.state.get_entry_by_global_id(&id).entry)
+                .expect("can convert test table to durable item");
+            let (_, extra_id) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("can allocate test table version ID");
+            let mut versioned = original.clone();
+            versioned.create_sql =
+                "CREATE TABLE materialize.public.t (a int, b int VERSION ADDED 1)".into();
+            versioned
+                .extra_versions
+                .insert(RelationVersion::root().bump(), extra_id);
+            for (old, new, expected) in [
+                (
+                    original.clone(),
+                    Some(versioned.clone()),
+                    BTreeSet::from([id, extra_id]),
+                ),
+                (
+                    versioned,
+                    Some(original.clone()),
+                    BTreeSet::from([id, extra_id]),
+                ),
+                (original, None, BTreeSet::from([id])),
+            ] {
+                let mut updates = vec![StateUpdate {
+                    kind: StateUpdateKind::Item(old),
+                    ts: Timestamp::MIN,
+                    diff: StateDiff::Retraction,
+                }];
+                if let Some(new) = new {
+                    updates.push(StateUpdate {
+                        kind: StateUpdateKind::Item(new),
+                        ts: Timestamp::MIN,
+                        diff: StateDiff::Addition,
+                    });
+                }
+                let _ = catalog
+                    .state
+                    .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                    .await;
+                assert_eq!(catalog.take_read_protection_changes(), expected);
+                assert!(catalog.take_read_protection_changes().is_empty());
+            }
+            catalog.expire().await;
+        })
+        .await;
     }
 
     #[mz_ore::test(tokio::test)]

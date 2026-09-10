@@ -145,7 +145,8 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
-    ddl_revision: u64,
+    /// Opening context needed to reconstruct persisted state independently of this catalog.
+    diagnostic_config: Arc<StateConfig>,
     /// The latest `transient_revision`, shared by all clones of this catalog.
     /// While `transient_revision` is this clone's own revision, frozen when
     /// the snapshot was taken, this field always tracks the latest revision
@@ -186,7 +187,7 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
-            ddl_revision: self.ddl_revision,
+            diagnostic_config: Arc::clone(&self.diagnostic_config),
             shared_transient_revision: Arc::clone(&self.shared_transient_revision),
         }
     }
@@ -365,14 +366,6 @@ impl Catalog {
         self.transient_revision
     }
 
-    /// Returns the revision used to detect conflicts with open DDL transactions.
-    /// It starts at 1 on every load and advances on the same changes as
-    /// [`Self::transient_revision`], except changes to
-    /// `catalog_read_protection_publish_interval`.
-    pub fn ddl_revision(&self) -> u64 {
-        self.ddl_revision
-    }
-
     /// Reports whether this catalog's transient revision is still the latest,
     /// i.e., whether its planning-visible state is equivalent to the current
     /// catalog's. Can be called on a snapshot from off-thread, without a
@@ -478,7 +471,11 @@ impl Catalog {
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
-        let environment_id = None;
+        let environment_id = Some(
+            format!("local-az1-{organization_id}-0")
+                .parse()
+                .expect("valid debug environment ID"),
+        );
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(organization_id)
             .with_default_deploy_generation()
@@ -515,7 +512,11 @@ impl Catalog {
         aws_context: Option<DebugAwsContext>,
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
-        let environment_id = None;
+        let environment_id = Some(
+            format!("local-az1-{organization_id}-0")
+                .parse()
+                .expect("valid debug environment ID"),
+        );
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(organization_id)
             .with_default_deploy_generation()
@@ -547,7 +548,11 @@ impl Catalog {
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
-        let environment_id = None;
+        let environment_id = Some(
+            format!("local-az1-{organization_id}-0")
+                .parse()
+                .expect("valid debug environment ID"),
+        );
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(organization_id)
             .build()
@@ -609,7 +614,10 @@ impl Catalog {
         .await
     }
 
-    async fn open_debug_catalog_inner(
+    /// Reconstructs a debug catalog from caller-prepared durable storage without reopening it.
+    ///
+    /// Storage must retain its initial update stream.
+    pub async fn open_debug_catalog_inner(
         persist_client: PersistClient,
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
@@ -744,6 +752,21 @@ impl Catalog {
 
     pub async fn current_upper(&self) -> mz_repr::Timestamp {
         self.storage().await.current_upper().await
+    }
+
+    /// Certifies a durable prefix while the caller serializes catalog snapshot capture.
+    pub(crate) async fn current_upper_if_in_sync(
+        &self,
+    ) -> Result<mz_repr::Timestamp, AdapterError> {
+        let mut storage = self.storage().await;
+        if storage.is_savepoint() || storage.is_read_only() {
+            return Err(AdapterError::ReadOnly);
+        }
+        let upper = storage.current_upper().await;
+        // Allocations and empty upper advancement can run off-loop. Neither may
+        // certify unapplied catalog content as part of the memory snapshot.
+        storage.ensure_not_out_of_sync(upper).await?;
+        Ok(upper)
     }
 
     /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`], delegating to
@@ -1324,6 +1347,27 @@ impl Catalog {
     /// identically.
     pub fn dump(&self) -> Result<CatalogDump, Error> {
         Ok(CatalogDump::new(self.state.dump(None)?))
+    }
+
+    pub(crate) async fn open_diagnostic_reader(
+        &self,
+    ) -> Result<mz_catalog::durable::CatalogSnapshotReader, AdapterError> {
+        let config = &self.diagnostic_config;
+        let bootstrap = BootstrapArgs {
+            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
+            default_cluster_replica_size: config.builtin_system_cluster_config.size.clone(),
+            default_cluster_replication_factor: config
+                .builtin_system_cluster_config
+                .replication_factor,
+            bootstrap_role: None,
+        };
+        Ok(mz_catalog::durable::CatalogSnapshotReader::open(
+            config.persist_client.clone(),
+            config.environment_id.organization_id(),
+            config.build_info.semver_version(),
+            &bootstrap,
+        )
+        .await?)
     }
 
     /// Checks the [`Catalog`]s internal consistency.
@@ -2653,7 +2697,6 @@ mod tests {
             .await
             .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
-            assert_eq!(catalog.ddl_revision(), 1);
             assert!(catalog.transient_revision_is_current());
             let snapshot = catalog.clone();
             let commit_ts = catalog.current_upper().await;
@@ -2670,12 +2713,11 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
-            assert_eq!(catalog.ddl_revision(), 2);
             assert!(catalog.transient_revision_is_current());
             // The pre-transaction snapshot detects its own staleness through
             // the shared latest revision.
             assert!(!snapshot.transient_revision_is_current());
-            assert_eq!(snapshot.ddl_revision(), 1);
+            assert_eq!(snapshot.transient_revision(), 1);
             catalog.expire().await;
         }
         {
@@ -2684,9 +2726,182 @@ mod tests {
                     .await
                     .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
-            assert_eq!(catalog.ddl_revision(), 1);
             catalog.expire().await;
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn owned_catalog_reconstruction_preserves_pending_replica() {
+        Catalog::with_debug(|mut catalog| async move {
+            let replica = catalog
+                .user_cluster_replicas()
+                .next()
+                .expect("bootstrap user replica")
+                .clone();
+            let mut config = replica.config;
+            let mz_controller::clusters::ReplicaLocation::Managed(location) = &mut config.location
+            else {
+                panic!("bootstrap replica must be managed");
+            };
+            location.pending = true;
+            let ts = catalog.current_upper().await;
+            let replica_id = catalog
+                .allocate_user_replica_ids(1, ts)
+                .await
+                .expect("can allocate pending replica ID")[0];
+            let ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    ts,
+                    None,
+                    vec![Op::CreateClusterReplica {
+                        cluster_id: replica.cluster_id,
+                        replica_id,
+                        name: "pending_replica".into(),
+                        config,
+                        owner_id: replica.owner_id,
+                        reason: super::ReplicaCreateDropReason::GracefulReconfiguration,
+                    }],
+                )
+                .await
+                .expect("can create pending replica");
+
+            let expected = catalog.state().dump(None).expect("can dump catalog state");
+            let reader = catalog
+                .open_diagnostic_reader()
+                .await
+                .expect("can open diagnostic catalog reader");
+            let upper = catalog.current_upper().await;
+            let input = reader
+                .into_snapshot_at(upper)
+                .await
+                .expect("can extract catalog snapshot");
+            let reconstructed = catalog
+                .reconstruct_state(input)
+                .await
+                .expect("can reconstruct catalog state");
+            assert_eq!(
+                expected,
+                reconstructed
+                    .dump(None)
+                    .expect("can dump reconstructed catalog state")
+            );
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn owned_catalog_reconstruction_preserves_protection_snapshot() {
+        use mz_catalog::durable::TestCatalogStateBuilder;
+        use mz_catalog::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
+        use mz_ore::now::SYSTEM_TIME;
+        use mz_persist_client::ShardId;
+        use mz_storage_client::controller::StorageTxn;
+
+        let persist = PersistClient::new_for_tests().await;
+        let organization = Uuid::new_v4();
+        let bootstrap = test_bootstrap_args();
+        let input = GlobalId::User(100_000);
+        let output = GlobalId::User(100_001);
+        let mut seed = TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .build()
+            .await
+            .expect("failed to build seed catalog")
+            .open(SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("failed to open seed catalog");
+        let _ = seed
+            .sync_to_current_updates()
+            .await
+            .expect("failed to sync seed catalog");
+        let mut tx = seed
+            .transaction()
+            .await
+            .expect("failed to start seed transaction");
+        tx.insert_collection_metadata(BTreeMap::from([
+            (input, ShardId::new()),
+            (output, ShardId::new()),
+        ]))
+        .expect("failed to insert seed collection metadata");
+        tx.set_collection_compaction_bound(input, Some(Timestamp::from(10)))
+            .expect("failed to set seed compaction bound");
+        tx.set_maintained_read_requirement(
+            output,
+            BTreeSet::from([input]),
+            Some(Timestamp::from(10)),
+        )
+        .expect("failed to set seed read requirement");
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts)
+            .await
+            .expect("failed to commit seed transaction");
+        seed.expire().await;
+
+        let mut writer = Catalog::open_debug_catalog(persist.clone(), organization, &bootstrap)
+            .await
+            .expect("failed to open writer catalog");
+        let expected = writer
+            .state()
+            .dump(None)
+            .expect("failed to dump initial writer catalog");
+        let reader = writer
+            .open_diagnostic_reader()
+            .await
+            .expect("failed to open readonly catalog");
+        let upper = writer.current_upper().await;
+        let memory = writer.clone();
+
+        let ts = writer.current_upper().await;
+        writer
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::SetReadProtection {
+                    requirements: vec![MaintainedReadRequirement {
+                        id: output,
+                        inputs: BTreeSet::from([input]),
+                        frontier: Some(Timestamp::from(20)),
+                    }],
+                    bounds: vec![CollectionCompactionBound {
+                        id: input,
+                        frontier: Some(Timestamp::from(20)),
+                    }],
+                }],
+            )
+            .await
+            .expect("failed to update writer read protection");
+        assert_ne!(
+            expected,
+            writer
+                .state()
+                .dump(None)
+                .expect("failed to dump updated writer catalog")
+        );
+
+        let input = reader
+            .into_snapshot_at(upper)
+            .await
+            .expect("failed to extract catalog prefix");
+        let reconstructed = memory
+            .reconstruct_state(input)
+            .await
+            .expect("failed to reconstruct catalog");
+        assert_eq!(
+            expected,
+            reconstructed
+                .dump(None)
+                .expect("can dump reconstructed catalog state")
+        );
+        drop(memory);
+        writer.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]

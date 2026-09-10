@@ -58,7 +58,7 @@ use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
-use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
+use crate::durable::objects::{AuditLogKey, FenceToken, ReadProtectionIndex, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
@@ -94,7 +94,7 @@ pub const _BUILTIN_MIGRATION_SEED: usize = 3;
 /// Legacy seed used to generate the persist shard ID for the expression cache. DO NOT REUSE.
 pub const _EXPRESSION_CACHE_SEED: usize = 4;
 
-/// Durable catalog mode that dictates the effect of mutable operations.
+/// Durable catalog read and write behavior.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(crate) enum Mode {
     /// Mutable operations are prohibited.
@@ -339,7 +339,7 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
 /// respectively.
 #[derive(Debug)]
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
-    /// The [`Mode`] that this catalog was opened in.
+    /// The catalog's read and write mode.
     pub(crate) mode: Mode,
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff>,
@@ -400,18 +400,31 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         updates: Vec<(S, Diff)>,
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CompareAndAppendError> {
+        let mut traffic = [(0u64, 0u64); 3];
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
-            (
-                (Into::<SourceData>::into(kind), ()),
-                commit_ts,
-                diff.into_inner(),
-            )
+            let index = match kind.kind() {
+                "CollectionCompactionBound" => 0,
+                "MaintainedReadRequirement" => 1,
+                _ => 2,
+            };
+            let row = SourceData::from(kind);
+            traffic[index].0 += 1;
+            traffic[index].1 += u64::try_from(row.0.as_ref().expect("catalog row").byte_len())
+                .expect("row length fits in u64");
+            ((row, ()), commit_ts, diff.into_inner())
         });
         let next_upper = commit_ts.step_forward();
         // Upper mismatches are classified by the commit and advance callers.
         self.compare_and_append_inner(updates, next_upper).await?;
 
+        // Publication succeeded even if the subsequent local sync fails.
+        for ((updates, bytes), (update_count, byte_count)) in
+            self.metrics.committed_row_traffic.iter().zip_eq(traffic)
+        {
+            updates.inc_by(update_count);
+            bytes.inc_by(byte_count);
+        }
         self.sync(next_upper).await?;
         Ok(next_upper)
     }
@@ -533,16 +546,27 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Returns an error if this instance has been fenced out.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sync(&mut self, target_upper: Timestamp) -> Result<(), FenceError> {
+        self.sync_with_limit(target_upper, false).await
+    }
+
+    fn sync_with_limit(
+        &mut self,
+        target_upper: Timestamp,
+        terminal: bool,
+    ) -> impl std::future::Future<Output = Result<(), FenceError>> + '_ {
         self.metrics.syncs.inc();
         let histogram = self.metrics.sync_latency_seconds.clone();
-        self.sync_inner(target_upper)
+        self.sync_inner(target_upper, terminal)
             .wall_time()
             .observe(histogram)
-            .await
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), FenceError> {
+    async fn sync_inner(
+        &mut self,
+        target_upper: Timestamp,
+        terminal: bool,
+    ) -> Result<(), FenceError> {
         self.fenceable_token.validate()?;
 
         // Savepoint catalogs do not yet know how to update themselves in response to concurrent
@@ -565,6 +589,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                     ListenEvent::Progress(upper) => {
                         debug!("synced up to {upper:?}");
                         self.upper = antichain_to_timestamp(upper);
+                        if terminal {
+                            self.upper = self.upper.min(target_upper);
+                        }
                         // Attempt to apply updates in batches of a single timestamp. If another
                         // catalog wrote a fence token at one timestamp and then updates in a new
                         // format at a later timestamp, then we want to apply the fence token
@@ -585,10 +612,18 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                             self.apply_updates(updates)?;
                             self.maybe_consolidate();
                         }
+                        if terminal && self.upper == target_upper {
+                            break;
+                        }
                     }
                     ListenEvent::Updates(batch_updates) => {
                         for update in batch_updates {
                             let update: StateUpdate<StateUpdateKindJson> = update.into();
+                            // Terminal synchronization discards the suffix of this continuous
+                            // listen, since the consumed handle must never follow it again.
+                            if terminal && update.ts >= target_upper {
+                                continue;
+                            }
                             updates.entry(update.ts).or_default().push(update);
                         }
                     }
@@ -750,7 +785,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     }
 }
 
-impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
+impl PersistCatalogState {
     /// Execute and return the results of `f` on the current catalog snapshot.
     ///
     /// Will return an error if the catalog has been fenced out.
@@ -758,6 +793,11 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
         &mut self,
         f: impl FnOnce(Snapshot) -> Result<T, CatalogError>,
     ) -> Result<T, CatalogError> {
+        self.sync_to_current_upper().await?;
+        f(self.cached_snapshot()?)
+    }
+
+    fn cached_snapshot(&self) -> Result<Snapshot, CatalogError> {
         fn apply<K, V>(map: &mut BTreeMap<K, V>, key: &K, value: &V, diff: Diff)
         where
             K: Ord + Clone,
@@ -781,9 +821,10 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
             }
         }
 
-        self.with_trace(|trace| {
+        {
             let mut snapshot = Snapshot::empty();
-            for (kind, ts, diff) in trace {
+            snapshot.read_protection_index = self.update_applier.read_protection_index.clone();
+            for (kind, ts, diff) in &self.snapshot {
                 let diff = *diff;
                 if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                     panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
@@ -883,9 +924,8 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     }
                 }
             }
-            f(snapshot)
-        })
-        .await
+            Ok(snapshot)
+        }
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -1145,7 +1185,7 @@ impl UnopenedPersistCatalogState {
         mode: Mode,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+    ) -> Result<Box<PersistCatalogState>, CatalogError> {
         // It would be nice to use `initial_ts` here, but it comes from the system clock, not the
         // timestamp oracle.
         let mut commit_ts = self.upper;
@@ -1473,9 +1513,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
+        Ok(self
+            .open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
             .boxed()
-            .await
+            .await?)
     }
 
     #[mz_ore::instrument]
@@ -1483,9 +1524,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, EpochMillis::MIN.into(), bootstrap_args)
+        Ok(self
+            .open_inner(Mode::Readonly, EpochMillis::MIN.into(), bootstrap_args)
             .boxed()
-            .await
+            .await?)
     }
 
     #[mz_ore::instrument]
@@ -1494,9 +1536,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Writable, initial_ts, bootstrap_args)
+        Ok(self
+            .open_inner(Mode::Writable, initial_ts, bootstrap_args)
             .boxed()
-            .await
+            .await?)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1612,12 +1655,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 struct CatalogStateInner {
     /// A trace of all catalog updates that can be consumed by some higher layer.
     updates: VecDeque<memory::objects::StateUpdate>,
+    read_protection_index: ReadProtectionIndex,
 }
 
 impl CatalogStateInner {
     fn new() -> CatalogStateInner {
         CatalogStateInner {
             updates: VecDeque::new(),
+            read_protection_index: ReadProtectionIndex::default(),
         }
     }
 }
@@ -1629,6 +1674,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
         current_fence_token: &mut FenceableToken,
         metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKind>>, FenceError> {
+        self.read_protection_index.apply_update(&update);
         if let Some(collection_type) = update.kind.collection_type() {
             metrics
                 .collection_entries
@@ -1668,6 +1714,75 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
 /// Production users should call [`Self::expire`] before dropping a [`PersistCatalogState`]
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
+
+/// An independent readonly acquisition consumed by exact-prefix reconstruction.
+#[derive(Debug)]
+pub struct CatalogSnapshotReader {
+    state: Box<PersistCatalogState>,
+}
+
+impl CatalogSnapshotReader {
+    /// Opens an ordinary readonly catalog without a deployment generation override.
+    pub async fn open(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+        version: semver::Version,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Self, CatalogError> {
+        let state = UnopenedPersistCatalogState::new(
+            persist_client,
+            organization_id,
+            version,
+            None,
+            Arc::new(Metrics::new(&mz_ore::metrics::MetricsRegistry::new())),
+        )
+        .await?
+        .open_inner(Mode::Readonly, EpochMillis::MIN.into(), bootstrap_args)
+        .await?;
+        Ok(Self { state })
+    }
+
+    /// Consumes the acquisition at exactly `exclusive_upper`, releasing resources on success or error.
+    ///
+    /// Open before capturing memory. The prefix excludes updates at the upper and later,
+    /// including later fences. Backwards requests and observed fences are errors.
+    pub async fn into_snapshot_at(
+        self,
+        exclusive_upper: Timestamp,
+    ) -> Result<crate::durable::CatalogSnapshot, CatalogError> {
+        let mut state = self.state;
+        let result = async {
+            state.fenceable_token.validate()?;
+            if exclusive_upper < state.upper {
+                return Err(DurableCatalogError::Internal(format!(
+                    "catalog prefix {exclusive_upper} predates acquisition upper {}",
+                    state.upper,
+                ))
+                .into());
+            }
+            state.sync_with_limit(exclusive_upper, true).await?;
+            Ok(crate::durable::CatalogSnapshot {
+                snapshot: state.cached_snapshot()?,
+                updates: state.update_applier.updates.drain(..).collect(),
+                upper: exclusive_upper,
+                deployment_generation: state
+                    .fenceable_token
+                    .token()
+                    .expect("opened catalog has a fence token")
+                    .deploy_generation,
+                is_bootstrap_complete: state.bootstrap_complete,
+            })
+        }
+        .await;
+        state.expire().await;
+        result
+    }
+
+    /// Releases the acquisition without extracting a snapshot.
+    pub async fn expire(self) {
+        self.state.expire().await;
+    }
+}
 
 impl PersistHandle<StateUpdateKind, CatalogStateInner> {
     /// Creates a transaction without validating pending catalog updates.
@@ -1887,7 +2002,7 @@ impl DurableCatalogState for PersistCatalogState {
             // If the transaction is empty then we don't error, even in read-only mode.
             // This is mostly for legacy reasons (i.e. with enough elbow grease this
             // behavior can be changed without breaking any fundamental assumptions).
-            if catalog.mode == Mode::Readonly {
+            if catalog.is_read_only() {
                 let updates: Vec<_> = StateUpdate::from_txn_batch(txn_batch).collect();
                 if !updates.is_empty() {
                     let collection_types: Vec<_> = updates

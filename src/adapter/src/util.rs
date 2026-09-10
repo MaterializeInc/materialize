@@ -378,6 +378,7 @@ impl ShouldTerminateGracefully for DataflowCreationError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
             DataflowCreationError::SinceViolation(_)
+            | DataflowCreationError::CompactionBoundViolation(_)
             | DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
             | DataflowCreationError::ReplicaMissing(_)

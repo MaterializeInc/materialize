@@ -34,7 +34,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::{IngestionDescription, SourceConnection};
+use mz_storage_types::sources::SourceConnection;
 use timely::progress::Antichain;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -527,11 +527,12 @@ impl Instance {
         let mut scheduling_preferences: Vec<(ObjectId, bool)> = Vec::new();
 
         for ingestion_id in self.active_ingestions.keys() {
-            let ingestion_description = self
-                .get_ingestion_description(ingestion_id)
-                .expect("missing ingestion description");
+            let ingestion = self
+                .get_ingestion_command(ingestion_id)
+                .expect("missing ingestion command");
 
-            let prefers_single_replica = ingestion_description
+            let prefers_single_replica = ingestion
+                .description
                 .desc
                 .connection
                 .prefers_single_replica();
@@ -613,13 +614,11 @@ impl Instance {
                 for object_id in object_ids {
                     match object_id {
                         ObjectId::Ingestion(id) => {
-                            ingestion_commands.push(RunIngestionCommand {
-                                id,
-                                description: self
-                                    .get_ingestion_description(&id)
-                                    .expect("missing ingestion description")
+                            ingestion_commands.push(
+                                self.get_ingestion_command(&id)
+                                    .expect("missing ingestion command")
                                     .clone(),
-                            });
+                            );
                         }
                         ObjectId::Export(id) => {
                             export_commands.push(RunSinkCommand {
@@ -646,17 +645,8 @@ impl Instance {
         }
     }
 
-    /// Returns the ingestion description for the given ingestion ID, if it
-    /// exists.
-    ///
-    /// This function searches through the command history to find the most
-    /// recent RunIngestionCommand for the specified ingestion ID and returns
-    /// its description.  Returns None if no ingestion with the given ID is
-    /// found.
-    pub fn get_ingestion_description(
-        &self,
-        id: &GlobalId,
-    ) -> Option<IngestionDescription<CollectionMetadata>> {
+    /// Returns the latest command for an active ingestion, including its remap permission.
+    fn get_ingestion_command(&self, id: &GlobalId) -> Option<&RunIngestionCommand> {
         if !self.active_ingestions.contains_key(id) {
             return None;
         }
@@ -664,7 +654,7 @@ impl Instance {
         self.history.iter().rev().find_map(|command| {
             if let StorageCommand::RunIngestion(ingestion) = command {
                 if &ingestion.id == id {
-                    Some(ingestion.description.clone())
+                    Some(ingestion.as_ref())
                 } else {
                     None
                 }

@@ -10,6 +10,7 @@
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
+use mz_catalog::durable::objects::MaintainedReadRequirement;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
@@ -770,10 +771,13 @@ impl Coordinator {
             },
         ];
         if self.catalog().state().catalog_read_protection_enabled() {
-            ops.push(catalog::Op::SetMaintainedReadRequirement {
-                id: global_id,
-                inputs: logical_inputs.storage_ids,
-                frontier: dataflow_as_of.as_option().copied(),
+            ops.push(catalog::Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: global_id,
+                    inputs: logical_inputs.storage_ids,
+                    frontier: dataflow_as_of.as_option().copied(),
+                }],
+                bounds: vec![],
             });
         }
 

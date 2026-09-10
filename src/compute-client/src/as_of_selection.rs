@@ -81,6 +81,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
+use differential_dataflow::lattice::Lattice;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_ore::collections::CollectionExt;
@@ -101,6 +102,7 @@ use tracing::{info, warn};
 pub fn run(
     dataflows: &mut [DataflowDescription<LirRelationExpr, ()>],
     read_policies: &BTreeMap<GlobalId, ReadPolicy>,
+    committed_index_bounds: &BTreeMap<GlobalId, Antichain<Timestamp>>,
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
@@ -138,6 +140,7 @@ pub fn run(
     // Apply hard constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
     ctx.apply_downstream_storage_constraints();
+    ctx.apply_committed_index_bounds(committed_index_bounds);
 
     // At this point all collections have as-of bounds that reflect what is required for
     // correctness. The current state isn't very usable though. In particular, most of the upper
@@ -497,6 +500,32 @@ impl<'a> Context<'a> {
         }
 
         // Propagate constraints upstream, restoring `AsOfBounds` invariant (2).
+        self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
+    fn apply_committed_index_bounds(&self, bounds: &BTreeMap<GlobalId, Antichain<Timestamp>>) {
+        for (id, collection) in &self.collections {
+            if !collection.is_index {
+                continue;
+            }
+            let Some(bound) = bounds.get(id) else {
+                continue;
+            };
+            // A saved permission below actual readability cannot be recovered. Replacement
+            // installs at the readable lower bound, never at a later soft preference, and
+            // seeds local governance there until durable publication catches up.
+            let lower = collection.bounds.borrow().lower.clone();
+            let upper = bound.join(&lower);
+            self.apply_constraint(
+                *id,
+                Constraint {
+                    type_: ConstraintType::Hard,
+                    bound_type: BoundType::Upper,
+                    frontier: &upper,
+                    reason: "committed index compaction bound",
+                },
+            );
+        }
         self.propagate_bounds_upstream(BoundType::Upper);
     }
 
@@ -928,7 +957,10 @@ mod tests {
             unimplemented!()
         }
 
-        fn compaction_frontiers(&self) -> BTreeMap<GlobalId, Antichain<Timestamp>> {
+        fn take_read_protection_frontiers(
+            &self,
+            _additional_ids: &BTreeSet<GlobalId>,
+        ) -> BTreeMap<GlobalId, (CollectionFrontiers, Antichain<Timestamp>)> {
             unimplemented!()
         }
 
@@ -1041,6 +1073,16 @@ mod tests {
             _bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
         ) -> Result<(), StorageError> {
             unimplemented!()
+        }
+
+        fn compaction_bound(
+            &self,
+            id: GlobalId,
+        ) -> Result<Option<Antichain<Timestamp>>, StorageError> {
+            self.0
+                .contains_key(&id)
+                .then_some(None)
+                .ok_or(StorageError::IdentifierMissing(id))
         }
 
         fn acquire_read_holds(
@@ -1168,6 +1210,7 @@ mod tests {
             dataflows: [ $( $export_id:literal <- $inputs:expr => $as_of:expr, )* ],
             current_time: $current_time:literal,
             $( read_policies: { $( $policy_id:literal: $policy:expr, )* }, )?
+            $( committed_bounds: { $( $bound_id:literal: $bound:expr, )* }, )?
             $( read_only: $read_only:expr, )?
         }) => {
             #[mz_ore::test]
@@ -1200,6 +1243,9 @@ mod tests {
                 super::run(
                     &mut dataflows,
                     &read_policies,
+                    &BTreeMap::from([
+                        $($( ($bound_id.parse().unwrap(), ts_to_frontier($bound)), )*)?
+                    ]),
                     &storage_frontiers,
                     $current_time.into(),
                     read_only,
@@ -1215,6 +1261,35 @@ mod tests {
             }
         };
     }
+
+    testcase!(committed_index_caps, {
+        storage: { "s1": (10, 100), },
+        dataflows: [
+            "u1" <- ["s1"] => 30,
+            "u2" <- ["u1"] => 30,
+            "u3" <- ["s1"] => 90,
+        ],
+        current_time: 90,
+        committed_bounds: { "u2": 30, },
+    });
+
+    testcase!(committed_index_replacement, {
+        storage: { "s1": (20, 100), },
+        dataflows: [
+            "u1" <- ["s1"] => 20,
+            "u2" <- ["u1"] => 20,
+        ],
+        current_time: 90,
+        committed_bounds: { "u2": 10, },
+    });
+
+    testcase!(committed_index_dropped_input, {
+        storage: { "s1": (SEALED, SEALED), },
+        dataflows: [ "u1" <- ["s1"] => SEALED, ],
+        current_time: 90,
+        committed_bounds: { "u1": 10, },
+        read_only: true,
+    });
 
     testcase!(upstream_storage_constraints, {
         storage: {

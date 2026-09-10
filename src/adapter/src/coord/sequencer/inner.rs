@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use differential_dataflow::lattice::Lattice;
 use futures::future::{BoxFuture, FutureExt};
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
@@ -24,6 +25,7 @@ use mz_adapter_types::dyncfgs::{
     ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE,
     READ_THEN_WRITE_MAX_DEPENDENCIES,
 };
+use mz_catalog::durable::objects::MaintainedReadRequirement;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -2272,10 +2274,10 @@ impl Coordinator {
                         ops,
                         state: _,
                         side_effects,
-                        ddl_revision,
+                        transient_revision,
                         snapshot: _,
                     } => {
-                        if *ddl_revision != self.catalog().ddl_revision() {
+                        if *transient_revision != self.catalog().transient_revision() {
                             return Err(AdapterError::DDLTransactionRace);
                         }
                         // Commit all of our queued ops.
@@ -3436,12 +3438,22 @@ impl Coordinator {
             storage_ids: BTreeSet::from_iter([plan.sink.from]),
             compute_ids: BTreeMap::new(),
         };
-        let read_hold = self.acquire_read_holds(&id_bundle);
+        let mut read_hold = self.acquire_read_holds(&id_bundle);
+        let mut threshold = read_hold.least_valid_read();
+        if self.catalog().state().catalog_read_protection_enabled() {
+            let metadata = self.catalog().state().storage_metadata();
+            let Some(bound) = metadata.compaction_bounds.get(&plan.sink.from) else {
+                ctx.retire(Err(AdapterError::UnreadableSinkCollection));
+                return;
+            };
+            threshold.join_assign(bound);
+        }
 
-        let Some(read_ts) = read_hold.least_valid_read().into_option() else {
+        let Some(read_ts) = threshold.into_option() else {
             ctx.retire(Err(AdapterError::UnreadableSinkCollection));
             return;
         };
+        read_hold.downgrade(read_ts);
 
         let otel_ctx = OpenTelemetryContext::obtain();
         let from_item_id = self.catalog().resolve_item_id(&plan.sink.from);
@@ -3547,6 +3559,23 @@ impl Coordinator {
             &*as_of,
             &**write_frontier
         );
+        let mut ops = Vec::new();
+        if self.catalog().state().catalog_read_protection_enabled() {
+            let requirement = &self.catalog().state().maintained_read_requirements()[&global_id];
+            let mut frontier: Antichain<_> = requirement.frontier.into_iter().collect();
+            // Kafka reports this frontier only after committing its progress shard.
+            // Retain the predecessor so no pending output timestamp is skipped.
+            let predecessor = write_frontier.iter().map(|t| t.saturating_sub(1)).collect();
+            frontier.join_assign(&predecessor);
+            ops.push(catalog::Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: global_id,
+                    inputs: requirement.inputs.clone(),
+                    frontier: frontier.as_option().copied(),
+                }],
+                bounds: vec![],
+            });
+        }
 
         // Parse the `create_sql` so we can update it to the new sink definition.
         //
@@ -3612,11 +3641,11 @@ impl Coordinator {
             commit_interval: sink_plan.commit_interval,
         };
 
-        let ops = vec![catalog::Op::UpdateItem {
+        ops.push(catalog::Op::UpdateItem {
             id: item_id,
             name: entry.name().clone(),
             to_item: CatalogItem::Sink(new_sink),
-        }];
+        });
 
         match self
             .catalog_transact(Some(ctx.ctx().session_mut()), ops)

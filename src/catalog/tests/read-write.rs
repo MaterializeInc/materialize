@@ -883,6 +883,183 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
     }
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_exact_prefix() {
+    let persist = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let builder = TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization_id)
+        .with_default_deploy_generation();
+    let mut writer = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = writer.sync_to_current_updates().await.unwrap();
+    let shard = writer.shard_id();
+    async fn resources(persist: &PersistClient, shard: ShardId) -> (usize, usize) {
+        let state = serde_json::to_value(
+            persist
+                .inspect_shard::<mz_repr::Timestamp>(&shard)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        (
+            state["leased_readers"].as_object().unwrap().len(),
+            state["writers"].as_object().unwrap().len(),
+        )
+    }
+    let initial_resources = resources(&persist, shard).await;
+    let reader = |persist: PersistClient| async move {
+        mz_catalog::durable::CatalogSnapshotReader::open(
+            persist,
+            organization_id,
+            semver::Version::new(0, 0, 0),
+            &test_bootstrap_args(),
+        )
+        .await
+        .unwrap()
+    };
+    let exact = reader(persist.clone()).await;
+    let before_fence = reader(persist.clone()).await;
+    let at_fence = reader(persist.clone()).await;
+    let live = reader(persist.clone()).await;
+    let backwards = reader(persist.clone()).await;
+    let opened_upper = writer.current_upper().await;
+    assert!(
+        backwards
+            .into_snapshot_at(opened_upper.saturating_sub(1))
+            .await
+            .is_err()
+    );
+
+    let input = GlobalId::User(1000);
+    let output = GlobalId::User(1001);
+    let mut txn = writer.transaction().await.unwrap();
+    txn.insert_collection_metadata(
+        [input, output]
+            .into_iter()
+            .map(|id| (id, ShardId::new()))
+            .collect(),
+    )
+    .unwrap();
+    txn.set_collection_compaction_bound(input, Some(10.into()))
+        .unwrap();
+    txn.set_maintained_read_requirement(output, BTreeSet::from([input]), Some(10.into()))
+        .unwrap();
+    txn.insert_item(
+        CatalogItemId::User(2000),
+        22_000,
+        GlobalId::User(2000),
+        SchemaId::User(0),
+        "temporary_view",
+        "CREATE VIEW temporary_view AS SELECT 1".into(),
+        RoleId::User(1),
+        vec![],
+        BTreeMap::new(),
+        Some(Uuid::new_v4()),
+    )
+    .unwrap();
+    let expected = txn.current_snapshot();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+
+    let expected_upper = writer.current_upper().await;
+    let replayed = reader(persist.clone()).await;
+    assert_eq!(
+        replayed
+            .into_snapshot_at(expected_upper)
+            .await
+            .unwrap()
+            .snapshot,
+        expected
+    );
+    let mut txn = writer.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(input, Some(20.into()))
+        .unwrap();
+    txn.set_maintained_read_requirement(output, BTreeSet::from([input]), None)
+        .unwrap();
+    txn.remove_ephemeral_items();
+    txn.get_and_increment_id(USER_ITEM_ALLOC_KEY.into())
+        .unwrap();
+    let changed = txn.current_snapshot();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let later_upper = writer.current_upper().await;
+    assert!(later_upper > expected_upper);
+
+    // Keep publishing while extraction consumes the earlier exclusive prefix.
+    let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+    let (published, publishing) = tokio::sync::oneshot::channel();
+    let publisher = mz_ore::task::spawn(|| "catalog-prefix-publisher", async move {
+        let mut published = Some(published);
+        while matches!(
+            stopped.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ) {
+            let upper = writer.current_upper().await.step_forward();
+            writer.advance_upper(upper).await.unwrap();
+            if let Some(published) = published.take() {
+                let _ = published.send(());
+            }
+            tokio::task::yield_now().await;
+        }
+        writer
+    });
+    publishing.await.unwrap();
+    let owned = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        exact.into_snapshot_at(expected_upper),
+    )
+    .await;
+    let _ = stop.send(());
+    let writer = publisher.await;
+    let owned = owned
+        .expect("extraction must not wait for publication to stop")
+        .unwrap();
+    assert_eq!(owned.upper, expected_upper);
+    assert_eq!(owned.snapshot, expected);
+    assert!(!owned.updates.is_empty());
+    assert!(
+        owned
+            .updates
+            .iter()
+            .all(|update| update.ts < expected_upper)
+    );
+    assert_eq!(
+        live.into_snapshot_at(later_upper).await.unwrap().snapshot,
+        changed
+    );
+    let mut next_writer = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let fenced_upper = next_writer.current_upper().await;
+    assert!(matches!(
+        at_fence.into_snapshot_at(fenced_upper).await,
+        Err(CatalogError::Durable(DurableCatalogError::Fence(_)))
+    ));
+    let before_fence = before_fence.into_snapshot_at(expected_upper).await.unwrap();
+    assert_eq!(before_fence.snapshot, expected);
+    assert_eq!(before_fence.updates, owned.updates);
+    next_writer.expire().await;
+    assert_eq!(resources(&persist, shard).await, initial_resources);
+    writer.expire().await;
+
+    let unused = reader(persist.clone()).await;
+    unused.expire().await;
+    assert_eq!(resources(&persist, shard).await, (0, 0));
+}
+
 /// Verifies that computing next IDs from max existing catalog items gives
 /// the correct baseline for DDL detection, even when the allocator counter
 /// has been advanced far ahead by batch allocation (as IdPool does).
@@ -1161,6 +1338,255 @@ async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
 
     Box::new(writer).expire().await;
     Box::new(reader).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_committed_row_traffic() {
+    use mz_repr::adt::jsonb::Jsonb;
+    use mz_storage_types::sources::SourceData;
+
+    fn traffic(registry: &MetricsRegistry) -> BTreeMap<(String, String), f64> {
+        registry
+            .gather()
+            .into_iter()
+            .filter(|family| {
+                matches!(
+                    family.name(),
+                    "mz_catalog_committed_updates" | "mz_catalog_committed_update_bytes"
+                )
+            })
+            .flat_map(|family| {
+                family
+                    .get_metric()
+                    .iter()
+                    .map(|metric| {
+                        assert_eq!(metric.get_label().len(), 1);
+                        let label = &metric.get_label()[0];
+                        assert_eq!(label.name(), "kind");
+                        (
+                            (family.name().to_owned(), label.value().to_owned()),
+                            metric.get_counter().as_ref().unwrap().value(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn packed_bytes(kind: proto::StateUpdateKind, tag: &str) -> f64 {
+        let json = serde_json::to_value(kind).unwrap();
+        assert_eq!(json["kind"], tag);
+        let source = SourceData(Ok(Jsonb::from_serde_json(json).unwrap().into_row()));
+        let bytes = source.0.unwrap().byte_len();
+        assert!(bytes > 0);
+        f64::from(u32::try_from(bytes).unwrap())
+    }
+
+    let registry = MetricsRegistry::new();
+    let metrics = Arc::new(Metrics::new(&registry));
+    let zero = traffic(&registry);
+    assert_eq!(zero.len(), 6);
+    for kind in ["compaction_bound", "maintained_read_requirement", "other"] {
+        for metric in [
+            "mz_catalog_committed_updates",
+            "mz_catalog_committed_update_bytes",
+        ] {
+            assert_eq!(zero[&(metric.to_owned(), kind.to_owned())], 0.0);
+        }
+    }
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation()
+        .with_metrics(metrics);
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let input = GlobalId::User(1000);
+    let output = GlobalId::User(1001);
+
+    let mut previous_bytes = [0.0; 2];
+    for frontier in [10u64, 20] {
+        let before = traffic(&registry);
+        let mut txn = state.transaction().await.unwrap();
+        // A storage collection's first bound must be published with its metadata.
+        if frontier == 10 {
+            txn.insert_collection_metadata(
+                [input, output]
+                    .into_iter()
+                    .map(|id| (id, ShardId::new()))
+                    .collect(),
+            )
+            .unwrap();
+        }
+        txn.set_collection_compaction_bound(input, Some(frontier.into()))
+            .unwrap();
+        txn.set_maintained_read_requirement(output, BTreeSet::from([input]), Some(frontier.into()))
+            .unwrap();
+        let snapshot = txn.current_snapshot();
+        let metadata_bytes = if frontier == 10 {
+            snapshot
+                .storage_collection_metadata
+                .into_iter()
+                .map(|(key, value)| {
+                    packed_bytes(
+                        proto::StateUpdateKind::StorageCollectionMetadata(
+                            proto::StorageCollectionMetadata { key, value },
+                        ),
+                        "StorageCollectionMetadata",
+                    )
+                })
+                .sum::<f64>()
+        } else {
+            0.0
+        };
+        let (key, value) = snapshot
+            .collection_compaction_bounds
+            .into_iter()
+            .next()
+            .unwrap();
+        let bound_bytes = packed_bytes(
+            proto::StateUpdateKind::CollectionCompactionBound(proto::CollectionCompactionBound {
+                key,
+                value,
+            }),
+            "CollectionCompactionBound",
+        );
+        let (key, value) = snapshot
+            .maintained_read_requirements
+            .into_iter()
+            .next()
+            .unwrap();
+        let requirement_bytes = packed_bytes(
+            proto::StateUpdateKind::MaintainedReadRequirement(proto::MaintainedReadRequirement {
+                key,
+                value,
+            }),
+            "MaintainedReadRequirement",
+        );
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.unwrap();
+        let after = traffic(&registry);
+        for (i, (kind, bytes)) in [
+            ("compaction_bound", bound_bytes),
+            ("maintained_read_requirement", requirement_bytes),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let updates_key = ("mz_catalog_committed_updates".to_owned(), kind.to_owned());
+            let bytes_key = (
+                "mz_catalog_committed_update_bytes".to_owned(),
+                kind.to_owned(),
+            );
+            assert_eq!(
+                after[&updates_key] - before[&updates_key],
+                if frontier == 10 { 1.0 } else { 2.0 }
+            );
+            assert_eq!(
+                after[&bytes_key] - before[&bytes_key],
+                bytes + previous_bytes[i]
+            );
+            previous_bytes[i] = bytes;
+        }
+        for (metric, expected) in [
+            (
+                "mz_catalog_committed_updates",
+                if frontier == 10 { 2.0 } else { 0.0 },
+            ),
+            ("mz_catalog_committed_update_bytes", metadata_bytes),
+        ] {
+            let key = (metric.to_owned(), "other".to_owned());
+            assert_eq!(after[&key] - before[&key], expected);
+        }
+    }
+
+    let before = traffic(&registry);
+    let mut txn = state.transaction().await.unwrap();
+    txn.insert_user_database("traffic_db", RoleId::User(1), Vec::new(), &HashSet::new())
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let after = traffic(&registry);
+    for (key, value) in &before {
+        if key.1 == "other" {
+            assert!(after[key] > *value);
+        } else {
+            assert_eq!(after[key], *value);
+        }
+    }
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(input, Some(20.into()))
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    assert_eq!(traffic(&registry), after);
+
+    let mut reader = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = reader.sync_to_current_updates().await.unwrap();
+    let mut txn = reader.transaction().await.unwrap();
+    txn.set_maintained_read_requirement(output, BTreeSet::from([input]), Some(30.into()))
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    assert!(matches!(
+        txn.commit(ts).await.unwrap_err(),
+        CatalogError::Durable(DurableCatalogError::NotWritable(_))
+    ));
+    assert_eq!(traffic(&registry), after);
+
+    let mut savepoint = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = savepoint.sync_to_current_updates().await.unwrap();
+    let mut txn = savepoint.transaction().await.unwrap();
+    txn.set_maintained_read_requirement(output, BTreeSet::from([input]), Some(30.into()))
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    assert_eq!(traffic(&registry), after);
+
+    // Fence a transaction after it is prepared, so its durable append fails.
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_maintained_read_requirement(output, BTreeSet::from([input]), Some(30.into()))
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let replacement = builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let before_failure = traffic(&registry);
+    let ts = txn.upper();
+    assert!(matches!(
+        txn.commit(ts).await.unwrap_err(),
+        CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+    ));
+    assert_eq!(traffic(&registry), before_failure);
+    Box::new(replacement).expire().await;
+    Box::new(savepoint).expire().await;
+    Box::new(reader).expire().await;
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]

@@ -25,4 +25,3 @@ Never regenerate full Cargo.lock. When changing deps:
 ## Licensing
 
 Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). New dep with new license not already allowed: add SPDX identifier to both.
-

@@ -15,6 +15,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
@@ -272,7 +273,7 @@ impl Coordinator {
             ops:
                 TransactionOps::DDL {
                     ops: txn_ops,
-                    ddl_revision: txn_revision,
+                    transient_revision: txn_revision,
                     state: txn_state,
                     snapshot: txn_snapshot,
                     side_effects: _,
@@ -290,7 +291,7 @@ impl Coordinator {
             return result;
         };
 
-        if self.catalog().ddl_revision() != *txn_revision {
+        if self.catalog().transient_revision() != *txn_revision {
             self.metrics
                 .catalog_transact_seconds
                 .with_label_values(&["catalog_transact_with_ddl_transaction"])
@@ -379,7 +380,7 @@ impl Coordinator {
                 ops: combined_ops,
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
-                ddl_revision: self.catalog().ddl_revision(),
+                transient_revision: self.catalog().transient_revision(),
                 snapshot: Some(new_snapshot),
             });
 
@@ -1104,9 +1105,6 @@ impl Coordinator {
         // The AsOf is used to determine at what time to snapshot reading from
         // the persist collection.  This is primarily relevant when we do _not_
         // want to include the snapshot in the sink.
-        //
-        // We choose the smallest as_of that is legal, according to the sinked
-        // collection's since.
         let id_bundle = crate::CollectionIdBundle {
             storage_ids: btreeset! {sink.from},
             compute_ids: btreemap! {},
@@ -1120,7 +1118,14 @@ impl Coordinator {
         // TODO: Maybe in the future, pass those holds on to storage, to hold on
         // to them and downgrade when possible?
         let read_holds = self.acquire_read_holds(&id_bundle);
-        let as_of = read_holds.least_valid_read();
+        let mut as_of = read_holds.least_valid_read();
+        if self.catalog().state().catalog_read_protection_enabled() {
+            let requirement = &self.catalog().state().maintained_read_requirements()[&id];
+            let committed = requirement.frontier.into_iter().collect();
+            // A read-only catalog snapshot can lag the leased since. Actual holds,
+            // not the snapshot's permission, determine what remains executable.
+            as_of.join_assign(&committed);
+        }
 
         let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
@@ -1396,8 +1401,7 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
-                | Op::SetCollectionCompactionBound { .. }
-                | Op::SetMaintainedReadRequirement { .. }
+                | Op::SetReadProtection { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}

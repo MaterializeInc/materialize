@@ -36,6 +36,7 @@ use mz_audit_log::VersionedEvent;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
+use mz_proto::RustType;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
@@ -1397,9 +1398,99 @@ impl DurableType for UnfinalizedShard {
 
 // Structs used internally to represent on-disk state.
 
+/// Structurally shared, derived lookups for changed-record read protection validation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReadProtectionIndex {
+    pub(crate) index_identity_counts: imbl::OrdMap<GlobalId, i64>,
+    pub(crate) active_consumers: imbl::OrdMap<GlobalId, imbl::OrdMap<GlobalId, i64>>,
+}
+
+impl ReadProtectionIndex {
+    /// Applies one committed typed update, exactly once, including during replay.
+    /// The projection is queryable after all updates at a timestamp have been applied.
+    pub(crate) fn apply_update(&mut self, update: &state_update::StateUpdate) {
+        use state_update::StateUpdateKind;
+        let diff = update.diff.into_inner();
+        match &update.kind {
+            StateUpdateKind::Item(_, value) => {
+                let value = ItemValue::from_proto(value.clone()).expect("valid item");
+                if value.item_type() == CatalogItemType::Index {
+                    self.update_identity(value.global_id, diff);
+                }
+            }
+            StateUpdateKind::SystemObjectMapping(key, value) => {
+                let key = GidMappingKey::from_proto(key.clone()).expect("valid mapping key");
+                if key.object_type == CatalogItemType::Index {
+                    let value = GidMappingValue::from_proto(value.clone()).expect("valid mapping");
+                    self.update_identity(value.global_id.into(), diff);
+                }
+            }
+            StateUpdateKind::IntrospectionSourceIndex(_, value) => {
+                let value = ClusterIntrospectionSourceIndexValue::from_proto(value.clone())
+                    .expect("valid introspection index");
+                self.update_identity(value.global_id.into(), diff);
+            }
+            StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                let key = MaintainedReadRequirementKey::from_proto(key.clone())
+                    .expect("valid requirement key");
+                let value = MaintainedReadRequirementValue::from_proto(value.clone())
+                    .expect("valid requirement");
+                self.update_requirement(key.id, &value, diff);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn update_identity(&mut self, id: GlobalId, diff: i64) {
+        let count = self.index_identity_counts.get(&id).copied().unwrap_or(0) + diff;
+        if count == 0 {
+            self.index_identity_counts.remove(&id);
+        } else {
+            self.index_identity_counts.insert(id, count);
+        }
+    }
+
+    pub(crate) fn update_requirement(
+        &mut self,
+        owner: GlobalId,
+        value: &MaintainedReadRequirementValue,
+        diff: i64,
+    ) {
+        if value.frontier.is_none() {
+            return;
+        }
+        for input in &value.inputs {
+            let mut owners = self
+                .active_consumers
+                .get(input)
+                .cloned()
+                .unwrap_or_default();
+            // Counts tolerate either ordering of replacement insertions and retractions.
+            let count = owners.get(&owner).copied().unwrap_or(0) + diff;
+            if count == 0 {
+                owners.remove(&owner);
+            } else {
+                owners.insert(owner, count);
+            }
+            if owners.is_empty() {
+                self.active_consumers.remove(input);
+            } else {
+                self.active_consumers.insert(*input, owners);
+            }
+        }
+    }
+
+    pub(crate) fn contains_index(&self, id: GlobalId) -> bool {
+        self.index_identity_counts
+            .get(&id)
+            .is_some_and(|count| *count > 0)
+    }
+}
+
 /// A snapshot of the current on-disk state.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
+    pub read_protection_index: ReadProtectionIndex,
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
     pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,

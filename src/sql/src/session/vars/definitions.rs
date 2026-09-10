@@ -960,11 +960,10 @@ pub static CATALOG_READ_PROTECTION_PUBLISH_INTERVAL: VarDefinition = VarDefiniti
     "catalog_read_protection_publish_interval",
     value!(Duration; Duration::from_secs(1)),
     "Sets the minimum delay after a catalog read protection publication completes before \
-     starting the next publication. Zero suspends publication and retains history without \
-     releasing protection. Used to measure the publication cadence and history retention \
-     tradeoff and to quiesce periodic metadata for consistency checks.",
+     starting the next publication. Longer intervals retain additional history.",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
 pub static PG_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(

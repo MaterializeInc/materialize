@@ -12,7 +12,7 @@
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{Histogram, IntGauge, IntGaugeVec};
+use prometheus::{Histogram, IntCounterVec, IntGauge, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -27,12 +27,34 @@ pub struct Metrics {
     pub allocate_id_seconds: Histogram,
     pub snapshot_consolidations: IntCounter,
     pub snapshot_max_entries: IntGauge,
+    /// Acknowledged row traffic through the catalog compare-and-append path, including bootstrap.
+    /// Each pair counts updates and packed row bytes, ordered by compaction bound, maintained
+    /// read requirement, and other kind. Each submitted row counts once regardless of its diff.
+    pub(crate) committed_row_traffic: [(IntCounter, IntCounter); 3],
 }
 
 impl Metrics {
     /// Returns a new [Metrics] instance connected to the given registry.
     pub fn new(registry: &MetricsRegistry) -> Self {
+        let updates: IntCounterVec = registry.register(metric!(
+            name: "mz_catalog_committed_updates",
+            help: "Number of catalog row updates in acknowledged compare-and-appends, including retractions and bootstrap writes.",
+            var_labels: ["kind"],
+        ));
+        let bytes: IntCounterVec = registry.register(metric!(
+            name: "mz_catalog_committed_update_bytes",
+            help: "Packed SourceData row bytes in acknowledged catalog compare-and-appends, including retractions and bootstrap writes. Excludes timestamps, diffs, Persist encoding, compression, and network framing. Not blob or network bytes.",
+            var_labels: ["kind"],
+        ));
+        let committed_row_traffic = ["compaction_bound", "maintained_read_requirement", "other"]
+            .map(|kind| {
+                (
+                    updates.with_label_values(&[kind]),
+                    bytes.with_label_values(&[kind]),
+                )
+            });
         Self {
+            committed_row_traffic,
             transactions_started: registry.register(metric!(
                 name: "mz_catalog_transactions_started",
                 help: "Total number of started transactions.",

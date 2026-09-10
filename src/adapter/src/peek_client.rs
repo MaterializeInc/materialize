@@ -253,8 +253,11 @@ impl PeekClient {
         // Session clients keep the coordinator loop alive. A dropped response
         // here therefore indicates an internal lifecycle bug, unlike a
         // background compute lookup racing coordinator shutdown.
-        let CatalogSnapshot { catalog } = self
-            .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+        let CatalogSnapshot { catalog, .. } = self
+            .call_coordinator(|tx| Command::CatalogSnapshot {
+                tx,
+                include_durable_upper: false,
+            })
             .await
             .expect("coordinator unexpectedly dropped catalog snapshot response");
         let metrics = self.coordinator_client.metrics();

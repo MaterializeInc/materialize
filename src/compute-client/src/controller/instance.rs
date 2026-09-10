@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
@@ -1477,7 +1478,7 @@ impl Instance {
         for export_id in dataflow.export_ids() {
             let shared = shared_collection_state
                 .remove(&export_id)
-                .unwrap_or_else(|| SharedCollectionState::new(as_of.clone()));
+                .unwrap_or_else(|| SharedCollectionState::new(as_of.clone(), None));
             let write_only = dataflow.sink_exports.contains_key(&export_id);
             let storage_sink = dataflow.persist_sink_ids().any(|id| id == export_id);
 
@@ -1742,6 +1743,8 @@ impl Instance {
             // If the collection is a copy to, stop tracking it. This ensures that the controller
             // ceases to produce `CopyToResponse`s` for this copy to.
             self.copy_tos.remove(id);
+
+            self.update_read_capabilities(*id, |caps| caps.replace_permission(None));
         }
 
         Ok(())
@@ -1872,6 +1875,12 @@ impl Instance {
             let new_since = new_policy.frontier(collection.write_frontier().borrow());
             let _ = collection.implied_read_hold.try_downgrade(new_since);
             collection.read_policy = Some(new_policy);
+            collection
+                .shared
+                .read_capabilities
+                .lock()
+                .expect("poisoned")
+                .mark_compaction_proposal_dirty();
         }
 
         Ok(())
@@ -1937,19 +1946,44 @@ impl Instance {
     }
 
     /// Apply a collection read hold change.
-    pub(super) fn apply_read_hold_change(
+    pub(super) fn apply_read_hold_change(&mut self, id: GlobalId, update: ChangeBatch<Timestamp>) {
+        self.update_read_capabilities(id, |_| update);
+    }
+
+    pub(super) fn apply_compaction_bound(&mut self, id: GlobalId, bound: Antichain<Timestamp>) {
+        self.update_read_capabilities(id, |caps| {
+            let permission = caps.permission.as_ref().expect("installed governed index");
+            if PartialOrder::less_than(permission, &bound) {
+                caps.replace_permission(Some(bound))
+            } else {
+                ChangeBatch::new()
+            }
+        });
+    }
+
+    fn update_read_capabilities(
         &mut self,
         id: GlobalId,
-        mut update: ChangeBatch<Timestamp>,
+        update: impl FnOnce(&mut ReadCapabilities) -> ChangeBatch<Timestamp>,
     ) {
         let Some(collection) = self.collections.get_mut(&id) else {
-            soft_panic_or_log!(
-                "read hold change for absent collection (id={id}, changes={update:?})"
-            );
+            soft_panic_or_log!("read capability change for absent collection (id={id})");
             return;
         };
 
-        let new_since = collection.shared.lock_read_capabilities(|caps| {
+        let new_since = {
+            let mut state = collection
+                .shared
+                .read_capabilities
+                .lock()
+                .expect("poisoned");
+            // Permission metadata and its count must change under the same lock. Otherwise a
+            // concurrent proposal could subtract a contribution that is not in the counts yet.
+            let mut update = update(&mut state);
+            if !update.is_empty() {
+                state.mark_compaction_proposal_dirty();
+            }
+            let caps = &mut state.holds;
             // Sanity check to prevent corrupted `read_capabilities`, which can cause hard-to-debug
             // issues (usually stuck read frontiers).
             let read_frontier = caps.frontier();
@@ -1973,13 +2007,14 @@ impl Instance {
 
             let changed = changes.count() > 0;
             changed.then(|| caps.frontier().to_owned())
-        });
+        };
 
         let Some(new_since) = new_since else {
             return; // read frontier did not change
         };
 
-        // Propagate read frontier update to dependencies.
+        // Catalog permission must constrain this frontier before releasing dependencies, not
+        // merely clip the command. Replicas need these inputs to recover the readable trace.
         for read_hold in collection.compute_dependencies.values_mut() {
             read_hold
                 .try_downgrade(new_since.clone())
@@ -2466,7 +2501,7 @@ impl Instance {
         // compute dependencies at frontiers that are held back by other read holds the caller
         // has previously taken.
         let collection = self.collection(id)?;
-        let since = collection.shared.lock_read_capabilities(|caps| {
+        let since = collection.shared.mutate_read_capabilities(|caps| {
             let since = caps.frontier().to_owned();
             caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
             since
@@ -2601,7 +2636,7 @@ impl CollectionState {
         let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_hold_tx);
 
         let updates = warmup_read_hold.since().iter().map(|t| (t.clone(), 1));
-        shared.lock_read_capabilities(|c| {
+        shared.mutate_read_capabilities(|c| {
             c.update_iter(updates);
         });
 
@@ -2696,23 +2731,24 @@ impl CollectionState {
 pub(super) struct SharedCollectionState {
     /// Accumulation of read capabilities for the collection.
     ///
-    /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
-    /// collection, including `implied_read_hold` and `warmup_read_hold`.
+    /// This accumulation contains all [`ReadHold`] capabilities, including `implied_read_hold`
+    /// and `warmup_read_hold`, plus the catalog permission contribution.
     ///
-    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_change`],
+    /// NOTE: This field may only be modified by [`Instance::update_read_capabilities`],
     /// [`Instance::acquire_read_hold`], and `ComputeController::acquire_read_hold`.
     /// Nobody else should modify read capabilities directly. Instead, collection users should
     /// manage read holds through [`ReadHold`] objects acquired through
     /// `ComputeController::acquire_read_hold`.
     ///
     /// TODO(teskje): Restructure the code to enforce the above in the type system.
-    read_capabilities: Arc<Mutex<MutableAntichain<Timestamp>>>,
+    read_capabilities: Arc<Mutex<ReadCapabilities>>,
     /// The write frontier of this collection.
     write_frontier: Arc<Mutex<Antichain<Timestamp>>>,
 }
 
 impl SharedCollectionState {
-    pub fn new(as_of: Antichain<Timestamp>) -> Self {
+    pub fn new(as_of: Antichain<Timestamp>, permission: Option<Antichain<Timestamp>>) -> Self {
+        let permission = permission.map(|bound| bound.join(&as_of));
         // A collection is not readable before the `as_of`.
         let since = as_of.clone();
         // A collection won't produce updates for times before the `as_of`.
@@ -2723,19 +2759,65 @@ impl SharedCollectionState {
         // [`CollectionState::new`].
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+        if let Some(bound) = &permission {
+            read_capabilities.update_iter(bound.iter().map(|time| (*time, 1)));
+        }
 
         Self {
-            read_capabilities: Arc::new(Mutex::new(read_capabilities)),
+            read_capabilities: Arc::new(Mutex::new(ReadCapabilities {
+                holds: read_capabilities,
+                permission,
+                dirty_compaction_proposals: None,
+            })),
             write_frontier: Arc::new(Mutex::new(upper)),
         }
     }
 
     pub fn lock_read_capabilities<F, R>(&self, f: F) -> R
     where
+        F: FnOnce(&MutableAntichain<Timestamp>) -> R,
+    {
+        let caps = self.read_capabilities.lock().expect("poisoned");
+        f(&caps.holds)
+    }
+
+    pub fn mutate_read_capabilities<F, R>(&self, f: F) -> R
+    where
         F: FnOnce(&mut MutableAntichain<Timestamp>) -> R,
     {
         let mut caps = self.read_capabilities.lock().expect("poisoned");
-        f(&mut *caps)
+        let result = f(&mut caps.holds);
+        caps.mark_compaction_proposal_dirty();
+        result
+    }
+
+    pub fn track_compaction_proposals(&self, id: GlobalId, dirty: Arc<Mutex<BTreeSet<GlobalId>>>) {
+        let mut caps = self.read_capabilities.lock().expect("poisoned");
+        if caps.permission.is_some() {
+            caps.dirty_compaction_proposals = Some((id, dirty));
+            caps.mark_compaction_proposal_dirty();
+        }
+    }
+
+    pub fn compaction_bound(&self) -> Option<Antichain<Timestamp>> {
+        self.read_capabilities
+            .lock()
+            .expect("poisoned")
+            .permission
+            .clone()
+    }
+
+    pub fn take_compaction_bound_proposal(&self) -> Option<Antichain<Timestamp>> {
+        let caps = self.read_capabilities.lock().expect("poisoned");
+        // Clear under the snapshot lock so a mutation cannot be acknowledged without
+        // being sampled.
+        if let Some((id, dirty)) = &caps.dirty_compaction_proposals {
+            dirty.lock().expect("poisoned").remove(id);
+        }
+        let permission = caps.permission.as_ref()?;
+        let mut holds = caps.holds.clone();
+        holds.update_iter(permission.iter().map(|time| (*time, -1)));
+        Some(holds.frontier().to_owned())
     }
 
     pub fn lock_write_frontier<F, R>(&self, f: F) -> R
@@ -2744,6 +2826,38 @@ impl SharedCollectionState {
     {
         let mut frontier = self.write_frontier.lock().expect("poisoned");
         f(&mut *frontier)
+    }
+}
+
+#[derive(Debug)]
+struct ReadCapabilities {
+    holds: MutableAntichain<Timestamp>,
+    permission: Option<Antichain<Timestamp>>,
+    dirty_compaction_proposals: Option<(GlobalId, Arc<Mutex<BTreeSet<GlobalId>>>)>,
+}
+
+impl ReadCapabilities {
+    fn mark_compaction_proposal_dirty(&self) {
+        if let Some((id, dirty)) = &self.dirty_compaction_proposals {
+            dirty.lock().expect("poisoned").insert(*id);
+        }
+    }
+
+    /// Replace permission metadata and return the corresponding count changes.
+    /// The caller must apply these changes before releasing the capability lock.
+    fn replace_permission(
+        &mut self,
+        permission: Option<Antichain<Timestamp>>,
+    ) -> ChangeBatch<Timestamp> {
+        let mut changes = ChangeBatch::new();
+        if let Some(old) = self.permission.take() {
+            changes.extend(old.into_iter().map(|time| (time, -1)));
+        }
+        if let Some(new) = &permission {
+            changes.extend(new.iter().map(|time| (*time, 1)));
+        }
+        self.permission = permission;
+        changes
     }
 }
 
@@ -3428,6 +3542,10 @@ impl Drop for ReplicaCollectionIntrospection {
         self.send(IntrospectionType::ReplicaFrontiers, updates);
     }
 }
+
+#[cfg(test)]
+#[path = "compaction_tests.rs"]
+mod compaction_tests;
 
 #[cfg(test)]
 mod tests {

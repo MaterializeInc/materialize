@@ -353,9 +353,18 @@ impl Coordinator {
                     drop(retire_notify);
                 }
 
-                Command::CatalogSnapshot { tx } => {
+                Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper,
+                } => {
+                    let durable_upper = if include_durable_upper {
+                        Some(self.catalog().current_upper_if_in_sync().await)
+                    } else {
+                        None
+                    };
                     let _ = tx.send(CatalogSnapshot {
                         catalog: self.owned_catalog(),
+                        durable_upper,
                     });
                 }
 
@@ -1411,7 +1420,7 @@ impl Coordinator {
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
                         let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let ddl_revision = self.catalog().ddl_revision();
+                        let transient_revision = self.catalog().transient_revision();
 
                         // Initialize our transaction with a set of empty ops, or return an error
                         // if we can't run a DDL transaction
@@ -1419,7 +1428,7 @@ impl Coordinator {
                         if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
                             ops: vec![],
                             state,
-                            ddl_revision,
+                            transient_revision,
                             side_effects: vec![],
                             snapshot: None,
                         }) {
