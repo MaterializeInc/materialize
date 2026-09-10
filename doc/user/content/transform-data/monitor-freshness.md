@@ -98,8 +98,23 @@ GROUP BY 1
 ORDER BY 1 DESC;
 ```
 
-For recurring or dashboard queries, stay on
+For recurring or dashboard queries that fit within the last 24 hours, stay on
 `mz_wallclock_global_lag_recent_history`.
+
+If you need historical data on a recurring basis, run the query from a separate
+cluster instead of the default `mz_catalog_server`. A slow scan of the unindexed
+relation can tie up `mz_catalog_server` for seconds at a time, and because it
+also serves the `SHOW` commands and catalog lookups behind the Console and
+interactive tooling, that slows catalog queries across your whole environment.
+These queries read only system catalog relations, so Materialize routes them to
+`mz_catalog_server` by default. Point the session at your own cluster and turn
+off catalog auto-routing so the query actually runs there:
+
+```mzsql
+CREATE CLUSTER freshness_monitoring (SIZE = '25cc');
+SET cluster = freshness_monitoring;
+SET auto_route_catalog_queries = false;
+```
 
 ## Summarize freshness with a CCDF
 
