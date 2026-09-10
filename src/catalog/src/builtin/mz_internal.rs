@@ -34,7 +34,8 @@ use crate::memory::objects::DataSourceDesc;
 use super::{
     ANALYTICS_SELECT, BuiltinConnection, BuiltinIndex, BuiltinMaterializedView, BuiltinSource,
     BuiltinTable, BuiltinView, Cardinality, LinkProperties, MONITOR_REDACTED_SELECT,
-    MONITOR_SELECT, Ontology, OntologyLink, PUBLIC_SELECT, SUPPORT_SELECT,
+    MONITOR_SELECT, Ontology, OntologyLink, PUBLIC_SELECT, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    SUPPORT_SELECT,
 };
 
 pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -4151,36 +4152,89 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     }),
 });
 
-pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_object_global_ids",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_OBJECT_GLOBAL_IDS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("global_id", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the object. Corresponds to `mz_objects.id`.",
+pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_object_global_ids",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_OBJECT_GLOBAL_IDS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("global_id", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the object. Corresponds to `mz_objects.id`.",
+            ),
+            ("global_id", "The global ID of the object."),
+        ]),
+        sql: Box::leak(
+            format!(
+                "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL global_id
+) AS
+WITH
+    -- `Item` rows carry user items, temporary items, and runtime-alterable builtins
+    items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_id(data->'value'->'global_id') AS global_id,
+            data->'value'->'extra_versions' AS extra_versions
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Item'
+    ),
+    -- Create a one to many mapping between an object and its global IDs. Tables and
+    -- materialized views are the only objects with multiple global IDs.
+    item_versions AS (
+        SELECT i.id, mz_internal.parse_catalog_id(v.version->'global_id') AS global_id
+        FROM items i
+        CROSS JOIN LATERAL jsonb_array_elements(i.extra_versions) AS v(version)
+    ),
+    builtin_mappings AS (
+        SELECT
+            's' || (data->'value'->>'catalog_id') AS id,
+            's' || (data->'value'->>'global_id') AS global_id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            -- Exclude runtime-alterable builtins since they're already included in `items`
+            data->'value'->>'fingerprint' != '{RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL}'
+    ),
+    introspection_source_indexes AS (
+        SELECT
+            'si' || (data->'value'->>'catalog_id') AS id,
+            'si' || (data->'value'->>'global_id') AS global_id
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'ClusterIntrospectionSourceIndex'
+    )
+SELECT id, global_id FROM items
+UNION ALL
+SELECT id, global_id FROM item_versions
+UNION ALL
+SELECT id, global_id FROM builtin_mappings
+UNION ALL
+SELECT id, global_id FROM introspection_source_indexes"
+            )
+            .into_boxed_str(),
         ),
-        ("global_id", "The global ID of the object."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "object_global_id",
-        description: "Mapping between CatalogItemId (SQL layer) and GlobalId (runtime layer)",
-        links: &const {
-            [OntologyLink {
-                name: "id_references",
-                target: "object",
-                properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "object_global_id",
+            description: "Mapping between CatalogItemId (SQL layer) and GlobalId (runtime layer)",
+            links: &const {
+                [OntologyLink {
+                    name: "id_references",
+                    target: "object",
+                    properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    });
 
 // TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
 pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
