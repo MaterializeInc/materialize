@@ -369,9 +369,8 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )
     where
-        // The builder accepts whatever `logic` gives it, so the push bound lives at the `give`
-        // call site, letting a caller push borrowed records into a columnar builder that has no
-        // owned-tuple `Push`.
+        // No push bound here: it lives at `logic`'s `give` call site, so a caller can push
+        // borrowed records into a columnar builder that has no owned-tuple `Push`.
         DCB: ContainerBuilder,
         L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, T, Diff, &mut Session<T, DCB>) -> usize
             + 'static,
@@ -644,11 +643,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// the fueled `flat_map` or `as_collection` method, depending on the flag
     /// [`ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION`].
     ///
-    /// The keyed path materializes the arrangement as the columnar edge, so an
-    /// arrangement-producing operator (Reduce, Threshold, bucketed TopK) whose
-    /// result is demanded as a collection carries columnar downstream. The
-    /// unkeyed path returns the unarranged `.collection` edge as-is, preserving
-    /// its variant.
+    /// The keyed path materializes the arrangement as the columnar edge. The unkeyed path
+    /// returns the unarranged `.collection` edge with its variant intact.
     pub fn as_specific_collection(
         &self,
         key: Option<&[LirScalarExpr]>,
@@ -777,8 +773,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         for<'a> BatchCursor<Tr>:
             Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
         <<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned: PartialEq,
-        // No push bound here: it lives at `logic`'s `give` call site, so a caller can push
-        // borrowed records into a columnar builder that has no owned-tuple `Push`.
         DCB: ContainerBuilder,
         // `logic` receives the key and value already decoded into a `DatumVecBorrow`. The decode
         // (and its arena/`DatumVec`) lives in the per-activation closure below, so it is scoped to
@@ -897,11 +891,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         for<'a> BatchCursor<Tr>:
             Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
         <<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned: PartialEq,
-        // The builder accepts whatever `logic` gives it, so the push bound lives at the `give`
-        // call site rather than here (see `flat_map_core_fallible`).
         DCB: ContainerBuilder,
-        // `logic` takes already-decoded datums; the decode lives in the per-activation closure
-        // below.
         L: for<'a, 'b> FnMut(
                 &'a mut DatumVecBorrow<'b>,
                 T,
@@ -1505,8 +1495,6 @@ where
         fuel: &mut usize,
         ok_output: &mut OutputBuilderSession<'_, C::Time, DCB>,
     ) where
-        // The builder accepts whatever `logic` gives it, so the push bound lives at the `give`
-        // call site rather than here.
         DCB: ContainerBuilder,
         L: FnMut(C::Key<'_>, C::Val<'_>, C::Time, C::Diff, &mut Session<C::Time, DCB>) -> usize,
     {
@@ -1902,17 +1890,8 @@ mod tests {
         assert_eq!(extract_row_updates(captured), expected);
     }
 
-    /// The shared arrangement->collection materialization carries the columnar
-    /// edge. Reduce, Threshold, and bucketed TopK emit arrangements; when their
-    /// result is demanded as a collection it flows through
-    /// `as_specific_collection`, so those outputs are columnar with
-    /// no `ColumnarToVec`.
-    ///
-    /// Correctness: the materialized rows must equal the arranged input. Keying
-    /// by column 0 and thinning the value to column 1 reconstructs the original
-    /// two-column row. No-decode is a by-inspection property: the fueled path
-    /// builds a `ColumnBuilder` via `flat_map_ok` and never calls
-    /// `columnar_to_vec`; the `into_vec` below is the capture harness only.
+    /// Keying by column 0 and thinning the value to column 1 reconstructs the original
+    /// two-column row. The `into_vec` below belongs to the capture harness.
     #[mz_ore::test]
     fn as_specific_collection_materializes_columnar() {
         let rows = test_rows();
@@ -1923,8 +1902,7 @@ mod tests {
             .collect();
         expected.sort();
 
-        // A populated set so the fueled-materialization flag resolves to its
-        // default (`true`); `ConfigSet::default()` alone would panic on lookup.
+        // A populated set, because `ConfigSet::default()` panics on lookup.
         let config_set = all_dyncfgs(ConfigSet::default());
         let (is_columnar, captured) = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
