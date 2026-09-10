@@ -314,6 +314,16 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
         }
     }
 
+    /// Resume queued maintenance without requesting another exertion allowance.
+    ///
+    /// Completion wakes the owner so it can accept input before starting further
+    /// maintenance. Incomplete work retains its fuel and waits for the read waker.
+    pub fn resume_maintenance(&mut self) {
+        if self.drive_maintenance() {
+            self.activate();
+        }
+    }
+
     /// Install the owning operator's wakeup before any maintenance can return pending.
     pub fn set_waker(&mut self, waker: Waker) {
         self.waker = Some(waker);

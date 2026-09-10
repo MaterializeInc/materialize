@@ -316,26 +316,23 @@ impl Wake for NotifyWake {
     }
 }
 
-/// Finish the outstanding native maintenance operation, yielding while it waits for I/O.
+/// Apply one exertion turn, yielding while its maintenance waits for I/O.
 ///
 /// This does not force all batches to compact. DD's exertion policy determines
 /// the work allowance. The caller must use the notification installed by
 /// `Spine::with_budget` and poll this future on the owning Timely worker.
-pub(super) async fn maintain<D, T, R>(state: &RefCell<NativeSpine<D, T, R>>, notify: &Notify)
+pub(super) async fn maintain<B>(state: &RefCell<vendor::spine::Spine<B>>, notify: &Notify)
 where
-    D: Columnar + 'static,
-    for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Default + Timestamp + Lattice + Ord,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>> + 'static,
+    B: differential_dataflow_next::trace::asynchronous::Batch + Clone + 'static,
 {
-    loop {
-        state.borrow_mut().exert();
-        if !state.borrow().maintenance_pending() {
-            return;
-        }
+    state.borrow_mut().exert();
+    while state.borrow().maintenance_pending() {
         // No trace borrow may cross this await. Reader compaction can change the
         // same spine while a read is pending, and its wakeup uses this notification.
         notify.notified().await;
+        // A read completion resumes the existing allowance. Calling `exert` here
+        // would grant more fuel and could keep the arranger from accepting input
+        // until an entire merge finishes.
+        state.borrow_mut().resume_maintenance();
     }
 }
