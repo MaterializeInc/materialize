@@ -71,14 +71,21 @@ where
         let mut batcher = Batcher::new(budget.clone());
         let mut chunker = ChunkChunker::<D, T, R>::default();
         let mut upper = Antichain::from_elem(T::minimum());
+        const INPUT_EVENTS_PER_TURN: usize = 32;
         loop {
-            let event = tokio::select! {
+            let mut event = tokio::select! {
+                biased;
                 _ = input.ready(), if !upper.is_empty() => input.next_sync(),
                 _ = notify.notified() => None,
             };
-            if let Some(event) = event {
-                match event {
-                    Event::Data(time, mut data) => {
+            let mut next_upper = None;
+            // Extra exertion can introduce virtual batches and change subsequent
+            // merge work. Amortize it over queued input, with a finite scheduling
+            // quantum so other operators still get a turn. The latest observed
+            // frontier suffices for sealing, including data read after it.
+            for index in 0..INPUT_EVENTS_PER_TURN {
+                match event.take() {
+                    Some(Event::Data(time, mut data)) => {
                         if cap.as_ref().is_none_or(|old| time.time() < old.time()) {
                             cap = Some(time);
                         }
@@ -87,31 +94,35 @@ where
                             batcher.push(std::mem::take(chunk)).await;
                         }
                     }
-                    Event::Progress(next) => {
-                        while let Some(chunk) = chunker.finish() {
-                            batcher.push(std::mem::take(chunk)).await;
-                        }
-                        if next != upper {
-                            let (chunks, description) = batcher.seal(next.clone()).await;
-                            let batch = Rc::new(ChunkBatch {
-                                chunks,
-                                description,
-                            });
-                            writer
-                                .insert(Rc::clone(&batch), cap.as_ref().map(|c| c.time().clone()));
-                            if let Some(time) = &cap {
-                                output.give(time, batch);
-                            }
-                            if let Some(t) = batcher.frontier().first() {
-                                cap.as_mut()
-                                    .expect("buffered data has a capability")
-                                    .downgrade(t);
-                            } else {
-                                cap = None;
-                            }
-                            upper = next;
-                        }
+                    Some(Event::Progress(next)) => next_upper = Some(next),
+                    None => break,
+                }
+                if index + 1 < INPUT_EVENTS_PER_TURN {
+                    event = input.next_sync();
+                }
+            }
+            if let Some(next) = next_upper {
+                while let Some(chunk) = chunker.finish() {
+                    batcher.push(std::mem::take(chunk)).await;
+                }
+                if next != upper {
+                    let (chunks, description) = batcher.seal(next.clone()).await;
+                    let batch = Rc::new(ChunkBatch {
+                        chunks,
+                        description,
+                    });
+                    writer.insert(Rc::clone(&batch), cap.as_ref().map(|c| c.time().clone()));
+                    if let Some(time) = &cap {
+                        output.give(time, batch);
                     }
+                    if let Some(t) = batcher.frontier().first() {
+                        cap.as_mut()
+                            .expect("buffered data has a capability")
+                            .downgrade(t);
+                    } else {
+                        cap = None;
+                    }
+                    upper = next;
                 }
             }
             maintain(&state, &notify).await;
@@ -126,6 +137,9 @@ where
         button.press_on_drop(),
     )
 }
+
+#[cfg(test)]
+mod operator_tests;
 
 #[cfg(test)]
 mod tests {
