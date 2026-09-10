@@ -671,6 +671,11 @@ pub struct RestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     /// a catalog can reject our whole request,
     /// even if we have our own storage credentials to fall back on.
     pub access_delegation: Option<IcebergAccessDelegation>,
+    /// Which object store the catalog's tables live in.
+    ///
+    /// Defaults to S3. A REST catalog does not tell us this, so a table backed
+    /// by GCS or ADLS is unreadable until the connection says so.
+    pub storage_provider: IcebergStorageProvider,
 }
 
 /// The value Materialize sends in the Iceberg REST `X-Iceberg-Access-Delegation`
@@ -725,6 +730,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<RestIcebergCatalog, R>
             auth: self.auth.into_inline_connection(&r),
             warehouse: self.warehouse,
             access_delegation: self.access_delegation,
+            storage_provider: self.storage_provider,
         }
     }
 }
@@ -744,6 +750,36 @@ impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
 pub enum IcebergCatalogType {
     Rest,
     S3TablesRest,
+}
+
+/// Which object store holds the data files of a REST catalog's tables.
+///
+/// The catalog protocol says nothing about this: a REST catalog hands back
+/// storage locations and credentials, and the client has to already know how to
+/// talk to that store. So it is configured per connection rather than
+/// discovered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergStorageProvider {
+    S3,
+    Gcs,
+    Adls,
+}
+
+impl IcebergStorageProvider {
+    /// The name as spelled in SQL.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IcebergStorageProvider::S3 => "s3",
+            IcebergStorageProvider::Gcs => "gcs",
+            IcebergStorageProvider::Adls => "adls",
+        }
+    }
+}
+
+impl Default for IcebergStorageProvider {
+    fn default() -> Self {
+        IcebergStorageProvider::S3
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -1109,14 +1145,25 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 };
 
                 (
-                    OpenDalStorageFactory::S3 {
+                    // The catalog tells us where the data lives but not what
+                    // kind of store it is, so the connection has to say.
+                    match rest.storage_provider {
                         // When used with MinIO, Polaris returns a config with:
                         //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
                         // `iceberg-rust` forwards these props to `opendal`. When the catalog
                         // vends instead, it returns per-table `storage-credentials` that
                         // `iceberg-rust` wires into the same FileIO.
                         // N.B. This is not confirmed to work with other catalog & storage implementations.
-                        customized_credential_load,
+                        IcebergStorageProvider::S3 => OpenDalStorageFactory::S3 {
+                            customized_credential_load,
+                        },
+                        // Both take their credentials from the catalog's
+                        // config, which `iceberg-rust` forwards to `opendal`
+                        // the same way. Neither has an equivalent of the S3
+                        // credential loader, so vended credentials for these
+                        // stores only work through those props.
+                        IcebergStorageProvider::Gcs => OpenDalStorageFactory::Gcs,
+                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls,
                     },
                     // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
                     // This means we ignore auth overrides from `/v1/config` (e.g. `oauth2-server-uri`).

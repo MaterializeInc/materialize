@@ -36,9 +36,10 @@ use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, CsrConnection,
     CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergAccessDelegation,
     IcebergCatalogAuth, IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType,
-    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
-    MySqlSslMode, PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog,
-    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
+    IcebergStorageProvider, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions,
+    MySqlConnection, MySqlSslMode, PostgresConnection, RestIcebergCatalog,
+    S3TablesRestIcebergCatalog, SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity,
+    Tunnel,
 };
 
 use crate::names::Aug;
@@ -50,6 +51,7 @@ use crate::session::vars;
 generate_extracted_config!(
     ConnectionOption,
     (AccessDelegation, IcebergAccessDelegation),
+    (StorageProvider, IcebergStorageProvider),
     (AccessKeyId, StringOrSecret),
     (AssumeRoleArn, String),
     (AssumeRoleSessionName, String),
@@ -199,6 +201,7 @@ pub(super) fn validate_options_per_connection_type(
             GcpConnection,
             Oauth2ServerUrl,
             Scope,
+            StorageProvider,
             Url,
             Warehouse,
         ],
@@ -711,6 +714,11 @@ impl ConnectionOptionExtracted {
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections do not support ACCESS DELEGATION"
                             );
                         }
+                        if self.storage_provider.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support STORAGE PROVIDER"
+                            );
+                        }
                         let Some(warehouse) = warehouse else {
                             sql_bail!(
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections must specify WAREHOUSE"
@@ -753,6 +761,18 @@ impl ConnectionOptionExtracted {
                                         "invalid CONNECTION: ICEBERG GCP CONNECTION does not support ACCESS DELEGATION"
                                     );
                                 }
+                                // A GCP connection authenticates to GCS, so the
+                                // store is already determined. Reject a
+                                // contradicting value rather than silently
+                                // overriding it.
+                                if let Some(provider) = self.storage_provider
+                                    && provider != IcebergStorageProvider::Gcs
+                                {
+                                    sql_bail!(
+                                        "invalid CONNECTION: ICEBERG GCP CONNECTION implies STORAGE PROVIDER 'gcs', not '{}'",
+                                        provider.as_str()
+                                    );
+                                }
                                 /// All BigLake Iceberg REST Catalogs use the same catalog URI.
                                 const BIGLAKE_CATALOG_URI: &str =
                                     "https://biglake.googleapis.com/iceberg/v1/restcatalog";
@@ -769,10 +789,19 @@ impl ConnectionOptionExtracted {
                             ),
                         };
 
+                        // A GCP connection only authenticates to GCS, so it
+                        // fixes the store regardless of what was written.
+                        let storage_provider = if matches!(auth, IcebergCatalogAuth::Gcp(_)) {
+                            IcebergStorageProvider::Gcs
+                        } else {
+                            self.storage_provider.unwrap_or_default()
+                        };
+
                         IcebergCatalogImpl::Rest(RestIcebergCatalog {
                             auth,
                             warehouse,
                             access_delegation: self.access_delegation,
+                            storage_provider,
                         })
                     }
                 };
