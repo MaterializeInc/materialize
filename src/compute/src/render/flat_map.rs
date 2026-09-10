@@ -111,6 +111,10 @@ where
                 // Buffer for extensions to `input_row`.
                 let mut table_func_output = Vec::new();
 
+                // Reused so a record's time and diff do not allocate per record.
+                let mut time = T::minimum();
+                let mut diff = Diff::ZERO;
+
                 let mut budget = budget;
 
                 input.for_each(|cap, data| {
@@ -121,12 +125,12 @@ where
                     let mut ok_session = ok_output.session_with_builder(&ok_cap);
                     let mut err_session = err_output.session_with_builder(&err_cap);
 
-                    // Rows are read from the borrowed column, never materialized
-                    // as owned `Row`s. Times and diffs are owned only to pass
-                    // them by reference.
+                    // Rows stay borrowed. The time and diff have to be owned to pass
+                    // them by reference, so they are copied into buffers rather than
+                    // built fresh: an iterative `T` owns a `PointStamp`'s allocation.
                     for (input_row, t, d) in data.borrow().into_index_iter() {
-                        let time = Columnar::into_owned(t);
-                        let diff = Columnar::into_owned(d);
+                        time.copy_from(t);
+                        diff.copy_from(d);
                         process_flat_map_row(
                             input_row,
                             &time,
