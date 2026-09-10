@@ -1410,9 +1410,8 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             .get(&self.config_set)
                             .try_into()
                             .expect("must fit");
-                        // Temporal bucketing operates on `Vec`: decode the edge
-                        // into it, then re-encode the result so this Union input
-                        // is a columnar edge like every other.
+                        // Temporal bucketing is `Vec`-internal, so decode in and
+                        // encode out, keeping this Union input a columnar edge.
                         let os = os.into_vec();
                         CollectionEdge::Columnar(vec_to_columnar(
                             T::maybe_apply_temporal_bucketing(
