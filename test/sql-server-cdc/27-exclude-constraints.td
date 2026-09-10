@@ -9,10 +9,12 @@
 
 #
 # EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS: excluded upstream constraints
-# are not recorded as Materialize keys. NOTE: SQL Server does not allow
-# dropping a PRIMARY KEY while CDC is enabled, and upstream ALTER COLUMN still
-# errors the table regardless of these options, so this test covers key
-# recording and nullability only.
+# are not recorded as Materialize keys, so dropping them upstream is a
+# non-event instead of stalling the table. NOTE: SQL Server does not allow
+# dropping a PRIMARY KEY while CDC is enabled, so the drop scenarios use UNIQUE
+# constraints. Upstream ALTER COLUMN still errors the table regardless of these
+# options, so EXCLUDE ALL CONSTRAINTS is checked for key recording and
+# nullability only.
 #
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -41,6 +43,10 @@ CREATE TABLE t27_all (id INT NOT NULL, email VARCHAR(64) NOT NULL, CONSTRAINT t2
 INSERT INTO t27_all VALUES (1, 'a@b.c');
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't27_all', @role_name = 'SA', @supports_net_changes = 0;
 
+CREATE TABLE t27_stall (id INT NOT NULL, wallet VARCHAR(64) NOT NULL, CONSTRAINT t27_stall_pk PRIMARY KEY (id), CONSTRAINT t27_stall_uq UNIQUE (wallet));
+INSERT INTO t27_stall VALUES (1, 'a');
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't27_stall', @role_name = 'SA', @supports_net_changes = 0;
+
 > CREATE SOURCE t27_source FROM SQL SERVER CONNECTION sql_server_test_27_connection;
 
 #
@@ -57,7 +63,8 @@ contains:EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS
 
 #
 # Excluding a named UNIQUE constraint: the PRIMARY KEY survives, the excluded
-# constraint is not recorded as a key.
+# constraint is not recorded as a key, and its later upstream drop is a
+# non-event.
 #
 
 > CREATE TABLE t27_uniq FROM SOURCE t27_source (REFERENCE t27_uniq)
@@ -73,6 +80,15 @@ contains:EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS
 
 > SELECT create_sql LIKE '%EXCLUDE CONSTRAINTS%t27_uq_wallet%' FROM (SHOW CREATE TABLE t27_uniq);
 true
+
+$ sql-server-execute name=sql-server
+ALTER TABLE t27_uniq DROP CONSTRAINT t27_uq_wallet;
+INSERT INTO t27_uniq VALUES (3, 'a');
+
+> SELECT * FROM t27_uniq;
+1 a
+2 b
+3 a
 
 #
 # EXCLUDE ALL CONSTRAINTS: no keys, every column nullable.
@@ -94,13 +110,14 @@ email true
 
 # Replication still works on both tables.
 $ sql-server-execute name=sql-server
-INSERT INTO t27_uniq VALUES (3, 'c');
+INSERT INTO t27_uniq VALUES (4, 'c');
 INSERT INTO t27_all VALUES (2, 'd@e.f');
 
 > SELECT * FROM t27_uniq;
 1 a
 2 b
-3 c
+3 a
+4 c
 
 > SELECT * FROM t27_all;
 1 a@b.c
@@ -118,6 +135,35 @@ INSERT INTO t27_all VALUES (2, 'd@e.f');
 {id}
 
 > DROP TABLE t27_uniq_empty;
+
+#
+# A non-excluded UNIQUE constraint dropped upstream still stalls the table,
+# with an error that names the constraint and the recovery workflow.
+#
+
+> CREATE TABLE t27_stall FROM SOURCE t27_source (REFERENCE t27_stall);
+
+> SELECT * FROM t27_stall;
+1 a
+
+$ sql-server-execute name=sql-server
+ALTER TABLE t27_stall DROP CONSTRAINT t27_stall_uq;
+INSERT INTO t27_stall VALUES (2, 'a');
+
+! SELECT * FROM t27_stall;
+contains:incompatible schema change on dbo.t27_stall: UNIQUE constraint "t27_stall_uq" (wallet) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('t27_stall_uq')) before the upstream drop
+
+# Recovery: a replacement table snapshots the current upstream schema, which no
+# longer has the constraint, so no exclusion is needed. Then drop the errored
+# table.
+> CREATE TABLE t27_stall_v2 FROM SOURCE t27_source (REFERENCE t27_stall);
+
+> SELECT * FROM t27_stall_v2;
+1 a
+2 a
+
+> DROP TABLE t27_stall;
 
 #
 # Feature flag: the options are rejected when disabled.
