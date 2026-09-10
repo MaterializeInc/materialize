@@ -20,7 +20,9 @@
 //! Reconcilers additionally report their own [steps](Metrics::step). A step is
 //! the only level at which "there was nothing to do" is distinguishable from
 //! "the desired state was reached", since the reconciler interface reports both
-//! as success.
+//! as success. A reconciler that tracks a lifecycle of its own reports it with
+//! [`Publisher::publish`], which is the same event machinery pointed at
+//! transitions rather than failures.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
