@@ -150,5 +150,26 @@ Loki for logs, a Prometheus-compatible store for metrics, and Grafana at a real
 hostname with TLS, along with dashboards and alert rules. It is yours, under your
 retention, and you can point your own tools at it.
 
-The same set of logs and metrics is emitted both to your stack and toX]\X[^KÛÈ]X]\X[^HØ[[Û]Ü[Ý\ÜH\Þ[Y[Ù[Ú]]H]H\È^ÛYY]H\XØ][Û][]\[[\YÛBØ^HÝ]ÛÈÝË[][]HÛH[Ý\X\È[Y]ÜÈ\È]\Ü][[ÈHÙÂÜHY]XËÈÈ\ÜY\ÂX]\X[^HÙY\È[Ý\[\ÛY[Ý\[\Z[È\Ú[Û\ÜY\ÈHØ[YBØ^H\ÈX]\X[^HÛÝYXÝ]ÙYZÛK][ÛHHX]\X[^HÛÛÛ[K\ÜY\È\HÛ[ËÛÈH]È[Ý[ÙHÛÛY\È\[ÛÜÚYHHÛÛBYÜHHÛÛH\È[[ÝY[[Ý\XØÛÝ[YYÈ[ÝYÚXYÛÛHÜÝXZÜ\Ú[ÛÈ\HÝÚÚ\Y[ÝÛÜY\È\HÝÝ\ÜYÈÈÝ\ÛÝYÂSÐÈ\È[][ÜY[ÛÐÔ\ÝÚ]UÔÈÈÛÝÎÈ^\H\ÈÛBØYX\ÙYHÐSÐÈÛÐÔJØ[ØËØ[ØËYØÜYYÊKÈÈYY[ÂÛÛXÝ[Ý\X]\X[^H\\Ù[]]KÜXXÚBÓX]\X[^HÝ\ÜX[WJÎËÛX]\X[^KÛÛKØÛÛXÝ
-K
+The same set of logs and metrics is emitted both to your stack and to
+Materialize, so that Materialize can monitor and support the deployment.
+Sensitive data is excluded at the application level rather than filtered on the
+way out, so row-level data from your tables and views is never written into a log
+or a metric.
+
+## Upgrades
+
+Materialize keeps your environment current, applying version upgrades the same
+way as Materialize Cloud: about weekly, driven from the Materialize control
+plane. Upgrades are rolling, so a new instance comes up alongside the old one
+before the old one is removed, and your account needs enough headroom for both.
+Major versions are not skipped, and downgrades are not supported.
+
+## Other clouds
+
+BYOC is in development, on GCP first with AWS to follow; Azure is on the
+roadmap. See [BYOC on GCP](/byoc/byoc-gcp-draft/).
+
+## Need help?
+
+Contact your Materialize representative, or reach the
+[Materialize support team](https://materialize.com/contact).
