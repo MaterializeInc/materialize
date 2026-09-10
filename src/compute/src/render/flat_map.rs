@@ -51,10 +51,9 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         // a batch. A `generate_series` can still cause unavailability if it generates many rows.
         let budget = COMPUTE_FLAT_MAP_FUEL.get(&self.config_set);
 
-        // The unarranged path (no key) reads the input `CollectionEdge` directly,
-        // so the columnar arm never decodes rows at the input. The keyed path
-        // reads an existing arrangement, already columnar internally, and is
-        // presented as a `Vec` edge here.
+        // The unarranged path reads the edge directly, so a columnar input is never
+        // decoded here. The keyed path reads an existing arrangement, presented as a
+        // `Vec` edge.
         let (edge, err_collection) = match input_key.as_deref() {
             None => input
                 .collection
@@ -90,11 +89,8 @@ type FlatMapErr<T> = ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Dif
 
 /// Yields the `(row, time, diff)` records of one queued FlatMap input batch.
 ///
-/// The two edge arms differ only in how records are read from a queued batch:
-/// the `Vec` arm drains owned rows, the `Column` arm iterates the borrowed
-/// column and never materializes an owned [`Row`]. Everything else in the
-/// FlatMap operator (the fuel queue, budget, and re-activation) is shared
-/// through [`flat_map_stage`].
+/// The arms differ only in how a batch is read. Everything else in the operator, the fuel
+/// queue, budget and re-activation, is shared through [`flat_map_stage`].
 trait FlatMapBatch<T> {
     /// Calls `logic` once per record, presenting the row as a borrowed
     /// [`RowRef`] and the time and diff by reference.
@@ -111,8 +107,8 @@ impl<T: RenderTimestamp> FlatMapBatch<T> for Vec<(Row, T, Diff)> {
 
 impl<T: RenderTimestamp> FlatMapBatch<T> for Column<(Row, T, Diff)> {
     fn for_each_record(&mut self, mut logic: impl FnMut(&RowRef, &T, &Diff)) {
-        // Rows are read from the borrowed column, never materialized as owned
-        // `Row`s. Times and diffs are owned only to hand `logic` a reference.
+        // Rows stay borrowed; the time and diff are owned only to hand `logic` a
+        // reference.
         for (row, t, d) in self.borrow().into_index_iter() {
             logic(row, &Columnar::into_owned(t), &Columnar::into_owned(d));
         }
@@ -121,13 +117,10 @@ impl<T: RenderTimestamp> FlatMapBatch<T> for Column<(Row, T, Diff)> {
 
 /// The fueled FlatMap operator, generic over the input edge arm.
 ///
-/// This is the sole owner of the fuel machinery, so the `Vec` and `Column`
-/// arms cannot drift apart. Incoming batches are queued; each activation
-/// processes queued batches and drains each record's table-function expansion
-/// through the mfp, decrementing a per-activation `budget`. When the budget is
-/// exhausted the operator re-activates itself and stops, deferring the rest of
-/// the queue to a later activation. This bounds the work a single
-/// `generate_series` can do before yielding the worker.
+/// Sole owner of the fuel machinery, so the arms cannot drift apart. Each activation
+/// expands queued batches until the `budget` runs out, then re-activates and defers the
+/// rest of the queue, which bounds what one `generate_series` does before the worker
+/// yields.
 fn flat_map_stage<'scope, T, C>(
     stream: Stream<'scope, T, C>,
     scope: Scope<'scope, T>,
@@ -196,10 +189,8 @@ where
 
 /// Expands one input record's table function and drains it through the mfp.
 ///
-/// Evaluates `exprs` to the table-function arguments, then `func`, chunking the
-/// expansion so [`drain_through_mfp`] amortizes the input-row decode. Argument
-/// or function evaluation errors emit to the err session and return early. The
-/// output budget is decremented inside [`drain_through_mfp`].
+/// The expansion is chunked so [`drain_through_mfp`] amortizes the input-row decode.
+/// Argument or function evaluation errors emit to the err session and return early.
 fn process_flat_map_row<T>(
     input_row: &RowRef,
     time: &T,
@@ -335,8 +326,7 @@ mod tests {
     use super::*;
     use crate::render::columnar::vec_to_columnar;
 
-    // `generate_series(1, stop, 1)` reading `stop` from column 1 of the input
-    // row, with an identity mfp over the (start, stop, generated) triple.
+    // `generate_series(1, stop, 1)`, reading `stop` from column 1, with an identity mfp.
     fn flat_map_args() -> (Vec<LirScalarExpr>, TableFunc, MfpPlan<LirScalarExpr>) {
         let exprs = vec![
             LirScalarExpr::column(0),
@@ -354,10 +344,8 @@ mod tests {
         Row::pack_slice(&[Datum::Int64(1), Datum::Int64(stop)])
     }
 
-    /// Runs one input row at each of `batches` distinct timestamps through
-    /// `flat_map_stage` with the given fuel `budget`, driving the worker one
-    /// step at a time. Returns how many steps were needed to produce all
-    /// output and the total output-record count.
+    /// Runs one input row at each of `batches` distinct timestamps through `flat_map_stage`,
+    /// stepping the worker manually. Returns the steps taken and the output-record count.
     fn run_fueled(batches: u64, stop: i64, budget: usize) -> (usize, usize) {
         let expected = usize::try_from(batches).unwrap() * usize::try_from(stop).unwrap();
         timely::execute_directly(move |worker| {
@@ -370,10 +358,9 @@ mod tests {
                 let scope = stream.scope();
                 let (oks, _errs) =
                     flat_map_stage(stream, scope, exprs, func, mfp, Antichain::new(), budget);
-                // Count through the container rather than per record. A
-                // per-record `inspect` needs `&Container: IntoIterator`, and
-                // resolving that on macOS recurses through `objc2`'s blanket
-                // impls until the trait solver overflows.
+                // Counted per container: a per-record `inspect` needs
+                // `&Container: IntoIterator`, which on macOS recurses through `objc2`'s
+                // blanket impls until the trait solver overflows.
                 oks.inspect_container(move |event| {
                     if let Ok((_time, data)) = event {
                         *sink.borrow_mut() += data.len();
@@ -382,8 +369,7 @@ mod tests {
                 input
             });
 
-            // Feed one row per timestamp as a separate batch. Distinct times
-            // keep the per-batch output from consolidating away.
+            // One batch per timestamp, so the per-batch output does not consolidate away.
             for i in 0..batches {
                 input.advance_to(Timestamp::from(i));
                 input.update(input_row(stop), Diff::ONE);
@@ -404,10 +390,6 @@ mod tests {
 
     #[mz_ore::test]
     fn flat_map_fuel_bounds_per_activation() {
-        // A fuel budget of one forces the operator to yield after each queued
-        // batch and re-activate, so several batches take several activations.
-        // An unbounded budget drains the whole queue in a single activation.
-        // This is the availability guard the fuel machinery exists for.
         let (fueled_steps, fueled_count) = run_fueled(4, 3, 1);
         let (unfueled_steps, unfueled_count) = run_fueled(4, 3, usize::MAX);
         assert_eq!(fueled_count, 12);
@@ -424,12 +406,8 @@ mod tests {
 
     #[mz_ore::test]
     fn flat_map_arms_agree() {
-        // The `Vec` and `Column` input arms must produce identical `(row, time,
-        // diff)` output. Multiple timestamps and a retraction exercise time
-        // handling and negative diffs. The columnar arm's `Columnar::into_owned`
-        // for time and diff runs on every ok record here (the input decode has
-        // no fallible/try_extend path, so the standing fallible-key rule does
-        // not apply), and this comparison proves it decodes correctly.
+        // Several timestamps and a retraction, so time handling and a negative diff are
+        // both decoded.
         let (vec_captured, col_captured) = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();
