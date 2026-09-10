@@ -65,9 +65,7 @@ pub type ColumnarCollection<'scope, T, D, R> = Collection<'scope, T, Column<(D, 
 /// `concat`s repack the row-based inputs and produce the columnar variant.
 #[derive(Clone)]
 pub enum CollectionEdge<'scope, T: RenderTimestamp> {
-    /// Row-formatted collection. No producer constructs this after the
-    /// migration; the variant and its remaining match arms are removed when the
-    /// enum collapses to a columnar alias.
+    /// Row-formatted collection. No producer constructs this.
     #[allow(dead_code)]
     Vec(VecCollection<'scope, T, Row, Diff>),
     /// Columnar collection. Currently unused by any producer; reserved for the
@@ -126,15 +124,13 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
 
     /// Concatenates a collection of edges.
     ///
-    /// The inputs are all columnar, so they concatenate natively into the
-    /// columnar variant.
+    /// Every input is columnar, so they concatenate natively.
     pub fn concat_many<I>(scope: Scope<'scope, T>, edges: I) -> Self
     where
         I: IntoIterator<Item = Self>,
     {
         let cols = edges.into_iter().map(|edge| match edge {
             CollectionEdge::Columnar(c) => c,
-            // No producer emits `Vec`, so a `Vec` input cannot reach here.
             CollectionEdge::Vec(_) => unreachable!("no producer emits a `Vec` edge"),
         });
         CollectionEdge::Columnar(differential_dataflow::collection::concatenate(
