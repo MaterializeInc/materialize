@@ -716,7 +716,7 @@ impl ConnectionOptionExtracted {
                         }
                         if self.storage_provider.is_some() {
                             sql_bail!(
-                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support STORAGE PROVIDER; S3 Tables is always backed by S3"
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support STORAGE PROVIDER"
                             );
                         }
                         let Some(warehouse) = warehouse else {
