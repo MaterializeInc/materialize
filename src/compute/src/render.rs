@@ -1217,12 +1217,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 // We should advance times in constant collections to start from `as_of`.
                 let as_of_frontier = self.as_of_frontier.clone();
                 let until = self.until.clone();
-                // Build the ok rows columnar, so this literal source emits the
-                // columnar edge. Advancing times to `as_of` can collapse
-                // distinct original times onto one time, so rows the planner
-                // left distinct may become duplicates here; a
-                // `ConsolidatingColumnBuilder` folds those within the batch (the
-                // rows are already owned, so the give is a move into staging).
+                // Advancing times to `as_of` can collapse distinct times onto one, so
+                // rows the planner left distinct can become duplicates. The
+                // `ConsolidatingColumnBuilder` folds those within the batch.
                 let ok_collection = CollectionEdge::Columnar(
                     rows.into_iter()
                         .filter_map(move |(row, mut time, diff)| {
