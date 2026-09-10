@@ -68,9 +68,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         top_k_plan: TopKPlan,
         temporal_bucketing_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'scope, T> {
-        // Consume the input as a columnar-capable edge rather than decoding it to
-        // `Vec` up front. The arrangement key is formed off the edge below via
-        // `map_topk_key`, so no `ColumnarToVec` sits on the common input path.
+        // `map_topk_key` forms the arrangement key off the edge, so the common input path
+        // carries no `ColumnarToVec`.
         let (ok_input, err_input) = input
             .collection
             .clone()
@@ -109,11 +108,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                  `mz_now()` has been const-folded and no temporal bucketing is set",
             );
         }
-        // Temporal bucketing consumes and produces a `Vec` stream, so decode the
-        // edge here. This is the sanctioned leaf decode. It only
-        // fires under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the `TemporalBucketing`
-        // strategy, both off on the common path, so the columnar edge otherwise
-        // flows straight through.
+        // Temporal bucketing is `Vec`-internal, so decode the edge here. It fires only
+        // under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the `TemporalBucketing` strategy.
         let ok_input = if matches!(
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
@@ -157,12 +153,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // thus needs to be checked.
                     let expr = expr.clone();
                     let mut datum_vec = mz_repr::DatumVec::new();
-                    // A literal, non-negative limit skips this branch entirely, so this
-                    // per-row evaluation only runs for column or otherwise fallible
-                    // limits. On the `Vec` edge `into_vec` is the identity, so the
-                    // `Vec` path is unchanged. On a columnar edge it is a narrow
-                    // sanctioned decode
-                    // confined to this rare path.
+                    // A literal, non-negative limit skips this branch, so the decode and the
+                    // per-row evaluation only run for column or otherwise fallible limits.
                     let errors = ok_input.clone().into_vec().flat_map(move |row| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(&row);
@@ -608,23 +600,15 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
     }
 }
 
-/// Forms the `(key, value)` arrangement input the TopK stages consume, reading
-/// directly from a columnar input edge.
+/// Forms the `(key, value)` arrangement input the TopK stages consume.
 ///
-/// `key` receives the borrowed datums of an input row and the owned row, and
-/// returns the arrangement key. The value is always the full input row, because
-/// every TopK stage carries the row through to its output.
+/// `key` receives the borrowed datums of an input row and the owned row. The value is the
+/// full input row, because every TopK stage carries it through to its output.
 ///
-/// The output is a `VecCollection<(Row, Row)>` because the TopK downstream
-/// (`KeyBatcher`, `MzReduce`) is `Vec`-based. The columnar arm therefore still
-/// decodes the value `Row` of every record inline via `Columnar::into_owned`,
-/// which costs the same as `columnar_to_vec`'s body. This is not a zero-copy
-/// borrowed-push: it removes the separate `ColumnarToVec` decode operator and the
-/// intermediate `Vec<(Row, T, Diff)>` container it would produce, but it does not
-/// avoid the per-record decode, because there is no columnar batcher to push
-/// borrowed rows into here. The `Vec` arm maps the collection directly and reuses
-/// the owned input row, so it is behaviorally identical to consuming the
-/// collection directly.
+/// The output is a `VecCollection`, since the TopK stages are `Vec`-based, so the columnar
+/// arm still decodes a `Row` per record. That saves the separate `ColumnarToVec` operator
+/// and its intermediate container, not the decode itself, which needs a columnar batcher to
+/// push borrowed rows into.
 fn map_topk_key<'s, T, L>(
     edge: CollectionEdge<'s, T>,
     name: &str,
@@ -659,11 +643,6 @@ where
                     let mut output = output.activate();
                     input.for_each(|time, data| {
                         let mut session = output.session_with_builder(&time);
-                        // The value row is decoded to an owned `Row` here because the
-                        // output is `Vec`-based. This is the same per-record cost as
-                        // `columnar_to_vec`, just without the separate decode operator
-                        // and its intermediate container. The key is formed from the
-                        // borrowed datums. Time and diff are owned per record.
                         for (row, t, d) in data.borrow().into_index_iter() {
                             let value_row: Row = Columnar::into_owned(row);
                             let key_row = {
@@ -1259,12 +1238,9 @@ mod tests {
         updates
     }
 
-    /// Input rows tagged with distinct timestamps. Feeding several timestamps
-    /// makes both arms exercise per-record time handling. The columnar arm owns
-    /// time and diff per record via `Columnar::into_owned` on the ok path. The
-    /// two `-1` records exercise `Columnar::into_owned` on a negative diff. They
-    /// retract at a `(row, time)` that has no matching insertion, so they survive
-    /// the `InputSession`'s pre-send consolidation and reach the operator.
+    /// Rows across several timestamps, including two `-1` diffs so a negative diff is
+    /// decoded. Those retract at a `(row, time)` with no matching insertion, so the
+    /// `InputSession`'s pre-send consolidation does not cancel them out.
     fn test_input() -> Vec<(Row, u64, Diff)> {
         vec![
             (
@@ -1300,9 +1276,8 @@ mod tests {
         ]
     }
 
-    /// Runs `map_topk_key` against the same input fed once as a `Vec` edge and
-    /// once as a columnar edge, forming a hash-and-group key exactly as
-    /// `build_topk` does. Returns the sorted `(key, value)` updates of each arm.
+    /// Runs `map_topk_key` over both edge arms with the hash-and-group key `build_topk`
+    /// forms, returning each arm's sorted `(key, value)` updates.
     fn run_both_arms(input: Vec<(Row, u64, Diff)>) -> (Vec<KeyedUpdate>, Vec<KeyedUpdate>) {
         let (vec, col) = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
@@ -1334,20 +1309,8 @@ mod tests {
         (extract_sorted(vec), extract_sorted(col))
     }
 
-    /// The columnar arm of `map_topk_key` forms the same `(key, value)` updates
-    /// as the `Vec` arm, across several distinct timestamps.
-    ///
-    /// This proves the columnar key-forming is correct and that the columnar arm
-    /// ran (the input is fed through `vec_to_columnar`). It does not prove the
-    /// absence of a silent `ColumnarToVec` decode on the ok path: such a decode
-    /// would yield identical contents. No-decode holds by code inspection, the
-    /// columnar arm reads via `into_index_iter` and never calls `into_vec`.
-    ///
-    /// The key closure here is infallible (projection plus hash plus pack), so
-    /// there is no fallible-key path to test, unlike the arrange operator's key.
-    /// `Columnar::into_owned` for time and diff runs on the ok path for every
-    /// record, so the multi-timestamp, mixed-sign input exercises it on both
-    /// positive and negative diffs.
+    /// Agreeing contents do not rule out a silent `ColumnarToVec` on the ok path. That the
+    /// arm never decodes holds by inspection, not by this test.
     #[mz_ore::test]
     fn map_topk_key_arms_agree() {
         let (vec_updates, col_updates) = run_both_arms(test_input());
