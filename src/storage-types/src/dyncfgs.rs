@@ -502,6 +502,39 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
     ParameterScope::Environment,
 );
 
+/// How far ahead of the data the source `persist_sink` commits a ceiling while a hydrating
+/// export holds its frontier pinned, so that it can group updates into one batch.
+///
+/// A batch's bounds come from a batch description, and while a collection's frontier is pinned the
+/// minter has nothing to derive one from, so the sink has no bounds to group updates under and
+/// falls back to one batch per timestamp. With a lookahead the minter instead commits to a ceiling
+/// this far past the largest timestamp the data has reached and broadcasts it to the writers, which
+/// group everything below it into a single builder. The minter honors the ceiling by minting no
+/// description below it, so the whole snapshot and the catch-up that follows it become one
+/// description, appended once.
+///
+/// The ceiling has to stay ahead of the data, since a builder only takes updates at times it was
+/// opened for, so this wants to be several `timestamp_interval`s. An update that outruns it writes
+/// a batch of its own instead, which costs a batch rather than correctness.
+///
+/// Only applies to an export that is snapshotting in this dataflow incarnation, and only until the
+/// frontier moves off the time its snapshot occupies. A collection that is keeping up lags the data
+/// by about one `timestamp_interval` and so has nothing to group, and committing ahead of a
+/// frontier that is moving would hold the shard upper at the ceiling instead. That wait is what the
+/// lookahead costs: once the snapshot ends the shard upper waits for the frontier to reach the
+/// ceiling, which is about one lookahead regardless of how long the snapshot ran.
+///
+/// Zero disables committing ahead, leaving descriptions derived from the frontier alone and every
+/// timestamp writing its own batch.
+pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config::new(
+    "storage_persist_sink_description_lookahead",
+    Duration::ZERO,
+    "How far past the data the source persist sink commits a ceiling while a snapshotting export \
+    holds its frontier pinned, so updates below it group into one batch and one description \
+    (zero leaves every timestamp writing its own batch).",
+    ParameterScope::Environment,
+);
+
 /// Configure mz-ore overflowing type behavior.
 pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
@@ -557,6 +590,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
+        .add(&STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
