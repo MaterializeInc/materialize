@@ -27,7 +27,9 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::{
+    ENABLE_COLUMNAR_ACCUMULABLE_DIFF, ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
@@ -55,8 +57,8 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
-    RowRowSpine, RowSpine, RowValSpine,
+    ErrBatcher, ErrBuilder, KeyBatcher, RowAgent, RowErrBuilder, RowErrSpine, RowRowAgent,
+    RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 use mz_row_spine::{
     DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher,
@@ -1474,6 +1476,50 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             differential_dataflow::collection::concatenate(collection_scope, to_aggregate)
         };
 
+        // The accumulators travel in the arrangement's diffs. A columnar diff container
+        // lays each `Accum` out by variant, so it occupies only its own variant's
+        // columns rather than the footprint of the largest variant. Both layouts feed
+        // the same reduce operators.
+        if ENABLE_COLUMNAR_ACCUMULABLE_DIFF.get(&self.config_set) {
+            let arranged = collection
+                .mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowBatcher<_, _>,
+                    RowBuilder<_, _, Coltainer<_>>,
+                    RowSpine<_, (Vec<Accum>, Diff), Coltainer<_>>,
+                >(
+                    "ArrangeAccumulable [val: empty]",
+                );
+            self.reduce_accumulable(arranged, full_aggrs, mfp_after)
+        } else {
+            let arranged = collection
+                .mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowBatcher<_, _>,
+                    RowBuilder<_, _>,
+                    RowSpine<_, (Vec<Accum>, Diff)>,
+                >(
+                    "ArrangeAccumulable [val: empty]",
+                );
+            self.reduce_accumulable(arranged, full_aggrs, mfp_after)
+        }
+    }
+
+    /// Reduces arranged accumulators to output rows, and to the errors the accumulated
+    /// values can reveal. Generic over the container holding the diffs, so both diff
+    /// layouts share one rendering of the reduce operators.
+    fn reduce_accumulable<'s, DC>(
+        &self,
+        arranged: Arranged<'s, RowAgent<T, (Vec<Accum>, Diff), DC>>,
+        full_aggrs: Vec<LirAggregateExpr>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
+    ) -> (
+        RowRowArrangement<'s, T>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
+    )
+    where
+        DC: BatchContainer<Owned = (Vec<Accum>, Diff)>,
+    {
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
@@ -1483,17 +1529,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
-        // The diffs are stored columnar so that each `Accum` occupies only its own
-        // variant's columns, rather than the footprint of the largest variant.
-        let arranged = collection
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowBatcher<_, _>,
-                RowBuilder<_, _, Coltainer<_>>,
-                RowSpine<_, (Vec<Accum>, Diff), Coltainer<_>>,
-            >(
-                "ArrangeAccumulable [val: empty]",
-            );
         let arranged_output = arranged
             .clone()
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
