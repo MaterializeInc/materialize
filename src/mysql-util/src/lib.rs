@@ -96,7 +96,7 @@ impl std::fmt::Display for MissingPrivilege {
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
-    #[error("error validating privileges: {0:?}")]
+    #[error("error validating privileges: {}", itertools::join(.0, ", "))]
     MissingPrivileges(Vec<MissingPrivilege>),
     #[error("error creating mysql connection with config: {0}")]
     InvalidClientConfig(String),
@@ -124,9 +124,12 @@ pub enum MySqlError {
         /// Redacted at construction, safe to log.
         upper_bound: String,
     },
-    #[error("unsupported data types: {columns:?}")]
+    #[error("unsupported data types: {}", itertools::join(.columns, ", "))]
     UnsupportedDataTypes { columns: Vec<UnsupportedDataType> },
-    #[error("duplicated column names in table '{qualified_table_name}': {columns:?}")]
+    #[error(
+        "duplicated column names in table '{qualified_table_name}': {}",
+        itertools::join(.columns, ", ")
+    )]
     DuplicatedColumnNames {
         qualified_table_name: String,
         columns: Vec<String>,
