@@ -3932,6 +3932,125 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
+    async fn test_materialized_view_downstream_publication_after_replacement() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_expr::CollectionPlan;
+        use mz_sql::catalog::SessionCatalog;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        Catalog::with_debug(|catalog| async move {
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database exists");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema exists");
+            let qualifiers = ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let birth = catalog.current_upper().await;
+            let mut state = catalog.state().clone();
+            state.catalog_read_protection_enabled = true;
+            let mut snapshot = None;
+            let mut ids = BTreeMap::new();
+            let mut consumers = Vec::new();
+            // The persisted upstream output is the downstream's recovery boundary.
+            // Consumers created between replacements must pin the latest collection,
+            // even though the relation schema does not change.
+            for (name, sql) in [
+                ("t", format!("CREATE TABLE {prefix}.t (a int, b int)")),
+                ("mv", format!("CREATE MATERIALIZED VIEW {prefix}.mv IN CLUSTER quickstart AS SELECT a, b FROM {prefix}.t AS OF {birth}")),
+                ("mv_downstream", format!("CREATE MATERIALIZED VIEW {prefix}.mv_downstream IN CLUSTER quickstart AS SELECT a + b AS sum FROM {prefix}.mv AS OF {birth}")),
+                ("rp", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.rp FOR {prefix}.mv IN CLUSTER quickstart AS SELECT a * 10 AS a, b FROM {prefix}.t AS OF {birth}")),
+                ("mv_downstream_new", format!("CREATE MATERIALIZED VIEW {prefix}.mv_downstream_new IN CLUSTER quickstart AS SELECT a + b AS sum FROM {prefix}.mv AS OF {birth}")),
+                ("rp2", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.rp2 FOR {prefix}.mv IN CLUSTER quickstart AS SELECT a * 100 AS a, b FROM {prefix}.t AS OF {birth}")),
+            ] {
+                let (id, gid) = catalog
+                    .allocate_user_id_for_test().await.expect("allocate test item identity");
+                let item = state.with_enable_for_item_parsing(|state| state.parse_item(
+                    gid, &sql, &BTreeMap::new(), None, false, None,
+                    &mut LocalExpressionCache::Closed, None,
+                )).unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                let (next_state, next_snapshot) = catalog.transact_incremental_dry_run(
+                    &state,
+                    vec![Op::CreateItem {
+                        id,
+                        name: QualifiedItemName {
+                            qualifiers: qualifiers.clone(),
+                            item: name.into(),
+                        },
+                        item,
+                        owner_id: MZ_SYSTEM_ROLE_ID,
+                    }],
+                    None, snapshot, birth,
+                ).await.unwrap_or_else(|err| panic!("create {name}: {err}"));
+                state = next_state;
+                snapshot = Some(next_snapshot);
+                ids.insert(name, (id, gid));
+                match name {
+                    "mv_downstream" => consumers.push((id, gid, ids["mv"].1)),
+                    "mv_downstream_new" => consumers.push((id, gid, ids["rp"].1)),
+                    "rp" | "rp2" => {
+                        let target_id = if name == "rp" { ids["mv"].0 } else { ids["rp"].0 };
+                        let (next_state, next_snapshot) = catalog.transact_incremental_dry_run(
+                            &state,
+                            vec![Op::AlterMaterializedViewApplyReplacement {
+                                id: target_id,
+                                replacement_id: id,
+                            }],
+                            None, snapshot, birth,
+                        ).await.expect("apply upstream replacement");
+                        state = next_state;
+                        snapshot = Some(next_snapshot);
+                    }
+                    _ => {}
+                }
+
+                let mut requirements = Vec::new();
+                for &(consumer_id, consumer_gid, input_gid) in &consumers {
+                    let inputs = BTreeSet::from([input_gid]);
+                    let CatalogItem::MaterializedView(mv) = state.get_entry(&consumer_id).item()
+                    else {
+                        panic!("expected downstream MV");
+                    };
+                    assert_eq!(mv.raw_expr.depends_on(), inputs, "{name}: downstream reads stay pinned");
+                    let requirement = &state.maintained_read_requirements()[&consumer_gid];
+                    assert_eq!(requirement.inputs, inputs, "{name}: downstream protection stays pinned");
+
+                    let session_catalog = state.for_system_session();
+                    assert_eq!(
+                        session_catalog.get_item_by_global_id(&input_gid).global_id(), input_gid,
+                    );
+                    assert_eq!(session_catalog.try_get_item_by_global_id(&input_gid)
+                        .expect("retained MV collection exists").global_id(), input_gid);
+
+                    let mut publication = requirement.clone();
+                    publication.frontier = Some(birth.step_forward());
+                    requirements.push(publication);
+                }
+                if !requirements.is_empty() {
+                    // Progress publication must accept the same protected storage
+                    // history after the upstream SQL identity changes.
+                    let (next_state, next_snapshot) = catalog.transact_incremental_dry_run(
+                        &state,
+                        vec![Op::SetReadProtection { requirements, bounds: vec![] }],
+                        None, snapshot, birth,
+                    ).await.expect("downstream publication succeeds across replacements");
+                    state = next_state;
+                    snapshot = Some(next_snapshot);
+                }
+            }
+            catalog.expire().await;
+        }).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
     async fn test_materialized_view_birth_admission() {
         use std::collections::{BTreeMap, BTreeSet};
 

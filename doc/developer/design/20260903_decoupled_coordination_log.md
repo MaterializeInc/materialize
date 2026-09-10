@@ -546,3 +546,21 @@ Milestone 2 is re-cut as independent maintained lifecycle with one adapter and
 one query client. Milestone 3 becomes multiplicity and isolation of query clients.
 Next: build the query client in-process, then the connection split, cooperating
 writers, and the process move, in that order.
+
+### 2026-09-10: Stable MV read bindings and client-protection proposal
+
+MV collection versions now participate in SQL name resolution independently of
+table schema evolution. Replacement changes the catalog item ID while preserving
+the referenced collection version, so downstream recovery requirements and SQL
+reconstruction retain the same input identity. Session-catalog GlobalId lookups
+also preserve the requested MV version. The internal state-level lookup still
+defaults MV aliases to Latest, an adjacent inconsistency left outside this fix.
+
+Pending approval before building protection: a never-reused client incarnation
+with a heartbeat sequence, plus per-incarnation collection requirements with
+frontiers and input lifetime bindings. The proposed reclaimer observes an unchanged
+heartbeat for five minutes on its monotonic clock, then compares and closes that
+incarnation atomically with removing its requirements. Renewal is proposed every
+minute. A restarted observer waits a full observation window. Closed incarnations
+cannot be revived, and closure must fence late query execution before compaction
+passes the reclaimed protection. This is a proposal, not an agreed decision.
