@@ -338,12 +338,10 @@ where
                 errors.push(errs);
                 CollectionEdge::Columnar(updates)
             } else {
-                // Identity finalization: the raw stage output is the result.
-                // `mz_join_core` produces a `Vec` collection (intra-operator,
-                // unchanged), so encode it to the columnar edge via the sanctioned
-                // leaf-encode, non-consolidating to match the raw output. A columnar
-                // source (single-input join) is already an edge and passes through
-                // with no round-trip.
+                // With identity finalization the raw stage output is the result.
+                // `mz_join_core` produces a `Vec` collection, so encode it here,
+                // non-consolidating to match that output. A single-input join's columnar
+                // source is already an edge and passes straight through.
                 match joined {
                     CollectionEdge::Columnar(c) => CollectionEdge::Columnar(c),
                     CollectionEdge::Vec(s) => CollectionEdge::Columnar(vec_to_columnar(s)),

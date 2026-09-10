@@ -248,12 +248,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .leave_region(self.scope),
             )
         });
-        // The delta join is Vec-internal (half_join, the `ok_err` demux, the
-        // time-unpair map, and the per-path finalization all operate on `Vec`).
-        // Encode the concatenated node output to the columnar edge once here.
-        // This is the sanctioned leaf-encode; a columnar `half_join`/algorithm is
-        // a differential-side follow-up. Non-consolidating: the per-path
-        // finalization already consolidated whatever it consolidates.
+        // The delta join is `Vec`-internal throughout, so the concatenated node output is
+        // encoded once here. Non-consolidating, because the per-path finalization already
+        // consolidated whatever it consolidates.
         CollectionBundle::from_edge(CollectionEdge::Columnar(vec_to_columnar(oks)), errs)
     }
 }
