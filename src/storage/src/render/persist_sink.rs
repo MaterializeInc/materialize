@@ -128,6 +128,7 @@ use tokio::sync::Semaphore;
 use tracing::trace;
 
 use crate::metrics::source::SourcePersistSinkMetrics;
+use crate::statistics::SourceStatistics;
 use crate::storage_state::StorageState;
 
 /// Metrics about batches.
@@ -291,6 +292,12 @@ pub(crate) fn render<'scope>(
 
     let operator_name = format!("persist_sink({})", collection_id);
 
+    let source_statistics = storage_state
+        .aggregated_statistics
+        .get_source(&collection_id)
+        .expect("statistics initialized")
+        .clone();
+
     let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
         scope,
         collection_id,
@@ -308,7 +315,7 @@ pub(crate) fn render<'scope>(
         batch_descriptions.clone(),
         passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
-        storage_state,
+        source_statistics,
         Arc::clone(&busy_signal),
     );
 
@@ -536,7 +543,7 @@ fn write_batches<'scope>(
     >,
     desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
-    storage_state: &StorageState,
+    source_statistics: SourceStatistics,
     busy_signal: Arc<Semaphore>,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, HollowBatchAndMetadata<mz_repr::Timestamp>>,
@@ -547,12 +554,6 @@ fn write_batches<'scope>(
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
-
-    let source_statistics = storage_state
-        .aggregated_statistics
-        .get_source(&collection_id)
-        .expect("statistics initialized")
-        .clone();
 
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
@@ -1411,4 +1412,482 @@ fn append_batches<'scope>(
     }));
 
     (upper_stream, errors, shutdown_button.press_on_drop())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::str::FromStr;
+
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_dyncfg::{ConfigUpdates, ConfigVal};
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::url::SensitiveUrl;
+    use mz_persist_client::PersistLocation;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
+    use mz_persist_types::ShardId;
+    use mz_repr::{Datum, RelationDesc, SqlScalarType};
+    use mz_storage_types::sources::SourceEnvelope;
+    use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope};
+    use timely::dataflow::operators::Input;
+
+    use crate::statistics::SourceStatisticsMetricDefs;
+
+    use super::*;
+
+    fn ts(t: u64) -> mz_repr::Timestamp {
+        t.into()
+    }
+
+    fn frontier(t: u64) -> Antichain<mz_repr::Timestamp> {
+        Antichain::from_elem(ts(t))
+    }
+
+    /// One step of a `write_batches` script.
+    #[derive(Clone)]
+    enum Step {
+        /// Deliver a batch description, as `mint_batch_descriptions` would.
+        Description(u64, u64),
+        /// Deliver `count` updates at time `at`.
+        Updates(u64, usize),
+        /// Advance both input frontiers.
+        AdvanceTo(u64),
+    }
+
+    /// What a batch emitted by `write_batches` carries, flattened for assertions.
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct EmittedBatch {
+        lower: u64,
+        upper: u64,
+        data_ts: u64,
+        inserts: u64,
+    }
+
+    /// Runs a timely worker to completion on a blocking thread.
+    ///
+    /// The test body is a single poll of the runtime's `block_on` future, so it runs under one
+    /// tokio cooperative budget. A worker driven inline spends that budget on the operators'
+    /// `select!` and semaphore polls, and once it is gone every such poll returns `Pending` and
+    /// re-wakes itself, parking the operator for good with no error. Blocking threads have no
+    /// budget.
+    async fn run_worker<T: Send + 'static>(
+        worker: impl FnOnce(&mut timely::worker::Worker) -> T + Send + Sync + 'static,
+    ) -> T {
+        mz_ore::task::spawn_blocking(
+            || "persist_sink_test_worker",
+            move || timely::execute_directly(worker),
+        )
+        .await
+    }
+
+    /// Drives `write_batches` through `script` and returns the batches it emitted, along with a
+    /// handle to the shard so callers can append them and read the result back.
+    async fn run_write_batches(
+        target: CollectionMetadata,
+        persist_clients: Arc<PersistClientCache>,
+        script: Vec<Step>,
+    ) -> Vec<(EmittedBatch, ProtoBatch)> {
+        run_worker(move |worker| {
+            // `ProtoBatch` is not `Ord`, so the captured stream is summarized on the way out
+            // rather than going through `Capture`.
+            let emitted = Rc::new(RefCell::new(Vec::new()));
+
+            let (mut descs_input, mut data_input, button) = worker
+                .dataflow::<mz_repr::Timestamp, _, _>(|scope| {
+                    let (descs_input, descs) = scope.new_input();
+                    let (data_input, data) = scope.new_input();
+
+                    let source_id = GlobalId::User(0);
+                    let stats_defs =
+                        SourceStatisticsMetricDefs::register_with(&MetricsRegistry::new());
+                    let source_statistics = SourceStatistics::new(
+                        source_id,
+                        0,
+                        &stats_defs,
+                        source_id,
+                        &target.data_shard,
+                        SourceEnvelope::None(NoneEnvelope {
+                            key_envelope: KeyEnvelope::None,
+                            key_arity: 0,
+                        }),
+                        Antichain::from_elem(Timestamp::minimum()),
+                    );
+
+                    let (batches, button) = write_batches(
+                        scope,
+                        source_id,
+                        "test",
+                        &target,
+                        descs,
+                        data.as_collection(),
+                        persist_clients,
+                        source_statistics,
+                        Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
+                    );
+                    let sink = Rc::clone(&emitted);
+                    InspectCore::inspect_container(batches, move |event| {
+                        if let Ok((_, data)) = event {
+                            for b in data {
+                                sink.borrow_mut().push((
+                                    EmittedBatch {
+                                        lower: b.lower.as_option().expect("single lower").into(),
+                                        upper: b.upper.as_option().expect("single upper").into(),
+                                        data_ts: b.data_ts.into(),
+                                        inserts: b.metrics.inserts,
+                                    },
+                                    b.batch.clone(),
+                                ));
+                            }
+                        }
+                    });
+
+                    (descs_input, data_input, button)
+                });
+
+            // The operator waits on persist off the timely scheduler, so a plain `step` can find
+            // the worker idle while the operator is still starting up. Parking hands the thread
+            // over until its waker fires, which is what lets the operator keep up with the script.
+            fn pump(worker: &mut timely::worker::Worker) {
+                // no solid reason for this number, it's a selection that seems high enough to
+                // work reliably, but not create a ton of delay (~32ms parked).
+                for _ in 0..32 {
+                    worker.step_or_park(Some(Duration::from_millis(1)));
+                }
+            }
+
+            // Twice, so the operator is past opening its persist handles before the script runs.
+            pump(worker);
+            pump(worker);
+
+            for step in script {
+                match step {
+                    Step::Description(lower, upper) => {
+                        descs_input.send((frontier(lower), frontier(upper)));
+                    }
+                    Step::Updates(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), Diff::ONE));
+                        }
+                    }
+                    Step::AdvanceTo(t) => {
+                        descs_input.advance_to(ts(t));
+                        data_input.advance_to(ts(t));
+                    }
+                }
+                pump(worker);
+            }
+
+            descs_input.close();
+            data_input.close();
+            for _ in 0..1_000 {
+                if !worker.step_or_park(Some(Duration::from_millis(1))) {
+                    break;
+                }
+            }
+
+            drop(button);
+            while worker.step() {}
+
+            let mut emitted = emitted.borrow().clone();
+            emitted.sort_by(|a, b| a.0.cmp(&b.0));
+            emitted
+        })
+        .await
+    }
+
+    fn test_target() -> CollectionMetadata {
+        CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            },
+            data_shard: ShardId::new(),
+            relation_desc: RelationDesc::builder()
+                .with_column("a", SqlScalarType::Int64.nullable(false))
+                .finish(),
+            txns_shard: None,
+        }
+    }
+
+    /// Persist clients with part bounds validation on. Both settings default off in code but are
+    /// turned on in production, so an append has to run under them to say anything about the
+    /// bounds the sink writes.
+    fn test_persist_clients() -> Arc<PersistClientCache> {
+        let persist_cfg =
+            PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let mut updates = ConfigUpdates::default();
+        updates.add_dynamic(
+            "persist_validate_part_bounds_on_write",
+            ConfigVal::Bool(true),
+        );
+        updates.add_dynamic(
+            "persist_validate_part_bounds_on_read",
+            ConfigVal::Bool(true),
+        );
+        updates.apply(&persist_cfg.configs);
+        Arc::new(PersistClientCache::new(
+            persist_cfg,
+            &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
+        ))
+    }
+
+    /// A single `compare_and_append` over `[lower, upper)` carrying every emitted batch.
+    fn one_append(
+        emitted: Vec<(EmittedBatch, ProtoBatch)>,
+        lower: u64,
+        upper: u64,
+    ) -> Vec<(u64, u64, Vec<ProtoBatch>)> {
+        vec![(lower, upper, emitted.into_iter().map(|(_, p)| p).collect())]
+    }
+
+    /// One `compare_and_append` per description the batches were written for, ascending by lower.
+    fn append_per_description(
+        emitted: Vec<(EmittedBatch, ProtoBatch)>,
+    ) -> Vec<(u64, u64, Vec<ProtoBatch>)> {
+        let mut by_desc: BTreeMap<(u64, u64), Vec<ProtoBatch>> = BTreeMap::new();
+        for (batch, proto) in emitted {
+            by_desc
+                .entry((batch.lower, batch.upper))
+                .or_default()
+                .push(proto);
+        }
+        by_desc
+            .into_iter()
+            .map(|((lower, upper), protos)| (lower, upper, protos))
+            .collect()
+    }
+
+    /// Applies each entry in `appends` as one `compare_and_append` over `[lower, upper)`, in order,
+    /// then reads the shard back as of `as_of` and returns the summed diffs.
+    ///
+    /// Batches written for different descriptions need separate entries, because persist rejects a
+    /// batch whose upper is below the append upper. A `lower` above a batch's own lower registers
+    /// it truncated, which is what the sink relies on when a concurrent writer has already claimed
+    /// part of the range.
+    ///
+    /// Part bounds validation is what catches a batch whose parts reach outside their registered
+    /// bounds, so the tests append for real rather than stopping at what `write_batches` emitted.
+    async fn append_and_read_back(
+        target: &CollectionMetadata,
+        persist_clients: &PersistClientCache,
+        appends: Vec<(u64, u64, Vec<ProtoBatch>)>,
+        as_of: u64,
+    ) -> i64 {
+        let persist_client = persist_clients
+            .open(target.persist_location.clone())
+            .await
+            .expect("could not open persist client");
+        let mut write = persist_client
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                target.data_shard,
+                Arc::new(target.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("could not open persist shard");
+
+        assert!(
+            write.validate_part_bounds_on_write(),
+            "part bounds validation is off, so this append proves nothing about batch bounds"
+        );
+
+        for (lower, upper, protos) in appends {
+            let mut batches: Vec<_> = protos
+                .into_iter()
+                .map(|proto| write.batch_from_transmittable_batch(proto))
+                .collect();
+            let mut to_append: Vec<_> = batches.iter_mut().collect();
+            write
+                .compare_and_append_batch(
+                    &mut to_append[..],
+                    frontier(lower),
+                    frontier(upper),
+                    true,
+                )
+                .await
+                .expect("invalid usage")
+                .expect("upper mismatch");
+
+            assert_eq!(write.fetch_recent_upper().await, &frontier(upper));
+        }
+
+        let mut read = persist_client
+            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                target.data_shard,
+                Arc::new(target.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("invalid usage");
+        let contents = read
+            .snapshot_and_fetch(frontier(as_of))
+            .await
+            .expect("since <= as_of");
+
+        contents.iter().map(|(_, _, d)| *d).sum()
+    }
+
+    /// Several descriptions can become ready in the same pass. Each is written under its own
+    /// bounds, so every batch holds exactly the updates its description covers however that ready
+    /// set happens to be ordered.
+    ///
+    /// NOTE: `in_flight_batches` is a `HashMap`, so the ready set comes out in no particular order.
+    /// Enough descriptions are used here that an all-ascending pass is unlikely.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_handles_descriptions_ready_in_one_pass() {
+        const DESCRIPTIONS: u64 = 6;
+        const DONE: u64 = DESCRIPTIONS * 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // One update inside each of the tiling descriptions [0,2), [2,4), ... None of them is ready
+        // until the frontier passes every upper, so they all come due together.
+        let mut script = vec![];
+        for i in 0..DESCRIPTIONS {
+            script.push(Step::Updates(i * 2 + 1, 1));
+        }
+        for i in 0..DESCRIPTIONS {
+            script.push(Step::Description(i * 2, i * 2 + 2));
+        }
+        script.push(Step::AdvanceTo(DONE));
+
+        let emitted = run_write_batches(target.clone(), Arc::clone(&persist_clients), script).await;
+
+        assert_eq!(
+            emitted.len(),
+            usize::cast_from(DESCRIPTIONS),
+            "one batch per description, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        for (batch, _) in &emitted {
+            assert!(
+                batch.lower <= batch.data_ts && batch.data_ts < batch.upper,
+                "batch {batch:?} holds data outside the description it was written for"
+            );
+        }
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            append_per_description(emitted),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(DESCRIPTIONS).expect("small"),
+            "every update should be readable exactly once"
+        );
+    }
+
+    /// A description that covers no updates must emit no batch, rather than open a builder that
+    /// has no data bounds to register.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_emits_nothing_for_a_description_with_no_updates() {
+        const SPLIT: u64 = 4;
+        const DONE: u64 = 8;
+
+        // Two descriptions in hand, with data only in the second.
+        let emitted = run_write_batches(
+            test_target(),
+            test_persist_clients(),
+            vec![
+                Step::Description(0, SPLIT),
+                Step::Description(SPLIT, DONE),
+                Step::AdvanceTo(SPLIT),
+                Step::Updates(SPLIT, 8),
+                Step::AdvanceTo(DONE),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            emitted
+                .iter()
+                .map(|(b, _)| (b.lower, b.upper))
+                .collect::<Vec<_>>(),
+            vec![(SPLIT, DONE)],
+            "only the description holding data should produce a batch",
+        );
+    }
+
+    /// A snapshot at time 1 pinning the frontier while replication delivers one update at each of
+    /// times 2..=`pinned_times`+1, with the description that covers the whole snapshot arriving
+    /// only at the end.
+    fn pinned_frontier_script(snapshot_rows: usize, pinned_times: u64, done: u64) -> Vec<Step> {
+        let mut script = vec![Step::Updates(1, snapshot_rows)];
+        for t in 2..=pinned_times + 1 {
+            script.push(Step::Updates(t, 1));
+        }
+        // The minter holds a capability at the shard upper for the whole snapshot, so its one
+        // description is emitted there, and the frontier then jumps past everything staged.
+        script.push(Step::Description(0, done));
+        script.push(Step::AdvanceTo(done));
+        script
+    }
+
+    /// A snapshot pins the export's frontier at its as_of while concurrent replication keeps
+    /// delivering updates at later times. Each timestamp writes a batch of its own, all finished
+    /// under the one description that arrives when the snapshot finishes.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_writes_one_batch_per_timestamp() {
+        const SNAPSHOT_ROWS: usize = 4;
+        const PINNED_TIMES: u64 = 16;
+        const DONE: u64 = PINNED_TIMES + 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            pinned_frontier_script(SNAPSHOT_ROWS, PINNED_TIMES, DONE),
+        )
+        .await;
+
+        // Every batch carries the description's bounds, since that is what they are finished
+        // under, and holds a single timestamp's updates.
+        let expected: Vec<_> = std::iter::once(EmittedBatch {
+            lower: 0,
+            upper: DONE,
+            data_ts: 1,
+            inserts: u64::cast_from(SNAPSHOT_ROWS),
+        })
+        .chain((2..=PINNED_TIMES + 1).map(|ts| EmittedBatch {
+            lower: 0,
+            upper: DONE,
+            data_ts: ts,
+            inserts: 1,
+        }))
+        .collect();
+        assert_eq!(
+            emitted.iter().map(|(b, _)| b.clone()).collect::<Vec<_>>(),
+            expected,
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(SNAPSHOT_ROWS).expect("small")
+                + i64::try_from(PINNED_TIMES).expect("small"),
+            "the same updates should be readable however they were batched"
+        );
+    }
 }
