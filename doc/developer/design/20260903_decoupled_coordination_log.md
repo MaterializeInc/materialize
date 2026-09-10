@@ -525,3 +525,24 @@ against final transaction state. Query references are reconstructed from SQL and
 separate from replacement-target dependencies. Storage preparation uses final catalog
 membership, including all collection versions, rather than installed collections.
 Shared live aliases prevent shard retirement, while orphan mappings do not.
+
+### 2026-09-10: Lifecycle placement and query client agreed with Aljoscha
+
+The controller bundle moves into one independent process whose interface is
+catalog following, enactment, and publication. It does not serve controller state
+to adapters or gate their catalog writes, so it can later dissolve into per-cluster
+followers. The adapter gets no remote controller API. It reads through a query
+client that owns its read requirements, learns storage frontiers from persist and
+compute frontiers from the fast protocol, and carries durable client protection
+from the start. That protection is pulled forward from milestone 3 so no bridge is
+built twice. Table appends and DDL stay with the adapter.
+
+Adapter DDL and lifecycle publication become two cooperating catalog writers.
+This is required concurrency once publication leaves the adapter, distinct from
+arbitrary numbers of adapters, which remain out of scope. The cluster side must
+accept a lifecycle connection and query connections at once.
+
+Milestone 2 is re-cut as independent maintained lifecycle with one adapter and
+one query client. Milestone 3 becomes multiplicity and isolation of query clients.
+Next: build the query client in-process, then the connection split, cooperating
+writers, and the process move, in that order.
