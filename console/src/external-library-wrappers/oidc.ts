@@ -24,6 +24,7 @@ import { useQuery } from "@tanstack/react-query";
 import { User, UserManager, WebStorageStateStore } from "oidc-client-ts";
 
 import { apiClient } from "~/api/apiClient";
+import { fetchConsoleConfig } from "~/api/materialize/consoleConfig";
 import { useAppConfig } from "~/config/useAppConfig";
 
 export interface OidcConfig {
@@ -32,37 +33,24 @@ export interface OidcConfig {
   scopes: string;
 }
 
-interface ConsoleConfigResponse {
-  oidc_issuer: string;
-  console_oidc_client_id: string;
-  console_oidc_scopes: string;
-}
-
 async function fetchOidcConfig(): Promise<OidcConfig> {
-  const response = await fetch("/api/console/config");
-  if (!response.ok) {
-    throw new Error(`Failed to fetch OIDC config: ${response.status}`);
-  }
-  const data: ConsoleConfigResponse = await response.json();
+  const config = await fetchConsoleConfig();
 
-  if (!data.console_oidc_client_id) {
+  if (!config.oidcClientId) {
     throw new Error(
       "To use SSO, OIDC client ID must be set. Configure the console_oidc_client_id system parameter: https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/",
     );
   }
-  if (
-    !data.console_oidc_scopes ||
-    !data.console_oidc_scopes.includes("openid")
-  ) {
+  if (!config.oidcScopes.includes("openid")) {
     throw new Error(
       "To use SSO, OIDC scopes must include at least 'openid'. Configure the console_oidc_scopes system parameter: https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/",
     );
   }
 
   return {
-    issuer: data.oidc_issuer,
-    clientId: data.console_oidc_client_id,
-    scopes: data.console_oidc_scopes,
+    issuer: config.issuer,
+    clientId: config.oidcClientId,
+    scopes: config.oidcScopes,
   };
 }
 
