@@ -6500,6 +6500,7 @@ dependencies = [
  "derivative",
  "differential-dataflow",
  "futures",
+ "imbl",
  "insta",
  "ipnet",
  "itertools 0.15.0",

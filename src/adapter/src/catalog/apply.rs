@@ -366,6 +366,9 @@ impl CatalogState {
                 );
             }
             StateUpdateKind::Item(item) => {
+                self.read_protection_changes.insert(item.global_id);
+                self.read_protection_changes
+                    .extend(item.extra_versions.values().copied());
                 self.apply_item_update(item, diff, retractions, local_expression_cache)?;
             }
             StateUpdateKind::Comment(comment) => {
@@ -386,16 +389,36 @@ impl CatalogState {
             }
             StateUpdateKind::CollectionCompactionBound(bound) => {
                 apply_inverted_lookup(
-                    &mut Arc::make_mut(&mut self.storage_metadata).compaction_bounds,
+                    &mut self.collection_compaction_bounds,
                     &bound.id,
                     bound.frontier.into_iter().collect(),
                     diff,
                 );
+                self.read_protection_changes.insert(bound.id);
+                self.update_storage_compaction_bound(bound.id);
             }
             StateUpdateKind::MaintainedReadRequirement(requirement) => {
                 let id = requirement.id;
+                self.read_protection_changes.insert(id);
+                self.read_protection_changes
+                    .extend(requirement.inputs.iter().copied());
+                if let Some(frontier) = requirement.frontier {
+                    for input in &requirement.inputs {
+                        let edge = (*input, frontier, id);
+                        match diff {
+                            StateDiff::Addition => {
+                                let prev = self.maintained_input_requirements.insert(edge);
+                                assert!(prev.is_none(), "requirement edge already exists");
+                            }
+                            StateDiff::Retraction => {
+                                let prev = self.maintained_input_requirements.remove(&edge);
+                                assert!(prev.is_some(), "requirement edge does not exist");
+                            }
+                        }
+                    }
+                }
                 apply_inverted_lookup(
-                    Arc::make_mut(&mut self.maintained_read_requirements),
+                    &mut self.maintained_read_requirements,
                     &id,
                     requirement,
                     diff,
@@ -1416,6 +1439,32 @@ impl CatalogState {
             storage_collection_metadata.shard,
             diff,
         );
+        self.read_protection_changes
+            .insert(storage_collection_metadata.id);
+        self.update_storage_compaction_bound(storage_collection_metadata.id);
+    }
+
+    fn update_storage_compaction_bound(&mut self, id: GlobalId) {
+        // Bounds and shard mappings can arrive in either order. Storage receives
+        // only the shard-backed projection, never permissions for compute traces.
+        let bound = self
+            .storage_metadata
+            .collection_metadata
+            .contains_key(&id)
+            .then(|| self.collection_compaction_bounds.get(&id))
+            .flatten();
+        if self.storage_metadata.compaction_bounds.get(&id) == bound {
+            return;
+        }
+        let metadata = Arc::make_mut(&mut self.storage_metadata);
+        match bound {
+            Some(bound) => {
+                metadata.compaction_bounds.insert(id, bound.clone());
+            }
+            None => {
+                metadata.compaction_bounds.remove(&id);
+            }
+        }
     }
 
     #[instrument(level = "debug")]

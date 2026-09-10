@@ -33,9 +33,7 @@ $ kafka-create-topic topic=test
 # and `replica_id` fields are dropped for versions where the audit-log struct
 # uses `#[serde(skip_serializing_if)]`, and source `external_type` is
 # exposed as `type`.
-# Exclude consistency-checker interval changes from this fixture's newest DDL events.
 > SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal' - 'scheduling_policies' - 'reason', user FROM mz_audit_events
-  WHERE (object_type = 'system' AND details->>'name' = 'catalog_read_protection_publish_interval') IS NOT TRUE
   ORDER BY id DESC LIMIT 4
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"type\":\"kafka\"}" materialize
 create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
@@ -49,7 +47,6 @@ create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 > SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal' - 'scheduling_policies' - 'reason', user FROM mz_audit_events
-  WHERE (object_type = 'system' AND details->>'name' = 'catalog_read_protection_publish_interval') IS NOT TRUE
   ORDER BY id DESC LIMIT 4
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"type\":\"load-generator\"}" materialize
 create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize

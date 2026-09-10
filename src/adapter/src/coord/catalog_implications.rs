@@ -257,6 +257,19 @@ impl Coordinator {
             self.catalog().system_config().notify_all_callbacks();
         }
 
+        // Logging indexes are installed with their cluster, so stage compute permission
+        // before applying any creates. Storage receives its bounds after registration.
+        let storage_metadata = self.catalog().state().storage_metadata();
+        let (storage_bounds, compute_bounds): (BTreeMap<_, _>, BTreeMap<_, _>) = compaction_bounds
+            .into_iter()
+            .partition(|(id, _)| storage_metadata.collection_metadata.contains_key(id));
+        for (id, bound) in compute_bounds {
+            self.controller
+                .compute
+                .apply_compaction_bound(id, bound)
+                .map_err(|error| AdapterError::Unstructured(error.into()))?;
+        }
+
         let mut tables_to_drop = BTreeSet::new();
         let mut sources_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
@@ -851,10 +864,10 @@ impl Coordinator {
 
         // New collections already enforce their committed bounds during creation.
         // Deliver advancements after same-batch creates, before drops release protection.
-        if !compaction_bounds.is_empty() {
+        if !storage_bounds.is_empty() {
             self.controller
                 .storage_collections
-                .apply_compaction_bounds(compaction_bounds)?;
+                .apply_compaction_bounds(storage_bounds)?;
         }
 
         // Create VPC endpoints for AWS PrivateLink connections

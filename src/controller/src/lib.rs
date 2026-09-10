@@ -678,6 +678,7 @@ impl Controller {
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
         read_only: bool,
+        catalog_read_protection_enabled: bool,
         storage_txn: &dyn StorageTxn,
     ) -> Self {
         if read_only {
@@ -726,6 +727,7 @@ impl Controller {
             config.build_info,
             storage_collections,
             read_only,
+            catalog_read_protection_enabled,
             &config.metrics_registry,
             config.persist_location,
             controller_metrics,

@@ -58,6 +58,53 @@ impl CatalogInconsistencies {
     }
 }
 
+impl super::Catalog {
+    pub(crate) async fn check_durable_consistency(
+        &self,
+        input: mz_catalog::durable::CatalogSnapshot,
+    ) -> Result<(), crate::AdapterError> {
+        self.check_consistency()
+            .map_err(|error| crate::AdapterError::Internal(error.to_string()))?;
+        let reconstructed = self.reconstruct_state(input).await?;
+        // Shard finalization is asynchronous and is not applied to CatalogState.
+        let unfinalized_shards = self
+            .state
+            .storage_metadata
+            .unfinalized_shards
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let memory = self.state.dump(None)?;
+        let disk = reconstructed.dump(Some(unfinalized_shards))?;
+        if memory != disk {
+            let memory_lines: Vec<_> = memory.lines().collect();
+            let disk_lines: Vec<_> = disk.lines().collect();
+            let common_len = memory_lines.len().min(disk_lines.len());
+            let first = (0..common_len)
+                .find(|&i| memory_lines[i] != disk_lines[i])
+                .unwrap_or(common_len);
+            let start = first.saturating_sub(5);
+            return Err(crate::AdapterError::Internal(format!(
+                "in-memory catalog differs from durable reconstruction at line {}\nmemory:\n{}\ndurable:\n{}",
+                first + 1,
+                memory_lines[start..]
+                    .iter()
+                    .take(20)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                disk_lines[start..]
+                    .iter()
+                    .take(20)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl CatalogState {
     /// Checks the [`CatalogState`] to make sure we're internally consistent.
     pub fn check_consistency(&self) -> Result<(), Box<CatalogInconsistencies>> {

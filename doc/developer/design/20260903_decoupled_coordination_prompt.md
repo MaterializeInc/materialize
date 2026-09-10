@@ -21,46 +21,29 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
-Milestone 1 remains active. Source/sink authorization and maintained compute
-permission are connected. What remains is removing machinery that grew beyond
-the design, recovery liveness, and performance evidence. Item 1 removes code and
-goes first.
+Milestone 1 remains active. Sparse index permission, no-wait reconstruction,
+changed-record publication and validation, and owned diagnostic reconstruction
+are integrated. Complete their production evidence before declaring the milestone.
 
-1. Index permission as published since: the design's Index reconstruction
-   decision now settles both halves of the paused question. A fresh index has no
-   bound record until first publication, so the MIN birth records and their
-   lifecycle threading through item, system-mapping, introspection, and cluster
-   mutation paths go, together with the whole-catalog `index_ids` scans in
-   validation. Installation selects the least readable frontier, capped by
-   permission where permission is at or above readability, and otherwise replaces
-   the index at readability with the bound following through publication. Remove
-   the read-only wait loop and the per-second re-delivery of all index bounds.
-   CREATE INDEX becomes one durable commit and `ship_new_dataflow` no longer
-   commits from inside an implication batch. Keep monotonicity and no-regression
-   for published bounds, and keep concurrent drops during bootstrap correct.
-2. Consistency checker: agreed to move the durable-to-memory reconstruction
-   behind the existing diagnostic check in environmentd, where a memory snapshot
-   and its durable upper are available together. Reconstruction is an ordinary
-   read-only open synced to that upper and then discarded. Run it off the
-   coordinator thread so a check does not stall DDL, and reuse the existing
-   snapshot path rather than adding a command variant. Then remove
-   `Command::CatalogDumpSnapshot`, `dump_upper`, the `mz-catalog-upper` header,
-   `freeze`/`freeze_at`, `FrozenReadonly`, and the `publish_interval = 0` pause
-   semantics if no test still needs them.
-3. Publication scaling: per-tick work and transaction validation must scale with
-   changed records, not with all collections or items. Then finish representative
-   measurements using the existing workflow, including DDL latency, subscriber
-   lag, and retained history, and record the numbers in the PR. Distinguish
-   publication overhead from workload and observer costs. Do not make a general
-   catalog redesign a prerequisite.
-4. Add a targeted test for final sink execution as-of selection using aggregate
-   readability rather than policy permission, including ungoverned collections.
-5. History: the 09-09 commits, including `wip: Integrate maintained recovery
+1. Production proof: run the restart and read-only index workflows in draft PR
+   CI, resolve integration findings, and demonstrate protection through actual
+   compaction and uncached recovery across maintained types. Keep claims about
+   bootstrap-drop ordering limited to the ordering the evidence establishes.
+   The large sparse fixture's identical indexes expose quadratic notice and
+   dependency work, amplified by cache-miss reconstruction on the coordinator.
+   Its scope split is awaiting Aljoscha's decision in the latest handoff. Do not
+   suppress the slow-message diagnostics or silently substitute a smaller cohort.
+2. Publication costs: finish representative measurements using the existing
+   workflow, including DDL latency, follower lag, and retained history. Separate
+   changed-record work from baseline catalog snapshot and storage-metadata cloning
+   costs. Distinguish publication, workload, and observer costs with controlled
+   comparisons, and record the numbers in the PR. Do not make a general catalog
+   redesign a prerequisite.
+3. History: the 09-09 commits, including `wip: Integrate maintained recovery
    protection`, are not yet one coherent story. Squash them before milestone 2
    work begins.
-6. Ownership transition: prioritize a production maintained-lifecycle subscriber
-   over more standalone APIs. The bound-only `CatalogSubscriber` is not that
-   outcome and should either grow into it or take a narrower name. Address
+4. Ownership transition: prioritize a production maintained-lifecycle subscriber
+   over more standalone APIs. The bound subscriber is not that outcome. Address
    creator-local plans, prepare_state's reliance on locally installed collections,
    and writer-side responsibility for complete maintained requirements: the
    sequencer supplies an MV's requirement as its own op, and the transaction
@@ -109,6 +92,10 @@ formatting and checks, and run targeted local tests when useful, not as a
 prerequisite for pushing. Follow the mz-debug-ci skill when investigating CI.
 Report pending or failed checks explicitly rather than treating a push as
 successful validation.
+
+Use draft PR CI for Docker/mzcompose demos and performance workloads. Avoid
+running them locally when CI can run them. Local verification should focus on
+formatting, compilation, and targeted Rust tests.
 
 Locally, `bin/fmt`, `cargo check`, and the Rust parts of `bin/lint`
 (check-cargo, check-formatting, check-python-docs) work. `bin/lint` also runs

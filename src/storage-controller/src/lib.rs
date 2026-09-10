@@ -3482,6 +3482,9 @@ where
         };
 
         let storage_instance_id = description.instance_id;
+        let remap_compaction_bound = self
+            .storage_collections
+            .compaction_bound(description.remap_collection_id)?;
         // Fetch the client for this ingestion's instance.
         let instance = self
             .instances
@@ -3491,7 +3494,11 @@ where
                 ingestion_id: id,
             })?;
 
-        let augmented_ingestion = Box::new(RunIngestionCommand { id, description });
+        let augmented_ingestion = Box::new(RunIngestionCommand {
+            id,
+            description,
+            remap_compaction_bound,
+        });
         instance.send(StorageCommand::RunIngestion(augmented_ingestion));
 
         Ok(())
@@ -3514,7 +3521,14 @@ where
         // reading it; otherwise assume we may have to replay from the beginning.
         let export_state = self.storage_collections.collection_frontiers(id)?;
         let mut as_of = description.sink.as_of.clone();
-        as_of.join_assign(&export_state.implied_capability);
+        // Policy permission alone does not prove recovery can skip history.
+        // The descriptor carries the recovery frontier, while actual readability
+        // also accounts for leases opened against a stale read-only snapshot.
+        as_of.join_assign(&export_state.read_capabilities);
+        let input_state = self
+            .storage_collections
+            .collection_frontiers(description.sink.from)?;
+        as_of.join_assign(&input_state.read_capabilities);
         let with_snapshot = description.sink.with_snapshot
             && !PartialOrder::less_than(&as_of, &export_state.write_frontier);
 
@@ -4143,4 +4157,297 @@ fn swap_updates(
         update.extend(replace_with.iter().map(|time| (*time, -1)));
     }
     update
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroI64;
+
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
+    use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
+    use mz_storage_client::storage_collections::StorageCollectionsImpl;
+    use mz_storage_types::connections::{KafkaConnection, Tunnel};
+    use mz_storage_types::sinks::{
+        KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
+        KafkaSinkFormatType, SinkEnvelope,
+    };
+
+    use super::*;
+
+    struct TestTxn(ShardId);
+
+    #[async_trait]
+    impl StorageTxn for TestTxn {
+        fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
+            BTreeMap::new()
+        }
+        fn insert_collection_metadata(
+            &mut self,
+            _: BTreeMap<GlobalId, ShardId>,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        fn delete_collection_metadata(
+            &mut self,
+            _: BTreeSet<GlobalId>,
+        ) -> Vec<(GlobalId, ShardId)> {
+            unimplemented!()
+        }
+        fn get_unfinalized_shards(&self) -> BTreeSet<ShardId> {
+            BTreeSet::new()
+        }
+        fn insert_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        fn remove_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) {
+            unimplemented!()
+        }
+        fn get_txn_wal_shard(&self) -> Option<ShardId> {
+            Some(self.0)
+        }
+        fn write_txn_wal_shard(&mut self, _: ShardId) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+    }
+
+    fn frontier(ts: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(ts.into())
+    }
+
+    async fn export_test_controller() -> (Controller, Arc<StorageCollectionsImpl>, PersistClient) {
+        let registry = MetricsRegistry::new();
+        let location = PersistLocation {
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
+        };
+        let mut config = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        config.critical_downgrade_interval = Duration::ZERO;
+        let cache = Arc::new(PersistClientCache::new(config, &registry, |_, _| {
+            PubSubClientConnection::noop()
+        }));
+        let persist = cache.open(location.clone()).await.unwrap();
+        // No replica connects and the sink has no secrets, so this reader performs no file I/O.
+        let secrets_reader = SecretsReaderCliArgs {
+            secrets_reader: SecretsControllerKind::LocalFile,
+            secrets_reader_local_file_dir: Some("/dev/null".into()),
+            secrets_reader_kubernetes_context: None,
+            secrets_reader_aws_prefix: None,
+            secrets_reader_name_prefix: None,
+        }
+        .load()
+        .await
+        .unwrap();
+        let context = ConnectionContext::for_tests(secrets_reader);
+        let txns_metrics = Arc::new(TxnMetrics::new(&registry));
+        let txn = TestTxn(ShardId::new());
+        let collections = Arc::new(
+            StorageCollectionsImpl::new(
+                location.clone(),
+                Arc::clone(&cache),
+                &registry,
+                SYSTEM_TIME.clone(),
+                Arc::clone(&txns_metrics),
+                NonZeroI64::new(1).unwrap(),
+                false,
+                context.clone(),
+                &txn,
+            )
+            .await,
+        );
+        let controller = Controller::new(
+            &DUMMY_BUILD_INFO,
+            location,
+            cache,
+            SYSTEM_TIME.clone(),
+            WallclockLagFn::new(SYSTEM_TIME.clone()),
+            txns_metrics,
+            false,
+            &registry,
+            ControllerMetrics::new(&registry),
+            context,
+            &txn,
+            Arc::<StorageCollectionsImpl>::clone(&collections),
+        )
+        .await;
+        (controller, collections, persist)
+    }
+
+    fn export_description(from: GlobalId) -> ExportDescription {
+        ExportDescription {
+            sink: StorageSinkDesc {
+                from,
+                from_desc: RelationDesc::empty(),
+                connection: StorageSinkConnection::Kafka(KafkaSinkConnection {
+                    connection_id: mz_repr::CatalogItemId::System(1),
+                    connection: KafkaConnection {
+                        brokers: Default::default(),
+                        default_tunnel: Tunnel::Direct,
+                        progress_topic: Default::default(),
+                        progress_topic_options: Default::default(),
+                        options: Default::default(),
+                        tls: Default::default(),
+                        sasl: Default::default(),
+                    },
+                    format: KafkaSinkFormat {
+                        key_format: None,
+                        value_format: KafkaSinkFormatType::Text,
+                    },
+                    relation_key_indices: None,
+                    key_desc_and_indices: None,
+                    headers_index: None,
+                    value_desc: RelationDesc::empty(),
+                    partition_by: Default::default(),
+                    topic: Default::default(),
+                    topic_options: Default::default(),
+                    compression_type: KafkaSinkCompressionType::None,
+                    progress_group_id: KafkaIdStyle::Legacy,
+                    transactional_id: KafkaIdStyle::Legacy,
+                    topic_metadata_refresh_interval: Default::default(),
+                }),
+                with_snapshot: true,
+                version: 0,
+                envelope: SinkEnvelope::Upsert,
+                as_of: frontier(5),
+                from_storage_metadata: (),
+                to_storage_metadata: (),
+                commit_interval: Default::default(),
+            },
+            instance_id: StorageInstanceId::system(1).unwrap(),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn run_export_uses_held_readability() {
+        for input_governed in [false, true] {
+            for sink_governed in [false, true] {
+                check_export_readability(input_governed, sink_governed).await;
+            }
+        }
+    }
+
+    async fn check_export_readability(input_governed: bool, sink_governed: bool) {
+        let (mut controller, collections, persist) = export_test_controller().await;
+        let input = GlobalId::User(1);
+        let sink = GlobalId::User(2);
+        let description = export_description(input);
+        let instance = description.instance_id;
+        let data_source = DataSource::Sink { desc: description };
+        let metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([(input, ShardId::new()), (sink, ShardId::new())]),
+            compaction_bounds: [(input, input_governed), (sink, sink_governed)]
+                .into_iter()
+                .filter_map(|(id, governed)| governed.then(|| (id, frontier(20))))
+                .collect(),
+            ..Default::default()
+        };
+        let mut sink_collection = CollectionDescription::for_other(RelationDesc::empty(), None);
+        sink_collection.data_source = data_source.clone();
+        collections
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                vec![
+                    (
+                        input,
+                        CollectionDescription::for_other(RelationDesc::empty(), Some(frontier(5))),
+                    ),
+                    (sink, sink_collection),
+                ],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        let [read_hold, self_hold] = collections
+            .acquire_read_holds(vec![input, sink])
+            .unwrap()
+            .try_into()
+            .expect("two holds");
+        collections.set_read_policies(vec![
+            (input, ReadPolicy::ValidFrom(frontier(20))),
+            (sink, ReadPolicy::ValidFrom(frontier(20))),
+        ]);
+        for (id, governed) in [(input, input_governed), (sink, sink_governed)] {
+            let state = collections.collection_frontiers(id).unwrap();
+            assert_eq!(state.implied_capability, frontier(20));
+            assert_eq!(state.read_capabilities, frontier(5));
+            assert_eq!(
+                collections.compaction_bound(id).unwrap(),
+                governed.then(|| frontier(20))
+            );
+        }
+        controller.create_instance(instance, None);
+        controller.collections.insert(
+            sink,
+            CollectionState::new(
+                data_source,
+                collections.collection_metadata(sink).unwrap(),
+                CollectionStateExtra::Export(ExportState::new(
+                    instance,
+                    read_hold,
+                    self_hold,
+                    frontier(0),
+                    ReadPolicy::step_back(),
+                )),
+                controller.metrics.wallclock_lag_metrics(sink, None),
+            ),
+        );
+        let mut writer = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                metadata.collection_metadata[&sink],
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        for (upper, since, snapshot) in [(0, 5, true), (5, 5, true), (6, 5, false), (21, 20, false)]
+        {
+            if writer.upper() != &frontier(upper) {
+                writer
+                    .compare_and_append(
+                        Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                        writer.upper().clone(),
+                        frontier(upper),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            controller.update_write_frontier(sink, &frontier(upper));
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let state = collections.collection_frontiers(sink).unwrap();
+                    if state.write_frontier == frontier(upper)
+                        && state.read_capabilities == frontier(since)
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            controller.run_export(sink).unwrap();
+            let command = controller.instances[&instance]
+                .get_export_description(&sink)
+                .unwrap();
+            assert_eq!(
+                command.as_of,
+                frontier(since),
+                "input_governed={input_governed}, sink_governed={sink_governed}, upper={upper}"
+            );
+            assert_eq!(command.with_snapshot, snapshot);
+            assert_eq!(
+                command.from_storage_metadata,
+                collections.collection_metadata(input).unwrap()
+            );
+            assert_eq!(
+                command.to_storage_metadata,
+                collections.collection_metadata(sink).unwrap()
+            );
+        }
+    }
 }

@@ -362,7 +362,7 @@ impl StateUpdateKindJson {
         serde_json::from_value::<D>(serde_value)
     }
 
-    fn kind(&self) -> &str {
+    pub(crate) fn kind(&self) -> &str {
         let row = self.0.row();
         let mut iter = row.unpack_first().unwrap_map().iter();
         let datum = iter

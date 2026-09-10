@@ -131,6 +131,11 @@ pub struct RunIngestionCommand {
     /// The description of what source type should be ingested and what post-processing steps must
     /// be applied to the data before writing them down into the storage collection
     pub description: IngestionDescription<CollectionMetadata>,
+    /// Committed compaction permission for the remap collection, used as a lower bound on
+    /// ingestion as-of even when physical compaction lags. `None` denotes a legacy collection.
+    /// Must not exceed any unfinished ordinary export's recovery requirement.
+    #[serde(default)]
+    pub remap_compaction_bound: Option<Antichain<Timestamp>>,
 }
 
 /// A command that starts ingesting the given ingestion description

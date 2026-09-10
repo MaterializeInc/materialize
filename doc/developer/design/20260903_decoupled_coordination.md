@@ -123,12 +123,11 @@ valid, compute and persist compaction must respect it, including through
 dependencies, installation, and ownership handover. One client cannot release
 another's protection.
 
-Committed permission bounds a dataflow's installation `as_of` from above. Installing
-a maintained collection at an `as_of` beyond its committed permission discards
-history without authorization, so `as_of` selection treats permission as a hard
-constraint rather than waiting for permission to catch up. An MV's initial storage
-visibility boundary remains a distinct concept. The representation and accounting
-mechanisms for individual read requirements remain implementation choices.
+Installation `as_of` selection respects committed permission, with the replacement
+semantics for indexes described in [Index reconstruction](#index-reconstruction).
+An MV's initial storage visibility boundary remains a distinct concept. The
+representation and accounting mechanisms for individual read requirements remain
+implementation choices.
 
 Propagation to persist critical since handles must respect all valid read
 requirements. Those handles are the durable backstop, not a substitute for
@@ -207,10 +206,9 @@ remain protected by execution holds.
 ### Read-only prewarming
 
 Preserve prewarming by following committed catalog permission independently of the
-SQL savepoint. Read-only bootstrap installs within that permission and does not
-wait for the writer to advance it. A local savepoint write grants no compaction
-permission, and there is no startup-specific writer protocol or reconstruction
-exemption.
+SQL savepoint. Read-only bootstrap follows [Index reconstruction](#index-reconstruction)
+without waiting for the writer. A local savepoint write grants no compaction
+permission, and there is no startup-specific writer protocol.
 
 ## Alternatives
 
