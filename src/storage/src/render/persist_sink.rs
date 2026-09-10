@@ -169,7 +169,12 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     builder: BatchBuilder<K, V, T, D>,
-    data_ts: T,
+    /// Largest update timestamp staged so far, `None` while empty.
+    ///
+    /// `append_batches` needs this to decide, after an `UpperMismatch`, whether a batch lies
+    /// entirely below a raised append lower. A batch completely below the append lower is
+    /// deleted. A batch whose data straddles an append lower has its bounds adjusted instead.
+    data_max_ts: Option<T>,
     metrics: BatchMetrics,
 }
 
@@ -180,33 +185,35 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Monoid + Codec64,
 {
-    /// Creates a new batch.
-    ///
-    /// NOTE(benesch): temporary restriction: all updates added to the batch
-    /// must be at the specified timestamp `data_ts`.
-    fn new(builder: BatchBuilder<K, V, T, D>, data_ts: T) -> Self {
+    /// Creates a new batch. Updates at any timestamp at or beyond the builder's lower may be
+    /// added, in any order.
+    fn new(builder: BatchBuilder<K, V, T, D>) -> Self {
         BatchBuilderAndMetadata {
             builder,
-            data_ts,
+            data_max_ts: None,
             metrics: Default::default(),
         }
     }
 
     /// Adds an update to the batch.
-    ///
-    /// NOTE(benesch): temporary restriction: all updates added to the batch
-    /// must be at the timestamp specified during creation.
     async fn add(&mut self, k: &K, v: &V, t: &T, d: &D) {
-        assert_eq!(
-            self.data_ts, *t,
-            "BatchBuilderAndMetadata::add called with a timestamp {t:?} that does not match creation timestamp {:?}",
-            self.data_ts
-        );
+        self.data_max_ts = Some(match self.data_max_ts.take() {
+            Some(max) => max.join(t),
+            None => t.clone(),
+        });
 
         self.builder.add(k, v, t, d).await.expect("invalid usage");
     }
 
+    /// Finishes the batch, registering it under `lower` and `upper`.
+    ///
+    /// Panics if no update was ever added, since an empty batch has no largest timestamp. Callers
+    /// open a builder on the first update rather than up front, so reaching this is a bug.
     async fn finish(self, lower: Antichain<T>, upper: Antichain<T>) -> HollowBatchAndMetadata<T> {
+        let data_max_ts = self.data_max_ts.expect("finishing an empty builder");
+        // `BatchBuilder::finish` rejects an update at or beyond `upper`, so a builder that was
+        // handed updates outside the description it is being finished under fails here rather
+        // than producing a batch whose parts reach past their registered bounds.
         let batch = self
             .builder
             .finish(upper.clone())
@@ -215,7 +222,7 @@ where
         HollowBatchAndMetadata {
             lower,
             upper,
-            data_ts: self.data_ts,
+            data_max_ts,
             batch: batch.into_transmittable_batch(),
             metrics: self.metrics,
         }
@@ -231,7 +238,7 @@ where
 struct HollowBatchAndMetadata<T> {
     lower: Antichain<T>,
     upper: Antichain<T>,
-    data_ts: T,
+    data_max_ts: T,
     batch: ProtoBatch,
     metrics: BatchMetrics,
 }
@@ -246,7 +253,33 @@ struct BatchSet {
 #[derive(Debug)]
 struct FinishedBatch {
     batch: Batch<SourceData, (), mz_repr::Timestamp, StorageDiff>,
-    data_ts: mz_repr::Timestamp,
+    data_max_ts: mz_repr::Timestamp,
+}
+
+/// The batch builder the source sink writes with.
+type SourceBatchBuilder = BatchBuilderAndMetadata<SourceData, (), mz_repr::Timestamp, StorageDiff>;
+
+/// Adds one update to `builder`, keeping the batch metrics in step.
+async fn stage_update(
+    builder: &mut SourceBatchBuilder,
+    row: Result<Row, DataflowError>,
+    ts: mz_repr::Timestamp,
+    diff: Diff,
+) {
+    let is_value = row.is_ok();
+
+    builder
+        .add(&SourceData(row), &(), &ts, &diff.into_inner())
+        .await;
+
+    // Note that we assume `diff` is either +1 or -1 here, being anything else is a logic bug we
+    // can't handle at the metric layer. We also assume this addition doesn't overflow.
+    match (is_value, diff.is_positive()) {
+        (true, true) => builder.metrics.inserts += diff.unsigned_abs(),
+        (true, false) => builder.metrics.retractions += diff.unsigned_abs(),
+        (false, true) => builder.metrics.error_inserts += diff.unsigned_abs(),
+        (false, false) => builder.metrics.error_retractions += diff.unsigned_abs(),
+    }
 }
 
 /// Continuously writes the `desired_stream` into persist
@@ -695,33 +728,10 @@ fn write_batches<'scope>(
                                 let builder = stashed_batches.entry(ts).or_insert_with(|| {
                                     BatchBuilderAndMetadata::new(
                                         write.builder(operator_batch_lower.clone()),
-                                        ts,
                                     )
                                 });
-
-                                let is_value = row.is_ok();
-
-                                builder
-                                    .add(&SourceData(row), &(), &ts, &diff.into_inner())
-                                    .await;
-
+                                stage_update(builder, row, ts, diff).await;
                                 source_statistics.inc_updates_staged_by(1);
-
-                                // Note that we assume `diff` is either +1 or -1 here, being anything
-                                // else is a logic bug we can't handle at the metric layer. We also
-                                // assume this addition doesn't overflow.
-                                match (is_value, diff.is_positive()) {
-                                    (true, true) => builder.metrics.inserts += diff.unsigned_abs(),
-                                    (true, false) => {
-                                        builder.metrics.retractions += diff.unsigned_abs()
-                                    }
-                                    (false, true) => {
-                                        builder.metrics.error_inserts += diff.unsigned_abs()
-                                    }
-                                    (false, false) => {
-                                        builder.metrics.error_retractions += diff.unsigned_abs()
-                                    }
-                                }
                             }
                         }
                     }
@@ -1071,7 +1081,7 @@ fn append_batches<'scope>(
 
                                 batches.finished.push(FinishedBatch {
                                     batch: write.batch_from_transmittable_batch(batch.batch),
-                                    data_ts: batch.data_ts,
+                                    data_max_ts: batch.data_max_ts,
                                 });
                                 batches.batch_metrics += &batch.metrics;
                             }
@@ -1371,13 +1381,17 @@ fn append_batches<'scope>(
                             let new_done_batch_metadata =
                                 (new_batch_lower.clone(), batch_upper.clone());
 
-                            // Retain any batches that are still in advance of
-                            // the new lower, and delete any batches that are
-                            // not.
+                            // Re-append every batch that still holds something we owe, under the
+                            // narrowed description. A batch may hold data on both sides of the new
+                            // lower: persist registers it truncated and filters the updates
+                            // outside the registered bounds on read, so the ones the concurrent
+                            // writer already committed do not come back. A batch entirely below
+                            // the new lower owes nothing and is deleted instead, to keep parts
+                            // that would be truncated away in full out of shard state.
                             let mut batch_delete_futures = vec![];
                             let mut new_batch_set = BatchSet::default();
                             for batch in batches {
-                                if new_batch_lower.less_equal(&batch.data_ts) {
+                                if new_batch_lower.less_equal(&batch.data_max_ts) {
                                     new_batch_set.finished.push(batch);
                                 } else {
                                     batch_delete_futures.push(batch.batch.delete());
@@ -1461,7 +1475,7 @@ mod tests {
     struct EmittedBatch {
         lower: u64,
         upper: u64,
-        data_ts: u64,
+        data_max_ts: u64,
         inserts: u64,
     }
 
@@ -1534,7 +1548,7 @@ mod tests {
                                     EmittedBatch {
                                         lower: b.lower.as_option().expect("single lower").into(),
                                         upper: b.upper.as_option().expect("single upper").into(),
-                                        data_ts: b.data_ts.into(),
+                                        data_max_ts: b.data_max_ts.into(),
                                         inserts: b.metrics.inserts,
                                     },
                                     b.batch.clone(),
@@ -1775,7 +1789,7 @@ mod tests {
         );
         for (batch, _) in &emitted {
             assert!(
-                batch.lower <= batch.data_ts && batch.data_ts < batch.upper,
+                batch.lower <= batch.data_max_ts && batch.data_max_ts < batch.upper,
                 "batch {batch:?} holds data outside the description it was written for"
             );
         }
@@ -1866,13 +1880,13 @@ mod tests {
         let expected: Vec<_> = std::iter::once(EmittedBatch {
             lower: 0,
             upper: DONE,
-            data_ts: 1,
+            data_max_ts: 1,
             inserts: u64::cast_from(SNAPSHOT_ROWS),
         })
         .chain((2..=PINNED_TIMES + 1).map(|ts| EmittedBatch {
             lower: 0,
             upper: DONE,
-            data_ts: ts,
+            data_max_ts: ts,
             inserts: 1,
         }))
         .collect();
