@@ -840,6 +840,7 @@ mod tests {
         let expr = HirRelationExpr::Get {
             id: mz_expr::Id::Global(TABLE_GID),
             typ: desc.typ().clone(),
+            changes_as_of: None,
         };
 
         let df_desc = optimize_from(

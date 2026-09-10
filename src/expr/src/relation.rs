@@ -124,6 +124,11 @@ pub enum MirRelationExpr {
         /// by `prune_and_annotate_dataflow_index_imports`. Note that this is not used by the
         /// lowering to LIR, but is used only by EXPLAIN.
         access_strategy: AccessStrategy,
+        /// If set, this reads the collection's history from the given time onward as an
+        /// append-only collection: one `(row..., mz_timestamp, mz_diff)` row per consolidated
+        /// update, with `typ` describing those promoted rows. Only meaningful for global ids
+        /// backed by a persist shard whose since is pinned at or before the time.
+        changes_as_of: Option<mz_repr::Timestamp>,
     },
     /// Introduce a temporary dataflow.
     ///
@@ -1135,6 +1140,7 @@ impl MirRelationExpr {
             id: Id::Local(id),
             typ,
             access_strategy: AccessStrategy::UnknownOrLocal,
+            changes_as_of: None,
         }
     }
 
@@ -1144,6 +1150,22 @@ impl MirRelationExpr {
             id: Id::Global(id),
             typ,
             access_strategy: AccessStrategy::UnknownOrLocal,
+            changes_as_of: None,
+        }
+    }
+
+    /// Constructs the expression for reading a global collection's history from `as_of` onward
+    /// as promoted `(row..., mz_timestamp, mz_diff)` rows; `typ` must describe those rows.
+    pub fn global_get_changes(
+        id: GlobalId,
+        typ: ReprRelationType,
+        as_of: mz_repr::Timestamp,
+    ) -> Self {
+        MirRelationExpr::Get {
+            id: Id::Global(id),
+            typ,
+            access_strategy: AccessStrategy::UnknownOrLocal,
+            changes_as_of: Some(as_of),
         }
     }
 
@@ -1590,6 +1612,7 @@ impl MirRelationExpr {
                 id: Id::Local(id),
                 typ: self.typ(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
+                changes_as_of: None,
             };
             let body = (body)(id_gen, get)?;
             Ok(MirRelationExpr::Let {
@@ -4210,14 +4233,16 @@ mod structured_diff {
                             id: id1,
                             typ: typ1,
                             access_strategy: as1,
+                            changes_as_of: c1,
                         },
                         MirRelationExpr::Get {
                             id: id2,
                             typ: typ2,
                             access_strategy: as2,
+                            changes_as_of: c2,
                         },
                     ) => {
-                        if id1 != id2 || typ1 != typ2 || as1 != as2 {
+                        if id1 != id2 || typ1 != typ2 || as1 != as2 || c1 != c2 {
                             return Some((expr1, expr2));
                         }
                     }

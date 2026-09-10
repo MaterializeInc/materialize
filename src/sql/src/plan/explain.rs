@@ -113,6 +113,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) {
                         let mut subquery = Get {
                             id: Id::Local(local_id.clone()),
                             typ: SqlRelationType::empty(), // TODO (aalexandrov)
+                            changes_as_of: None,
                         };
                         // swap the current subquery with the replacement
                         std::mem::swap(expr, &mut subquery);

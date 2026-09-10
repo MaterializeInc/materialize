@@ -279,13 +279,18 @@ impl HirRelationExpr {
                         typ: ReprRelationType::from(&typ),
                     })
                 }
-                Get { id, typ } => match id {
+                Get {
+                    id,
+                    typ,
+                    changes_as_of,
+                } => match id {
                     mz_expr::Id::Local(local_id) => {
                         let cte_desc = cte_map.get(&local_id).unwrap();
                         let get_cte = SR::Get {
                             id: mz_expr::Id::Local(cte_desc.new_id.clone()),
                             typ: cte_desc.relation_type.clone(),
                             access_strategy: AccessStrategy::UnknownOrLocal,
+                            changes_as_of: None,
                         };
                         if get_outer == cte_desc.outer_relation {
                             // If the CTE was applied to the same exact relation, we can safely
@@ -339,6 +344,7 @@ impl HirRelationExpr {
                             id,
                             typ: ReprRelationType::from(&typ),
                             access_strategy: AccessStrategy::UnknownOrLocal,
+                            changes_as_of,
                         })
                     }
                 },

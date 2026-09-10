@@ -114,6 +114,8 @@ pub enum HirRelationExpr {
     Get {
         id: mz_expr::Id,
         typ: SqlRelationType,
+        /// See `MirRelationExpr::Get::changes_as_of`.
+        changes_as_of: Option<mz_repr::Timestamp>,
     },
     /// Mutually recursive CTE
     LetRec {
@@ -2580,7 +2582,7 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2663,7 +2665,7 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2746,7 +2748,7 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2830,7 +2832,7 @@ impl VisitChildren<Self> for HirRelationExpr {
 
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2909,7 +2911,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         let mut v: Vec<&HirRelationExpr> = vec![];
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -2999,7 +3001,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         let mut v = vec![];
         use HirRelationExpr::*;
         match self {
-            Constant { rows: _, typ: _ } | Get { id: _, typ: _ } => (),
+            Constant { rows: _, typ: _ } | Get { .. } => (),
             Let {
                 name: _,
                 id: _,
@@ -3093,7 +3095,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get { .. }
             | Let {
                 name: _,
                 id: _,
@@ -3170,7 +3172,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get { .. }
             | Let {
                 name: _,
                 id: _,
@@ -3247,7 +3249,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get { .. }
             | Let {
                 name: _,
                 id: _,
@@ -3325,7 +3327,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get { .. }
             | Let {
                 name: _,
                 id: _,
@@ -3403,7 +3405,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get { .. }
             | Let {
                 name: _,
                 id: _,
@@ -3463,7 +3465,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
         use HirRelationExpr::*;
         match self {
             Constant { rows: _, typ: _ }
-            | Get { id: _, typ: _ }
+            | Get { .. }
             | Let {
                 name: _,
                 id: _,

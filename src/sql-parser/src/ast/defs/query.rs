@@ -573,6 +573,13 @@ pub enum TableFactor<T: AstInfo> {
         name: T::ItemName,
         alias: Option<TableAlias>,
     },
+    /// `CHANGES(name AS OF expr)`: the consolidated update history of `name` from the given time
+    /// onward, with `mz_timestamp` and `mz_diff` as trailing columns.
+    Changes {
+        name: T::ItemName,
+        as_of: Expr<T>,
+        alias: Option<TableAlias>,
+    },
     Function {
         function: Function<T>,
         alias: Option<TableAlias>,
@@ -603,6 +610,17 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
         match self {
             TableFactor::Table { name, alias } => {
                 f.write_node(name);
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
+            }
+            TableFactor::Changes { name, as_of, alias } => {
+                f.write_str("CHANGES(");
+                f.write_node(name);
+                f.write_str(" AS OF ");
+                f.write_node(as_of);
+                f.write_str(")");
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
                     f.write_node(alias);

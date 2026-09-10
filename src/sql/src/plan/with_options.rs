@@ -464,6 +464,56 @@ impl ImpliedValue for OptionalDuration {
     }
 }
 
+/// The value of a `RETAIN HISTORY` option: a duration to lag the write frontier by, or a fixed
+/// time from which history is retained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetainHistoryValue {
+    For(OptionalDuration),
+    PinAt(mz_repr::Timestamp),
+}
+
+impl<T: AstInfo + std::fmt::Debug> TryFromValue<WithOptionValue<T>> for RetainHistoryValue {
+    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::RetainHistoryPinAt(value) => {
+                let s = match value {
+                    Value::Number(n) => n,
+                    Value::String(s) => s,
+                    other => sql_bail!("invalid RETAIN HISTORY PIN AT value: {other:?}"),
+                };
+                let ts = s.parse::<mz_repr::Timestamp>().map_err(|e| {
+                    PlanError::Unstructured(format!("invalid RETAIN HISTORY PIN AT value: {e}"))
+                })?;
+                Ok(RetainHistoryValue::PinAt(ts))
+            }
+            v => Ok(RetainHistoryValue::For(OptionalDuration::try_from_value(
+                v,
+            )?)),
+        }
+    }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<T>> {
+        match self {
+            RetainHistoryValue::For(d) => Some(WithOptionValue::RetainHistoryFor(
+                d.try_into_value(catalog)?,
+            )),
+            RetainHistoryValue::PinAt(ts) => Some(WithOptionValue::RetainHistoryPinAt(
+                Value::Number(ts.to_string()),
+            )),
+        }
+    }
+
+    fn name() -> String {
+        "retain history value".to_string()
+    }
+}
+
+impl ImpliedValue for RetainHistoryValue {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a RETAIN HISTORY value")
+    }
+}
+
 impl TryFromValue<Value> for String {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
@@ -724,7 +774,8 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             }
             WithOptionValue::Ident(v) => V::try_from_value(Value::String(v.into_string())),
             WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
-            WithOptionValue::Sequence(_)
+            WithOptionValue::RetainHistoryPinAt(_)
+            | WithOptionValue::Sequence(_)
             | WithOptionValue::Map(_)
             | WithOptionValue::Item(_)
             | WithOptionValue::UnresolvedItemName(_)
@@ -745,6 +796,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     // The first few are unreachable because they are handled at the top of the outer match.
                     WithOptionValue::Value(_) => unreachable!(),
                     WithOptionValue::RetainHistoryFor(_) => unreachable!(),
+                    WithOptionValue::RetainHistoryPinAt(_) => "retain history pins",
                     WithOptionValue::ClusterAlterStrategy(_) => "cluster alter strategy",
                     WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Map(_) => "maps",
