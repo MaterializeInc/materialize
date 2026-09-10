@@ -503,3 +503,25 @@ collection assumptions, and sequencer-supplied MV requirements remain transition
 Keep the bounded performance scope, baseline catalog cloning costs, and deferred
 identical-index scaling work explicit rather than folding a general redesign into
 the ownership transition.
+
+### 2026-09-10: Lifecycle extraction cost question
+
+Controller servicing, protection publication, table registration, and managed-cluster
+reconciliation still depend on the coordinator. Moving installation into implications
+alone does not establish adapter-process independence. A full catalog follower must
+also preserve transaction boundaries rather than pass several transactions' parsed
+updates into implications as one unconsolidated batch.
+
+Pending guidance from Aljoscha: the proposed extraction keeps the controller bundle
+in an independently running lifecycle service, with single-adapter controller access
+initially. This brings the required cross-process access boundary forward, but not
+milestone 3's independent clients or durable client protection. The service extraction
+is paused on its implementation cost. Writer-owned MV admission and catalog-owned
+storage metadata preparation are bounded prerequisites that can proceed independently.
+
+The writer derives complete MV requirements from query references and committed input
+permission. A sequencer-selected frontier is optional, with birth promises checked
+against final transaction state. Query references are reconstructed from SQL and kept
+separate from replacement-target dependencies. Storage preparation uses final catalog
+membership, including all collection versions, rather than installed collections.
+Shared live aliases prevent shard retirement, while orphan mappings do not.

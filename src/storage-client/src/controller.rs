@@ -240,7 +240,8 @@ impl StorageMetadata {
 pub trait StorageTxn {
     /// Retrieve all of the visible storage metadata.
     ///
-    /// The value of this map should be treated as opaque.
+    /// The value of this map should be treated as opaque. Mappings can outlive
+    /// their catalog collections, so their presence does not establish liveness.
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId>;
 
     /// Add new storage metadata for a collection.

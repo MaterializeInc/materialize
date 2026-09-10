@@ -755,6 +755,7 @@ impl Coordinator {
                     desc,
                     collections,
                     resolved_ids,
+                    query_ids,
                     dependencies,
                     replacement_target,
                     cluster_id,

@@ -851,7 +851,7 @@ impl Catalog {
                     && born.contains(&mv.global_id_writes())
                 {
                     let inputs = state.logical_collection_inputs(
-                        mv.resolved_ids
+                        mv.query_ids
                             .collections()
                             .copied()
                             .chain(mv.raw_expr.depends_on())

@@ -1031,6 +1031,7 @@ mod tests {
             _ids_to_add: BTreeSet<GlobalId>,
             _ids_to_drop: BTreeSet<GlobalId>,
             _ids_to_register: BTreeMap<GlobalId, ShardId>,
+            _live_collection_ids: &BTreeSet<GlobalId>,
         ) -> Result<(), StorageError> {
             unimplemented!()
         }

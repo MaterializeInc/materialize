@@ -797,6 +797,7 @@ impl StorageCollections for EmptyStorage {
         _ids_to_add: BTreeSet<GlobalId>,
         _ids_to_drop: BTreeSet<GlobalId>,
         _ids_to_register: BTreeMap<GlobalId, ShardId>,
+        _live_collection_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
         unimplemented!("storage is not used by these compute tests")
     }
