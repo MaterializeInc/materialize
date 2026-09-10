@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/mysql.rs
-revision: 47a81d6e64
+revision: 4c45b862e2
 ---
 
 # mz-storage::source::mysql
