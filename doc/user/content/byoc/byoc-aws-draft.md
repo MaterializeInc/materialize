@@ -24,23 +24,23 @@ operations from its control plane.
 BYOC is a good fit if you need:
 
 - **Data residency**: your data stays in your own cloud account and VPC.
-- **Network isolation**: no data path through Materialize-managed infrastructure.
-- **Compliance**: when direct control of infrastructure is necessary or more suitable, possibly including HIPAA, PCI-DSS*, or other frameworks.
+- **Network isolation**: your query traffic never traverses Materialize-managed infrastructure.
+- **Compliance**: when direct control of the underlying infrastructure is necessary or more suitable for your requirements.
 - **Cost visibility**: compute and storage are billed directly to your AWS account.
 
 {{< note >}}
 BYOC is set up together with the Materialize team. This guide describes the
-steps; your Materialize contact coordinates the handoff. BYOC on AWS requires an
-active BYOC subscription.
+steps; your Materialize contact coordinates the handoff.
 {{< /note >}}
 
 ## How it works
 
 Your environment runs entirely in your AWS account. Materialize provisions and
 operates it across your account boundary using an IAM role you create, scoped by
-permission boundaries you control. Only operational telemetry (logs and metrics,
-with sensitive values redacted) leaves your account so Materialize can monitor
-and support the deployment.
+permission boundaries you control. Operational telemetry (logs and metrics)
+leaves your account so Materialize can monitor and support the deployment.
+Sensitive data is excluded at the application level, so it is never written into
+a log or a metric in the first place.
 
 ![BYOC on AWS architecture](/images/byoc-aws-architecture.svg)
 
@@ -48,7 +48,8 @@ and support the deployment.
 
 - An AWS account, and the AWS region you want to run in.
 - Permission to run CloudFormation and create IAM roles in that account.
-- An active Materialize BYOC subscription.
+- Quota in that account and region for the instance types, local NVMe storage, and IP addresses your environment needs. Your Materialize contact will size this with you.
+- No inherited service control policy that blocks the permissions Materialize needs. Materialize cannot detect these in advance, so this is worth checking before you start.
 
 {{< tip >}}
 **Recommended: a dedicated AWS account.** We recommend running BYOC in a
@@ -103,8 +104,17 @@ Provisioning takes roughly one hour.
 ## Step 4: Connect
 
 Once provisioning completes, Materialize shares your connection details.
-Establish an AWS PrivateLink connection from your VPC to reach the environment
-privately.
+
+Both private and public access are supported, and you choose which you want at
+provisioning time: a private endpoint reachable only from inside your own
+network, over AWS PrivateLink or VPC peering, or a public endpoint with IP
+allowlisting.
+
+{{< note >}}
+Draft: the access model is chosen when your environment is provisioned and is not
+straightforward to change afterwards, so raise your preference with your
+Materialize contact early.
+{{< /note >}}
 
 ## Security model
 
@@ -135,22 +145,29 @@ privately.
 
 ## Observability
 
-Your data stays in your account. Operational telemetry is collected so
-Materialize can monitor and support your deployment, and sensitive values in logs
-are redacted before anything leaves your account. A copy of your metrics and logs
-is also kept in your account (Loki for logs and a Prometheus-compatible
-store for metrics) so you can query it with your own tools.
+A full monitoring stack is deployed in your account as part of provisioning:
+Loki for logs, a Prometheus-compatible store for metrics, and Grafana at a real
+hostname with TLS, along with dashboards and alert rules. It is yours, under your
+retention, and you can point your own tools at it.
+
+The same set of logs and metrics is emitted both to your stack and to
+Materialize, so that Materialize can monitor and support the deployment.
+Sensitive data is excluded at the application level rather than filtered on the
+way out, so row-level data from your tables and views is never written into a log
+or a metric.
 
 ## Upgrades
 
 Materialize keeps your environment current, applying version upgrades the same
-way as Materialize Cloud.
+way as Materialize Cloud: about weekly, driven from the Materialize control
+plane. Upgrades are rolling, so a new instance comes up alongside the old one
+before the old one is removed, and your account needs enough headroom for both.
+Major versions are not skipped, and downgrades are not supported.
 
 ## Other clouds
 
-BYOC launches on AWS first. Support for GCP and Azure is on the roadmap. If you
-run on GCP or Azure and are interested in BYOC, let your Materialize contact know
-so we can factor your needs into sequencing.
+BYOC is in development on AWS and GCP; Azure is on the roadmap. See
+[BYOC on GCP](/byoc/byoc-gcp-draft/).
 
 ## Need help?
 
