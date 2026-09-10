@@ -431,6 +431,7 @@ impl Coordinator {
         let mut update_http_config = false;
         let mut update_advance_timelines_interval = false;
         let mut update_optimizer_e2e_latency_warning_threshold = false;
+        let mut reconcile_metric_sinks = false;
 
         for op in &ops {
             match op {
@@ -487,6 +488,7 @@ impl Coordinator {
                     update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
                     update_optimizer_e2e_latency_warning_threshold |=
                         name == vars::OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD.name();
+                    reconcile_metric_sinks |= name == vars::DISABLED_METRIC_SINKS.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -504,6 +506,7 @@ impl Coordinator {
                     update_http_config = true;
                     update_advance_timelines_interval = true;
                     update_optimizer_e2e_latency_warning_threshold = true;
+                    reconcile_metric_sinks = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
@@ -701,6 +704,9 @@ impl Coordinator {
                     .optimizer_e2e_latency_warning_threshold();
                 self.optimizer_metrics
                     .set_e2e_optimization_time_log_threshold(threshold);
+            }
+            if reconcile_metric_sinks {
+                self.reconcile_metric_sinks().await;
             }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))

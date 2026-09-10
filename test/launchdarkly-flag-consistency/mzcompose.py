@@ -234,6 +234,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     default_cluster_reconfiguration_timeout
     default_hydration_burst_linger
     default_timestamp_interval
+    disabled_metric_sinks
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check

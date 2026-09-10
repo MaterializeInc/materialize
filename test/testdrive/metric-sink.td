@@ -560,3 +560,104 @@ true
 > DROP CLUSTER mb_c CASCADE
 
 > DROP TABLE mrep_t CASCADE
+
+#
+# Per-metric denylist (`disabled_metric_sinks`): denying a name tears the running sink down and
+# keeps it from installing, where `enable_metric_sink` only ever gated future installs.
+#
+# The health gauges are the presence signal, since each carries a `sink` label naming the curated
+# definition and leaves the registry with that sink's dataflow, whether or not the definition has
+# rows of its own to publish.
+#
+
+> SET cluster = quickstart
+
+> SET cluster_replica = r1
+
+# An arrangement, so the teardown below is observable on the size family and not only the gauges.
+> CREATE TABLE deny_t (x int)
+
+> CREATE INDEX deny_ix ON deny_t (x)
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
+2
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+true
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET disabled_metric_sinks = 'mz_metric_arrangement_sizes'
+
+# Torn down on the replica it was already running on, families and gauges alike.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE labels -> 'sink' = 'mz_metric_arrangement_sizes'
+0
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+0
+
+# The definition that was not denied keeps running.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+1
+
+# A replica created while the name is denied never installs it. The undenied sink's gauge is what
+# keeps the zero below meaningful: it proves the curated install ran on this replica at all.
+> CREATE CLUSTER deny_c (SIZE '${arg.default-replica-size}')
+
+> SET cluster = deny_c
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+1
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE labels -> 'sink' = 'mz_metric_arrangement_sizes'
+0
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET disabled_metric_sinks
+
+# Clearing it installs the sink on both replicas already running: the torn-down one and the one
+# denied at creation.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+1
+
+> SET cluster = quickstart
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+1
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+true
+
+# A name matching no definition is tolerated: the SET succeeds and nothing is torn down.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET disabled_metric_sinks = 'mz_metric_no_such_sink'
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
+2
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET disabled_metric_sinks
+
+> RESET cluster_replica
+
+> RESET cluster
+
+> DROP CLUSTER deny_c CASCADE
+
+> DROP TABLE deny_t CASCADE

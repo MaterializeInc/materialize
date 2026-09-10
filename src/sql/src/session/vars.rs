@@ -1248,6 +1248,7 @@ impl SystemVars {
             &STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS,
             &PERSIST_FAST_PATH_LIMIT,
             &METRICS_RETENTION,
+            &DISABLED_METRIC_SINKS,
             &UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP,
             &ENABLE_RBAC_CHECKS,
             &PG_SOURCE_CONNECT_TIMEOUT,
@@ -2126,6 +2127,11 @@ impl SystemVars {
     /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
         *self.expect_value(&METRICS_RETENTION)
+    }
+
+    /// Returns the `disabled_metric_sinks` configuration parameter.
+    pub fn disabled_metric_sinks(&self) -> &str {
+        self.expect_value::<String>(&DISABLED_METRIC_SINKS)
     }
 
     /// Returns the `unsafe_mock_audit_event_timestamp` configuration parameter.
