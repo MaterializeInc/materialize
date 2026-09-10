@@ -272,6 +272,12 @@ module "database" {
   node_security_group_id    = module.eks.node_security_group_id
   tags                      = var.tags
 
+  # A throwaway test database needs no point-in-time recovery, and the module
+  # default of 7 days makes every teardown wait on deleting a week of automated
+  # backups: nightly 18272's destroy was still on the RDS instance after 55
+  # minutes against a 90 minute step budget.
+  backup_retention_period = 0
+
   depends_on = [
     module.eks,
     module.networking,
