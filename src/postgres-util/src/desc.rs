@@ -87,9 +87,9 @@ impl PostgresTableDesc {
 
         if self.namespace != other.namespace || self.name != other.name {
             return Err(self.build_schema_change_error(SchemaChange::TableRenamed {
-                namespace: other.namespace.clone(),
+                schema: other.namespace.clone(),
                 name: other.name.clone(),
-                oid: other.oid,
+                oid: Some(other.oid),
             }));
         }
 

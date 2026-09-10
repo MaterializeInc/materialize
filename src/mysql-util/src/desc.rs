@@ -8,9 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeSet;
-use std::fmt;
 
-use mz_ore::str::StrExt;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::SqlColumnType;
 #[cfg(any(test, feature = "proptest"))]
@@ -20,7 +18,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use self::proto_my_sql_column_desc::Meta;
-use crate::schema_change::{SchemaChange, SchemaChangeError};
+use crate::schema_change::{KeyRef, SchemaChange, SchemaChangeError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_mysql_util.rs"));
 
@@ -102,8 +100,9 @@ impl MySqlTableDesc {
 
         if self.schema_name != other.schema_name || self.name != other.name {
             return Err(self.build_schema_change_error(SchemaChange::TableRenamed {
-                schema_name: other.schema_name.clone(),
+                schema: other.schema_name.clone(),
                 name: other.name.clone(),
+                oid: None,
             }));
         }
 
@@ -157,10 +156,15 @@ impl MySqlTableDesc {
         // {a} ⊆ {a, c}.
         if let Some(key) = self.keys.difference(&other.keys).next() {
             let still_exists = other.keys.iter().any(|k| k.name == key.name);
+            let key = KeyRef {
+                name: key.name.clone(),
+                is_primary: key.is_primary,
+                columns: key.columns.clone(),
+            };
             let change = if still_exists {
-                SchemaChange::KeyAltered { key: key.clone() }
+                SchemaChange::KeyAltered { key }
             } else {
-                SchemaChange::KeyDropped { key: key.clone() }
+                SchemaChange::KeyDropped { key }
             };
             return Err(self.build_schema_change_error(change));
         }
@@ -387,22 +391,5 @@ impl RustType<ProtoMySqlKeyDesc> for MySqlKeyDesc {
             is_primary: proto.is_primary,
             columns: proto.columns,
         })
-    }
-}
-
-impl fmt::Display for MySqlKeyDesc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // MySQL names the primary key's index literally "PRIMARY".
-        let kind = if self.is_primary {
-            "PRIMARY KEY"
-        } else {
-            "UNIQUE"
-        };
-        write!(
-            f,
-            "{kind} constraint {} ({})",
-            self.name.quoted(),
-            self.columns.join(", ")
-        )
     }
 }
