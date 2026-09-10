@@ -110,6 +110,7 @@
 /src/secrets                        @MaterializeInc/cloud
 /src/segment
 /src/service                        @MaterializeInc/cluster
+/src/source-schema-change           @MaterializeInc/cluster
 /src/sql                            @MaterializeInc/adapter
 /src/sql/src/session/vars.rs
 # HirRelationExpr is the boundary between the `sql` crate and the cluster
