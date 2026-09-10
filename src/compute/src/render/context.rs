@@ -766,9 +766,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         for<'a> BatchCursor<Tr>:
             Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
         <<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned: PartialEq,
-        // The builder accepts whatever `logic` gives it, so the push bound lives at the `give`
-        // call site rather than here. This lets a caller push borrowed records into a columnar
-        // builder that has no owned-tuple `Push`.
+        // No push bound here: it lives at `logic`'s `give` call site, so a caller can push
+        // borrowed records into a columnar builder that has no owned-tuple `Push`.
         DCB: ContainerBuilder,
         // `logic` receives the key and value already decoded into a `DatumVecBorrow`. The decode
         // (and its arena/`DatumVec`) lives in the per-activation closure below, so it is scoped to
@@ -1015,15 +1014,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         if mfp_plan.is_identity() && !has_key_val {
             let key = key_val.map(|(k, _v)| k);
             return match key {
-                // Unarranged identity: hand the edge straight through, so a
-                // columnar producer stays columnar without a `ColumnarToVec` hop.
+                // Unarranged identity hands the edge straight through, so a columnar
+                // producer stays columnar.
                 None => self
                     .collection
                     .clone()
                     .expect("The unarranged collection doesn't exist."),
-                // Keyed identity reads an existing arrangement, which is
-                // row-based. Wrap it as a `Vec` edge. `as_specific_collection`
-                // stays the consumer leaf.
                 Some(key) => {
                     let (oks, errs) = self.as_specific_collection(Some(&key), config_set);
                     (CollectionEdge::Vec(oks), errs)
@@ -1048,13 +1044,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         // Wrap in an `Rc` so that lifetimes work out.
         let until = std::rc::Rc::new(until);
 
-        // The ok output is built into a `Column`, so this producer emits the
-        // columnar edge. `ConsolidatingColumnBuilder` folds within-batch
-        // duplicates, matching the row-based `ConsolidatingContainerBuilder`
-        // this replaced. It stages owned `(Row, T, Diff)` tuples to consolidate
-        // in place, so the records are given owned; `mfp_plan.evaluate` already
-        // produces a fresh owned `Row` per result, so this is a move into
-        // staging, not a new allocation.
+        // `ConsolidatingColumnBuilder` folds within-batch duplicates. It consolidates in
+        // place, so records are given owned, which costs nothing here because
+        // `mfp_plan.evaluate` already produces a fresh `Row` per result.
         let (stream, errors) = self.flat_map::<ConsolidatingColumnBuilder<Row, T, Diff>, _>(
             key_val,
             max_demand,
@@ -1161,9 +1153,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .try_into()
                     .expect("must fit");
                 bucketed = true;
-                // Temporal bucketing consumes and produces a `Vec` edge, so
-                // decode here. This is the sanctioned leaf decode where a
-                // `Vec`-internal operator meets the columnar edge.
+                // Temporal bucketing is `Vec`-internal, so decode here.
                 CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
                     oks.into_vec().inner,
                     as_of.clone(),
@@ -1456,8 +1446,6 @@ where
         ok_output: &mut OutputBuilderSession<'_, C::Time, DCB>,
         err_output: &mut OutputBuilderSession<'_, C::Time, ECB<C::Time>>,
     ) where
-        // The push bound lives at `logic`'s `give` call site, not here, so a caller can push
-        // borrowed records into a columnar builder that has no owned-tuple `Push`.
         DCB: ContainerBuilder,
         L: FnMut(
             C::Key<'_>,
@@ -1742,14 +1730,8 @@ mod tests {
         updates
     }
 
-    /// A `Get -> ArrangeBy` chain carries the columnar arm end to end. A
-    /// non-identity MFP drives `as_collection_core` down its columnar producer
-    /// path, and feeding that edge into the arrange input keeps the columnar
-    /// passthrough, so no `ColumnarToVec` sits on the arrange path.
-    ///
-    /// The producer output is checked against the projected input. Arrange
-    /// correctness itself is covered by `arrange_collection_arms_agree`; here we
-    /// only assert the variant survives the hand-off.
+    /// Arrange correctness itself is covered by `arrange_collection_arms_agree`; this only
+    /// asserts the columnar variant survives the hand-off.
     #[mz_ore::test]
     fn get_arrange_by_carries_columnar_end_to_end() {
         let rows = vec![
@@ -1757,9 +1739,8 @@ mod tests {
             (Row::pack_slice(&[Datum::Int64(2), Datum::Int64(20)]), 1),
             (Row::pack_slice(&[Datum::Int64(1), Datum::Int64(10)]), 1),
         ];
-        // Project away column 1; the output row carries only column 0. A
-        // projection is non-identity, so `as_collection_core` takes the columnar
-        // producer path rather than the identity passthrough.
+        // A projection is non-identity, so `as_collection_core` takes the producer path
+        // rather than the identity passthrough.
         let mfp = MapFilterProject::<LirScalarExpr>::new(2)
             .project(vec![0])
             .into_plan()
@@ -1783,8 +1764,6 @@ mod tests {
                     let (edge, _errs) =
                         bundle.as_collection_core(mfp, None, Antichain::new(), &config_set);
                     let producer_is_columnar = matches!(edge, CollectionEdge::Columnar(_));
-                    // Tee the producer output for a content check, then feed the
-                    // original edge into the arrange input.
                     let produced = edge.clone().into_vec().inner.capture();
                     let (_arranged, _arrange_errs, passthrough) =
                         CollectionBundle::<Timestamp>::arrange_collection(
