@@ -430,6 +430,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # reads it with Perl's `||`, which treats the string "0" as false and
     # falls back to the real time, so any other fixed non-zero value is used.
     env["SOURCE_DATE_EPOCH"] = "1"
+    # `build_info!()` shells out to `git rev-parse HEAD` at compile time and
+    # embeds the result, so without a fixed value the two checkouts always
+    # differ, which also defeats the skip. The dummy build info uses all zeros.
+    env["MZ_DEV_BUILD_SHA"] = "0" * 40
 
     # Cargo derives a unit's hash from absolute paths, so the ancestor and
     # current checkouts must build at the same checkout path and the same
