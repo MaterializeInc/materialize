@@ -192,9 +192,8 @@ impl YieldSpec {
 
 /// Different forms the streamed data might take.
 enum JoinedFlavor<'scope, T: RenderTimestamp> {
-    /// Streamed data as a collection edge. `differential_join` forms its
-    /// arrangement key off the edge, so a columnar source flows in without a
-    /// `ColumnarToVec` decode.
+    /// Streamed data as a collection edge. `differential_join` forms its arrangement key
+    /// off the edge, so a columnar source needs no decode.
     Collection(CollectionEdge<'scope, T>),
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
@@ -247,17 +246,12 @@ where
                 // TODO: extract closure from the first stage in the join plan, should it exist.
                 // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
                 let (joined, errs) = match linear_plan.source_key.as_deref() {
-                    // No source key: consume the input edge directly rather than
-                    // decoding it to `Vec`. `differential_join` forms the source
-                    // arrangement key off this edge below, pushing rows borrowed,
-                    // so a columnar source has no `ColumnarToVec` hop.
                     None => inputs[linear_plan.source_relation]
                         .collection
                         .clone()
                         .expect("The unarranged collection doesn't exist."),
-                    // With a source key the input is read from an existing
-                    // arrangement, which is already columnar internally; wrap its
-                    // decoded rows as a `Vec` edge.
+                    // A source key reads from an existing arrangement, columnar internally,
+                    // whose decoded rows are wrapped as a `Vec` edge.
                     Some(key) => {
                         let (oks, errs) = inputs[linear_plan.source_relation]
                             .as_specific_collection(Some(key), &self.config_set);
@@ -273,9 +267,8 @@ where
                     // If there is no starting arrangement, then we can run filters
                     // directly on the starting collection.
                     // If there is only one input, we are done joining, so run filters.
-                    // `into_vec` is the identity on the `Vec` arm, so this is
-                    // unchanged for `Vec` sources; a columnar source decodes here,
-                    // but this branch is never taken in current lowering.
+                    // A columnar source decodes here, but current lowering never takes this
+                    // branch.
                     let name = "LinearJoinInitialization";
                     type CB<C> = ConsolidatingContainerBuilder<C>;
                     let (j, errs) = joined
@@ -313,8 +306,7 @@ where
                 stage_plan,
                 &mut errors,
             );
-            // Update joined results and capture any errors. Stage output is a
-            // `Vec` collection.
+            // Update joined results and capture any errors.
             joined = JoinedFlavor::Collection(CollectionEdge::Vec(stream));
         }
 
@@ -322,8 +314,6 @@ where
         // For example, we may have expressions not pushed down (e.g. literals)
         // and projections that could not be applied (e.g. column repetition).
         let bundle = if let JoinedFlavor::Collection(joined) = joined {
-            // The join output is a `Vec` collection, so `into_vec` is the identity
-            // on the `Vec` arm.
             let mut joined = joined.into_vec();
             if let Some(closure) = linear_plan.final_closure {
                 let name = "LinearJoinFinalization";
@@ -521,12 +511,8 @@ where
 
 /// Forms the source arrangement for a streamed join input off a collection edge.
 ///
-/// Both arms build the same `((key, value), t, d)` columnar updates and push the
-/// key and value borrowed into a `ColumnBuilder`, which the `Col2Val` batcher
-/// consumes. This is the zero-allocation pattern: no owned `Row` per record on
-/// the ok path. The arms differ only in how records are read, the `Vec` arm from
-/// the owned container and the columnar arm from the borrowed column, and in the
-/// error path, which owns time and diff.
+/// Both arms push the key and value borrowed into the `ColumnBuilder` the `Col2Val` batcher
+/// consumes, so the ok path holds no owned `Row` per record.
 fn arrange_join_input<'s, T>(
     edge: CollectionEdge<'s, T>,
     stream_key: Vec<LirScalarExpr>,
@@ -591,9 +577,7 @@ where
                         input.for_each(|time, data| {
                             let mut ok_session = ok.session_with_builder(&time);
                             let mut err_session = errs.session(&time);
-                            // Rows are read from the borrowed column; the key and
-                            // value are pushed borrowed. Time and diff are owned
-                            // only on the error path.
+                            // Rows stay borrowed; only the error path owns a time and diff.
                             for (row, time, diff) in data.borrow().into_index_iter() {
                                 temp_storage.clear();
                                 let datums_local = datums.borrow_with(row);
@@ -675,10 +659,7 @@ mod tests {
         updates
     }
 
-    // `DataflowErrorSer` is not `Ord`, so project the error to its debug string
-    // for a stable ordering. The time and diff ride along, so this verifies the
-    // columnar arm's `into_owned` on the error path reconstructs the same
-    // `(time, diff)` as the `Vec` arm.
+    // `DataflowErrorSer` is not `Ord`, so order by the error's debug string.
     fn extract_err(captured: Captured<ErrUpdate>) -> Vec<(String, Timestamp, Diff)> {
         let mut updates: Vec<_> = captured
             .extract()
@@ -690,10 +671,9 @@ mod tests {
         updates
     }
 
-    /// Input rows tagged with distinct timestamps and mixed-sign diffs. The two
-    /// `-1` records retract at a `(row, time)` with no matching insertion, so they
-    /// survive the `InputSession`'s pre-send consolidation and exercise a negative
-    /// diff on the ok path (pushed borrowed, not owned).
+    /// Rows across several timestamps, including two `-1` diffs. Those retract at a
+    /// `(row, time)` with no matching insertion, so the `InputSession`'s pre-send
+    /// consolidation does not cancel them out.
     fn test_input() -> Vec<(Row, u64, Diff)> {
         vec![
             (
@@ -729,10 +709,9 @@ mod tests {
         ]
     }
 
-    /// Runs `arrange_join_input` against the same input fed once as a `Vec` edge
-    /// and once as a columnar edge, keying by `key` with column 1 as the value.
-    /// Returns the sorted ok updates (read back from each arrangement) and the
-    /// sorted err updates of each arm.
+    /// Runs `arrange_join_input` over both edge arms, keying by `key` with column 1 as the
+    /// value, and returns each arm's sorted ok updates, read back from the arrangement, and
+    /// err updates.
     #[allow(clippy::type_complexity)]
     fn run_both_arms(
         input: Vec<(Row, u64, Diff)>,
@@ -782,21 +761,8 @@ mod tests {
         )
     }
 
-    /// The columnar arm of `arrange_join_input` forms the same keyed arrangement
-    /// as the `Vec` arm, across several distinct timestamps and a retraction.
-    ///
-    /// This proves the columnar key-forming is correct and that the columnar arm
-    /// ran (the input is fed through `vec_to_columnar`). It does not prove the
-    /// absence of a silent `ColumnarToVec` decode on the ok path: such a decode
-    /// would yield identical contents. No-decode holds by code inspection, the
-    /// columnar arm reads via `into_index_iter` and pushes the key and value
-    /// borrowed into the `ColumnBuilder`, never calling `into_vec`.
-    ///
-    /// The stream key here is infallible column projection, so `try_extend` never
-    /// fails and the ok path pushes the diff borrowed. The retraction records
-    /// exercise a negative diff on that borrowed ok path. `Columnar::into_owned`
-    /// runs only on the error path, which `arrange_join_input_arms_agree_on_error_path`
-    /// covers.
+    /// Agreeing contents do not rule out a silent `ColumnarToVec` on the ok path. That the
+    /// arm never decodes holds by inspection, not by this test.
     #[mz_ore::test]
     fn arrange_join_input_arms_agree() {
         let (ok_vec, ok_col, err_vec, err_col) =
