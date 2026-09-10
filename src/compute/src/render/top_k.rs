@@ -112,6 +112,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         // Temporal bucketing is `Vec`-internal, so decode in and encode out. It fires
         // only under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the `TemporalBucketing`
         // strategy.
+        //
+        // TODO: `map_topk_key` decodes this encode again one operator later, so a
+        // bucketed TopK pays a round trip that no consumer here wants. Both halves
+        // go away with the columnar push-down noted on `topk_result_to_columnar`.
         let ok_input = if matches!(
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
