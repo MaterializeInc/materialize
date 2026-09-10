@@ -672,19 +672,21 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     panic!("The collection arranged by {:?} doesn't exist.", key)
                 });
                 if ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION.get(config_set) {
-                    // Decode all columns (max_demand usize::MAX) and pack each cursor record
-                    // into a `Column`, so the materialized collection carries the columnar edge.
-                    // Output is 1:1 from the already-consolidated cursor, so a non-consolidating
-                    // `ColumnBuilder` matches the row-based `CapacityContainerBuilder` this
-                    // replaced; the packed row is pushed borrowed, holding no owned `Row` per
-                    // record.
+                    // Output is 1:1 from the already-consolidated cursor, so a
+                    // non-consolidating `ColumnBuilder` suffices. `max_demand` is
+                    // `usize::MAX` because the materialized collection carries every column.
                     let (ok, err) = arranged.flat_map_ok::<ColumnBuilder<(Row, T, Diff)>, _>(
                         None,
                         usize::MAX,
-                        |borrow, t, r, ok_session| {
-                            let row = SharedRow::pack(borrow.iter());
-                            ok_session.give((&row, &t, &r));
-                            1
+                        {
+                            // `give` copies the bytes into the column, so one buffer
+                            // serves every record.
+                            let mut row_buf = Row::default();
+                            move |borrow, t, r, ok_session| {
+                                row_buf.packer().extend(borrow.iter());
+                                ok_session.give((&row_buf, &t, &r));
+                                1
+                            }
                         },
                     );
                     (CollectionEdge::Columnar(ok.as_collection()), err)
