@@ -15,8 +15,10 @@ queries may fail. Transparent query or session failover is out of scope.
 
 Working multi-adapter operation is the destination, not this deliverable.
 Boundaries must support independent adapters becoming catalog writers and query
-clients without another ownership redesign. Enabling concurrent catalog writers
-and deploying multiple adapters are not required here.
+clients without another ownership redesign. Once lifecycle enactment leaves the
+adapter, the adapter's DDL and the lifecycle components' publication are two
+cooperating catalog writers, and that much concurrency is required. Arbitrary
+numbers of adapters and their deployment are not.
 
 Initial implementation and validation target environments initialized under the
 new protection rules. Conversion of existing environments, builtin schema migration,
@@ -210,6 +212,24 @@ SQL savepoint. Read-only bootstrap follows [Index reconstruction](#index-reconst
 without waiting for the writer. A local savepoint write grants no compaction
 permission, and there is no startup-specific writer protocol.
 
+### Lifecycle placement
+
+The controller bundle may run as one independent process that follows the
+catalog, enacts maintained state, and publishes protection. Those three
+responsibilities are its interface. It does not serve controller state to adapters
+and does not gate their catalog writes, so it can later dissolve into per-cluster
+followers without another redesign. Collection lifecycle and compaction belong to
+it. DDL and table appends are request-scoped and stay with adapters.
+
+### Query client
+
+An adapter reads through a query client that owns that client's read
+requirements. It learns storage frontiers from persist and compute frontiers from
+the fast protocol, where frontier reporting is best effort. It issues peeks and
+query-local dataflows and receives their responses. Its protection is the
+[durable client protection](#client-read-protection) from the start. No remote
+controller access API or volatile hold forwarding is introduced as a bridge.
+
 ## Alternatives
 
 ### Plan-specific recovery protection
@@ -288,30 +308,33 @@ system-catalog collections. Measure publication and retained-history costs as th
 real path becomes available. This milestone can use the current single-writer
 arrangement.
 
-#### 2. Catalog-driven maintained lifecycle
+#### 2. Independent maintained lifecycle
 
-Cluster-side lifecycle components establish and follow maintained state from the
-catalog without sequencer installation closures or the originating adapter.
-Creation, changes, deletion, and compaction work across recovery. Losing the
-adapter does not interrupt maintained work.
+Lifecycle components establish and follow maintained state from the catalog in a
+process that is not the adapter, without sequencer installation closures or
+creator-local plans. Creation, changes, deletion, compaction, and protection
+publication continue across adapter loss and recovery. Adapter DDL and lifecycle
+publication commit as cooperating catalog writers. The adapter reads through the
+query client with durable protection, and a cluster accepts its lifecycle
+connection and query connections at once without one replacing the other's state.
 
-Demonstrate a production subscriber applying committed changes without
-creator-local plans, including same-batch dependencies. Include concurrent and
-delayed application of committed compaction permission.
+Demonstrate: stop the adapter while maintained dataflows, sources, sinks, and
+compaction continue, then restart it and resume queries. Include same-batch
+dependencies and concurrent or delayed application of committed permission. One
+adapter and one query client suffice.
 
-#### 3. Independent query execution
+#### 3. Independent query clients
 
-Query clients use the fast protocol without acquiring ownership of maintained
-lifecycle. Catalog application and query readiness remain correctly ordered.
-Responses, cancellation, query-local dataflows, and disconnect cleanup are
+Several query clients use the fast protocol without acquiring ownership of
+maintained lifecycle. Catalog application and query readiness remain correctly
+ordered. Responses, cancellation, query-local dataflows, and disconnect cleanup are
 isolated between clients.
 
-Demonstrate independent clients without requiring concurrent catalog writers or
-a multi-adapter deployment. Cover one client advancing or losing its protection
-while another retains an older timestamp, recovery of the components enforcing
-compaction, and an expired client returning. Together, these milestones complete the
-fresh-environment decoupling outcome, subject to the correctness and performance
-acceptance criteria above.
+Demonstrate independent clients without a multi-adapter deployment. Cover one
+client advancing or losing its protection while another retains an older
+timestamp, recovery of the components enforcing compaction, and an expired client
+returning. Together, these milestones complete the fresh-environment decoupling
+outcome, subject to the correctness and performance acceptance criteria above.
 
 Implementation history is in the [log](20260903_decoupled_coordination_log.md).
 Workflow and current steering are in the

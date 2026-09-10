@@ -21,12 +21,27 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
-Milestone 2 starts with MV compute installation from committed state and a
-production maintained-lifecycle subscriber, not more standalone APIs. The bound
-subscriber is not that outcome. MV and metric-sink compute installation still
-uses creator-local plans, and sink alteration still has sequencer-side effects.
-Resolve the lifecycle-service scope question in the latest handoff before
-starting that extraction.
+Milestone 2 is active. The lifecycle-service scope question is decided in the
+design's Lifecycle placement and Query client decisions and the re-cut milestone.
+Order the work so each step lands and is verified in-process before the process
+boundary moves:
+
+1. Query client inside the adapter, replacing the adapter's direct use of
+   controller frontiers and holds: storage frontiers from persist, compute
+   frontiers from fast-protocol `Frontiers` responses, peeks and query-local
+   dataflows through it, durable client protection as its only protection. Bring
+   the client protection record shape and the incarnation expiry and reclamation
+   rule to Aljoscha before building them. No remote controller access API.
+2. Cluster-side connection split: a cluster accepts one lifecycle connection and
+   query connections at once. A new query connection must not replace desired
+   state or reset maintained dataflows.
+3. Cooperating catalog writers: adapter DDL and lifecycle publication commit
+   independently. Bring the smallest mechanism to Aljoscha first. Do not route
+   DDL through the lifecycle process.
+4. Move the controller bundle out: MV and metric-sink compute installation and
+   sink alteration from committed state, then the bundle in its own process with
+   catalog following, enactment, and publication as its interface. Table appends
+   stay with the adapter.
 
 Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
 shared-view index topology and diagnostics. Larger-scale work and the known
@@ -45,9 +60,9 @@ Standing rules
 - A durable record is added only when it carries information that cannot be
   derived from existing catalog state or durable progress. A record whose value
   is constant at birth is a signal to look again.
-- Milestone 2 starts with MV compute installation from committed state and a real
-  catalog subscriber. Client protection stays in milestone 3. Do not pull its
-  machinery forward.
+- Milestone 2 builds the query client with durable client protection for one
+  adapter. Multiplicity and isolation of clients stay in milestone 3. Do not
+  build a bridge that the design's shape will replace.
 
 Prefer changes that remove a dependency on the originating adapter and demonstrate
 that through a production path. Preparatory work is appropriate when it unblocks
