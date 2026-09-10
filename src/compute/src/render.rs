@@ -935,6 +935,21 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
 
             let rec_ids: Vec<_> = recs.iter().map(|r| r.id).collect();
 
+            // A binding's `Variable` serves the `Get`s rendered before the rec
+            // loop binds the real value, which are exactly the values of
+            // `recs[0..=i]`. A binding no such value reads has no use for a
+            // `Variable`-backed bundle, and installing one would build a
+            // re-encode that repacks the whole collection once per iteration
+            // with nothing to consume it.
+            let mut variable_read = BTreeSet::new();
+            let mut read_so_far = BTreeSet::new();
+            for rec in recs.iter() {
+                read_so_far.extend(rec.value.depends());
+                if read_so_far.contains(&Id::Local(rec.id)) {
+                    variable_read.insert(rec.id);
+                }
+            }
+
             // Define variables for rec bindings.
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
@@ -947,21 +962,23 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (err_v, err_collection) =
                     Variable::new(self.scope, Product::new(Default::default(), inner));
 
-                // Re-encode the read-edge to columnar so `Get`s on this rec
-                // binding (e.g. as a Union input) see a columnar edge. The
-                // feedback `Variable` itself stays `Vec` (set at `oks_v.set`
-                // below), so each iteration crosses the container boundary
-                // twice: encoded here for the readers, decoded once per binding
-                // where the value is fed back. The re-encode is a stateless,
-                // timestamp-agnostic pass-through, so it does not alter the
-                // iterative frontier or fixpoint behavior.
-                self.insert_id(
-                    Id::Local(*id),
-                    CollectionBundle::from_edge(
-                        CollectionEdge::Columnar(vec_to_columnar(oks_collection)),
-                        err_collection,
-                    ),
-                );
+                if variable_read.contains(id) {
+                    // Re-encode the read-edge to columnar so `Get`s on this rec
+                    // binding (e.g. as a Union input) see a columnar edge. The
+                    // feedback `Variable` itself stays `Vec` (set at `oks_v.set`
+                    // below), so each iteration crosses the container boundary
+                    // twice: encoded here for the readers, decoded once per
+                    // binding where the value is fed back. The re-encode is a
+                    // stateless, timestamp-agnostic pass-through, so it does not
+                    // alter the iterative frontier or fixpoint behavior.
+                    self.insert_id(
+                        Id::Local(*id),
+                        CollectionBundle::from_edge(
+                            CollectionEdge::Columnar(vec_to_columnar(oks_collection)),
+                            err_collection,
+                        ),
+                    );
+                }
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
             // Now render each of the rec bindings. The decoded value is kept so
