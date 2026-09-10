@@ -222,6 +222,7 @@ FILTERED_ARGS = [
     "aws-access-key-id=",
     "aws-secret-access-key=",
     "default-sql-server-password=",
+    "databricks-credential=",
     "Authorization: Bearer ",
     "client_secret=",
     # Not a secret, but too spammy, filter too

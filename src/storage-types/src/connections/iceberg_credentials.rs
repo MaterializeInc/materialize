@@ -193,6 +193,16 @@ impl VendedCredentialLoader {
             })
             .transpose()?;
 
+        // The only record that a refresh happened. Nothing else on either
+        // credential path logs or counts, so without this a stale credential
+        // and a freshly minted one are indistinguishable from outside.
+        debug!(
+            endpoint = %self.credential_endpoint,
+            prefix = %credential.prefix,
+            ?expires_in,
+            "fetched vended Iceberg storage credentials"
+        );
+
         Ok((
             AwsCredential {
                 access_key_id,
