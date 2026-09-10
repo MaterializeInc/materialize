@@ -86,6 +86,9 @@ where
             let mut buffer: Column<(D, T, mz_repr::Diff)> = Default::default();
             // Reused input permutation, ordered by time.
             let mut permutation: Vec<usize> = Vec::new();
+            // Reused so reading a record's time does not allocate: an iterative `T`
+            // owns a `PointStamp`'s allocation.
+            let mut time_buf = T::minimum();
 
             move |(input, frontier), output| {
                 // The upper frontier is the join of the input frontier and the `as_of` frontier,
@@ -112,7 +115,8 @@ where
                         permutation.clear();
                         for index in 0..borrowed.len() {
                             let update = borrowed.get(index);
-                            if upper.less_equal(&T::into_owned(update.1)) {
+                            time_buf.copy_from(update.1);
+                            if upper.less_equal(&time_buf) {
                                 permutation.push(index);
                             } else {
                                 session.give(update);
@@ -128,12 +132,12 @@ where
                         let mut buffered_range = None;
                         for index in permutation.drain(..) {
                             let update = borrowed.get(index);
-                            let update_time = T::into_owned(update.1);
+                            time_buf.copy_from(update.1);
 
                             // Ship the buffer whenever the bucket changes, which
                             // the time order makes a single transition per bucket.
                             let contained = match &buffered_range {
-                                Some(range) => BucketRange::contains(range, &update_time),
+                                Some(range) => BucketRange::contains(range, &time_buf),
                                 None => false,
                             };
                             if !contained {
@@ -142,7 +146,7 @@ where
                                     bucket.push_container(&mut buffer);
                                 }
                                 buffered_range =
-                                    Some(chain.range_of(&update_time).expect("Must exist"));
+                                    Some(chain.range_of(&time_buf).expect("Must exist"));
                             }
                             buffer.push_into(update);
                         }
