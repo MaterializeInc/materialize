@@ -257,8 +257,6 @@ where
                         .collection
                         .clone()
                         .expect("The unarranged collection doesn't exist."),
-                    // A source key materializes an existing arrangement, which
-                    // `as_specific_collection` presents as a columnar edge.
                     Some(key) => {
                         inputs[linear_plan.source_relation].as_specific_collection(Some(key))
                     }

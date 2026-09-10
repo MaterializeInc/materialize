@@ -674,7 +674,7 @@ where
 ///
 /// TODO: TopK renders its stages over `Vec` containers, so this encode sits at the very
 /// end of the plan. Pushing columnar containers down through `build_topk` and the
-/// monotonic path would remove it.
+/// monotonic path would remove it, leaving a projection that drops the hash.
 fn topk_result_to_columnar<'s, T>(
     collection: VecCollection<'s, T, (Row, Row), Diff>,
 ) -> CollectionEdge<'s, T>

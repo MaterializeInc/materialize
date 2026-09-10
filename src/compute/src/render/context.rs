@@ -1184,9 +1184,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
         CollectionEdge<'scope, T>,
     ) {
-        // Spelled out rather than `map_fallible`, whose closure cannot return the references a
-        // columnar stream is pushed from. The ok output is columnar in both arms, because the
-        // arrangement key and value always are; the passthrough keeps its input's variant.
+        // Spelled out rather than `map_fallible`, whose closure cannot return the references
+        // a columnar stream is pushed from.
         //
         // The arena is per-activation and cleared per row, so the capacity it retains never
         // outlives a scheduling invocation.
@@ -1501,8 +1500,7 @@ mod tests {
         updates
     }
 
-    /// Arranges `rows` through both edge arms, returning each arm's sorted ok and err output
-    /// plus whether the columnar arm kept its passthrough variant.
+    /// Arranges `rows`, returning the sorted ok and err output.
     fn arrange_columnar(
         rows: Vec<(Row, u64)>,
         key: Vec<LirScalarExpr>,
@@ -1549,7 +1547,7 @@ mod tests {
     }
 
     /// Agreeing contents do not rule out a silent `columnar_to_vec` on the ok path. That the
-    /// arm never decodes holds by inspection, not by this test.
+    /// operator never decodes holds by inspection, not by this test.
     #[mz_ore::test]
     fn arrange_collection_keys_correctly() {
         let rows = test_rows();
@@ -1677,10 +1675,8 @@ mod tests {
         assert_eq!(extract_row_updates(captured), expected);
     }
 
-    /// The columnar producer folds within-batch duplicates: input rows that
-    /// project to the same output row at the same time collapse to one record
-    /// with summed diff, matching the row-based `ConsolidatingContainerBuilder`
-    /// this replaced. A plain `ColumnBuilder` would emit both records.
+    /// Input rows that project to the same output row at the same time collapse to one
+    /// record with summed diff. A plain `ColumnBuilder` would emit both.
     #[mz_ore::test]
     fn as_collection_core_consolidates_within_batch() {
         // `[1, 10]` and `[1, 20]` both project (dropping column 1) to `[1]` at
