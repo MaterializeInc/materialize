@@ -102,6 +102,8 @@ export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
     <Box
       as="button"
       data-testid="region-toggle"
+      aria-label={data.expanded ? "Collapse region" : "Expand region"}
+      aria-expanded={data.expanded}
       flexShrink={0}
       lineHeight="1"
       onClick={(e) => {

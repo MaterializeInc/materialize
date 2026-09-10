@@ -81,7 +81,7 @@ describe("OperatorNode", () => {
       },
     };
     await renderComponent(<OperatorNode {...nodeProps(data)} />);
-    expect(screen.getByText("3s · 100 r · 1 KB")).toBeVisible();
+    expect(screen.getByText("3.0s · 100 r · 1 KB")).toBeVisible();
   });
 
   it("renders no stat line when the node has no stats", async () => {

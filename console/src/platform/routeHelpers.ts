@@ -38,6 +38,17 @@ export const relativeClusterPath = (cluster: ClusterPathParams) =>
   `${cluster.id}/${encodeURIComponent(cluster.name)}`;
 
 /**
+ * The `?replica=` query string the dataflow routes are keyed by, or the empty
+ * string when there is no replica to name. A replica name is an identifier
+ * and can contain "&", "=", "#" or spaces when quoted, so it is encoded here
+ * rather than concatenated at the call site.
+ */
+export const replicaSearch = (replicaName: string | undefined) =>
+  replicaName === undefined
+    ? ""
+    : `?${new URLSearchParams({ replica: replicaName })}`;
+
+/**
  * Function to switch to another cluster, while maintaining the rest of the route.
  */
 export function replaceClusterIdAndName({

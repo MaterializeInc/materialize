@@ -179,7 +179,7 @@ describe("statLines", () => {
         scheduleCount: 0n,
       },
     };
-    expect(statLines(withStats)).toEqual(["3s · 221,245,721 r · 4 KB"]);
+    expect(statLines(withStats)).toEqual(["3.0s · 221,245,721 r · 4 KB"]);
   });
 
   it("omits records and size when there are none, keeping duration alone", () => {
@@ -192,7 +192,7 @@ describe("statLines", () => {
         scheduleCount: 0n,
       },
     };
-    expect(statLines(withStats)).toEqual(["3s"]);
+    expect(statLines(withStats)).toEqual(["3.0s"]);
   });
 
   it("omits duration when there is none, keeping records and size", () => {

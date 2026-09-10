@@ -229,8 +229,15 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
   const flags = useFlags();
   const materializedViewPath = useBuildMaterializedViewPath();
   const regionSlug = useRegionSlug();
-  const dataflowVisualizerEnabled = flags["visualization-features"];
   const { cluster } = props;
+  // The visualizer link needs the owning cluster, which resolves
+  // asynchronously, so the flag alone doesn't decide whether the column
+  // exists. Header and body both gate on this one value, or they disagree
+  // on the column count while the cluster is still in flight.
+  const dataflowsPath =
+    flags["visualization-features"] && cluster
+      ? `${absoluteClusterPath(regionSlug, cluster)}/dataflows`
+      : undefined;
 
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -246,7 +253,7 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
             <Th>Name</Th>
             <Th>Memory Utilization</Th>
             <Th>Freshness</Th>
-            {dataflowVisualizerEnabled && <Th></Th>}
+            {dataflowsPath && <Th></Th>}
           </Tr>
         </Thead>
         <Tbody>
@@ -287,17 +294,17 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
                   )}
                 </Td>
                 <Td>{formattedLag}</Td>
-                {dataflowVisualizerEnabled && cluster && (
+                {dataflowsPath && (
                   <Td width="16">
                     <OverflowMenu
                       items={[
                         {
-                          visible: dataflowVisualizerEnabled,
+                          visible: true,
                           render: () => (
                             <MenuItem
                               key="dataflow-visualizer"
                               as={Link}
-                              to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows?export=${v.id}`}
+                              to={`${dataflowsPath}?export=${v.id}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                               }}

@@ -28,7 +28,11 @@ import {
   type VisibleNode,
 } from "./dataflowGraph";
 import type { SelectedEdge } from "./DataflowGraphView";
-import { formatCount, formatSkew, prettyPrintChannelType } from "./nodeStyle";
+import {
+  formatCountParts,
+  formatSkew,
+  prettyPrintChannelType,
+} from "./nodeStyle";
 
 export type Selection =
   | { kind: "node"; node: VisibleNode; connectedEdges?: SelectedEdge[] }
@@ -61,23 +65,19 @@ const Section = (props: SidebarSectionProps) => (
 // digits if this were plain text ("221,245,721" pastes with the commas
 // still in it): user-select:none on each separator excludes it from the
 // clipboard while leaving it fully visible.
-const GroupedCount = ({ n }: { n: bigint }) => {
-  const groups = formatCount(n).split(",");
-  return (
-    <>
-      {groups.map((group, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && (
-            <Text as="span" userSelect="none">
-              ,
-            </Text>
-          )}
-          {group}
-        </React.Fragment>
-      ))}
-    </>
-  );
-};
+const GroupedCount = ({ n }: { n: bigint }) => (
+  <>
+    {formatCountParts(n).map((part, i) =>
+      part.type === "group" ? (
+        <Text as="span" key={i} userSelect="none">
+          {part.value}
+        </Text>
+      ) : (
+        <React.Fragment key={i}>{part.value}</React.Fragment>
+      ),
+    )}
+  </>
+);
 
 interface TypeRowProps {
   channelTypes: string[];
@@ -102,6 +102,12 @@ interface EdgeRowsProps {
   onJumpTo: (peer: PortPeer) => void;
 }
 
+// Every landing on one side of an edge carries the same `address` (the
+// collapsed box's own), and is distinguished only by the inner port it
+// resolved to, so the port has to be part of the key.
+const landingKey = (peer: PortPeer) =>
+  `${peer.address.join(".")}:${peer.peerPortId ?? ""}`;
+
 // The dedicated edge-selection view (EdgeDetail), showing where a merged
 // edge's real channels land inside a collapsed region.
 const EdgeRows = ({ edge, onJumpTo }: EdgeRowsProps) => (
@@ -112,14 +118,14 @@ const EdgeRows = ({ edge, onJumpTo }: EdgeRowsProps) => (
     {edge.sourceLandings.length > 0 && (
       <Section title={`Inside ${edge.sourceLabel}`}>
         {edge.sourceLandings.map((p) => (
-          <PeerRow key={p.address.join(".")} peer={p} onJumpTo={onJumpTo} />
+          <PeerRow key={landingKey(p)} peer={p} onJumpTo={onJumpTo} />
         ))}
       </Section>
     )}
     {edge.targetLandings.length > 0 && (
       <Section title={`Inside ${edge.targetLabel}`}>
         {edge.targetLandings.map((p) => (
-          <PeerRow key={p.address.join(".")} peer={p} onJumpTo={onJumpTo} />
+          <PeerRow key={landingKey(p)} peer={p} onJumpTo={onJumpTo} />
         ))}
       </Section>
     )}
