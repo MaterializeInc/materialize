@@ -661,18 +661,15 @@ where
     }
 }
 
-/// Drops the hash-key pairing from a consolidated `(hash_key, row)` TopK result,
-/// producing the columnar output edge.
+/// Drops the hash-key pairing from a consolidated `(hash_key, row)` TopK result.
 ///
-/// The input is consolidated upstream and the hash key is a function of the row,
-/// so distinct `(hash_key, row)` entries have distinct rows. Dropping the key is
-/// therefore injective and the output carries no within-batch duplicates, so a
-/// non-consolidating `ColumnBuilder` matches the prior `map`. The row is pushed
-/// borrowed, materializing no owned `Row` per record.
+/// The hash key is a function of the row and the input is consolidated, so dropping the
+/// key is injective and the output has no within-batch duplicates for a consolidating
+/// builder to fold. Rows are pushed borrowed.
 ///
-/// TODO: TopK renders its stages over `Vec` containers, so this encode sits at
-/// the very end of the plan. Pushing columnar containers down through
-/// `build_topk` and the monotonic path would remove it.
+/// TODO: TopK renders its stages over `Vec` containers, so this encode sits at the very
+/// end of the plan. Pushing columnar containers down through `build_topk` and the
+/// monotonic path would remove it.
 fn topk_result_to_columnar<'s, T>(
     collection: VecCollection<'s, T, (Row, Row), Diff>,
 ) -> CollectionEdge<'s, T>
@@ -1360,10 +1357,6 @@ mod tests {
         }
     }
 
-    /// `topk_result_to_columnar` drops the hash-key pairing and produces a
-    /// columnar edge whose rows are the value component, preserving times and
-    /// diffs. This produces the columnar output for the monotonic and basic TopK
-    /// plans.
     #[mz_ore::test]
     fn topk_result_to_columnar_drops_key() {
         let key = Row::pack_slice(&[Datum::Int64(7)]);
@@ -1378,9 +1371,8 @@ mod tests {
                 1u64,
                 Diff::ONE,
             ),
-            // Retracts at a `(row, time)` with no insertion, so it survives the
-            // `InputSession`'s pre-send consolidation and exercises a borrowed
-            // negative diff.
+            // Retracts at a `(row, time)` with no insertion, so the `InputSession`'s
+            // pre-send consolidation does not cancel it out.
             (
                 (key.clone(), Row::pack_slice(&[Datum::Int32(1)])),
                 2u64,
