@@ -2013,7 +2013,7 @@ def workflow_catalog_publication_measurement(
     """Measure the production catalog path. Requires disposable composition volumes."""
     parser.add_argument(
         "--collection-counts",
-        default="100,1000,10000",
+        default="100,1000",
         help="Total generated objects per step, tables plus filler views or indexes",
     )
     parser.add_argument("--publication-rounds", type=int, default=3)

@@ -487,3 +487,10 @@ lifecycle work. Do not suppress slow-message diagnostics to make that case pass.
 
 Milestone 1 remains active. Next: resolve that scope split and finish payload-aware
 CI measurements.
+
+### 2026-09-09: Bounded performance scope agreed with Aljoscha
+
+Milestone 1 measures 100 and 1,000 generated objects. Larger-scale performance
+work is deferred. Keep the shared-view index topology and diagnostics, rather
+than adopting the independent-view proposal. The workflow still accepts explicit
+larger cohorts. Next: finish payload-aware comparisons at the agreed sizes.

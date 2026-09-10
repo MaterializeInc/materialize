@@ -29,16 +29,16 @@ are integrated. Complete their production evidence before declaring the mileston
    CI, resolve integration findings, and demonstrate protection through actual
    compaction and uncached recovery across maintained types. Keep claims about
    bootstrap-drop ordering limited to the ordering the evidence establishes.
-   The large sparse fixture's identical indexes expose quadratic notice and
-   dependency work, amplified by cache-miss reconstruction on the coordinator.
-   Its scope split is awaiting Aljoscha's decision in the latest handoff. Do not
-   suppress the slow-message diagnostics or silently substitute a smaller cohort.
 2. Publication costs: finish representative measurements using the existing
    workflow, including DDL latency, follower lag, and retained history. Separate
    changed-record work from baseline catalog snapshot and storage-metadata cloning
    costs. Distinguish publication, workload, and observer costs with controlled
    comparisons, and record the numbers in the PR. Do not make a general catalog
    redesign a prerequisite.
+   Aljoscha scoped this milestone's measurements to 100 and 1,000 generated
+   objects, retaining the shared-view index topology and diagnostics. Larger-scale
+   performance work is deferred. Record the known quadratic notice/dependency
+   costs without making their redesign a prerequisite for this milestone.
 3. History: the 09-09 commits, including `wip: Integrate maintained recovery
    protection`, are not yet one coherent story. Squash them before milestone 2
    work begins.
