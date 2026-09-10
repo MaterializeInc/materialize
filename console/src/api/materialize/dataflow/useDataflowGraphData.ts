@@ -195,6 +195,18 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
   } = useSqlManyTyped(queries, {
     cluster: params?.clusterName,
     replica: params?.replicaName,
+    // The four dataflow-scoped queries read replica-local introspection
+    // logging. Strict serializable would take a linearized read timestamp
+    // and then wait for this replica's introspection frontier to reach it,
+    // which is slowest exactly when the replica is saturated -- the state
+    // someone opens this page to diagnose. Serializable reads what the
+    // replica has already logged instead. Staleness costs nothing here:
+    // these are counters and gauges shown next to a "Last fetched"
+    // timestamp with a manual refresh, never read back to make a decision.
+    // One level applies to the whole request, so replicaWorkers reads at
+    // serializable too, where a stale worker count would only shift the
+    // skew heatmap's ceiling.
+    transactionIsolation: "serializable",
     // This query can be slow for large dataflows.
     timeout: 30_000,
   });

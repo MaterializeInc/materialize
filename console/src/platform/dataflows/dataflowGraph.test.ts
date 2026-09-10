@@ -174,6 +174,20 @@ describe("buildDataflowStructure", () => {
     expect(s.nodes.get(s.root)).toBeDefined();
   });
 
+  it("returns the same placeholder when a mid-drop read lost the root row", () => {
+    // These reads run at serializable, so one can land on a timestamp where
+    // the drop is partially visible: descendants still logged, root row
+    // already gone. Same "no longer exists" answer as no rows at all, not a
+    // crash.
+    const orphans: OperatorRow[] = [
+      { ...OPS[0], id: "11", address: ["5", "1"] },
+      { ...OPS[0], id: "12", address: ["5", "2"] },
+    ];
+    const s = buildDataflowStructure(orphans, [], []);
+    expect(s.nodes.size).toBe(1);
+    expect(s.nodes.get(s.root)).toBeDefined();
+  });
+
   it("normalizes channels", () => {
     const s = buildDataflowStructure(OPS, CHANNELS, []);
     expect(s.channels[0]).toEqual({

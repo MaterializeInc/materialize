@@ -311,11 +311,11 @@ function passesMagnitudeFloor(own: bigint, maxOwn: bigint): boolean {
 
 /**
  * Builds the address tree and own/transitive stats from raw introspection
- * rows. A non-empty `operators` must contain exactly one root (an address of
- * length 1); any other count throws, including zero, which a partial read of
- * a dataflow being dropped can produce. An empty `operators` list (a dropped
- * or transient dataflow) is valid input, not an error: it returns a
- * single-node placeholder structure instead.
+ * rows. More than one root (an address of length 1) throws: a dataflow has
+ * exactly one, so two means the rows didn't come from one dataflow. No root
+ * at all is not an error, and neither is an empty `operators`: a dropped or
+ * transient dataflow, or one read mid-drop, returns a single-node
+ * placeholder structure to render as "no longer exists".
  */
 export function buildDataflowStructure(
   operators: OperatorRow[],
@@ -327,8 +327,9 @@ export function buildDataflowStructure(
   // operator rows, a valid query result rather than an error. Represent it
   // as a single-node placeholder structure instead of throwing below, so it
   // renders through the same nodes.size <= 1 "no longer exists" branch as
-  // any other empty dataflow.
-  if (operators.length === 0) {
+  // any other empty dataflow. `emptyStructure` is also how a rootless read
+  // lands (see below).
+  const emptyStructure = (): DataflowStructure => {
     const placeholderId = nodeIdOf([]);
     return {
       nodes: new Map([
@@ -364,7 +365,8 @@ export function buildDataflowStructure(
       root: placeholderId,
       channels: [],
     };
-  }
+  };
+  if (operators.length === 0) return emptyStructure();
   const spans = lirSpans.map((s) => ({
     exportId: s.exportId,
     lirId: s.lirId,
@@ -416,10 +418,16 @@ export function buildDataflowStructure(
     if (node.parent === null) roots.push(node.id);
     else nodes.get(node.parent)?.children.push(node.id);
   }
-  if (roots.length !== 1) {
-    throw new Error(
-      `expected exactly one root operator, found ${roots.length}`,
-    );
+  // A read that caught the dataflow mid-drop can return descendants whose
+  // root row is already gone. That is the same "no longer exists" answer as
+  // no rows at all, not a broken invariant, and these reads run at
+  // serializable (see useDataflowGraphData), so they can land on a
+  // timestamp where the drop is partially visible. Two roots is a real
+  // violation: a dataflow has exactly one, so two means these rows did not
+  // all come from one dataflow.
+  if (roots.length === 0) return emptyStructure();
+  if (roots.length > 1) {
+    throw new Error(`expected one root operator, found ${roots.length}`);
   }
   // Children in address order so layout and tests are deterministic.
   for (const node of nodes.values()) {
