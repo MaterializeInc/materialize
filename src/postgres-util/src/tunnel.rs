@@ -14,6 +14,8 @@ use std::time::Duration;
 
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
+use mz_ore::sql;
+use mz_ore::sql::Sql;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
@@ -24,6 +26,7 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tracing::{info, warn};
 
 use crate::PostgresError;
+use crate::query::simple_query_opt;
 
 macro_rules! bail_generic {
     ($err:expr $(,)?) => {
@@ -57,6 +60,23 @@ pub enum TunnelConfig {
 
 pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 
+/// Session settings every [`Config`] pins at connection startup, as
+/// `(name, value)`.
+///
+/// Source ingestion parses the text PostgreSQL renders, both for COPY
+/// snapshots and for before-images in the replication stream, and a
+/// retraction only cancels its insertion if both were rendered identically.
+/// These settings control that rendering and are otherwise inherited from
+/// server or database defaults that can change at any point in a source's
+/// life, so they are fixed here and verified after connecting.
+pub const PINNED_SESSION_SETTINGS: &[(&str, &str)] = &[
+    ("DateStyle", "ISO"),
+    ("IntervalStyle", "postgres"),
+    ("TimeZone", "UTC"),
+    // Any positive value selects shortest round-trip float rendering.
+    ("extra_float_digits", "3"),
+];
+
 /// A wrapper for [`tokio_postgres::Client`] that can report the server version.
 pub struct Client {
     inner: tokio_postgres::Client,
@@ -83,7 +103,10 @@ impl DerefMut for Client {
 /// Configuration for PostgreSQL connections.
 ///
 /// This wraps [`tokio_postgres::Config`] to allow the configuration of a
-/// tunnel via a [`TunnelConfig`].
+/// tunnel via a [`TunnelConfig`]. Every connection pins
+/// [`PINNED_SESSION_SETTINGS`] and fails if the server does not report them
+/// back, so a pooler or proxy that strips startup options is a connection
+/// error rather than a silent difference in rendering.
 #[derive(Clone, Debug)]
 pub struct Config {
     inner: tokio_postgres::Config,
@@ -99,6 +122,13 @@ impl Config {
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
     ) -> Result<Self, PostgresError> {
+        let mut inner = inner;
+        let mut options = inner.get_options().unwrap_or_default().to_owned();
+        for (name, value) in PINNED_SESSION_SETTINGS {
+            options.push_str(&format!(" -c {name}={value}"));
+        }
+        inner.options(options.trim());
+
         let config = Self {
             inner,
             tunnel,
@@ -163,10 +193,14 @@ impl Config {
             self.get_dbname().display_or("<unknown-dbname>")
         );
         info!(%task_name, %address, "connecting");
-        match self
+        let connected = match self
             .connect_internal(task_name, configure, ssh_tunnel_manager)
             .await
         {
+            Ok(client) => verify_pinned_session_settings(client).await,
+            Err(e) => Err(e),
+        };
+        match connected {
             Ok(t) => {
                 let backend_pid = t.backend_pid();
                 info!(%task_name, %address, %backend_pid, "connected");
@@ -327,4 +361,29 @@ impl Config {
     pub fn get_dbname(&self) -> Option<&str> {
         self.inner.get_dbname()
     }
+}
+
+/// Confirms the server applied [`PINNED_SESSION_SETTINGS`], returning the
+/// client on success.
+async fn verify_pinned_session_settings(client: Client) -> Result<Client, PostgresError> {
+    for (name, expected) in PINNED_SESSION_SETTINGS {
+        let row = simple_query_opt(
+            &client,
+            sql!("SELECT current_setting({})", Sql::literal(name)),
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no result for current_setting({name})"))?;
+        let actual = row.get(0).unwrap_or_default();
+        // DateStyle reports both the output format and the input field order,
+        // for example "ISO, MDY". Only the format is pinned.
+        let reported = actual.split(',').next().unwrap_or_default().trim();
+        if !reported.eq_ignore_ascii_case(expected) {
+            bail_generic!(
+                "PostgreSQL server did not apply session setting {name}={expected} \
+                 (reports {actual:?}); connection poolers that strip startup options \
+                 are not supported"
+            );
+        }
+    }
+    Ok(client)
 }
