@@ -223,7 +223,19 @@ pub trait StorageCollections: Debug + Sync {
     >;
 
     /// Update the given [`StorageTxn`] with the appropriate metadata given the
-    /// IDs to add and drop.
+    /// IDs to add and drop. This does not require locally installed collections
+    /// and does not physically finalize shards.
+    ///
+    /// When dropping IDs, `live_collection_ids` must contain every live storage
+    /// collection ID (all versions) in the final catalog state of this transaction,
+    /// including same-call additions and registrations. It may be empty when
+    /// there are no drops. Durable mappings alone are not evidence of liveness.
+    ///
+    /// Drops take precedence over additions and registrations for the same ID.
+    /// Dropped IDs must not be live. Added and registered IDs must not already
+    /// have metadata, and the two sets must be disjoint. Registered shards must
+    /// not already be eligible for finalization. An error requires aborting the
+    /// transaction, as metadata changes may already have been staged.
     ///
     /// The data modified in the `StorageTxn` must be made available in all
     /// subsequent calls that require [`StorageMetadata`] as a parameter.
@@ -233,6 +245,7 @@ pub trait StorageCollections: Debug + Sync {
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
+        live_collection_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError>;
 
     /// Create the collections described by the individual
@@ -1393,6 +1406,7 @@ impl StorageCollections for StorageCollectionsImpl {
             new_collections,
             BTreeSet::default(),
             BTreeMap::default(),
+            &init_ids,
         )
         .await?;
 
@@ -1765,21 +1779,8 @@ impl StorageCollections for StorageCollectionsImpl {
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
+        live_collection_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
-        // Durable metadata can outlive its collection. Reconcile it with live
-        // collection state so orphaned mappings do not block finalization.
-        let mut active_collection_ids: BTreeSet<_> = {
-            let collections = self.collections.lock().expect("poisoned");
-            collections
-                .iter()
-                .filter_map(|(id, collection)| {
-                    (!ids_to_drop.contains(id) && !collection.is_dropped()).then_some(*id)
-                })
-                .collect()
-        };
-        active_collection_ids.extend(ids_to_add.iter().copied());
-        active_collection_ids.extend(ids_to_register.keys().copied());
-
         txn.insert_collection_metadata(
             ids_to_add
                 .into_iter()
@@ -1791,31 +1792,21 @@ impl StorageCollections for StorageCollectionsImpl {
         // Delete the metadata for any dropped collections.
         let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
 
-        // Only finalize the shards of dropped collections that don't have a primary.
-        // Otherwise the shard might still be in use by the primary.
-        let mut dropped_shards = BTreeSet::new();
-        {
-            let collections = self.collections.lock().expect("poisoned");
-            for (id, shard) in dropped_mappings {
-                let coll = collections.get(&id).expect("must exist");
-                if coll.primary.is_none() {
-                    dropped_shards.insert(shard);
-                }
-            }
-        }
-        let remaining_metadata = txn.get_collection_metadata();
-        let (referenced_shards, dropped_shards) = partition_finalizable_shards(
-            remaining_metadata,
-            &active_collection_ids,
-            dropped_shards,
-        );
-        if !referenced_shards.is_empty() {
-            mz_ore::soft_panic_or_log!(
-                "dropped collections would finalize shards that active collections still use: \
-                 {referenced_shards:?}"
+        // Every dropped mapping is a candidate, including aliases and collections
+        // not installed here. Only live catalog references protect a shared shard:
+        // orphaned durable mappings must not prevent reclamation.
+        let dropped_shards: BTreeSet<_> = dropped_mappings
+            .into_iter()
+            .map(|(_, shard)| shard)
+            .collect();
+        if !dropped_shards.is_empty() {
+            let (_, dropped_shards) = partition_finalizable_shards(
+                txn.get_collection_metadata(),
+                live_collection_ids,
+                dropped_shards,
             );
+            txn.insert_unfinalized_shards(dropped_shards)?;
         }
-        txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
@@ -3665,36 +3656,57 @@ mod tests {
 
     use super::*;
 
-    struct TestTxn(ShardId);
+    #[derive(Default)]
+    struct TestTxn {
+        txns_shard: Option<ShardId>,
+        metadata: BTreeMap<GlobalId, ShardId>,
+        unfinalized: BTreeSet<ShardId>,
+    }
 
     #[async_trait]
     impl StorageTxn for TestTxn {
         fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
-            BTreeMap::new()
+            self.metadata.clone()
         }
         fn insert_collection_metadata(
             &mut self,
-            _: BTreeMap<GlobalId, ShardId>,
+            metadata: BTreeMap<GlobalId, ShardId>,
         ) -> Result<(), StorageError> {
-            unimplemented!()
+            for (id, shard) in metadata {
+                match self.metadata.entry(id) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(shard);
+                    }
+                    std::collections::btree_map::Entry::Occupied(_) => {
+                        return Err(StorageError::CollectionMetadataAlreadyExists(id));
+                    }
+                }
+            }
+            Ok(())
         }
         fn delete_collection_metadata(
             &mut self,
-            _: BTreeSet<GlobalId>,
+            ids: BTreeSet<GlobalId>,
         ) -> Vec<(GlobalId, ShardId)> {
-            unimplemented!()
+            ids.into_iter()
+                .filter_map(|id| self.metadata.remove(&id).map(|shard| (id, shard)))
+                .collect()
         }
         fn get_unfinalized_shards(&self) -> BTreeSet<ShardId> {
-            BTreeSet::new()
+            self.unfinalized.clone()
         }
-        fn insert_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) -> Result<(), StorageError> {
-            unimplemented!()
+        fn insert_unfinalized_shards(
+            &mut self,
+            shards: BTreeSet<ShardId>,
+        ) -> Result<(), StorageError> {
+            self.unfinalized.extend(shards);
+            Ok(())
         }
-        fn remove_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) {
-            unimplemented!()
+        fn remove_unfinalized_shards(&mut self, shards: BTreeSet<ShardId>) {
+            self.unfinalized.retain(|shard| !shards.contains(shard));
         }
         fn get_txn_wal_shard(&self) -> Option<ShardId> {
-            Some(self.0)
+            self.txns_shard
         }
         fn write_txn_wal_shard(&mut self, _: ShardId) -> Result<(), StorageError> {
             unimplemented!()
@@ -3729,7 +3741,10 @@ mod tests {
             NonZeroI64::new(1).unwrap(),
             false,
             ConnectionContext::for_tests(Arc::new(InMemorySecretsController::new())),
-            &TestTxn(ShardId::new()),
+            &TestTxn {
+                txns_shard: Some(ShardId::new()),
+                ..Default::default()
+            },
         )
         .await;
         (controller, persist)
@@ -3748,7 +3763,10 @@ mod tests {
             NonZeroI64::new(2).unwrap(),
             true,
             ConnectionContext::for_tests(Arc::new(InMemorySecretsController::new())),
-            &TestTxn(*leader.txns_read.txns_id()),
+            &TestTxn {
+                txns_shard: Some(*leader.txns_read.txns_id()),
+                ..Default::default()
+            },
         )
         .await
     }
@@ -5013,26 +5031,158 @@ mod tests {
         await_persist_since(&persist, shard, frontier(5)).await;
     }
 
-    #[mz_ore::test]
-    fn test_partition_finalizable_shards() {
-        let active_shard = ShardId::new();
-        let dropped_shard = ShardId::new();
-        let collection_metadata = BTreeMap::from([
-            (GlobalId::User(1), active_shard),
-            (GlobalId::User(2), active_shard),
-            (GlobalId::User(3), dropped_shard),
-        ]);
-        let active_collection_ids = BTreeSet::from([GlobalId::User(1), GlobalId::User(2)]);
-        let unfinalized_shards = BTreeSet::from([active_shard, dropped_shard]);
+    #[mz_ore::test(tokio::test)]
+    async fn test_prepare_state_drop_before_install() {
+        let (controller, _persist) = bound_test_controller().await;
+        let id = GlobalId::User(1);
+        let orphan = GlobalId::User(2);
+        let mut txn = TestTxn::default();
+        controller
+            .prepare_state(
+                &mut txn,
+                BTreeSet::from([id]),
+                BTreeSet::new(),
+                BTreeMap::new(),
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        let shard = txn.metadata[&id];
+        // A durable orphan sharing the shard must not prevent runtime cleanup.
+        txn.metadata.insert(orphan, shard);
+        controller
+            .prepare_state(
+                &mut txn,
+                BTreeSet::new(),
+                BTreeSet::from([id]),
+                BTreeMap::new(),
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(txn.metadata, BTreeMap::from([(orphan, shard)]));
+        assert_eq!(txn.unfinalized, BTreeSet::from([shard]));
+        assert!(controller.collections.lock().unwrap().is_empty());
+        assert!(controller.finalizable_shards.lock().is_empty());
 
-        let (referenced_shards, finalizable_shards) = partition_finalizable_shards(
-            collection_metadata,
-            &active_collection_ids,
-            unfinalized_shards,
+        // Acknowledgment removes durable WAL entries, but retains the local
+        // acknowledgment until committed metadata is supplied back to storage.
+        controller.finalized_shards.lock().insert(shard);
+        controller
+            .prepare_state(
+                &mut txn,
+                BTreeSet::new(),
+                BTreeSet::new(),
+                BTreeMap::new(),
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        assert!(txn.unfinalized.is_empty());
+        assert!(controller.finalized_shards.lock().contains(&shard));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_prepare_state_shared_aliases() {
+        // Both an existing alias and one registered with the drop protect the
+        // shared shard, even when no collection has been installed locally.
+        for register_with_drop in [false, true] {
+            let (controller, _persist) = bound_test_controller().await;
+            let primary = GlobalId::User(1);
+            let alias = GlobalId::User(2);
+            let shard = ShardId::new();
+            let mut txn = TestTxn {
+                metadata: BTreeMap::from([(primary, shard)]),
+                ..Default::default()
+            };
+            let registration = if register_with_drop {
+                BTreeMap::from([(alias, shard)])
+            } else {
+                txn.metadata.insert(alias, shard);
+                BTreeMap::new()
+            };
+            controller
+                .prepare_state(
+                    &mut txn,
+                    BTreeSet::new(),
+                    BTreeSet::from([primary]),
+                    registration,
+                    &BTreeSet::from([alias]),
+                )
+                .await
+                .unwrap();
+            assert_eq!(txn.metadata, BTreeMap::from([(alias, shard)]));
+            assert!(txn.unfinalized.is_empty());
+            controller
+                .prepare_state(
+                    &mut txn,
+                    BTreeSet::new(),
+                    BTreeSet::from([alias]),
+                    BTreeMap::new(),
+                    &BTreeSet::new(),
+                )
+                .await
+                .unwrap();
+            assert!(txn.metadata.is_empty());
+            assert_eq!(txn.unfinalized, BTreeSet::from([shard]));
+            assert!(controller.collections.lock().unwrap().is_empty());
+            assert!(controller.finalizable_shards.lock().is_empty());
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_prepare_state_create_drop_overlap() {
+        let (controller, _persist) = bound_test_controller().await;
+        let id = GlobalId::User(1);
+        let mut txn = TestTxn::default();
+        controller
+            .prepare_state(
+                &mut txn,
+                BTreeSet::from([id]),
+                BTreeSet::from([id]),
+                BTreeMap::new(),
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        assert!(txn.metadata.is_empty());
+        assert_eq!(txn.unfinalized.len(), 1);
+        assert!(controller.collections.lock().unwrap().is_empty());
+        assert!(controller.finalizable_shards.lock().is_empty());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_initialize_state_repairs_stale_finalization_wal() {
+        let (mut controller, _persist) = bound_test_controller().await;
+        // Keep the background finalizer from consuming the bootstrap queue.
+        let idle_task = mz_ore::task::spawn(|| "idle-finalizer", std::future::pending());
+        let finalizer = std::mem::replace(
+            &mut controller._finalize_shards_task,
+            Arc::new(idle_task.abort_on_drop()),
         );
-
-        assert_eq!(referenced_shards, BTreeSet::from([active_shard]));
-        assert_eq!(finalizable_shards, BTreeSet::from([dropped_shard]));
+        Arc::try_unwrap(finalizer).unwrap().abort_and_wait().await;
+        let live = GlobalId::User(1);
+        let orphan = GlobalId::User(2);
+        let new = GlobalId::User(3);
+        let live_shard = ShardId::new();
+        let orphan_shard = ShardId::new();
+        let mut txn = TestTxn {
+            metadata: BTreeMap::from([(live, live_shard), (orphan, orphan_shard)]),
+            unfinalized: BTreeSet::from([live_shard, orphan_shard]),
+            ..Default::default()
+        };
+        controller
+            .initialize_state(&mut txn, BTreeSet::from([live, new]))
+            .await
+            .unwrap();
+        assert_eq!(txn.metadata[&live], live_shard);
+        assert!(txn.metadata.contains_key(&new));
+        assert_eq!(txn.unfinalized, BTreeSet::from([orphan_shard]));
+        assert_eq!(
+            *controller.finalizable_shards.lock(),
+            BTreeSet::from([orphan_shard])
+        );
+        assert!(controller.collections.lock().unwrap().is_empty());
     }
 
     #[mz_ore::test(tokio::test)]

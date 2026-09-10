@@ -1727,6 +1727,7 @@ impl CatalogState {
                     locally_optimized_expr: optimized_expr,
                     desc,
                     resolved_ids,
+                    query_ids: materialized_view.query_ids,
                     dependencies,
                     replacement_target: materialized_view.replacement_target,
                     cluster_id: materialized_view.cluster_id,

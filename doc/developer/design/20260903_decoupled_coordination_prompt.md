@@ -21,17 +21,12 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
-Milestone 1's implementation, production recovery demonstration, and bounded
-publication measurements are integrated. Confirm final regular PR CI acceptance
-before starting milestone 2. The PR owns the evidence and validation status.
-
 Milestone 2 starts with MV compute installation from committed state and a
 production maintained-lifecycle subscriber, not more standalone APIs. The bound
-subscriber is not that outcome. Address creator-local plans, prepare_state's
-reliance on locally installed collections, and writer-side responsibility for
-complete maintained requirements: the sequencer supplies an MV's requirement as
-its own op, and the transaction validates but does not derive it. These are
-transitional dependencies, not evidence that the current single-owner path fails.
+subscriber is not that outcome. MV and metric-sink compute installation still
+uses creator-local plans, and sink alteration still has sequencer-side effects.
+Resolve the lifecycle-service scope question in the latest handoff before
+starting that extraction.
 
 Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
 shared-view index topology and diagnostics. Larger-scale work and the known

@@ -1425,6 +1425,9 @@ pub struct MaterializedView {
     pub desc: VersionedRelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// References in the defining query, including reads eliminated during planning.
+    /// A `FOR` target alone is not a query reference.
+    pub query_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
     /// ID of the materialized view this materialized view is intended to replace.
@@ -1552,6 +1555,7 @@ impl MaterializedView {
             locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
             resolved_ids,
+            query_ids: replacement.query_ids,
             dependencies,
             replacement_target: None,
             cluster_id: replacement.cluster_id,

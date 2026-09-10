@@ -40,12 +40,13 @@ use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
-    ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget, SourceReferences,
-    StateUpdateKind, TableDataSource,
+    MaterializedView, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
+    SourceReferences, StateUpdateKind, TableDataSource,
 };
 use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::CollectionPlan;
 use mz_ore::collections::HashSet;
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
@@ -1000,8 +1001,25 @@ impl Catalog {
         let mut storage_collections_to_register = BTreeMap::new();
 
         let mut updates = Vec::new();
+        let mut born_mvs = BTreeSet::new();
+        let mut updated_requirements = BTreeSet::new();
 
         for op in ops {
+            if preliminary_state.catalog_read_protection_enabled() {
+                match &op {
+                    Op::CreateItem {
+                        item: CatalogItem::MaterializedView(mv),
+                        ..
+                    } => {
+                        born_mvs.insert(mv.global_id_writes());
+                        updated_requirements.insert(mv.global_id_writes());
+                    }
+                    Op::SetReadProtection { requirements, .. } => {
+                        updated_requirements.extend(requirements.iter().map(|r| r.id));
+                    }
+                    _ => (),
+                }
+            }
             Self::transact_op(
                 oracle_write_ts,
                 session,
@@ -1029,15 +1047,59 @@ impl Catalog {
             updates.append(&mut op_updates);
         }
 
+        // Validate the final requirement, including a creator's optional frontier
+        // selection. Dropped owners need no protection. Publications may advance
+        // recovery, but may not change the logical inputs that define it.
+        for id in updated_requirements {
+            let Some(entry) = preliminary_state.try_get_entry_by_global_id(&id) else {
+                continue;
+            };
+            let CatalogItem::MaterializedView(mv) = entry.item() else {
+                continue;
+            };
+            let requirement = &preliminary_state.maintained_read_requirements()[&id];
+            // Applying a replacement can retain aliases of the retired writer.
+            // Their completed requirements describe the retired definition.
+            if id != mv.global_id_writes() {
+                if requirement.frontier.is_some() {
+                    return Err(AdapterError::internal(
+                        "materialized view read protection",
+                        format!("retired writer {id} has an active recovery requirement"),
+                    ));
+                }
+                continue;
+            }
+            if requirement.inputs != materialized_view_recovery_inputs(&preliminary_state, mv) {
+                return Err(AdapterError::internal(
+                    "materialized view read protection",
+                    format!("incomplete logical inputs for {id}"),
+                ));
+            }
+            if born_mvs.contains(&id) {
+                validate_materialized_view_birth(mv, requirement.frontier)?;
+            }
+        }
+
         match mode {
             TransactInnerMode::Commit => {
                 // `storage_collections` can be `None` in tests.
                 if let Some(c) = storage_collections {
+                    let live_collection_ids = if storage_collections_to_drop.is_empty() {
+                        BTreeSet::new()
+                    } else {
+                        preliminary_state
+                            .get_entries()
+                            .map(|(_, entry)| entry)
+                            .filter(|entry| entry.item().is_storage_collection())
+                            .flat_map(|entry| entry.global_ids())
+                            .collect()
+                    };
                     c.prepare_state(
                         tx,
                         storage_collections_to_create,
                         storage_collections_to_drop,
                         storage_collections_to_register,
+                        &live_collection_ids,
                     )
                     .await?;
                 }
@@ -1756,6 +1818,20 @@ impl Catalog {
                     }
                     CatalogItem::MaterializedView(mv) => {
                         let mv_gid = mv.global_id_writes();
+                        if state.catalog_read_protection_enabled() {
+                            let inputs = materialized_view_recovery_inputs(state, mv);
+                            // Join logical-input permission, not physical sinces.
+                            // None is the empty frontier, above every timestamp.
+                            let mut frontier = Some(mz_repr::Timestamp::MIN);
+                            for input in &inputs {
+                                let permission = dependency_compaction_bound(state, *input)?;
+                                frontier = match (frontier, permission) {
+                                    (Some(a), Some(b)) => Some(a.max(b)),
+                                    _ => None,
+                                };
+                            }
+                            tx.set_maintained_read_requirement(mv_gid, inputs, frontier)?;
+                        }
                         if let Some(target_id) = mv.replacement_target {
                             let target_gid = state.get_entry(&target_id).latest_global_id();
                             let shard_id =
@@ -3355,6 +3431,63 @@ impl Catalog {
     }
 }
 
+fn materialized_view_recovery_inputs(
+    state: &CatalogState,
+    mv: &MaterializedView,
+) -> BTreeSet<GlobalId> {
+    state.logical_collection_inputs(
+        mv.query_ids
+            .collections()
+            .copied()
+            .chain(mv.raw_expr.depends_on())
+            .filter(|id| state.get_entry_by_global_id(id).is_relation()),
+    )
+}
+
+/// Birth protection must retain every result promised by the stored definition.
+/// The output shard's permission is separate, especially for replacement MVs.
+fn validate_materialized_view_birth(
+    mv: &MaterializedView,
+    frontier: Option<mz_repr::Timestamp>,
+) -> Result<(), AdapterError> {
+    let initial_as_of = mv.initial_as_of.as_ref().and_then(|f| f.as_option());
+    let (Some(frontier), Some(initial_as_of)) = (frontier, initial_as_of) else {
+        return Err(AdapterError::internal(
+            "create materialized view",
+            "missing readable birth or initial storage frontier",
+        ));
+    };
+    if frontier > *initial_as_of {
+        return Err(AdapterError::internal(
+            "create materialized view",
+            "input protection exceeds initial storage visibility",
+        ));
+    }
+    if let Some(schedule) = &mv.refresh_schedule {
+        for refresh_at in &schedule.ats {
+            if frontier > *refresh_at {
+                return Err(AdapterError::InputNotReadableAtRefreshAtTime(
+                    *refresh_at,
+                    timely::progress::Antichain::from_elem(frontier),
+                ));
+            }
+            if initial_as_of > refresh_at {
+                return Err(AdapterError::internal(
+                    "create materialized view",
+                    "initial storage visibility skips an explicit refresh",
+                ));
+            }
+        }
+        if schedule.round_up_timestamp(*initial_as_of) != Some(*initial_as_of) {
+            return Err(AdapterError::internal(
+                "create materialized view",
+                "initial storage visibility is not a refresh timestamp",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Returns birth permission compatible with a source's storage initialization dependency.
 fn source_initial_compaction_bound(
     state: &CatalogState,
@@ -3796,6 +3929,242 @@ mod tests {
     use crate::AdapterError;
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_materialized_view_birth_admission() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_expr::CollectionPlan;
+        use timely::progress::Antichain;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        Catalog::with_debug(|catalog| async move {
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database exists");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema exists");
+            let qualifiers = ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let birth = catalog.current_upper().await;
+            let permission = birth.step_forward();
+            let visibility = permission.step_forward();
+            let mut base = catalog.state().clone();
+            base.catalog_read_protection_enabled = true;
+            let mut state = base.clone();
+            let mut snapshot = None;
+            let mut ops = Vec::new();
+            let mut ids = BTreeMap::new();
+            for (name, sql) in [
+                ("mv_input", format!("CREATE TABLE {prefix}.mv_input (a int)")),
+                ("mv_hidden", format!("CREATE TABLE {prefix}.mv_hidden (a int)")),
+                ("mv_view", format!("CREATE VIEW {prefix}.mv_view AS SELECT * FROM {prefix}.mv_hidden")),
+                ("mv_birth", format!("CREATE MATERIALIZED VIEW {prefix}.mv_birth IN CLUSTER quickstart AS SELECT * FROM {prefix}.mv_input UNION ALL SELECT * FROM {prefix}.mv_view WHERE false AS OF {visibility}")),
+            ] {
+                let (id, gid) = catalog
+                    .allocate_user_id_for_test().await.expect("allocate test item identity");
+                let item = state.with_enable_for_item_parsing(|state| state.parse_item(
+                    gid, &sql, &BTreeMap::new(), None, false, None,
+                    &mut LocalExpressionCache::Closed, None,
+                )).unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                ids.insert(name, (id, gid));
+                ops.push(Op::CreateItem {
+                    id,
+                    name: QualifiedItemName { qualifiers: qualifiers.clone(), item: name.into() },
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                });
+                if name == "mv_hidden" {
+                    ops.push(Op::SetReadProtection {
+                        requirements: vec![],
+                        bounds: vec![CollectionCompactionBound {
+                            id: gid,
+                            frontier: Some(permission),
+                        }],
+                    });
+                }
+                let (next_state, next_snapshot) = catalog.transact_incremental_dry_run(
+                    &base, ops.clone(), None, None, birth,
+                ).await.unwrap_or_else(|err| panic!("create {name}: {err}"));
+                state = next_state;
+                snapshot = Some(next_snapshot);
+            }
+            let (mv_id, mv_gid) = ids["mv_birth"];
+            let inputs = BTreeSet::from([ids["mv_input"].1, ids["mv_hidden"].1]);
+            let CatalogItem::MaterializedView(mv) = state.get_entry(&mv_id).item() else {
+                panic!("expected MV");
+            };
+            assert!(!mv.locally_optimized_expr.depends_on().contains(&ids["mv_view"].1));
+            assert_eq!(state.maintained_read_requirements()[&mv_gid], MaintainedReadRequirement {
+                id: mv_gid, inputs: inputs.clone(), frontier: Some(permission),
+            });
+            assert_eq!(
+                state.collection_compaction_bounds()[&mv_gid],
+                Antichain::from_elem(visibility),
+            );
+
+            // A selected frontier remains an optional optimization, not authority
+            // to omit a logical input or skip promised output.
+            for (selected_inputs, frontier, succeeds) in [
+                (inputs.clone(), Some(visibility), true),
+                (BTreeSet::from([ids["mv_input"].1]), Some(visibility), false),
+                (inputs.clone(), Some(birth), false),
+                (inputs.clone(), Some(visibility.step_forward()), false),
+                (inputs.clone(), None, false),
+            ] {
+                let mut selected = ops.clone();
+                selected.push(Op::SetReadProtection {
+                    requirements: vec![MaintainedReadRequirement {
+                        id: mv_gid,
+                        inputs: selected_inputs,
+                        frontier,
+                    }],
+                    bounds: vec![],
+                });
+                let result = catalog
+                    .transact_incremental_dry_run(&base, selected, None, None, birth)
+                    .await;
+                assert_eq!(result.is_ok(), succeeds, "{:?}", result.as_ref().err());
+                if let Ok((selected_state, _)) = result {
+                    assert_eq!(
+                        selected_state.maintained_read_requirements()[&mv_gid].frontier,
+                        frontier,
+                    );
+                }
+            }
+
+            // Permission on the optimized-away input still constrains admission.
+            let mut incompatible = ops.clone();
+            incompatible.insert(incompatible.len() - 1, Op::SetReadProtection {
+                requirements: vec![],
+                bounds: vec![CollectionCompactionBound { id: ids["mv_hidden"].1, frontier: Some(visibility.step_forward()) }],
+            });
+            assert!(catalog
+                .transact_incremental_dry_run(&base, incompatible.clone(), None, None, birth)
+                .await.is_err());
+
+            // An intermediate incompatible birth promises no results if the
+            // same transaction removes its owner before committing.
+            incompatible.push(Op::DropObjects(vec![super::DropObjectInfo::Item(mv_id)]));
+            let (without_mv, _) = catalog
+                .transact_incremental_dry_run(&base, incompatible, None, None, birth)
+                .await.expect("dropped birth has no surviving read promise");
+            assert!(!without_mv.maintained_read_requirements().contains_key(&mv_gid));
+
+            for (name, sql, succeeds) in [
+                ("mv_refresh", format!("CREATE MATERIALIZED VIEW {prefix}.mv_refresh IN CLUSTER quickstart WITH (REFRESH AT {visibility}) AS SELECT * FROM {prefix}.mv_hidden AS OF {visibility}"), true),
+                ("mv_refresh_old", format!("CREATE MATERIALIZED VIEW {prefix}.mv_refresh_old IN CLUSTER quickstart WITH (REFRESH AT {birth}) AS SELECT * FROM {prefix}.mv_hidden AS OF {visibility}"), false),
+                ("mv_replacement", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.mv_replacement FOR {prefix}.mv_birth IN CLUSTER quickstart AS SELECT * FROM {prefix}.mv_hidden AS OF {}", visibility.step_forward()), true),
+            ] {
+                let (id, gid) = catalog
+                    .allocate_user_id_for_test().await.expect("allocate MV test identity");
+                let item = state.with_enable_for_item_parsing(|state| state.parse_item(
+                    gid, &sql, &BTreeMap::new(), None, false, None,
+                    &mut LocalExpressionCache::Closed, None,
+                )).unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                let create = Op::CreateItem {
+                    id,
+                    name: QualifiedItemName { qualifiers: qualifiers.clone(), item: name.into() },
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                };
+                let result = catalog
+                    .transact_incremental_dry_run(
+                        &state, vec![create], None, snapshot.clone(), birth,
+                    )
+                    .await;
+                assert_eq!(result.is_ok(), succeeds, "{name}: {:?}", result.as_ref().err());
+                if let Ok((created, created_snapshot)) = result {
+                    assert_eq!(
+                        created.maintained_read_requirements()[&gid],
+                        MaintainedReadRequirement {
+                            id: gid,
+                            inputs: BTreeSet::from([ids["mv_hidden"].1]),
+                            frontier: Some(permission),
+                        },
+                    );
+                    // A replacement inherits the shared output's permission,
+                    // not its input protection or its own visibility frontier.
+                    assert_eq!(
+                        created.collection_compaction_bounds()[&gid],
+                        Antichain::from_elem(visibility),
+                    );
+                    if name == "mv_replacement" {
+                        let apply = vec![
+                            Op::SetReadProtection {
+                                requirements: vec![
+                                    created.maintained_read_requirements()[&mv_gid].clone(),
+                                ],
+                                bounds: vec![],
+                            },
+                            Op::AlterMaterializedViewApplyReplacement {
+                                id: mv_id,
+                                replacement_id: id,
+                            },
+                        ];
+                        let (applied, applied_snapshot) = catalog.transact_incremental_dry_run(
+                            &created, apply, None, Some(created_snapshot), birth,
+                        ).await.expect("apply replacement after retiring its predecessor");
+                        assert_eq!(applied.maintained_read_requirements()[&mv_gid].frontier, None);
+                        assert_eq!(
+                            applied.maintained_read_requirements()[&gid],
+                            created.maintained_read_requirements()[&gid],
+                        );
+                        for (frontier, succeeds) in [(None, true), (Some(permission), false)] {
+                            let mut retired =
+                                applied.maintained_read_requirements()[&mv_gid].clone();
+                            retired.frontier = frontier;
+                            let result = catalog.transact_incremental_dry_run(
+                                &applied,
+                                vec![Op::SetReadProtection {
+                                    requirements: vec![retired],
+                                    bounds: vec![],
+                                }],
+                                None,
+                                Some(applied_snapshot.clone()),
+                                birth,
+                            ).await;
+                            assert_eq!(result.is_ok(), succeeds, "{:?}", result.as_ref().err());
+                        }
+                    }
+                }
+            }
+
+            // A final drop retires protection, including a same-batch creation.
+            let mut dropped = ops.clone();
+            dropped.push(Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: mv_gid,
+                    inputs: BTreeSet::new(),
+                    frontier: None,
+                }],
+                bounds: vec![],
+            });
+            dropped.push(Op::DropObjects(vec![super::DropObjectInfo::Item(mv_id)]));
+            let (dropped_state, _) = catalog
+                .transact_incremental_dry_run(&base, dropped, None, None, birth)
+                .await.expect("drop retires MV protection");
+            assert!(dropped_state.try_get_entry(&mv_id).is_none());
+            assert!(!dropped_state.maintained_read_requirements().contains_key(&mv_gid));
+
+            // Feature-off catalogs do not acquire a maintained requirement.
+            base.catalog_read_protection_enabled = false;
+            let mut unprotected = ops;
+            unprotected.retain(|op| !matches!(op, Op::SetReadProtection { .. }));
+            let (unprotected_state, _) = catalog
+                .transact_incremental_dry_run(&base, unprotected, None, None, birth)
+                .await.expect("feature-off creation needs no maintained requirement");
+            assert!(!unprotected_state.maintained_read_requirements().contains_key(&mv_gid));
+            catalog.expire().await;
+        }).await;
+    }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
