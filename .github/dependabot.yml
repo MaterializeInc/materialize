@@ -72,16 +72,11 @@ updates:
       update-types:
         - minor
         - patch
-# The `test/terraform` roots source the self-managed modules from a public git
-# repository, pinned to a tag rather than floating on `main`. An upstream merge
-# to `main` used to reach the nightly with no PR-time signal: DEP-200 moved the
-# modules to AWS provider v6 and EKS module v21, and the next nightly, 4h50m
-# later, failed at `terraform init` on an unsatisfiable provider constraint and
-# stayed red for two weeks. With a pin, a major bump arrives here as a PR that
-# someone has to look at, and the roots can be adapted in the same change.
-#
-# Pin to a tag, not a commit SHA: dependabot does not reliably bump SHA refs
-# (dependabot/dependabot-core#10787).
+# The `test/terraform` roots pin the self-managed modules to a tag rather than
+# floating on `main`, so an upstream release arrives here as a PR that can
+# adapt the roots in the same change, instead of breaking the nightly overnight
+# with no PR-time signal. Pin to a tag, not a commit SHA: dependabot does not
+# reliably bump SHA refs (dependabot/dependabot-core#10787).
 - package-ecosystem: terraform
   directories:
     - /test/terraform/aws-temporary
