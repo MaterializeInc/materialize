@@ -506,7 +506,7 @@ VIEW
 materialize
 mz_internal
 mz_object_global_ids
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_object_graph_edges

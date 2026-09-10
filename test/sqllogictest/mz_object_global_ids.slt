@@ -1,0 +1,260 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_object_global_ids.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = true
+----
+COMPLETE 0
+
+# All user objects live in a scratch schema owned by the test role, so the
+# cascade at the end of the file can clean up everything in one statement.
+# The public schema is owned by mz_system, so it cannot play that role.
+statement ok
+CREATE SCHEMA gids
+
+statement ok
+SET search_path = gids
+
+# --- the relation itself ------------------------------------------------------
+
+query T
+SELECT count(*) FROM mz_materialized_views WHERE name = 'mz_object_global_ids'
+----
+1
+
+query T
+SELECT count(*) FROM mz_internal.mz_ontology_entity_types WHERE name = 'object_global_id'
+----
+1
+
+# --- one row per user item ----------------------------------------------------
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+CREATE VIEW v AS SELECT a FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT count(*) AS c FROM t
+
+statement ok
+CREATE INDEX t_idx ON t (a)
+
+statement ok
+CREATE SECRET pw AS 'hunter2'
+
+statement ok
+CREATE CONNECTION kc TO KAFKA (BROKER 'kafka:9092', SASL MECHANISMS 'PLAIN', SASL USERNAME 'u', SASL PASSWORD = SECRET pw) WITH (VALIDATE = false)
+
+statement ok
+CREATE TYPE custom_list AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
+
+statement ok
+CREATE TABLE lg_tbl FROM SOURCE lg (REFERENCE counter)
+
+# Every kind of user item maps to exactly one GlobalId until it gains a second
+# version.
+query TT rowsort
+SELECT o.name, count(*)
+FROM mz_internal.mz_object_global_ids g
+JOIN mz_objects o ON o.id = g.id
+JOIN mz_schemas s ON s.id = o.schema_id
+WHERE s.name = 'gids'
+GROUP BY o.name
+----
+custom_list  1
+kc  1
+lg  1
+lg_tbl  1
+mv  1
+pw  1
+t  1
+t_idx  1
+v  1
+
+# The mapping points at the object's own id, not at some other object's.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_tables WHERE name = 't')
+----
+1
+
+# --- extra versions -----------------------------------------------------------
+
+statement ok
+CREATE TABLE versioned (a int)
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_tables WHERE name = 'versioned')
+----
+1
+
+# A new column adds a version, and each version has its own GlobalId. The
+# durable item records the root version's GlobalId directly and the later ones
+# under `extra_versions`, so this is the only case where one id maps to more
+# than one GlobalId.
+statement ok
+ALTER TABLE versioned ADD COLUMN b text
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_tables WHERE name = 'versioned')
+----
+2
+
+statement ok
+ALTER TABLE versioned ADD COLUMN c int
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_tables WHERE name = 'versioned')
+----
+3
+
+# --- temporary items ----------------------------------------------------------
+
+statement ok
+CREATE TEMPORARY VIEW tv AS SELECT a FROM t
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_views WHERE name = 'tv')
+----
+1
+
+# --- builtins -----------------------------------------------------------------
+
+# Builtin items have no durable item record; their pair comes from the
+# GidMapping rows instead.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_views WHERE name = 'mz_object_fully_qualified_names')
+----
+1
+
+query T
+SELECT count(*) > 0
+FROM mz_internal.mz_object_global_ids g
+JOIN mz_functions f ON f.id = g.id
+WHERE f.name = 'parse_catalog_id'
+----
+true
+
+# mz_analytics is the one runtime-alterable builtin: it has a GidMapping row
+# *and* a durable item record, both carrying the same pair. Exactly one row
+# must come out.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_connections WHERE name = 'mz_analytics')
+----
+1
+
+# Introspection source indexes are recorded in their own durable collection.
+query T
+SELECT count(*) > 0 FROM mz_internal.mz_object_global_ids WHERE id LIKE 'si%'
+----
+true
+
+query T
+SELECT count(*) > 0 FROM mz_internal.mz_object_global_ids WHERE global_id LIKE 'si%'
+----
+true
+
+# --- structural invariants ----------------------------------------------------
+
+# A GlobalId is allocated once and belongs to exactly one item, so global_id is
+# a key. The materialized view unions its branches with UNION ALL and relies on
+# this.
+query T
+SELECT count(*) FROM (
+    SELECT global_id
+    FROM mz_internal.mz_object_global_ids
+    GROUP BY global_id
+    HAVING count(*) > 1
+)
+----
+0
+
+# An id and a GlobalId with the same digits denote different objects, but the
+# two are always allocated in corresponding namespaces.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE (id LIKE 'si%') != (global_id LIKE 'si%')
+   OR (id LIKE 'u%') != (global_id LIKE 'u%')
+----
+0
+
+# Every object has at least one GlobalId. mz_functions holds one row per
+# implementation, hence the DISTINCT.
+query T
+SELECT count(*) FROM (
+    SELECT DISTINCT id FROM mz_objects
+    EXCEPT ALL
+    SELECT DISTINCT id FROM mz_internal.mz_object_global_ids
+)
+----
+0
+
+# And no GlobalId outlives its object.
+query T
+SELECT count(*) FROM (
+    SELECT DISTINCT id FROM mz_internal.mz_object_global_ids
+    EXCEPT ALL
+    SELECT DISTINCT id FROM mz_objects
+)
+----
+0
+
+# --- dropped items leave no rows ----------------------------------------------
+
+statement ok
+CREATE VIEW dropme AS SELECT a FROM t
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_views WHERE name = 'dropme')
+----
+1
+
+statement ok
+DROP VIEW dropme
+
+# Cascading away the whole scratch schema drops every user object created
+# above, so any user row still present is a leak. The temporary view is scoped
+# to this session's schema rather than the scratch one, so it goes first.
+statement ok
+DROP VIEW tv
+
+statement ok
+DROP SCHEMA gids CASCADE
+
+query T
+SELECT count(*) FROM mz_internal.mz_object_global_ids WHERE id LIKE 'u%'
+----
+0
