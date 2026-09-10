@@ -22,10 +22,10 @@ mz-cloud-resources = { path = "../cloud-resources" }
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
+mz-source-schema-change = { path = "../source-schema-change" }
 mz-ssh-util = { path = "../ssh-util" }
 mysql_common.workspace = true
 mysql_async.workspace = true
-postgres-protocol.workspace = true
 prost.workspace = true
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }

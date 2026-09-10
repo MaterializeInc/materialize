@@ -1,0 +1,19 @@
+[package]
+name = "mz-source-schema-change"
+description = "Upstream schema changes that Materialize sources cannot follow."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-ore = { path = "../ore", default-features = false }
+postgres-protocol.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[features]
+default = []
