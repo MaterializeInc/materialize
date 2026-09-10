@@ -375,9 +375,8 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    // Imports read row-shaped data from persist. Encode it to the
-                    // columnar edge at the boundary. The batches are already
-                    // consolidated, so this leaf-encode is non-consolidating.
+                    // Persist batches are row-shaped and already consolidated, so the
+                    // encode here is non-consolidating.
                     let bundle = crate::render::CollectionBundle::from_edge(
                         CollectionEdge::Columnar(vec_to_columnar(oks.enter(region))),
                         errs.enter(region),
@@ -478,9 +477,8 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    // Imports read row-shaped data from persist. Encode it to the
-                    // columnar edge at the boundary. The batches are already
-                    // consolidated, so this leaf-encode is non-consolidating.
+                    // Persist batches are row-shaped and already consolidated, so the
+                    // encode here is non-consolidating.
                     let bundle = crate::render::CollectionBundle::from_edge(
                         CollectionEdge::Columnar(vec_to_columnar(oks.enter_region(region))),
                         errs.enter_region(region),
@@ -674,9 +672,8 @@ where
                         start_signal,
                         |e, _| e.clone(),
                     );
-                    // The filtered index collection is row-shaped. Encode it to
-                    // the columnar edge at the boundary. It is already
-                    // consolidated, so this leaf-encode is non-consolidating.
+                    // The filtered index collection is row-shaped and already
+                    // consolidated, so the encode here is non-consolidating.
                     CollectionBundle::from_edge(
                         CollectionEdge::Columnar(vec_to_columnar(oks)),
                         errs,
