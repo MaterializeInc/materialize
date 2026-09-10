@@ -865,6 +865,7 @@ impl k8s_controller::Context for Context {
                     ),
                     resource_requirements: mz.spec.console_resource_requirements.clone(),
                     replicas: Some(mz.console_replicas()),
+                    appearance: mz.spec.console_appearance.clone(),
                     external_certificate_spec: mz.spec.console_external_certificate_spec.clone(),
                     pod_annotations: mz.spec.pod_annotations.clone(),
                     pod_labels: mz.spec.pod_labels.clone(),
