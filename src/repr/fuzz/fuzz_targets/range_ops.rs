@@ -27,8 +27,8 @@
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_repr::Datum;
 use mz_repr::adt::range::{Range, RangeBound};
+use mz_repr::{Datum, SqlScalarType};
 
 // None = infinite bound. Some((inclusive, value)) = finite bound.
 type BoundSpec = Option<(bool, i32)>;
@@ -54,7 +54,7 @@ fn make_range(spec: RangeSpec) -> Range<Datum<'static>> {
 /// (misordered bounds, etc.).
 fn canonical(spec: RangeSpec) -> Option<Range<Datum<'static>>> {
     let mut r = make_range(spec);
-    r.canonicalize().ok()?;
+    r.canonicalize(&SqlScalarType::Int32).ok()?;
     Some(r)
 }
 

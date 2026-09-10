@@ -400,7 +400,7 @@ fn gen_scalar_datum<'a>(u: &mut Unstructured, ty: &SqlScalarType) -> arbitrary::
 /// Push a `Range` of the given discrete element type. Each bound is
 /// independently infinite (`Datum::Null` => infinite via `RangeBound::new`) or
 /// a finite element value, and independently inclusive/exclusive. Empty ranges
-/// are reached when `push_range`'s canonicalization collapses the bounds.
+/// are reached when canonicalization collapses the bounds.
 fn push_range(
     packer: &mut mz_repr::RowPacker,
     u: &mut Unstructured,
@@ -425,7 +425,12 @@ fn push_range(
     let upper: RangeUpperBound<Datum> = RangeBound::new(upper_d, bool::arbitrary(u)?);
     // An out-of-order range (lower > upper) is an `InvalidRangeError`. On
     // failure just fall back to the empty range so the column stays valid.
-    if packer.push_range(Range::new(Some((lower, upper)))).is_err() {
+    let mut range = Range::new(Some((lower, upper)));
+    if range.canonicalize(element_type).is_err() {
+        let _ = packer.push_range(Range { inner: None });
+        return Ok(());
+    }
+    if packer.push_range(range).is_err() {
         let _ = packer.push_range(Range { inner: None });
     }
     Ok(())

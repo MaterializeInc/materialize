@@ -57,7 +57,7 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::range::{Range, RangeBound, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, SqlScalarType, Timestamp};
 use mz_storage::fuzz_exports::{FuzzUpsertParts, UpsertKey, UpsertValue, fuzz_drain_staged_input};
 use mz_storage::source::SourceExportCreationConfig;
 use mz_storage_types::errors::{
@@ -225,9 +225,13 @@ fn push_range(packer: &mut RowPacker, u: &mut Unstructured) -> arbitrary::Result
             None
         },
     };
-    let range = Range {
+    let mut range = Range {
         inner: Some(RangeInner { lower, upper }),
     };
+    if range.canonicalize(&SqlScalarType::Int32).is_err() {
+        packer.push(Datum::Int32(lo));
+        return Ok(());
+    }
     if packer.push_range(range).is_err() {
         packer.push(Datum::Int32(lo));
     }
