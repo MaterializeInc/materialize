@@ -494,3 +494,12 @@ Milestone 1 measures 100 and 1,000 generated objects. Larger-scale performance
 work is deferred. Keep the shared-view index topology and diagnostics, rather
 than adopting the independent-view proposal. The workflow still accepts explicit
 larger cohorts. Next: finish payload-aware comparisons at the agreed sizes.
+
+### 2026-09-09: Maintained-lifecycle handoff
+
+The next ownership boundary is MV compute installation from committed state and a
+production maintained-lifecycle subscriber. Creator-local plans, locally installed
+collection assumptions, and sequencer-supplied MV requirements remain transitional.
+Keep the bounded performance scope, baseline catalog cloning costs, and deferred
+identical-index scaling work explicit rather than folding a general redesign into
+the ownership transition.

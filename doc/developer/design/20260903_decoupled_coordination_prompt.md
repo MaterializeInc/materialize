@@ -21,34 +21,24 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
-Milestone 1 remains active. Sparse index permission, no-wait reconstruction,
-changed-record publication and validation, and owned diagnostic reconstruction
-are integrated. Complete their production evidence before declaring the milestone.
+Milestone 1's implementation, production recovery demonstration, and bounded
+publication measurements are integrated. Confirm final regular PR CI acceptance
+before starting milestone 2. The PR owns the evidence and validation status.
 
-1. Production proof: run the restart and read-only index workflows in draft PR
-   CI, resolve integration findings, and demonstrate protection through actual
-   compaction and uncached recovery across maintained types. Keep claims about
-   bootstrap-drop ordering limited to the ordering the evidence establishes.
-2. Publication costs: finish representative measurements using the existing
-   workflow, including DDL latency, follower lag, and retained history. Separate
-   changed-record work from baseline catalog snapshot and storage-metadata cloning
-   costs. Distinguish publication, workload, and observer costs with controlled
-   comparisons, and record the numbers in the PR. Do not make a general catalog
-   redesign a prerequisite.
-   Aljoscha scoped this milestone's measurements to 100 and 1,000 generated
-   objects, retaining the shared-view index topology and diagnostics. Larger-scale
-   performance work is deferred. Record the known quadratic notice/dependency
-   costs without making their redesign a prerequisite for this milestone.
-3. History: the 09-09 commits, including `wip: Integrate maintained recovery
-   protection`, are not yet one coherent story. Squash them before milestone 2
-   work begins.
-4. Ownership transition: prioritize a production maintained-lifecycle subscriber
-   over more standalone APIs. The bound subscriber is not that outcome. Address
-   creator-local plans, prepare_state's reliance on locally installed collections,
-   and writer-side responsibility for complete maintained requirements: the
-   sequencer supplies an MV's requirement as its own op, and the transaction
-   validates but does not derive it. These are transitional dependencies, not
-   evidence that the current single-owner path fails.
+Milestone 2 starts with MV compute installation from committed state and a
+production maintained-lifecycle subscriber, not more standalone APIs. The bound
+subscriber is not that outcome. Address creator-local plans, prepare_state's
+reliance on locally installed collections, and writer-side responsibility for
+complete maintained requirements: the sequencer supplies an MV's requirement as
+its own op, and the transaction validates but does not derive it. These are
+transitional dependencies, not evidence that the current single-owner path fails.
+
+Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
+shared-view index topology and diagnostics. Larger-scale work and the known
+quadratic identical-index notice/dependency costs are deferred. Baseline catalog
+snapshot and storage-metadata cloning costs remain. Keep payload, Persist metadata,
+and current-state batch footprint distinct in reports, and do not treat observer
+timings as isolated subscriber latency or current-state bytes as total disk usage.
 
 Keep the draft PR description accurate about what is implemented and what remains,
 with validation status in the PR rather than the design log.
