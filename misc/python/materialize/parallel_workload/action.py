@@ -3025,6 +3025,12 @@ class FlipFlagsAction(Action):
             "'1min'",
             "'120d'",
         ]
+        # "0s" turns committing a ceiling ahead of a pinned frontier off.
+        self.flags_with_values["storage_persist_sink_description_lookahead"] = [
+            "'0s'",
+            "'1s'",
+            "'30s'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
