@@ -196,6 +196,15 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         storage_metadata: Option<StorageMetadata>,
     }
 
+    // The comparison below needs the on-disk catalog, which `with_catalog_copy`
+    // can only open when a catalog config was supplied
+    // (`--validate-catalog-store`). Without one it returns `None` and the
+    // check is skipped, so do not fetch and parse the dump (100+ MB) for
+    // nothing.
+    if state.materialize.catalog_config.is_none() {
+        return Ok(());
+    }
+
     // Dump the in-memory catalog state of the Materialize environment that we're
     // connected to.
     let memory_catalog = reqwest::get(&format!(

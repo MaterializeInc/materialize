@@ -99,9 +99,7 @@ const ColumnFilterTrigger = <TData,>({
         motionProps={{ animate: false }}
         onClick={(e) => e.stopPropagation()}
       >
-        <Box width="280px">
-          {renderFilter(header.column, header.getContext().table)}
-        </Box>
+        <Box>{renderFilter(header.column, header.getContext().table)}</Box>
       </PopoverContent>
     </Popover>
   );

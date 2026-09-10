@@ -97,7 +97,7 @@ By contrast, `data/sql_funcs.yml` is hand-maintained and supplies the
 `content/sql/functions/` pages. Add new SQL functions there manually. Chroma
 keywords come from `src/sql-lexer/src/keywords.txt`.
 
-## Writing and Naming Conventions
+## Writing and style guide
 
 Use clear Markdown headings, short paragraphs, fenced code blocks with an
 appropriate language (`sql` for SQL and `nofmt` for expected output), and
@@ -142,6 +142,47 @@ At every sidebar nesting level, order content by type: guides, features,
 patterns, performance, monitoring, then troubleshooting. Treat setup,
 configuration, and task-oriented how-to pages as guides. Feature pages explain
 a specific capability, such as dictionary compression.
+
+## Choose a documentation mode
+
+Classify each document section by the primary user need it serves. Use one
+Diátaxis mode per section:
+
+* **Tutorials, learning-oriented:** Help the reader gain practical knowledge
+  through a guided learning experience. Give the reader a complete path and
+  explain only what is needed to finish it.
+* **Guides, task-oriented:** Help a competent user accomplish a specific
+  real-world goal. Provide actionable steps, prerequisites, and relevant
+  variations. Do not teach fundamentals or explain the entire system.
+* **Reference, information-oriented:** Describe facts about the system
+  accurately and systematically. Document APIs, parameters, commands,
+  configuration, behavior, constraints, and defaults. Be concise, neutral,
+  structured, and complete. Do not turn reference material into a tutorial.
+* **Explanation, understanding-oriented:** Help the reader understand concepts,
+  design decisions, relationships, tradeoffs, and reasons. Provide context and
+  connect ideas. Do not make completing a task the primary structure.
+
+### Rules
+
+* Determine the reader's primary need before writing: **learn, accomplish, look
+  up, or understand**.
+* Do not mix documentation modes unnecessarily. Split content when the reader's
+  need changes.
+* Keep procedures in tutorials and guides. Keep factual descriptions in
+  reference material and conceptual discussion in explanations.
+* Link between documentation types instead of embedding substantial material
+  from another type.
+* Organize content around the reader's need, not the internal structure of the
+  product.
+* When revising existing documentation, identify mixed modes and separate them
+  into the appropriate Diátaxis categories.
+
+## Draft documentation from PRDs or engineering designs
+
+When asked to draft documentation from a PRD or engineering specification, do
+not invent details or steps. Investigate unclear details and ask for
+clarification. If required details remain unavailable, use a `$TODO` placeholder
+instead of inventing them.
 
 ## Testing Guidelines
 

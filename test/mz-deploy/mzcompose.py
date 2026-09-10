@@ -18,6 +18,8 @@ import subprocess
 import sys
 import time
 
+import requests
+
 from materialize import MZ_ROOT
 from materialize.mzcompose import loader
 from materialize.mzcompose.composition import (
@@ -1225,6 +1227,197 @@ def workflow_dev(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert (
             rows == []
         ), f"refused dev run must not insert a manifest row, got: {rows}"
+
+
+def workflow_avro_record_type(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """A Kafka source whose Avro schema wraps the row in a bare envelope.
+
+    A changefeed emitting `envelope='bare'` in Avro registers a value schema
+    whose single field is named `record` and holds the row, so `ENVELOPE NONE`
+    produces one column of that name typed as an anonymous record. That column
+    is what `mz_columns.type` cannot spell, and it reaches `lock` through the
+    source-table path rather than as a declared dependency.
+
+    The schema is faithful to what CockroachDB emits, and three of its
+    properties are only reachable through a real Avro decode:
+
+    - the envelope field is `["null", <record>]`, so the record column is
+      nullable, which reconstructs differently from a non-null one;
+    - a three-way union `["null", decimal, "string"]` expands to a
+      `<field>1` / `<field>2` pair *inside* the record (see the module docs on
+      Essential Unions in `mz_interchange::avro::schema`), which no
+      hand-written SQL produces;
+    - every field is a nullable union even where the upstream column is NOT
+      NULL, which the `__crdb__` annotations record.
+    """
+    setup_base(c)
+    c.up("redpanda")
+
+    topic = "cdc_bare_ledger_entry"
+    c.exec("redpanda", "rpk", "topic", "create", topic)
+    schema = (PROJECTS_DIR / "avro-record" / "value_schema.json").read_text()
+    response = requests.post(
+        f"http://localhost:{c.port('redpanda', 8081)}/subjects/{topic}-value/versions",
+        json={"schema": schema, "schemaType": "AVRO"},
+        timeout=60,
+    )
+    assert (
+        response.status_code == 200
+    ), f"registering the value schema failed: {response.status_code} {response.text}"
+
+    # Creates the connections, cluster, source and source table. The view is a
+    # deploy-time object and is not touched here.
+    result = run_mz_deploy(c, "avro-record/v1", "apply")
+    assert result.returncode == 0, f"apply failed: {result.stderr}"
+
+    project_dir = PROJECTS_DIR / "avro-record" / "v1"
+    types_lock = project_dir / "types.lock"
+    if types_lock.exists():
+        types_lock.unlink()
+
+    # Nothing has been produced to the topic, so the source has ingested
+    # nothing. Capturing a type must not wait on that: a first `lock` against a
+    # freshly created source is exactly when a large feed is least hydrated.
+    #
+    # It does not, because `pg_typeof` is evaluated at plan time and the
+    # subquery around the column is pruned, leaving a constant:
+    #
+    #     EXPLAIN SELECT pg_typeof((SELECT "record" FROM ... LIMIT 0))
+    #     Explained Query (fast path):
+    #       Constant
+    #         - ("record(id: text?,...)")
+    #
+    # so the capture never reads the source and never waits on its frontier,
+    # however far behind it is. This bound guards that property; it is not a
+    # performance assertion.
+    start = time.time()
+    result = run_mz_deploy(c, "avro-record/v1", "lock")
+    elapsed = time.time() - start
+    assert result.returncode == 0, f"lock failed: {result.stderr}"
+    assert (
+        elapsed < 60
+    ), f"lock took {elapsed:.0f}s against an unhydrated source; it must not wait on ingestion"
+
+    contents = types_lock.read_text()
+    for expected in [
+        # The column is named `record` and so is the tag for its type. The
+        # `fields` key is the whole difference between this and the entry that
+        # could not be read back.
+        '{ name = "record", type = "record", nullable = true, fields = [',
+        # Fields the Avro decoder invented by splitting a three-way union.
+        # Bare `numeric`, not `numeric(39,4)`: `pg_typeof` is the only surface
+        # that describes a record's fields and it renders without modifiers.
+        # Summing them still typechecks, since `base_eq` ignores scale.
+        '{ name = "amount1", type = "numeric", nullable = true }',
+        '{ name = "amount2", type = "text", nullable = true }',
+        '{ name = "fee1", type = "numeric", nullable = true }',
+        # A field whose name collides with the key naming its own type.
+        '{ name = "type", type = "text", nullable = true }',
+        '{ name = "created", type = "timestamp without time zone", nullable = true }',
+    ]:
+        assert expected in contents, f"missing {expected!r} in types.lock:\n{contents}"
+
+    # `compile` stubs the source table from the contract and typechecks the
+    # view, which reads `(record).amount1` and sums it.
+    result = run_mz_deploy(c, "avro-record/v1", "compile")
+    assert result.returncode == 0, f"compile failed: {result.stderr}"
+
+    # `stage` runs project validation, a path `compile` alone does not reach.
+    result = run_mz_deploy(c, "avro-record/v1", "stage", "--dry-run", "--allow-dirty")
+    assert result.returncode == 0, f"stage --dry-run failed: {result.stderr}"
+
+    with c.test_case("upgrade-from-an-unreadable-lock-file"):
+        # What a version 1 lock file holds for this column: the pseudo-type
+        # token, with no way to rebuild the record. It has to load, and
+        # reconstruction has to say what to do about it.
+        types_lock.write_text(
+            'version = 1\n\n[[table]]\nname = "app.ingest.ledger_entry"\ncolumns = [\n'
+            '    { name = "record", type = "record", nullable = true },\n]\n'
+        )
+        result = run_mz_deploy(c, "avro-record/v1", "compile", check=False)
+        assert (
+            result.returncode != 0
+        ), "compile over a pseudo-token lock file should fail"
+        combined = result.stdout + result.stderr
+        for expected in ("record", "mz-deploy lock"):
+            assert (
+                expected in combined
+            ), f"error should name the column and the fix, got:\n{combined}"
+
+        result = run_mz_deploy(c, "avro-record/v1", "lock")
+        assert result.returncode == 0, f"re-lock failed: {result.stderr}"
+        result = run_mz_deploy(c, "avro-record/v1", "compile")
+        assert result.returncode == 0, f"compile after re-lock failed: {result.stderr}"
+
+
+def workflow_structured_types(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Types that `mz_columns` cannot spell survive `lock` and `compile`.
+
+    `mz_columns.type` reports the bare tokens `record`, `list`, and `map` for an
+    anonymous composite or container, dropping the field list and the element
+    type. Neither can be turned back into a column, so the contract records the
+    real structure instead.
+
+    Verifies against a live catalog what unit tests cannot: that the capture
+    query recovers the full type, and that the recovered type reconstructs into
+    a relation the planner accepts.
+    """
+    setup_base(c)
+
+    # An upstream object mz-deploy does not own, carrying one column of every
+    # shape the catalog renders lossily.
+    c.sql(
+        """
+        CREATE SCHEMA upstream;
+        CREATE TABLE upstream.leaf (a int4 NOT NULL, b text);
+        CREATE VIEW upstream.wide AS
+            SELECT
+                __r AS payload,
+                NULL::int8 list AS tags,
+                NULL::numeric(38,2) AS amount
+            FROM (SELECT l.a, l.b, __n AS nested FROM upstream.leaf l, upstream.leaf __n) __r;
+        GRANT USAGE ON SCHEMA upstream TO deploy_user;
+        GRANT SELECT ON upstream.wide TO deploy_user;
+        """,
+        user="mz_system",
+        port=6877,
+    )
+
+    project_dir = PROJECTS_DIR / "structured-types" / "v1"
+    types_lock = project_dir / "types.lock"
+    if types_lock.exists():
+        types_lock.unlink()
+
+    result = run_mz_deploy(c, "structured-types/v1", "lock")
+    assert result.returncode == 0, f"lock failed: {result.stderr}"
+    assert types_lock.exists(), f"expected {types_lock} to be created"
+    contents = types_lock.read_text()
+
+    for expected in [
+        # The record's fields, not the bare token `record`.
+        '{ name = "a", type = "integer", nullable = false }',
+        '{ name = "b", type = "text", nullable = true }',
+        # A nested record keeps its own fields.
+        '{ name = "nested", type = "record", nullable = false, fields = [',
+        # The list's element type, not the bare token `list`.
+        '{ name = "tags", type = "list", nullable = true, of = { type = "bigint" } }',
+        # The modifier `mz_columns.type` drops.
+        'type = "numeric(39,2)"',
+    ]:
+        assert expected in contents, f"missing {expected!r} in types.lock:\n{contents}"
+
+    # The captured contract has to reconstruct: `compile` stubs every external
+    # dependency into its private catalog before typechecking the project.
+    result = run_mz_deploy(c, "structured-types/v1", "compile")
+    assert (
+        result.returncode == 0
+    ), f"compile over structured external types failed: {result.stderr}"
+
+    # Capture is deterministic, so a second lock is a no-op.
+    run_mz_deploy(c, "structured-types/v1", "lock")
+    assert (
+        types_lock.read_text() == contents
+    ), "re-locking changed types.lock; capture is not deterministic"
 
 
 def workflow_system_deps(c: Composition, parser: WorkflowArgumentParser) -> None:

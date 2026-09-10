@@ -456,7 +456,7 @@ notice, the ingesting table stalls permanently:
 
 ```
 ERROR:  Source error: source must be dropped and recreated due to failure:
-        incompatible schema change: source table orders with oid 16385 has been altered
+        incompatible schema change on public.orders (oid 16385): column "priority" was dropped or renamed upstream
 ```
 
 While the table is stalled, reads against the public interface return this

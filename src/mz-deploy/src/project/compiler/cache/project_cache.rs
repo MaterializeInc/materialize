@@ -182,7 +182,7 @@ impl ProjectCache {
                 Ok((
                     row.get::<_, String>(0)?,
                     ColumnType {
-                        r#type: row.get(1)?,
+                        r#type: super::decode_column_type(row.get(1)?)?,
                         nullable: row.get::<_, i32>(2)? != 0,
                         position: usize::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
                         comment: None,
@@ -559,6 +559,7 @@ impl ProjectCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::DataType;
     use rusqlite::Connection;
     use std::collections::BTreeMap;
 
@@ -704,13 +705,25 @@ mod tests {
         conn.execute(
             "INSERT INTO typecheck_columns (object_key, column_name, column_type, nullable, position) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params!["db.schema.my_view", "id", "integer", 0, 1],
+            params![
+                "db.schema.my_view",
+                "id",
+                DataType::named("integer").to_json(),
+                0,
+                1
+            ],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO typecheck_columns (object_key, column_name, column_type, nullable, position) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params!["db.schema.my_view", "name", "text", 1, 2],
+            params![
+                "db.schema.my_view",
+                "name",
+                DataType::named("text").to_json(),
+                1,
+                2
+            ],
         )
         .unwrap();
         drop(conn);
@@ -728,12 +741,12 @@ mod tests {
         assert_eq!(columns.len(), 2);
 
         let id_col = &columns["id"];
-        assert_eq!(id_col.r#type, "integer");
+        assert_eq!(id_col.r#type, DataType::named("integer"));
         assert!(!id_col.nullable);
         assert_eq!(id_col.position, 1);
 
         let name_col = &columns["name"];
-        assert_eq!(name_col.r#type, "text");
+        assert_eq!(name_col.r#type, DataType::named("text"));
         assert!(name_col.nullable);
         assert_eq!(name_col.position, 2);
     }
