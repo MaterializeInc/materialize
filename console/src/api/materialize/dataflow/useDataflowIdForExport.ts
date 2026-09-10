@@ -43,6 +43,9 @@ export function useDataflowIdForExport(params?: DataflowIdForExportParams) {
   const { results, error, databaseError, loading } = useSqlManyTyped(queries, {
     cluster: params?.clusterName,
     replica: params?.replicaName,
+    // Replica-local introspection logging: see useDataflowGraphData for why
+    // these reads must not wait on a saturated replica's frontier.
+    transactionIsolation: "serializable",
   });
 
   const dataflowId =

@@ -173,4 +173,35 @@ describe("useDataflowGraphData", () => {
     expect(result.current.loading).toEqual(false);
     expect(result.current.data).toBeNull();
   });
+
+  // Strict serializable (the console-wide default) makes a pinned-replica
+  // introspection read wait on that replica's frontier, which is slowest
+  // exactly when the replica is saturated and someone opens this page to
+  // find out why.
+  it("reads at serializable rather than the default strict serializable", async () => {
+    let isolation: string | undefined;
+    server.use(
+      http.post("*/api/sql", async ({ request }) => {
+        const options = JSON.parse(
+          new URL(request.url).searchParams.get("options") ?? "{}",
+        );
+        isolation = options.transaction_isolation;
+        return HttpResponse.json({
+          results: [operatorsResult, okResult, okResult, okResult, okResult],
+        });
+      }),
+    );
+    const Wrapper = await createProviderWrapper();
+    const { result } = renderHook(
+      () =>
+        useDataflowGraphData({
+          clusterName: "c",
+          replicaName: "r1",
+          dataflowId: "7",
+        }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(isolation).toEqual("serializable");
+  });
 });
