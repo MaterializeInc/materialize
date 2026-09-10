@@ -4291,7 +4291,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn latest_version(&self) -> Option<RelationVersion> {
-        self.table().map(|t| t.desc.latest_version())
+        match self.item() {
+            CatalogItem::Table(table) => Some(table.desc.latest_version()),
+            // Replacement versions share a schema but have distinct collection IDs.
+            CatalogItem::MaterializedView(mv) => mv.collections.keys().next_back().copied(),
+            _ => None,
+        }
     }
 }
 

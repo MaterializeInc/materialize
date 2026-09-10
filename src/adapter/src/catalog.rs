@@ -2275,10 +2275,14 @@ impl SessionCatalog for ConnCatalog<'_> {
         id: &GlobalId,
     ) -> Option<Box<dyn mz_sql::catalog::CatalogCollectionItem>> {
         let entry = self.state.try_get_entry_by_global_id(id)?;
-        let entry = match &entry.item {
-            CatalogItem::Table(table) => {
-                let (version, _gid) = table
-                    .collections
+        let collections = match &entry.item {
+            CatalogItem::Table(table) => Some(&table.collections),
+            CatalogItem::MaterializedView(mv) => Some(&mv.collections),
+            _ => None,
+        };
+        let entry = match collections {
+            Some(collections) => {
+                let (version, _gid) = collections
                     .iter()
                     .find(|(_version, gid)| *gid == id)
                     .expect("catalog out of sync, mismatched GlobalId");
@@ -2298,10 +2302,14 @@ impl SessionCatalog for ConnCatalog<'_> {
         id: &GlobalId,
     ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
         let entry = self.state.get_entry_by_global_id(id);
-        let entry = match &entry.item {
-            CatalogItem::Table(table) => {
-                let (version, _gid) = table
-                    .collections
+        let collections = match &entry.item {
+            CatalogItem::Table(table) => Some(&table.collections),
+            CatalogItem::MaterializedView(mv) => Some(&mv.collections),
+            _ => None,
+        };
+        let entry = match collections {
+            Some(collections) => {
+                let (version, _gid) = collections
                     .iter()
                     .find(|(_version, gid)| *gid == id)
                     .expect("catalog out of sync, mismatched GlobalId");

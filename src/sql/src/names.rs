@@ -1534,8 +1534,13 @@ impl<'a> NameResolver<'a> {
                 let alter_table_enabled =
                     self.catalog.system_vars().enable_alter_table_add_column();
                 let version = match item.latest_version() {
-                    // Only track the version of referenced object if the feature is enabled.
-                    Some(v) if item.id().is_user() && alter_table_enabled => {
+                    // MV replacement must preserve the referenced collection's lifetime,
+                    // independently of table schema evolution.
+                    Some(v)
+                        if item.id().is_user()
+                            && (alter_table_enabled
+                                || item.item_type() == CatalogItemType::MaterializedView) =>
+                    {
                         RelationVersionSelector::Specific(v)
                     }
                     _ => RelationVersionSelector::Latest,
@@ -1611,11 +1616,13 @@ impl<'a> NameResolver<'a> {
             // If there isn't a version specified, and this item supports versioning, track the
             // latest.
             None => match item.latest_version() {
-                // Only pin a version for user items, and only with the feature on. Mirrors the
-                // by-name path in `fold_item_name`. Builtins are not user-versioned, so pinning
-                // one strands the reference if the builtin is ever converted to an item type
-                // without versions.
-                Some(v) if id.is_user() && alter_table_enabled => {
+                // Mirror by-name resolution. Builtins are not user-versioned:
+                // pinning would strand references after an item-type migration.
+                Some(v)
+                    if id.is_user()
+                        && (alter_table_enabled
+                            || item.item_type() == CatalogItemType::MaterializedView) =>
+                {
                     RelationVersionSelector::Specific(v)
                 }
                 _ => RelationVersionSelector::Latest,
