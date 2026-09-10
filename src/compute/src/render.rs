@@ -963,14 +963,11 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                     Variable::new(self.scope, Product::new(Default::default(), inner));
 
                 if variable_read.contains(id) {
-                    // Re-encode the read-edge to columnar so `Get`s on this rec
-                    // binding (e.g. as a Union input) see a columnar edge. The
-                    // feedback `Variable` itself stays `Vec` (set at `oks_v.set`
-                    // below), so each iteration crosses the container boundary
-                    // twice: encoded here for the readers, decoded once per
-                    // binding where the value is fed back. The re-encode is a
-                    // stateless, timestamp-agnostic pass-through, so it does not
-                    // alter the iterative frontier or fixpoint behavior.
+                    // The feedback `Variable` stays `Vec`, so each iteration crosses
+                    // the container boundary twice, encoded here for the readers and
+                    // decoded where the value is fed back. The encode is a stateless,
+                    // timestamp-agnostic pass-through, so it leaves the iterative
+                    // frontier and the fixpoint alone.
                     self.insert_id(
                         Id::Local(*id),
                         CollectionBundle::from_edge(
@@ -981,9 +978,8 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 }
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
-            // Now render each of the rec bindings. The decoded value is kept so
-            // the extraction below reuses it instead of decoding the same stream
-            // a second time.
+            // The decoded value is kept so the extraction below reuses it rather than
+            // decoding the same stream twice.
             let mut decoded_oks = BTreeMap::new();
             let mut rec_iter = recs.into_iter().peekable();
             while let Some(RecBind { id, value, limit }) = rec_iter.next() {
@@ -1058,10 +1054,8 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let oks = decoded_oks
                     .remove(&id)
                     .expect("rec binding decoded while rendering above");
-                // Extract into the outer scope and re-encode the read-edge to
-                // columnar, so `Get`s on the extracted binding see a columnar
-                // edge. `leave_dynamic` has already stripped the iteration
-                // coordinate, so this runs in the parent scope.
+                // `leave_dynamic` has already stripped the iteration coordinate, so
+                // this encode runs in the parent scope.
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_edge(
