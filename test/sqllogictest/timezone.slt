@@ -433,3 +433,12 @@ query T
 SELECT timezone_offset('Europe/Chisinau', '2023-03-26 00:30:00 UTC')
 ----
 (EET,02:00:00,00:00:00)
+
+# Baja California observed DST in 1953 and 1961 through 1975, following
+# California, where earlier data had none. This asserts the current belief
+# about the past. If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('America/Tijuana', '1970-07-15 12:00:00 UTC')
+----
+(PDT,-08:00:00,01:00:00)
