@@ -383,7 +383,7 @@ hyper-util = "0.1.20"
 tower-service = "0.3.3"
 iceberg = "0.10.1"
 iceberg-catalog-rest = "0.10.1"
-iceberg-storage-opendal = { version = "0.10.1", default-features = false, features = ["opendal-s3", "opendal-gcs"] }
+iceberg-storage-opendal = { version = "0.10.1", default-features = false, features = ["opendal-s3", "opendal-gcs", "opendal-azdls"] }
 imbl = { version = "7.0.0", features = ["serde"] }
 include_dir = "0.7.4"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
