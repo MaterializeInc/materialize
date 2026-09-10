@@ -24,7 +24,8 @@ reference these objects is not allowed.
 
 ## `mz_object_global_ids`
 
-The `mz_object_global_ids` table maps Materialize catalog item IDs to global IDs.
+The `mz_object_global_ids` materialized view maps Materialize catalog item
+IDs to global IDs.
 
 <!-- RELATION_SPEC mz_internal.mz_object_global_ids -->
 | Field        | Type     | Meaning                                                                                             |
