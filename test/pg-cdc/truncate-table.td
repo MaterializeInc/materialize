@@ -63,19 +63,16 @@ contains:table was truncated
 # catalog when the dataflow restarts, which brings the table back as a live
 # output resuming from the current replication position. Rows inserted upstream
 # while the table was stalled were never ingested, so their later deletes are
-# written as retractions of rows that do not exist. Downstream Reduce and TopK
-# operators then report negative accumulations.
+# written as retractions of rows that do not exist.
 #
-# Those retractions cannot be read back over SQL, because the same shard also
-# holds the permanent "table was truncated" error and every peek on it fails on
-# that error instead. So we assert the cause rather than the symptom: after the
-# restart the source must commit no updates at all for the truncated table.
+# Those retractions cannot be read back directly: the shard also holds the
+# permanent "table was truncated" error, so every peek on it fails on that error
+# instead. A downstream MIN/MAX reduce does see them, because the ok stream keeps
+# flowing regardless of the error stream, and it pushes an error of its own into
+# the error stream. Counting the reduce's errors is therefore the observation
+# point.
 
 $ set-sql-timeout duration=120s
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET storage_statistics_collection_interval = 1000
-ALTER SYSTEM SET storage_statistics_interval = 2000
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE t_trunc (f1 INTEGER);
@@ -105,6 +102,18 @@ CREATE PUBLICATION mz_source_restart FOR TABLE t_trunc, t_barrier;
 > SELECT * FROM t_barrier;
 1
 
+# Hydrates on clean data before the truncate. One replica, because the error
+# counts are reported per replica and a second one only adds a lagging copy of
+# the same numbers.
+> CREATE CLUSTER compute_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
+
+> CREATE MATERIALIZED VIEW mv_minmax
+  IN CLUSTER compute_cluster
+  AS SELECT max(f1) AS m FROM t_trunc
+
+> SELECT * FROM mv_minmax;
+1
+
 # Truncate and reload upstream. The reloaded rows are dropped on the floor: the
 # running dataflow has already forgotten the table.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -114,6 +123,22 @@ INSERT INTO t_trunc VALUES (100), (200);
 ! SELECT * FROM t_trunc;
 contains:table was truncated
 
+# Wait for the truncate error to propagate into the view, then record how many
+# errors it has. How many the reduce plan produces for one definite error is not
+# the point, so keep the baseline rather than a literal: what matters is that it
+# does not grow later.
+> SELECT SUM(c.count) > 0
+  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  JOIN mz_objects o ON c.object_id = o.id
+  WHERE o.name = 'mv_minmax'
+true
+
+$ set-from-sql var=baseline_errors
+SELECT SUM(c.count)::text
+  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  JOIN mz_objects o ON c.object_id = o.id
+  WHERE o.name = 'mv_minmax'
+
 # Restart the ingestion dataflow without touching the truncated table. Dropping
 # any other subsource of the same source has the same effect.
 > ALTER CLUSTER restart_cluster SET (REPLICATION FACTOR 0)
@@ -122,13 +147,6 @@ contains:table was truncated
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 't_barrier'
 running
-
-# Pin the new replica so the stats queries below cannot pick up the pre-restart
-# replica's counters.
-$ set-from-sql var=replica_id
-SELECT cr.id
-  FROM mz_clusters c, mz_cluster_replicas cr
-  WHERE c.name = 'restart_cluster' AND c.id = cr.cluster_id
 
 # Delete the reloaded rows, then write to `t_barrier`. Replication is ordered,
 # so once the `t_barrier` row is visible the DELETE has already been processed.
@@ -142,17 +160,23 @@ INSERT INTO t_barrier VALUES (2);
 1
 2
 
-# Wait for this replica's statistics to reflect the `t_barrier` write, so that a
-# zero for `t_trunc` below means "nothing was committed" and not "not reported
-# yet". Both tables are reported in the same statistics update.
-> SELECT SUM(u.updates_committed) > 0
-  FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
-  WHERE t.name = 't_barrier' AND u.replica_id = '${replica_id}'
+$ set-from-sql var=barrier_ts
+SELECT mz_now()::text FROM t_barrier LIMIT 1
+
+# Both exports share the source's remap collection and the DELETE precedes the
+# `t_barrier` write in the replication stream, so a view that has produced output
+# past this point has already consumed the retractions if there were any. Without
+# this wait the count below would match before the view had a chance to change.
+> SELECT write_frontier > ${barrier_ts}
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_objects o ON f.object_id = o.id
+  WHERE o.name = 'mv_minmax'
 true
 
-> SELECT SUM(u.updates_committed)
-  FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
-  WHERE t.name = 't_trunc' AND u.replica_id = '${replica_id}'
-0
+# Pre-fix the deletes reach the reduce as retractions of rows it never saw, so it
+# emits further errors and this count grows past the baseline.
+> SELECT SUM(c.count) = ${baseline_errors}
+  FROM mz_internal.mz_compute_error_counts_raw_unified c
+  JOIN mz_objects o ON c.object_id = o.id
+  WHERE o.name = 'mv_minmax'
+true
