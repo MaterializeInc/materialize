@@ -26,7 +26,8 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC,
+    STORAGE_ARRANGEMENT_EXERT_PROPORTIONALITY, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -704,11 +705,6 @@ impl Controller {
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
 
-        // TODO(teskje): use the same values as for compute?
-        let storage_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality: 1337,
-            ..Default::default()
-        };
         // These configure the replica's process rather than environmentd's, so
         // they are `ParameterScope::Replica` and must be read through this
         // replica's scoped overrides. They are baked into the process
@@ -716,6 +712,11 @@ impl Controller {
         // environment-wide value or the override reaches the replica only when
         // it is next provisioned.
         let overrides = self.replica_dyncfg_overrides.get(&replica_id);
+        let storage_proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality: STORAGE_ARRANGEMENT_EXERT_PROPORTIONALITY
+                .get_with_overrides(&self.dyncfg, overrides),
+            ..Default::default()
+        };
         let compute_proto_timely_config = TimelyConfig {
             arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY
                 .get_with_overrides(&self.dyncfg, overrides),
