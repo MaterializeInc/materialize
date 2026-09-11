@@ -9,7 +9,6 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::bail;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::SqlColumnType;
 #[cfg(any(test, feature = "proptest"))]
@@ -19,6 +18,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use self::proto_my_sql_column_desc::Meta;
+use crate::schema_change::{KeyRef, SchemaChange, SchemaChangeError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_mysql_util.rs"));
 
@@ -84,23 +84,22 @@ impl MySqlTableDesc {
     /// exceptions:
     /// - `self`'s columns are a prefix of `other`'s columns.
     /// - `self`'s keys are all present in `other`
+    ///
+    /// On incompatibility, the error describes the first mismatch found and,
+    /// where possible, how to recover from it. The error text becomes the
+    /// permanent, user-visible error for the stalled table, so it must stand
+    /// on its own.
     pub fn determine_compatibility(
         &self,
         other: &MySqlTableDesc,
         binlog_full_metadata: bool,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), SchemaChangeError> {
         if self == other {
             return Ok(());
         }
 
         if self.schema_name != other.schema_name || self.name != other.name {
-            bail!(
-                "table name mismatch: self: {}.{}, other: {}.{}",
-                self.schema_name,
-                self.name,
-                other.schema_name,
-                other.name
-            );
+            return Err(self.build_schema_change_error(SchemaChange::TableRenamed {}));
         }
 
         // In the case that we don't have full binlog row metadata, `columns` is ordered by the
@@ -126,31 +125,21 @@ impl MySqlTableDesc {
                     .position(|oc| oc.name.as_str() == self_column.name.as_str())
             };
 
+            let dropped_column_error = || {
+                self.build_schema_change_error(SchemaChange::ColumnDropped {
+                    column: self_column.name.clone(),
+                })
+            };
             let wire_idx = match wire_idx {
                 Some(idx) => idx,
-                None => {
-                    // We could not find a column in the incoming row that matches this descriptor column.
-                    // This is an error as the column is not ignored (ignored columns have already been skipped).
-                    return Err(anyhow::anyhow!(
-                        "column {} no longer present in table {}",
-                        self_column.name,
-                        self.name
-                    ));
-                }
+                None => return Err(dropped_column_error()),
             };
-            let other_column = other.columns.get(wire_idx).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "column {} no longer present in table {}",
-                    self_column.name,
-                    self.name
-                )
-            })?;
-            if !self_column.is_compatible(other_column) {
-                bail!(
-                    "column {} in table {} has been altered",
-                    self_column.name,
-                    self.name
-                );
+            let other_column = other
+                .columns
+                .get(wire_idx)
+                .ok_or_else(dropped_column_error)?;
+            if let Some(change) = self_column.get_incompatible_schema_change(other_column) {
+                return Err(self.build_schema_change_error(change));
             }
         }
         // Our keys are all still present in exactly the same shape.
@@ -161,16 +150,30 @@ impl MySqlTableDesc {
         // up of columns (a, b) and key2 made up of columns (a, c) but now the table only has a
         // single unique key of just the column a then it's compatible because {a} ⊆ {a, b} and
         // {a} ⊆ {a, c}.
-        if self.keys.difference(&other.keys).next().is_some() {
-            bail!(
-                "keys in table {} have been altered: self: {:?}, other: {:?}",
-                self.name,
-                self.keys,
-                other.keys
-            );
+        if let Some(key) = self.keys.difference(&other.keys).next() {
+            let still_exists = other.keys.iter().any(|k| k.name == key.name);
+            let key = KeyRef {
+                name: key.name.clone(),
+                is_primary: key.is_primary,
+                columns: key.columns.clone(),
+            };
+            let change = if still_exists {
+                SchemaChange::KeyAltered { key }
+            } else {
+                SchemaChange::KeyDropped { key }
+            };
+            return Err(self.build_schema_change_error(change));
         }
 
         Ok(())
+    }
+
+    pub fn build_schema_change_error(&self, change: SchemaChange) -> SchemaChangeError {
+        SchemaChangeError {
+            schema_name: self.schema_name.clone(),
+            name: self.name.clone(),
+            change,
+        }
     }
 }
 
@@ -302,6 +305,32 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                 })
                 .transpose()?,
         })
+    }
+}
+
+impl MySqlColumnDesc {
+    fn get_incompatible_schema_change(&self, other: &MySqlColumnDesc) -> Option<SchemaChange> {
+        if self.is_compatible(other) {
+            return None;
+        }
+        let column = self.name.clone();
+        if self.name != other.name {
+            return Some(SchemaChange::ColumnDropped { column });
+        }
+        let nullability_only_change = match (&self.column_type, &other.column_type) {
+            (Some(self_type), Some(other_type)) => {
+                !self_type.nullable
+                    && other_type.nullable
+                    && self_type.scalar_type == other_type.scalar_type
+                    && self.meta.is_compatible(&other.meta)
+            }
+            _ => false,
+        };
+        if nullability_only_change {
+            Some(SchemaChange::NotNullDropped { column })
+        } else {
+            Some(SchemaChange::ColumnTypeChanged { column })
+        }
     }
 }
 

@@ -25,6 +25,9 @@ pub use desc::{
     ProtoMySqlTableDesc,
 };
 
+pub mod schema_change;
+pub use schema_change::{SchemaChange, SchemaChangeError};
+
 mod replication;
 pub use replication::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
@@ -93,7 +96,7 @@ impl std::fmt::Display for MissingPrivilege {
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
-    #[error("error validating privileges: {0:?}")]
+    #[error("error validating privileges: {}", itertools::join(.0, ", "))]
     MissingPrivileges(Vec<MissingPrivilege>),
     #[error("error creating mysql connection with config: {0}")]
     InvalidClientConfig(String),
@@ -121,9 +124,12 @@ pub enum MySqlError {
         /// Redacted at construction, safe to log.
         upper_bound: String,
     },
-    #[error("unsupported data types: {columns:?}")]
+    #[error("unsupported data types: {}", itertools::join(.columns, ", "))]
     UnsupportedDataTypes { columns: Vec<UnsupportedDataType> },
-    #[error("duplicated column names in table '{qualified_table_name}': {columns:?}")]
+    #[error(
+        "duplicated column names in table '{qualified_table_name}': {}",
+        itertools::join(.columns, ", ")
+    )]
     DuplicatedColumnNames {
         qualified_table_name: String,
         columns: Vec<String>,

@@ -13,18 +13,17 @@ use serde::{Deserialize, Serialize};
 
 pub use mz_source_schema_change::{KeyRef, SchemaChange};
 
-/// A [`SchemaChange`] on a PostgreSQL table.
+/// A [`SchemaChange`] on a MySQL table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
-#[error("incompatible schema change on {namespace}.{name} (oid {oid}): {change}")]
+#[error("incompatible schema change on {schema_name}.{name}: {change}")]
 pub struct SchemaChangeError {
-    pub namespace: String,
+    pub schema_name: String,
     pub name: String,
-    pub oid: u32,
     pub change: SchemaChange,
 }
 
 impl SchemaChangeError {
     pub fn hint(&self) -> Option<String> {
-        self.change.hint(&self.namespace, &self.name)
+        self.change.hint(&self.schema_name, &self.name)
     }
 }

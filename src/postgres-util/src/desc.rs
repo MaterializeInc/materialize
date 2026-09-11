@@ -80,17 +80,11 @@ impl PostgresTableDesc {
                 "table {}.{} changed oid from {} to {} during schema verification",
                 self.namespace, self.name, self.oid, other.oid
             );
-            return Err(
-                self.build_schema_change_error(SchemaChange::TableDropped { oid: other.oid })
-            );
+            return Err(self.build_schema_change_error(SchemaChange::TableDropped {}));
         }
 
         if self.namespace != other.namespace || self.name != other.name {
-            return Err(self.build_schema_change_error(SchemaChange::TableRenamed {
-                namespace: other.namespace.clone(),
-                name: other.name.clone(),
-                oid: other.oid,
-            }));
+            return Err(self.build_schema_change_error(SchemaChange::TableRenamed {}));
         }
 
         let other_cols_by_name = BTreeMap::from_iter(other.columns.iter().map(|c| (&c.name, c)));
