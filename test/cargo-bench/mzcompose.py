@@ -22,8 +22,13 @@ reuse that.
 A package whose dependency closure has no committed change between the ancestor
 and the current commit is not built at all: identical source at identical paths
 would only reproduce the identical-binary skip below at the cost of two builds.
+That prediction is unchecked by construction, so scheduled runs build those
+packages anyway and fail when a predicted-unchanged package yields differing
+binaries, which points at a hole in the closure or an unpinned compile-time
+input.
 """
 
+import argparse
 import hashlib
 import json
 import os
@@ -82,7 +87,12 @@ def resolve_ancestor() -> str:
     ]
     if not releases:
         raise RuntimeError(f"no release tag older than {current} found")
-    return git.rev_parse(f"{max(releases)}^{{commit}}")
+    tag = spawn.capture(
+        ["git", "rev-parse", f"{max(releases)}^{{commit}}"], cwd=MZ_ROOT
+    ).strip()
+    # The tag sits on its release branch and carries backports that main
+    # lacks, so the comparison point is where that branch left main.
+    return spawn.capture(["git", "merge-base", tag, "HEAD"], cwd=MZ_ROOT).strip()
 
 
 def target_dir() -> Path:
@@ -305,7 +315,9 @@ def run_benches(
     ancestor_by_key = {(b.package, b.name): b for b in ancestor_built}
     ancestor_target_by_key = {(t.package, t.name): t for t in ancestor_targets}
     head_target_by_key = {(t.package, t.name): t for t in head_targets}
-    scratch = criterion_home / "stripped"
+    # Outside `criterion_home`, which is uploaded as an artifact, so a hard
+    # kill mid-strip cannot leave a full bench binary in the upload.
+    scratch = cargo_bench_dir() / "stripped"
     scratch.mkdir(parents=True, exist_ok=True)
 
     ancestor_failures: list[TargetFailure] = []
@@ -384,6 +396,8 @@ def render_report(
     current_failures: list[TargetFailure],
     identical: list[BuiltBench],
     unchanged: list[str],
+    unchanged_built: bool,
+    mispredicted: list[str],
 ) -> str:
     sections = []
     if ancestor is not None:
@@ -410,9 +424,19 @@ def render_report(
         )
     if report.warnings:
         sections.append("Warnings:\n" + "\n".join(f"* {w}" for w in report.warnings))
-    if unchanged:
+    if mispredicted:
         sections.append(
-            "Bench packages with no change in their dependency closure since the ancestor (not built):\n"
+            "Bench packages the closure prefilter predicted unchanged whose binaries differ, a hole in the closure or an unpinned compile-time input:\n"
+            + "\n".join(f"* `{p}`" for p in mispredicted)
+        )
+    if unchanged:
+        suffix = (
+            "(built anyway to verify the prediction)"
+            if unchanged_built
+            else "(not built)"
+        )
+        sections.append(
+            f"Bench packages with no change in their dependency closure since the ancestor {suffix}:\n"
             + "\n".join(f"* `{p}`" for p in unchanged)
         )
     if identical:
@@ -446,6 +470,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         action="store_true",
         help="run only the current commit, no comparison",
     )
+    parser.add_argument(
+        "--verify-closure",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="build packages the closure prefilter predicts unchanged and fail when their binaries differ, defaults to on in scheduled CI runs and off in pull requests and locally",
+    )
     args = parser.parse_args()
     if args.skip_ancestor and args.ancestor:
         parser.error("--ancestor has no effect with --skip-ancestor")
@@ -469,7 +499,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Only the committed HEAD is measured here. Uncommitted local changes
     # in MZ_ROOT are not part of the checkout built below.
-    head = git.rev_parse("HEAD")
+    head = spawn.capture(["git", "rev-parse", "HEAD"], cwd=MZ_ROOT).strip()
     ancestor: str | None = None
     unchanged: list[str] = []
     if not args.skip_ancestor:
@@ -477,11 +507,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert ancestor is not None
         print(f"--- Comparing against ancestor {ancestor}")
         unchanged = unchanged_packages(ancestor, head, shard_packages)
-        if unchanged:
-            print(
-                f"--- Unchanged since the ancestor, not built: {', '.join(unchanged)}"
-            )
-    build_packages = [p for p in shard_packages if p not in unchanged]
+    # The prefilter is a prediction the identical-binary check can confirm or
+    # refute, but only if the predicted-unchanged packages get built. Pull
+    # requests and local runs take the saving, scheduled runs pay for the
+    # check so a wrong prediction surfaces before it hides a regression.
+    verify_closure = (
+        args.verify_closure
+        if args.verify_closure is not None
+        else buildkite.is_in_buildkite() and not buildkite.is_in_pull_request()
+    )
+    if unchanged:
+        action = "built to verify" if verify_closure else "not built"
+        print(f"--- Unchanged since the ancestor, {action}: {', '.join(unchanged)}")
+    build_packages = (
+        shard_packages
+        if verify_closure
+        else [p for p in shard_packages if p not in unchanged]
+    )
 
     criterion_home = target_dir() / "criterion-compare"
     # Stale baselines from an earlier run would silently become the
@@ -523,12 +565,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # A cancelled or timed-out job can leave a previous run's worktrees
     # registered and their directories in place. Clear both before reusing
-    # the fixed paths.
-    spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
+    # the fixed paths. The prune runs after the removals: `remove_worktree`
+    # tolerates failure, so the rmtree can leave a registration whose
+    # directory is gone, and `git worktree add` refuses such a path as a
+    # "missing but already registered worktree".
     for leftover in (src, ancestor_src):
         if leftover.exists():
             remove_worktree(leftover)
             shutil.rmtree(leftover, ignore_errors=True)
+    spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
     # A hard kill (OOM, SIGKILL) skips the `finally` below and can leave
     # `target` populated with whichever side's build was in flight. Which
     # side that was is no longer known, and the next rename onto this path
@@ -543,6 +588,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ancestor_failures: list[TargetFailure] = []
     current_failures: list[TargetFailure] = []
     identical: list[BuiltBench] = []
+    current_targets: list[BenchTarget] = []
     # Tracks which parked target dir currently owns `target`, so the
     # `finally` below can park it back even if a build raises partway through.
     target_owner: str | None = None
@@ -631,6 +677,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         shutil.rmtree(src, ignore_errors=True)
         shutil.rmtree(ancestor_src, ignore_errors=True)
 
+    mispredicted: list[str] = []
+    if verify_closure:
+        identical_keys = {(b.package, b.name) for b in identical}
+        for package in unchanged:
+            targets = [t for t in current_targets if t.package == package]
+            if any((t.package, t.name) not in identical_keys for t in targets):
+                mispredicted.append(package)
+
     report = compare(criterion_home, args.threshold)
     markdown = render_report(
         ancestor,
@@ -640,10 +694,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         current_failures,
         identical,
         unchanged,
+        verify_closure,
+        mispredicted,
     )
     print(markdown)
 
-    failed = report.has_regressions or bool(current_failures)
+    failed = report.has_regressions or bool(current_failures) or bool(mispredicted)
     if buildkite.is_in_buildkite():
         buildkite.add_annotation(
             "error" if failed else "info",
@@ -674,3 +730,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if report.has_regressions:
         regressions = [r.id for r in report.results if r.verdict == Verdict.REGRESSION]
         raise RuntimeError(f"benchmark regressions: {', '.join(regressions)}")
+    if mispredicted:
+        raise RuntimeError(
+            f"closure prefilter predicted unchanged but binaries differ: {', '.join(mispredicted)}"
+        )

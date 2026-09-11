@@ -98,6 +98,16 @@ def cargo_build_args(targets: Sequence[BenchTarget]) -> list[str]:
     `--features` flag, which is the only spelling cargo accepts when more than one
     package is selected. Output is `--message-format=json` so the caller can
     recover executable paths.
+
+    NOTE: the features are a union over the whole selection, so a target that
+    requires none is still built against a lib with every other selected
+    target's features enabled. Both sides of a comparison are built the same
+    way, so verdicts hold, but absolute numbers can differ from a single
+    `cargo bench --bench <name>` run.
+
+    Callers must select whole packages. A partial selection within a package
+    would build targets absent from the caller's target list, because
+    `--bench` names are matched across every selected package.
     """
     if not targets:
         raise ValueError("no bench targets to build")

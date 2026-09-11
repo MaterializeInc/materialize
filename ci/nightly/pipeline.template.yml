@@ -300,9 +300,12 @@ steps:
         label: ":rust: Cargo bench against ancestor"
         sanitizer: skip
         depends_on: []
-        timeout_in_minutes: 480
+        # Measured: 48 minutes for the largest closure built twice on the
+        # 8-core queue, 73 minutes for a shard that also ran its benchmarks.
+        timeout_in_minutes: 240
         # Annotation-only while the noise floor on this hardware is being
-        # calibrated. Remove after 2026-09-25 so regressions fail the build.
+        # calibrated. QAR-162 covers dropping `soft_fail` so regressions and
+        # HEAD build failures fail the build.
         soft_fail: true
         # One shard per package with bench targets, so this should track that
         # package count. Extra shards exit as no-ops, fewer shards double up.
