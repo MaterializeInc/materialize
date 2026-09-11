@@ -28,6 +28,7 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
 use mz_sql::catalog::{
@@ -36,6 +37,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql::plan::NetworkPolicyRule;
+use mz_sql::plan::{QueryPolicyMode, QueryPolicyRule};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
@@ -56,12 +58,13 @@ use crate::durable::objects::{
     ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    QueryPolicy, QueryPolicyKey, QueryPolicyValue, ReplicaConfig, ReplicaSystemConfiguration,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
@@ -69,7 +72,7 @@ use crate::durable::{
     EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
     SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration, USER_ITEM_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_QUERY_POLICY_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -109,6 +112,7 @@ pub struct Transaction<'a> {
     source_references: TableTransaction<SourceReferencesKey, SourceReferencesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
     network_policies: TableTransaction<NetworkPolicyKey, NetworkPolicyValue>,
+    query_policies: TableTransaction<QueryPolicyKey, QueryPolicyValue>,
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
@@ -162,6 +166,7 @@ impl<'a> Transaction<'a> {
             comments,
             clusters,
             network_policies,
+            query_policies,
             cluster_replicas,
             introspection_sources,
             id_allocator,
@@ -244,6 +249,11 @@ impl<'a> Transaction<'a> {
                 network_policies,
                 network_policy_unique_fn,
                 network_policy_unique_fn,
+            )?,
+            query_policies: TableTransaction::new_with_uniqueness_fn(
+                query_policies,
+                |a: &QueryPolicyValue, b| a.name == b.name,
+                |prev: &QueryPolicyValue, next| prev.name == next.name,
             )?,
             cluster_replicas: TableTransaction::new_with_uniqueness_fn(
                 cluster_replicas,
@@ -434,6 +444,7 @@ impl<'a> Transaction<'a> {
         vars: RoleVars,
         oid: u32,
     ) -> Result<(), CatalogError> {
+        self.validate_query_policy_reference(vars.query_policy)?;
         if let Some(ref password) = attributes.password {
             let hash = mz_auth::hash::scram256_hash(
                 password,
@@ -537,6 +548,7 @@ impl<'a> Transaction<'a> {
         config: ClusterConfig,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
+        self.validate_query_policy_reference(config.query_policy)?;
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
             ClusterValue {
@@ -660,6 +672,94 @@ impl<'a> Transaction<'a> {
             )
             .into());
         };
+        Ok(())
+    }
+
+    pub fn insert_user_query_policy(
+        &mut self,
+        name: String,
+        mode: QueryPolicyMode,
+        rules: Vec<QueryPolicyRule>,
+        privileges: Vec<MzAclItem>,
+        owner_id: RoleId,
+        temporary_oids: &HashSet<u32>,
+    ) -> Result<QueryPolicyId, CatalogError> {
+        let oid = self.allocate_oid(temporary_oids)?;
+        let id = QueryPolicyId::User(
+            self.get_and_increment_id(USER_QUERY_POLICY_ID_ALLOC_KEY.to_string())?,
+        );
+        self.query_policies
+            .insert(
+                QueryPolicyKey { id },
+                QueryPolicyValue {
+                    name: name.clone(),
+                    mode,
+                    rules,
+                    privileges,
+                    owner_id,
+                    oid,
+                },
+                self.op_id,
+            )
+            .map_err(|_| SqlCatalogError::QueryPolicyAlreadyExists(name))?;
+        Ok(id)
+    }
+
+    pub fn update_query_policy(&mut self, policy: QueryPolicy) -> Result<(), CatalogError> {
+        let id = policy.id;
+        let (key, value) = policy.into_key_value();
+        if self.query_policies.update_by_key(key, value, self.op_id)? {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownQueryPolicy(id.to_string()).into())
+        }
+    }
+
+    pub fn remove_query_policies(
+        &mut self,
+        ids: &BTreeSet<QueryPolicyId>,
+    ) -> Result<(), CatalogError> {
+        // Check references in the same durable working copy as the deletion.
+        // A sequencer's catalog snapshot can predate a staged attachment.
+        for policy in self
+            .clusters
+            .items()
+            .values()
+            .filter_map(|c| c.config.query_policy)
+            .chain(
+                self.roles
+                    .items()
+                    .values()
+                    .filter_map(|r| r.vars.query_policy),
+            )
+        {
+            if ids.contains(&policy) {
+                return Err(SqlCatalogError::QueryPolicyInUse(policy.to_string()).into());
+            }
+        }
+        let to_remove = ids
+            .iter()
+            .map(|id| (QueryPolicyKey { id: *id }, None))
+            .collect();
+        let previous = self.query_policies.set_many(to_remove, self.op_id)?;
+        for (key, value) in previous {
+            assert!(key.id.is_user(), "cannot delete non-user query policy");
+            if value.is_none() {
+                return Err(SqlCatalogError::UnknownQueryPolicy(key.id.to_string()).into());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_query_policy_reference(
+        &self,
+        id: Option<QueryPolicyId>,
+    ) -> Result<(), CatalogError> {
+        if let Some(id) = id {
+            if self.query_policies.get(&QueryPolicyKey { id }).is_none() {
+                return Err(SqlCatalogError::UnknownQueryPolicy(id.to_string()).into());
+            }
+        }
         Ok(())
     }
 
@@ -1097,6 +1197,7 @@ impl<'a> Transaction<'a> {
             self.databases.len()
                 + self.schemas.len()
                 + self.roles.len()
+                + self.query_policies.len()
                 + self.items.len()
                 + self.introspection_sources.len()
                 + temporary_oids.len(),
@@ -1108,6 +1209,9 @@ impl<'a> Transaction<'a> {
             allocated_oids.insert(value.oid);
         });
         self.roles.for_values(|_, value| {
+            allocated_oids.insert(value.oid);
+        });
+        self.query_policies.for_values(|_, value| {
             allocated_oids.insert(value.oid);
         });
         self.items.for_values(|_, value| {
@@ -1188,6 +1292,7 @@ impl<'a> Transaction<'a> {
             comments: self.comments.current_items_proto(),
             clusters: self.clusters.current_items_proto(),
             network_policies: self.network_policies.current_items_proto(),
+            query_policies: self.query_policies.current_items_proto(),
             cluster_replicas: self.cluster_replicas.current_items_proto(),
             introspection_sources: self.introspection_sources.current_items_proto(),
             id_allocator: self.id_allocator.current_items_proto(),
@@ -1680,6 +1785,7 @@ impl<'a> Transaction<'a> {
         role: Role,
         password: PasswordAction,
     ) -> Result<(), CatalogError> {
+        self.validate_query_policy_reference(role.vars.query_policy)?;
         let key = RoleKey { id };
         if self.roles.get(&key).is_some() {
             let auth_key = RoleAuthKey { role_id: id };
@@ -1743,6 +1849,9 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
+        for role in roles.values() {
+            self.validate_query_policy_reference(role.vars.query_policy)?;
+        }
         let update_role_ids: BTreeSet<_> = roles.keys().cloned().collect();
         let kvs: Vec<_> = roles
             .into_iter()
@@ -1801,6 +1910,7 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of clusters in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), CatalogError> {
+        self.validate_query_policy_reference(cluster.config.query_policy)?;
         let updated = self.clusters.update_by_key(
             ClusterKey { id },
             cluster.into_key_value().1,
@@ -2427,6 +2537,13 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
+    pub fn get_query_policies(&self) -> impl Iterator<Item = QueryPolicy> + use<'_> {
+        self.query_policies
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
     pub fn get_network_policies(&self) -> impl Iterator<Item = NetworkPolicy> + use<'_> {
         self.network_policies
             .items()
@@ -2565,6 +2682,7 @@ impl<'a> Transaction<'a> {
             role_auth,
             clusters,
             network_policies,
+            query_policies,
             cluster_replicas,
             introspection_sources,
             system_gid_mapping,
@@ -2641,6 +2759,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 network_policies,
                 StateUpdateKind::NetworkPolicy,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                query_policies,
+                StateUpdateKind::QueryPolicy,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -2750,6 +2873,7 @@ impl<'a> Transaction<'a> {
             clusters: self.clusters.pending(),
             cluster_replicas: self.cluster_replicas.pending(),
             network_policies: self.network_policies.pending(),
+            query_policies: self.query_policies.pending(),
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
@@ -2803,6 +2927,7 @@ impl<'a> Transaction<'a> {
             clusters,
             cluster_replicas,
             network_policies,
+            query_policies,
             introspection_sources,
             id_allocator,
             configs,
@@ -2832,6 +2957,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(clusters);
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
         differential_dataflow::consolidation::consolidate_updates(network_policies);
+        differential_dataflow::consolidation::consolidate_updates(query_policies);
         differential_dataflow::consolidation::consolidate_updates(introspection_sources);
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
@@ -3027,6 +3153,7 @@ pub struct TransactionBatch {
     pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
     pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
+    pub(crate) query_policies: Vec<(proto::QueryPolicyKey, proto::QueryPolicyValue, Diff)>,
     pub(crate) introspection_sources: Vec<(
         proto::ClusterIntrospectionSourceIndexKey,
         proto::ClusterIntrospectionSourceIndexValue,
@@ -3093,6 +3220,7 @@ impl TransactionBatch {
             clusters,
             cluster_replicas,
             network_policies,
+            query_policies,
             introspection_sources,
             id_allocator,
             configs,
@@ -3120,6 +3248,7 @@ impl TransactionBatch {
             && clusters.is_empty()
             && cluster_replicas.is_empty()
             && network_policies.is_empty()
+            && query_policies.is_empty()
             && introspection_sources.is_empty()
             && id_allocator.is_empty()
             && configs.is_empty()
@@ -3189,6 +3318,7 @@ mod unique_name {
         DatabaseValue,
         ItemValue,
         NetworkPolicyValue,
+        QueryPolicyValue,
         RoleValue,
         SchemaValue,
     }

@@ -107,6 +107,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             mz_audit_log::ObjectType::NetworkPolicy => {
                 crate::objects::audit_log_event_v1::ObjectType::NetworkPolicy
             }
+            mz_audit_log::ObjectType::QueryPolicy => {
+                crate::objects::audit_log_event_v1::ObjectType::QueryPolicy
+            }
             mz_audit_log::ObjectType::Role => crate::objects::audit_log_event_v1::ObjectType::Role,
             mz_audit_log::ObjectType::Secret => {
                 crate::objects::audit_log_event_v1::ObjectType::Secret
@@ -162,6 +165,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             }
             crate::objects::audit_log_event_v1::ObjectType::NetworkPolicy => {
                 Ok(mz_audit_log::ObjectType::NetworkPolicy)
+            }
+            crate::objects::audit_log_event_v1::ObjectType::QueryPolicy => {
+                Ok(mz_audit_log::ObjectType::QueryPolicy)
             }
             crate::objects::audit_log_event_v1::ObjectType::Role => {
                 Ok(mz_audit_log::ObjectType::Role)

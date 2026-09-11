@@ -470,6 +470,7 @@ mod tests {
                 burst: None,
             }),
             workload_class: None,
+            query_policy: None,
         }
     }
 

@@ -308,6 +308,10 @@ impl Coordinator {
                         .await;
                     ctx.retire(res);
                 }
+                Plan::CreateQueryPolicy(plan) => {
+                    let res = self.sequence_create_query_policy(ctx.session(), plan).await;
+                    ctx.retire(res);
+                }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);
@@ -547,6 +551,10 @@ impl Coordinator {
                     let res = self
                         .sequence_alter_network_policy(ctx.session(), plan)
                         .await;
+                    ctx.retire(res);
+                }
+                Plan::AlterQueryPolicy(plan) => {
+                    let res = self.sequence_alter_query_policy(ctx.session(), plan).await;
                     ctx.retire(res);
                 }
                 Plan::DiscardTemp => {

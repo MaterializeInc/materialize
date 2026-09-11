@@ -1,0 +1,310 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_query_policies = true;
+ALTER SYSTEM SET enable_query_policy_enforcement = true;
+ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
+ALTER SYSTEM SET persist_fast_path_limit = 1000;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+# Creation can be delegated without granting superuser or role-management powers.
+statement ok
+CREATE ROLE policy_creator;
+
+statement ok
+SET ROLE policy_creator;
+
+statement error
+CREATE QUERY POLICY delegated (RULES (r (action='reject', metric='query_plan_includes', value='persist_read')));
+
+statement ok
+RESET ROLE;
+
+statement ok
+GRANT CREATEQUERYPOLICY ON SYSTEM TO policy_creator;
+
+statement ok
+SET ROLE policy_creator;
+
+statement ok
+CREATE QUERY POLICY delegated (RULES (r (action='reject', metric='query_plan_includes', value='persist_read')));
+
+statement ok
+ALTER QUERY POLICY delegated SET (MODE = 'enforce');
+
+statement ok
+DROP QUERY POLICY delegated;
+
+statement ok
+RESET ROLE;
+
+statement ok
+REVOKE CREATEQUERYPOLICY ON SYSTEM FROM policy_creator;
+
+statement ok
+DROP ROLE policy_creator;
+
+statement ok
+CREATE TABLE indexed (a int, b int);
+
+statement ok
+INSERT INTO indexed VALUES (1, 10), (1, 30), (2, 20);
+
+statement ok
+CREATE DEFAULT INDEX ON indexed;
+
+statement ok
+CREATE MATERIALIZED VIEW unindexed AS SELECT * FROM indexed;
+
+statement ok
+CREATE QUERY POLICY no_dataflows (MODE = 'enforce', RULES (
+    fast_only (action = 'reject', metric = 'query_plan_includes', value = 'slow_path_query')
+));
+
+statement ok
+CREATE QUERY POLICY no_persist (MODE = 'enforce', RULES (
+    memory_only (action = 'reject', metric = 'query_plan_includes', value = 'persist_read')
+));
+
+statement ok
+ALTER CLUSTER quickstart SET (QUERY POLICY = no_dataflows);
+
+# Constants and existing-index reads are allowed.
+query I
+SELECT 7;
+----
+7
+
+query II rowsort
+SELECT * FROM indexed;
+----
+1 10
+1 30
+2 20
+
+# Aggregation needs a temporary dataflow even though its input is indexed.
+query error query rejected: this query would build a temporary dataflow
+SELECT a, sum(b) FROM indexed GROUP BY a;
+
+# A persist fast-path read does not build a temporary dataflow.
+query II rowsort
+SELECT * FROM unindexed LIMIT 10;
+----
+1 10
+1 30
+2 20
+
+# DDL remains possible on a restricted cluster.
+statement ok
+CREATE MATERIALIZED VIEW totals AS SELECT a, sum(b) FROM indexed GROUP BY a;
+
+statement ok
+CREATE DEFAULT INDEX ON totals;
+
+query II rowsort
+SELECT * FROM totals;
+----
+1 40
+2 20
+
+# Read-then-write queries cannot bypass the temporary-dataflow restriction.
+statement error query rejected: this query would build a temporary dataflow
+INSERT INTO indexed SELECT a, sum(b)::int FROM indexed GROUP BY a;
+
+statement error query rejected: this query would build a temporary dataflow
+UPDATE indexed SET b = b + (SELECT sum(b)::int FROM indexed);
+
+statement error query rejected: this query would build a temporary dataflow
+DELETE FROM indexed WHERE b < (SELECT avg(b) FROM indexed);
+
+query II rowsort
+SELECT * FROM indexed;
+----
+1 10
+1 30
+2 20
+
+query error query rejected: this query would build a temporary dataflow
+SUBSCRIBE indexed;
+
+statement ok
+ALTER CLUSTER quickstart SET (QUERY POLICY = no_persist);
+
+# A temporary dataflow over indexes is allowed by a persist-only restriction.
+query II rowsort
+SELECT a, sum(b) FROM indexed GROUP BY a;
+----
+1 40
+2 20
+
+query error query rejected: this query would read from object storage
+SELECT * FROM unindexed LIMIT 10;
+
+# This is a slow-path persist read, not a persist fast path.
+query error query rejected: this query would read from object storage
+SELECT a, sum(b) FROM unindexed GROUP BY a;
+
+# Exercise the same distinctions on frontend peeks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_frontend_peek_sequencing = true;
+----
+COMPLETE 0
+
+query II rowsort
+SELECT * FROM indexed;
+----
+1 10
+1 30
+2 20
+
+query II rowsort
+SELECT a, sum(b) FROM indexed GROUP BY a;
+----
+1 40
+2 20
+
+query error query rejected: this query would read from object storage
+SELECT * FROM unindexed LIMIT 10;
+
+query error query rejected: this query would read from object storage
+SELECT a, sum(b) FROM unindexed GROUP BY a;
+
+statement ok
+ALTER CLUSTER quickstart SET (QUERY POLICY = no_dataflows);
+
+query error query rejected: this query would build a temporary dataflow
+SELECT a, sum(b) FROM indexed GROUP BY a;
+
+statement error query rejected: this query would build a temporary dataflow
+INSERT INTO indexed SELECT a, sum(b)::int FROM indexed GROUP BY a;
+
+# A role restriction adds to, rather than replaces, the cluster restriction.
+statement ok
+CREATE ROLE guarded;
+
+statement ok
+GRANT USAGE ON CLUSTER quickstart TO guarded;
+
+statement ok
+GRANT SELECT ON indexed, unindexed TO guarded;
+
+statement ok
+GRANT USAGE ON QUERY POLICY no_persist TO guarded;
+
+statement ok
+ALTER ROLE guarded SET query_policy = no_persist;
+
+statement ok
+SET ROLE guarded;
+
+query error query rejected: this query would build a temporary dataflow
+SELECT a, sum(b) FROM indexed GROUP BY a;
+
+query error query rejected: this query would read from object storage
+SELECT * FROM unindexed LIMIT 10;
+
+statement error
+SET query_policy = '';
+
+statement error
+ALTER ROLE guarded RESET query_policy;
+
+statement ok
+RESET ROLE;
+
+# A referenced policy cannot silently disappear.
+statement error
+DROP QUERY POLICY no_persist;
+
+statement ok
+ALTER QUERY POLICY no_dataflows SET (MODE = 'warn');
+
+query II rowsort
+SELECT a, sum(b) FROM indexed GROUP BY a;
+----
+1 40
+2 20
+
+# The enforcement switch disables both rejection and warning independently of DDL.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_query_policy_enforcement = false;
+----
+COMPLETE 0
+
+statement ok
+ALTER QUERY POLICY no_dataflows SET (MODE = 'enforce');
+
+query II rowsort
+SELECT a, sum(b) FROM indexed GROUP BY a;
+----
+1 40
+2 20
+
+query TT rowsort
+SELECT name, mode FROM mz_internal.mz_query_policies;
+----
+no_dataflows enforce
+no_persist enforce
+
+query TTTT rowsort
+SELECT name, action, metric, value FROM mz_internal.mz_query_policy_rules;
+----
+fast_only reject query_plan_includes slow_path_query
+memory_only reject query_plan_includes persist_read
+
+statement ok
+ALTER ROLE guarded RESET query_policy;
+
+statement ok
+ALTER CLUSTER quickstart RESET (QUERY POLICY);
+
+# Policy privileges and ownership keep a role alive independently of attachments.
+statement ok
+CREATE ROLE policy_owner;
+
+statement ok
+GRANT USAGE ON QUERY POLICY no_dataflows TO policy_owner;
+
+statement error
+DROP ROLE policy_owner;
+
+statement ok
+REVOKE USAGE ON QUERY POLICY no_dataflows FROM policy_owner;
+
+statement ok
+ALTER QUERY POLICY no_dataflows OWNER TO policy_owner;
+
+statement error
+DROP ROLE policy_owner;
+
+statement ok
+DROP QUERY POLICY no_dataflows, no_persist;
+
+statement ok
+DROP ROLE policy_owner;
+
+query I
+SELECT count(*) FROM mz_internal.mz_query_policies;
+----
+0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_query_policies = false;
+----
+COMPLETE 0
+
+statement error
+CREATE QUERY POLICY disabled (RULES (r (action='reject', metric='query_plan_includes', value='persist_read')));

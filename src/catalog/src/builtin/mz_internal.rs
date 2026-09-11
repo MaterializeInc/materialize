@@ -638,6 +638,115 @@ WHERE data->>'kind' = 'NetworkPolicy'",
     }
 });
 
+pub static MZ_QUERY_POLICIES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_query_policies",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_QUERY_POLICIES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("mode", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![5])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the query policy."),
+            ("name", "The name of the query policy."),
+            (
+                "mode",
+                "Whether matching rules warn or enforce rejection: `warn` or `enforce`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the policy owner. Corresponds to `mz_catalog.mz_roles.id`.",
+            ),
+            (
+                "privileges",
+                "The privileges belonging to the query policy.",
+            ),
+            ("oid", "A PostgreSQL-compatible OID for the query policy."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL mode,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL oid
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    data->'value'->>'name' AS name,
+    data->'value'->>'mode' AS mode,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+    (data->'value'->>'oid')::oid AS oid
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'QueryPolicy'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+pub static MZ_QUERY_POLICY_RULES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_query_policy_rules",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_QUERY_POLICY_RULES_OID,
+        desc: RelationDesc::builder()
+            .with_column("policy_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("action", SqlScalarType::String.nullable(false))
+            .with_column("metric", SqlScalarType::String.nullable(false))
+            .with_column("value", SqlScalarType::String.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "policy_id",
+                "The policy containing this rule. Corresponds to `mz_internal.mz_query_policies.id`.",
+            ),
+            ("name", "The name of the rule within its policy."),
+            ("action", "The rule action: `reject`."),
+            ("metric", "The inspected metric: `query_plan_includes`."),
+            (
+                "value",
+                "The prohibited plan feature: `slow_path_query` or `persist_read`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL policy_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL action,
+    ASSERT NOT NULL metric,
+    ASSERT NOT NULL value
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS policy_id,
+    rule->>'name' AS name,
+    'reject'::text AS action,
+    'query_plan_includes'::text AS metric,
+    rule->>'value' AS value
+FROM mz_internal.mz_catalog_raw,
+    jsonb_array_elements(data->'value'->'rules') AS rule
+WHERE data->>'kind' = 'QueryPolicy'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
 /// in the `mz_types` table as part of our public, stable API.
 pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -3522,6 +3631,7 @@ SELECT
         WHEN obj ? 'Cluster'          THEN mz_internal.parse_catalog_id(obj->'Cluster')
         WHEN obj ? 'ClusterReplica'   THEN mz_internal.parse_catalog_id(obj->'ClusterReplica'->'replica_id')
         WHEN obj ? 'NetworkPolicy'    THEN mz_internal.parse_catalog_id(obj->'NetworkPolicy')
+        WHEN obj ? 'QueryPolicy'      THEN mz_internal.parse_catalog_id(obj->'QueryPolicy')
     END                                                              AS id,
     CASE
         WHEN obj ? 'Table'            THEN 'table'
@@ -3540,6 +3650,7 @@ SELECT
         WHEN obj ? 'Cluster'          THEN 'cluster'
         WHEN obj ? 'ClusterReplica'   THEN 'cluster-replica'
         WHEN obj ? 'NetworkPolicy'    THEN 'network-policy'
+        WHEN obj ? 'QueryPolicy'      THEN 'query-policy'
     END                                                              AS object_type,
     (sub->'ColumnPos')::int4                                          AS object_sub_id,
     comment
@@ -7379,6 +7490,33 @@ WHERE
 AND
     policy.id NOT LIKE 'g%'
 GROUP BY policy.name, comments.comment;",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_SHOW_QUERY_POLICIES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_query_policies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_QUERY_POLICIES_OID,
+    desc: RelationDesc::builder()
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("mode", SqlScalarType::String.nullable(false))
+        .with_column("rules", SqlScalarType::String.nullable(true))
+        .with_column("comment", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+SELECT policy.name, policy.mode,
+    pg_catalog.string_agg(rule.name, ',' ORDER BY rule.name) AS rules,
+    COALESCE(comments.comment, '') AS comment
+FROM mz_internal.mz_query_policies AS policy
+LEFT JOIN mz_internal.mz_query_policy_rules AS rule ON policy.id = rule.policy_id
+LEFT JOIN mz_internal.mz_comments AS comments
+    ON policy.id = comments.id
+    AND comments.object_type = 'query-policy'
+    AND comments.object_sub_id IS NULL
+WHERE policy.id NOT LIKE 's%'
+GROUP BY policy.name, policy.mode, comments.comment",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });

@@ -465,6 +465,17 @@ pub fn show_objects<'a>(
             ensure_no_from(from)?;
             show_network_policies(scx, filter)
         }
+        ShowObjectType::QueryPolicy => {
+            ensure_no_from(from)?;
+            ShowSelect::new(
+                scx,
+                "SELECT name, mode, rules, comment FROM mz_internal.mz_show_query_policies"
+                    .to_string(),
+                filter,
+                None,
+                Some(&["name", "mode", "rules", "comment"]),
+            )
+        }
     }
 }
 
