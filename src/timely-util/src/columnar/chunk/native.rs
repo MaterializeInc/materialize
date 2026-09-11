@@ -13,6 +13,10 @@
 //! [`super::asynchronous::arrange`] owns the Timely operator and calls [`maintain`]
 //! when compaction or read completion makes work available. Batch conversion clones
 //! chunk handles, preserving shared ownership of their bodies.
+//!
+//! Trace callbacks queue maintenance. Only the owning driver polls storage, so a
+//! reader cannot acquire admission for work that the owner must finish while it
+//! is already waiting for admission in its batcher.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -291,7 +295,7 @@ where
     }
 
     fn exert(&mut self) {
-        self.state.borrow_mut().exert();
+        self.notify.notify_one();
     }
 
     fn set_exert_logic(&mut self, logic: ExertionLogic) {

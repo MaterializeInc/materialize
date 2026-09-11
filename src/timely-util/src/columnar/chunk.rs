@@ -711,7 +711,7 @@ fn to_typed<C: Columnar>(column: Column<C>) -> Column<C> {
     }
 }
 
-impl<D, T, R> Chunk for ColumnChunk<D, T, R>
+impl<D, T, R> ColumnChunk<D, T, R>
 where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -719,26 +719,17 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
-    type Time = T;
-
-    /// A nominal record count for the harness's fuel and ladder accounting,
-    /// not a bound. Actual chunk sizing is by serialized bytes: `merge` and
-    /// `extract` cut output at the [`Column`] ship threshold, and `settle`
-    /// grades by `at_commit_size`, so a chunk of narrow records can hold more
-    /// records than this and nothing here consults it.
-    const TARGET: usize = 65536;
-
-    fn len(&self) -> usize {
-        self.records()
-    }
-
-    /// [`Column::merge_from`] does the work: gallop bulk-copies for disjoint
-    /// runs, semigroup consolidation on equal `(data, time)`, output cut at
-    /// the ship threshold.
+    /// Merge the front pair, optionally using decoded copies of those exact inputs.
     ///
-    /// Fronts whose data ranges are disjoint never load at all: the resident
-    /// fence entries decide, and the lower front moves to the output whole.
-    fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
+    /// Pool handles in the input queues stay available for untouched survivors.
+    /// Decoded input buffers are consumed here. Rewritten output and residuals
+    /// own typed storage, so read admission can be released when this returns.
+    pub(super) fn merge_with_loaded(
+        in1: &mut VecDeque<Self>,
+        in2: &mut VecDeque<Self>,
+        out: &mut VecDeque<Self>,
+        loaded: Option<[Self; 2]>,
+    ) {
         metrics::record(
             metrics::Stage::Merge,
             in1.front().map_or(0, Self::records) + in2.front().map_or(0, Self::records),
@@ -783,7 +774,15 @@ where
             ColumnChunk::Spilled(body, _) => Some(Rc::clone(body)),
             ColumnChunk::Resident(_, _) => None,
         };
-        let mut cols = [a.into_column(), b.into_column()];
+        let mut cols = match loaded {
+            Some([left, right]) => {
+                // Resident inputs can share their columns with the supplied copies.
+                // Release the originals before taking ownership to avoid copying them.
+                drop((a, b));
+                [left.into_column(), right.into_column()]
+            }
+            None => [a.into_column(), b.into_column()],
+        };
         let mut positions = [0usize, 0usize];
         loop {
             let mut result: Column<(D, T, R)> = Column::default();
@@ -819,6 +818,38 @@ where
                 queue.push_front(ColumnChunk::Resident(Rc::new(Column::Typed(rest)), depth));
             }
         }
+    }
+}
+
+impl<D, T, R> Chunk for ColumnChunk<D, T, R>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Timestamp + Lattice + Ord,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+{
+    type Time = T;
+
+    /// A nominal record count for the harness's fuel and ladder accounting,
+    /// not a bound. Actual chunk sizing is by serialized bytes: `merge` and
+    /// `extract` cut output at the [`Column`] ship threshold, and `settle`
+    /// grades by `at_commit_size`, so a chunk of narrow records can hold more
+    /// records than this and nothing here consults it.
+    const TARGET: usize = 65536;
+
+    fn len(&self) -> usize {
+        self.records()
+    }
+
+    /// [`Column::merge_from`] does the work: gallop bulk-copies for disjoint
+    /// runs, semigroup consolidation on equal `(data, time)`, output cut at
+    /// the ship threshold.
+    ///
+    /// Fronts whose data ranges are disjoint never load at all: the resident
+    /// fence entries decide, and the lower front moves to the output whole.
+    fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
+        Self::merge_with_loaded(in1, in2, out, None);
     }
 
     /// Partition one front chunk by `frontier`, folding kept times into

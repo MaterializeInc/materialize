@@ -251,7 +251,7 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
         );
         self.physical_frontier.clear();
         self.physical_frontier.extend(frontier.iter().cloned());
-        self.consider_merges();
+        self.activate();
     }
     #[inline]
     /// Return the current physical compaction frontier.
@@ -363,7 +363,7 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
 
         // TODO: Consolidate or discard spans with no updates.
         self.pending.push(span);
-        self.consider_merges();
+        self.activate();
     }
 
     /// Completes the trace with a final empty batch.
