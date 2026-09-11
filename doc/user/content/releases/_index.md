@@ -20,6 +20,28 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.42.0
+*Released to Materialize Cloud: 2026-09-17* <br>
+*Released to Materialize Self-Managed: 2026-09-18* <br>
+
+### Constraint Exclusion for Postgres Source Tables {#v26.42-constraint-exclusion-for-postgres-source-tables}
+`CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE CONSTRAINTS ('constraint_name', ...)` and `EXCLUDE ALL CONSTRAINTS`, which drop the named upstream constraints at purification so the table never records them. Dropping a `UNIQUE` or `PRIMARY KEY` constraint upstream previously stalled the corresponding table permanently, and a table created with the constraint excluded keeps ingesting through that change. When a table does stall on an incompatible schema change, the error now names the specific constraint or column that changed and includes a hint showing how to recreate the table without it.
+
+### Improvements {#v26.42-improvements}
+- **Vended credentials for GCS-backed Iceberg catalogs**: `CREATE CONNECTION ... TO ICEBERG CATALOG` now accepts a storage provider option, and `ACCESS DELEGATION` is allowed on GCP BigLake catalog connections, so an Iceberg catalog backed by Google Cloud Storage can authenticate with credentials the catalog vends.
+- **IANA time zone data updated to 2026c**: Time zone rules now follow IANA tzdata 2026c, covering Morocco's move to permanent +00 on 2026-09-20, Alberta's permanent -06, British Columbia's permanent -07, and Moldova's EU transition instants since 2022.
+- **Pod priority classes in Self-Managed deployments**: Operators can set `environmentd.priorityClassName` and `clusterd.priorityClassName` in the Helm chart, so a higher-priority pod scheduled onto a full node no longer evicts Materialize ahead of other workloads.
+- **`WAIT` options on `ALTER CLUSTER` are no longer in private preview**: `ALTER CLUSTER ... WITH (WAIT FOR ...)` and `WITH (WAIT UNTIL READY ...)` are accepted without enabling a feature flag.
+- **Composite types in `mz-deploy` projects**: `mz-deploy` records the full catalog type for composite types such as records in `types.lock`, so views that read a dependency's record-typed column type check offline instead of resolving to a pseudo type.
+
+### Bug Fixes {#v26.42-bug-fixes}
+- Fixed `CREATE TABLE ... FROM SOURCE` and `ALTER SOURCE` connecting to a source's upstream system before checking the caller's privileges on that source, which let a role holding no privilege on the source read upstream schema, table, and column names out of the resulting purification errors; `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source plus schema `USAGE`, and `ALTER SOURCE` requires ownership.
+- Fixed `ALTER CLUSTER` resource-limit enforcement during graceful reconfiguration, which predicted a reshape's peak replica overlap instead of checking the replica set actually being created; a target that does not fit now leaves the existing replicas serving and reports `INSUFFICIENT_RESOURCES` with a hint.
+- Fixed `ALTER CLUSTER ... WITH (WAIT UNTIL READY (..., ON TIMEOUT = 'COMMIT'))` needing room for the old and new replica sets at once when its deadline passed; the cut-over is now a single transaction that creates the target and retires the previous replicas together, so only the net change has to fit.
+- Fixed cluster- and replica-scoped configuration not reaching the replacement replicas the cluster controller creates during a reconfiguration, so those replicas now apply the overrides before their first render.
+- Fixed `mz_object_dependencies` omitting a sink's dependency on a user-defined type that the sink references through a `DOC ON TYPE` or `DOC ON COLUMN` option.
+- Fixed `mz-deploy compile` rejecting valid SQL with `precision for type numeric must be between 1 and 39` when a view aggregated a `bigint` or `uint8` column with `sum()` and another view in the project read it, and fixed declared `numeric(p, s)` columns being stubbed with the scale in the precision position.
+
 ## v26.40.2
 *Released to Materialize Cloud: 2026-09-07* <br>
 *Released to Materialize Self-Managed: 2026-09-08* <br>
