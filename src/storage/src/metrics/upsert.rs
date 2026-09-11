@@ -20,7 +20,7 @@ use mz_ore::metrics::{
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
 use mz_rocksdb::RocksDBInstanceMetrics;
-use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_operators::metrics::BackpressureOperatorMetrics;
 use prometheus::core::{AtomicF64, AtomicU64};
 
 /// Metric definitions for the `upsert` operator.
@@ -374,9 +374,42 @@ pub struct UpsertMetrics {
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
     pub(crate) rocksdb_instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
-    // `UpsertMetrics` keeps a reference (through `Arc`'s) to backpressure metrics, so that
-    // they are not dropped when the `persist_source` operator is dropped.
-    _backpressure_metrics: Option<BackpressureMetrics>,
+    // Owning the backpressure series here keeps them registered for the life
+    // of the upsert operator, past the `persist_source` operator that reports
+    // into them.
+    _backpressure_metrics: Option<UpsertBackpressureMetrics>,
+}
+
+/// The per-source, per-worker backpressure series for one upsert operator.
+///
+/// Owning this keeps the series registered. [Self::operator_metrics] hands the
+/// `backpressure` operator plain handles to them.
+#[derive(Debug)]
+pub(crate) struct UpsertBackpressureMetrics {
+    emitted_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    last_backpressured_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    retired_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+}
+
+impl UpsertBackpressureMetrics {
+    pub(crate) fn new(defs: &UpsertBackpressureMetricDefs, id: GlobalId, worker_id: usize) -> Self {
+        let labels = vec![id.to_string(), worker_id.to_string()];
+        UpsertBackpressureMetrics {
+            emitted_bytes: defs.emitted_bytes.get_delete_on_drop_metric(labels.clone()),
+            last_backpressured_bytes: defs
+                .last_backpressured_bytes
+                .get_delete_on_drop_metric(labels.clone()),
+            retired_bytes: defs.retired_bytes.get_delete_on_drop_metric(labels),
+        }
+    }
+
+    pub(crate) fn operator_metrics(&self) -> BackpressureOperatorMetrics {
+        BackpressureOperatorMetrics::new(
+            (*self.emitted_bytes).clone(),
+            (*self.last_backpressured_bytes).clone(),
+            (*self.retired_bytes).clone(),
+        )
+    }
 }
 
 impl UpsertMetrics {
@@ -385,7 +418,7 @@ impl UpsertMetrics {
         defs: &UpsertMetricDefs,
         source_id: GlobalId,
         worker_id: usize,
-        backpressure_metrics: Option<BackpressureMetrics>,
+        backpressure_metrics: Option<UpsertBackpressureMetrics>,
     ) -> Self {
         let source_id_s = source_id.to_string();
         let worker_id = worker_id.to_string();
