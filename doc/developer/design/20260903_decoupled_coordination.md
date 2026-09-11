@@ -38,6 +38,34 @@ SELECTs, SUBSCRIBEs, and COPY TO, remain on the fast protocol. Their creation,
 execution, responses, and cleanup are part of request-scoped execution, not
 durable catalog lifecycle.
 
+## Future work: true zero-downtime upgrades
+
+The end state this work must not foreclose is an upgrade in which an environment
+of the new version runs beside the current one, hydrates everything on its own
+replicas, and takes over only at cutover. Both generations are full participants:
+catalog writers, query clients, and lifecycle followers. Cutover transfers
+ownership of maintained outputs and external writes to the new generation and
+fences the old one. An outside signal from the upgrade orchestrator decides when
+that is safe. Nothing in the environment infers it.
+
+The catalog is shared across generations, and some state must be kept per
+generation. Items, clusters, protection, and what a user has declared for a
+cluster, whether its managed configuration and strategy or the replicas of an
+unmanaged cluster, live in the catalog once, for all generations. Replicas are
+per generation: each generation keeps the replicas it runs for a cluster, derived
+from that shared declaration, together with the state that drives them, such as
+hydration, scaling, and reconfiguration. A generation's clients and lifecycle
+components use its own replicas. Write ownership of a maintained output and a
+generation's client incarnations are per generation as well, and exactly one
+generation writes a given output at a time. Other state found to differ between
+generations is kept per generation rather than folded into a shared definition.
+
+While generations coexist, the catalog is written in a form every live generation
+understands. A newer version introduces no record kinds, builtin schema changes,
+or migrations until older generations are fenced, and operates against the older
+durable state until then. Persist applies the same discipline to its own state.
+This is a contract on how versions are developed, not only on this design.
+
 ## Approach
 
 Use catalog implications to derive lifecycle effects from committed catalog
