@@ -80,9 +80,7 @@ impl PostgresTableDesc {
                 "table {}.{} changed oid from {} to {} during schema verification",
                 self.namespace, self.name, self.oid, other.oid
             );
-            return Err(
-                self.build_schema_change_error(SchemaChange::TableDropped { })
-            );
+            return Err(self.build_schema_change_error(SchemaChange::TableDropped {}));
         }
 
         if self.namespace != other.namespace || self.name != other.name {
