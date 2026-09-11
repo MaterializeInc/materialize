@@ -30,6 +30,7 @@ use mz_ore::metrics::{ComputedUIntGauge, MakeCollectorOpts, MetricsRegistry};
 pub fn register(registry: &MetricsRegistry) {
     static REGISTERED: OnceLock<()> = OnceLock::new();
     REGISTERED.get_or_init(|| {
+        crate::columnar::chunk::metrics::register(registry);
         // Every name and help string is a literal at the `metric!` call so the
         // metrics-catalog scanner (`bin/gen-metrics-catalog`), which reads the
         // source rather than the expanded macro, can index them.
@@ -39,6 +40,10 @@ pub fn register(registry: &MetricsRegistry) {
         // instantaneous levels are mixed under the one gauge type, so the
         // `_total` name suffix, not the metric type, marks a field as
         // monotonic.
+        gauge(registry, metric!(name: "mz_column_pool_async_reads_total", help: "Pool reads submitted to the blocking executor."), |s| s.async_reads);
+        gauge(registry, metric!(name: "mz_column_pool_async_reads_in_flight", help: "Submitted pool reads that have not released their concurrency permit."), |s| s.async_reads_in_flight);
+        gauge(registry, metric!(name: "mz_column_pool_cold_inserts_total", help: "Chunks inserted directly into an extent by caller request."), |s| s.cold_inserts);
+        gauge(registry, metric!(name: "mz_column_pool_direct_extent_inserts_total", help: "Inserts written directly to an extent because resident admission was full."), |s| s.direct_extent_inserts);
         gauge(registry, metric!(name: "mz_column_pool_resident_bytes", help: "Uncompressed bytes resident in the buffer pool."), |s| s.resident_bytes);
         gauge(registry, metric!(name: "mz_column_pool_oversize_bytes", help: "Bytes held by oversize chunks that bypass pool paging."), |s| s.oversize_bytes);
         gauge(registry, metric!(name: "mz_column_pool_inserts_total", help: "Chunks inserted into the buffer pool."), |s| s.inserts);

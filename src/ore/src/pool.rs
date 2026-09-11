@@ -80,6 +80,11 @@ use crate::pool::region::{Region, SIZE_CLASSES};
 /// NOTE: Seen OoMs with Miri since it actually allocates the capacity.
 const CLASS_CAPACITY_BYTES: usize = if cfg!(miri) { 16 << 20 } else { 1 << 40 };
 
+// At most eight queued or running reads per pool. Completed buffers belong
+// to callers, whose staging limits must bound their retained memory.
+#[cfg(feature = "async")]
+const ASYNC_READ_CONCURRENCY: usize = 8;
+
 /// A chunk-provided transform between a chunk's body bytes and the stored
 /// bytes its extent holds. The pool owns scheduling: spill threads, the
 /// residency state machine, cancellation, and the ledger. It invokes the
@@ -194,6 +199,14 @@ enum Residency {
 pub struct PoolStats {
     /// Chunks inserted.
     pub inserts: u64,
+    /// Inserts written directly to an extent because resident admission was full.
+    pub direct_extent_inserts: u64,
+    /// Chunks inserted directly into an extent by caller request.
+    pub cold_inserts: u64,
+    /// Reads submitted to the blocking executor.
+    pub async_reads: u64,
+    /// Submitted reads that have not released their concurrency permit.
+    pub async_reads_in_flight: u64,
     /// Chunks freed (handle dropped).
     pub frees: u64,
     /// Backing writes elided: chunks dead before their compression
@@ -279,6 +292,9 @@ pub struct PoolStats {
 
 #[derive(Debug, Default)]
 struct Counters {
+    direct_extent_inserts: AtomicU64,
+    cold_inserts: AtomicU64,
+    async_reads: AtomicU64,
     inserts: AtomicU64,
     spill_scheduled: AtomicU64,
     spill_cancelled: AtomicU64,
@@ -378,6 +394,8 @@ struct PoolInner {
     /// counter read still has its bytes enforced rather than dropped.
     enforce_pending: std::sync::atomic::AtomicBool,
     counters: Counters,
+    #[cfg(feature = "async")]
+    read_slots: Arc<tokio::sync::Semaphore>,
     spill: Spill,
 }
 
@@ -565,15 +583,20 @@ impl Pool {
             enforcing: Mutex::new(()),
             enforce_pending: std::sync::atomic::AtomicBool::new(false),
             counters: Counters::default(),
+            #[cfg(feature = "async")]
+            read_slots: Arc::new(tokio::sync::Semaphore::new(ASYNC_READ_CONCURRENCY)),
             spill: Spill::default(),
         })))
     }
 
     /// Allocates a chunk of `len` words and fills it in place: `fill`
-    /// receives the chunk's slot memory directly and must overwrite all of
-    /// it (the slot's prior contents are unspecified), so serialization
-    /// writes its single copy straight into pool memory. The returned handle
-    /// starts `UnbackedResident`. A zero `len` returns a length-0 handle
+    /// receives `len` contiguous words and must overwrite all of them.
+    /// With resident admission, these are the slot's unspecified prior
+    /// contents, so serialization writes directly into pool memory.
+    /// Otherwise, `fill` writes into staging for a synchronous extent write.
+    /// The returned handle
+    /// starts `UnbackedResident` when admission has room, otherwise `Evicted`
+    /// with a directly written extent. A zero `len` returns a length-0 handle
     /// holding no slot; payloads beyond the largest size class fall back to
     /// a plain heap allocation, always resident, a prototype limitation.
     /// `hints` steer eviction and write-behind policy; callers without
@@ -620,14 +643,22 @@ impl Pool {
                 .oversize_payloads
                 .fetch_add(1, Ordering::Relaxed);
         }
+        if class.is_some() {
+            if !inner.reserve_insert(len_bytes) {
+                inner.enforce_budget();
+                if !inner.reserve_insert(len_bytes) {
+                    return self.insert_extent(len, hints, codec, fill);
+                }
+            }
+        } else {
+            inner
+                .counters
+                .resident_bytes
+                .fetch_add(u64::cast_from(len_bytes), Ordering::Relaxed);
+        }
         // A class with no free slot degrades to the heap path below: an
         // unpageable chunk beats a dead replica.
         let slot = class.and_then(|class| inner.alloc_slot(class, len_bytes));
-        // Whichever home the payload found, it is resident.
-        inner
-            .counters
-            .resident_bytes
-            .fetch_add(u64::cast_from(len_bytes), Ordering::Relaxed);
         let meta = match (class, slot) {
             (Some(class), Some(slot)) => {
                 let region = &inner.regions[class];
@@ -689,11 +720,93 @@ impl Pool {
         ChunkHandle { meta }
     }
 
+    /// Encode `data` directly into an extent without allocating a resident slot.
+    ///
+    /// Compression is synchronous. The extent participates in the pool's
+    /// compressed-residency accounting and reclamation. Empty and oversize
+    /// payloads use the same fallback as [`Pool::insert_with`].
+    pub fn insert_cold(
+        &self,
+        data: &[u64],
+        hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
+    ) -> ChunkHandle {
+        if data.is_empty() || region::size_class_for(std::mem::size_of_val(data)).is_none() {
+            return self.insert_with(data.len(), hints, codec, |dst| dst.copy_from_slice(data));
+        }
+        let inner = &self.0;
+        let extent = SwapExtent::write(&inner.extent_arena, data, codec, Scratch::Shrink);
+        inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
+        inner.counters.cold_inserts.fetch_add(1, Ordering::Relaxed);
+        self.finish_extent(data.len(), hints, codec, extent)
+    }
+
+    fn insert_extent(
+        &self,
+        len: usize,
+        hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
+        fill: impl FnOnce(&mut [u64]),
+    ) -> ChunkHandle {
+        // Compress synchronously to keep denied insertions from queuing
+        // uncompressed payloads behind an occupied enforcer.
+        let mut words = vec![0; len];
+        fill(&mut words);
+        let inner = &self.0;
+        let extent = SwapExtent::write(&inner.extent_arena, &words, codec, Scratch::Shrink);
+        drop(words);
+        inner
+            .counters
+            .direct_extent_inserts
+            .fetch_add(1, Ordering::Relaxed);
+        self.finish_extent(len, hints, codec, extent)
+    }
+
+    fn finish_extent(
+        &self,
+        len: usize,
+        hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
+        extent: SwapExtent,
+    ) -> ChunkHandle {
+        let inner = &self.0;
+        let meta = Arc::new(ChunkMeta::new(
+            inner,
+            len,
+            region::size_class_for(len * 8),
+            hints.depth,
+            codec,
+            Residency::Evicted,
+            None,
+            None,
+        ));
+        inner.live_chunks.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut state = meta.state();
+            inner.commit_extent(&meta, &mut state, extent);
+        }
+        inner.enforce_or_defer_compressed_cap();
+        ChunkHandle { meta }
+    }
+
     /// Snapshot of the pool's counters.
     pub fn stats(&self) -> PoolStats {
         let c = &self.0.counters;
         PoolStats {
             inserts: c.inserts.load(Ordering::Relaxed),
+            direct_extent_inserts: c.direct_extent_inserts.load(Ordering::Relaxed),
+            cold_inserts: c.cold_inserts.load(Ordering::Relaxed),
+            async_reads: c.async_reads.load(Ordering::Relaxed),
+            async_reads_in_flight: {
+                #[cfg(feature = "async")]
+                {
+                    u64::cast_from(ASYNC_READ_CONCURRENCY - self.0.read_slots.available_permits())
+                }
+                #[cfg(not(feature = "async"))]
+                {
+                    0
+                }
+            },
             frees: c.frees.load(Ordering::Relaxed),
             writes_elided: c.writes_elided.load(Ordering::Relaxed),
             evictions_compress: c.evictions_compress.load(Ordering::Relaxed),
@@ -984,6 +1097,23 @@ impl PoolInner {
                 queue.retain(|weak| weak.strong_count() > 0);
             }
         }
+    }
+
+    /// Reserve insertion bytes before populating a slot. Enforcement can
+    /// lag by one eighth of the budget, or one payload for small budgets.
+    /// Read admissions use the budget itself and cannot consume this slack.
+    fn reserve_insert(&self, len_bytes: usize) -> bool {
+        let len = u64::cast_from(len_bytes);
+        self.counters
+            .resident_bytes
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                let budget = self.budget_bytes.load(Ordering::Relaxed);
+                let ceiling = budget.saturating_add((budget / 8).max(len));
+                let next = cur.checked_add(len)?;
+                let oversize = self.counters.oversize_bytes.load(Ordering::Relaxed);
+                (next.saturating_sub(oversize) <= ceiling).then_some(next)
+            })
+            .is_ok()
     }
 
     fn enforce_budget(&self) {
@@ -1889,6 +2019,64 @@ impl ChunkHandle {
         self.read_impl(0..self.meta.len, dst, false);
     }
 
+    /// Copy this chunk without admitting it to the pool, offloading nonresident reads.
+    ///
+    /// Resident slots are copied inline if their state lock is available. Other
+    /// reads require a Tokio runtime. A submitted read retains its handle and
+    /// concurrency permit until it finishes, even if the caller cancels.
+    /// The returned buffer belongs to the caller.
+    #[cfg(feature = "async")]
+    pub async fn read_async(self: &Arc<Self>) -> Vec<u64> {
+        if let Some(words) = self.try_read_resident() {
+            return words;
+        }
+        let permit = Arc::clone(&self.meta.pool.read_slots)
+            .acquire_owned()
+            .await
+            .expect("pool read semaphore remains open");
+        let handle = Arc::clone(self);
+        self.meta
+            .pool
+            .counters
+            .async_reads
+            .fetch_add(1, Ordering::Relaxed);
+        crate::task::spawn_blocking(
+            || "pool_read",
+            move || {
+                // A cancelled JoinHandle must not release admission while its
+                // blocking read still owns a slot or extent reference.
+                let _permit = permit;
+                let mut words = Vec::new();
+                handle.read_into(&mut words);
+                words
+            },
+        )
+        .await
+    }
+
+    #[cfg(feature = "async")]
+    fn try_read_resident(&self) -> Option<Vec<u64>> {
+        if self.meta.len == 0 {
+            return Some(Vec::new());
+        }
+        let mut state = match self.meta.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+            Err(std::sync::TryLockError::Poisoned(_)) => panic!("chunk state poisoned"),
+        };
+        match state.residency {
+            Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
+                state.touched = true;
+                let slot = state.slot.expect("resident non-empty chunk has a slot");
+                // SAFETY: the state lock prevents eviction from releasing this slot.
+                let words = unsafe { self.meta.pool.slot_data(&self.meta, slot) };
+                Some(words.to_vec())
+            }
+            // Oversize heap copies have no slot-size bound, so keep them off-worker.
+            Residency::Oversize | Residency::Evicted => None,
+        }
+    }
+
     /// As [`ChunkHandle::read_into`], restricted to the word range `range`
     /// of the chunk's contents, which must lie within them. `dst` receives
     /// exactly the range.
@@ -2147,6 +2335,13 @@ impl Drop for ChunkHandle {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "async")]
+    use std::future::Future;
+    #[cfg(feature = "async")]
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    #[cfg(feature = "async")]
+    use std::task::{Context, Poll, Waker};
+
     use super::*;
     use crate::pool::extent::TEST_CODEC;
 
@@ -2160,6 +2355,175 @@ mod tests {
         let pool = Pool::with_class_capacity(capacity).expect("pool creation");
         pool.set_budget(budget_bytes);
         pool
+    }
+
+    #[cfg(feature = "async")]
+    #[derive(Debug, Default)]
+    struct DelayedReadCodec {
+        entered: AtomicUsize,
+        released: AtomicBool,
+    }
+
+    #[cfg(feature = "async")]
+    impl ExtentCodec for DelayedReadCodec {
+        fn encode(&self, body: &[u8], out: &mut Vec<u8>) {
+            TEST_CODEC.encode(body, out);
+        }
+
+        fn decode(&self, stored: &[u8], body: &mut [u8]) {
+            // NOTE: Test-only delay models a page fault while the state lock is held.
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !self.released.load(Ordering::SeqCst) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "test read was released"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            TEST_CODEC.decode(stored, body);
+        }
+    }
+
+    #[cfg(feature = "async")]
+    struct ReleaseReadsOnDrop(&'static DelayedReadCodec);
+
+    #[cfg(feature = "async")]
+    impl Drop for ReleaseReadsOnDrop {
+        fn drop(&mut self) {
+            self.0.released.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(feature = "async")]
+    async fn wait_for_read_state(mut ready: impl FnMut() -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !ready() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("read workers made progress");
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn async_read_round_trip_without_admission() {
+        for budget in [0, usize::MAX] {
+            let pool = test_pool(budget);
+            let expected = payload(8192, 42);
+            let handle = Arc::new(insert(&pool, &mut expected.clone()));
+            let resident = pool.stats().resident_bytes;
+            assert_eq!(handle.read_async().await, expected);
+            assert_eq!(pool.stats().resident_bytes, resident);
+            assert_eq!(pool.stats().async_reads, u64::from(budget == 0));
+            assert_eq!(pool.stats().async_reads_in_flight, 0);
+        }
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test]
+    fn resident_async_reads_complete_without_a_runtime() {
+        let pool = test_pool(usize::MAX);
+        let expected = payload(8192, 42);
+        let handle = Arc::new(insert(&pool, &mut expected.clone()));
+        let mut read = Box::pin(handle.read_async());
+        assert_eq!(
+            read.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(expected)
+        );
+        assert_eq!(pool.stats().async_reads, 0);
+        pool.evict(&handle);
+        assert!(handle.try_read_resident().is_none());
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn contended_resident_reads_yield() {
+        let pool = test_pool(usize::MAX);
+        let expected = payload(8192, 42);
+        let handle = Arc::new(insert(&pool, &mut expected.clone()));
+        let mut read = Box::pin(handle.read_async());
+        {
+            let _state = handle.meta.state();
+            assert!(
+                read.as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+        }
+        assert_eq!(read.await, expected);
+        assert_eq!(pool.stats().async_reads, 1);
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test(tokio::test)]
+    #[ignore = "local resident-read dispatch comparison"]
+    async fn resident_read_microbench() {
+        for words in [8 << 10, 256 << 10] {
+            let pool = test_pool(usize::MAX);
+            let expected = payload(words, 42);
+            let handle = Arc::new(insert(&pool, &mut expected.clone()));
+            assert_eq!(handle.read_async().await, expected);
+            let start = std::time::Instant::now();
+            for _ in 0..1024 {
+                std::hint::black_box(handle.read_async().await);
+            }
+            eprintln!(
+                "RESIDENT_READ bytes={} iterations=1024 us={} offloaded={}",
+                words * 8,
+                start.elapsed().as_micros(),
+                pool.stats().async_reads,
+            );
+        }
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn async_reads_remain_bounded_after_cancellation() {
+        let pool = test_pool(0);
+        let codec = Box::leak(Box::new(DelayedReadCodec::default()));
+        let release = ReleaseReadsOnDrop(codec);
+        let expected = payload(8192, 7);
+        let handles: Vec<_> = (0..=ASYNC_READ_CONCURRENCY)
+            .map(|_| {
+                Arc::new(
+                    pool.insert_with(expected.len(), ChunkHints::default(), codec, |dst| {
+                        dst.copy_from_slice(&expected);
+                    }),
+                )
+            })
+            .collect();
+        let mut reads: Vec<_> = handles.iter().map(|h| Box::pin(h.read_async())).collect();
+        for read in &mut reads {
+            assert!(futures::poll!(read.as_mut()).is_pending());
+        }
+        wait_for_read_state(|| codec.entered.load(Ordering::SeqCst) == ASYNC_READ_CONCURRENCY)
+            .await;
+        assert_eq!(
+            pool.stats().async_reads,
+            u64::cast_from(ASYNC_READ_CONCURRENCY)
+        );
+        assert_eq!(
+            pool.stats().async_reads_in_flight,
+            u64::cast_from(ASYNC_READ_CONCURRENCY)
+        );
+        drop(reads);
+        drop(handles);
+        // The unsubmitted ninth read frees immediately. Detached blocking
+        // jobs must retain both their handles and their admission permits.
+        assert_eq!(pool.stats().frees, 1);
+        assert_eq!(
+            pool.stats().async_reads_in_flight,
+            u64::cast_from(ASYNC_READ_CONCURRENCY)
+        );
+        drop(release);
+        wait_for_read_state(|| pool.stats().frees == u64::cast_from(ASYNC_READ_CONCURRENCY + 1))
+            .await;
+        assert_eq!(pool.stats().async_reads_in_flight, 0);
     }
 
     /// Scales an iteration count down under Miri, where one interpreted
@@ -3173,6 +3537,67 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn insertion_debt_is_bounded_during_enforcement() {
+        let budget = 2 * SMALL * 8;
+        let pool = test_pool(budget);
+        let guard = pool.0.enforcing.lock().expect("enforcement lock");
+        let mut handles = Vec::new();
+        for seed in 0..16 {
+            handles.push(insert(&pool, &mut payload(SMALL, seed)));
+            assert!(
+                pool.stats().resident_bytes <= u64::cast_from(budget + SMALL * 8),
+                "an occupied enforcer must not allow unlimited insertion debt",
+            );
+        }
+        drop(guard);
+        for (seed, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, u64::cast_from(seed)));
+        }
+        drop(handles);
+        assert_eq!(pool.stats().resident_bytes, 0);
+        assert_eq!(pool.stats().live_chunks, 0);
+        assert_eq!(pool.stats().extent_resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    fn admission_reserves_before_concurrent_fills() {
+        let budget = 2 * SMALL * 8;
+        let pool = test_pool(budget);
+        let guard = pool.0.enforcing.lock().expect("enforcement lock");
+        let gate = Arc::new(std::sync::Barrier::new(9));
+        let threads: Vec<_> = (0..8u64)
+            .map(|seed| {
+                let pool = pool.clone();
+                let gate = Arc::clone(&gate);
+                std::thread::spawn(move || {
+                    pool.insert_with(SMALL, ChunkHints::default(), &TEST_CODEC, |dst| {
+                        gate.wait();
+                        gate.wait();
+                        dst.copy_from_slice(&payload(SMALL, seed));
+                    })
+                })
+            })
+            .collect();
+        gate.wait();
+        let reserved = pool.stats().resident_bytes;
+        // Release every producer even if the assertion fails.
+        gate.wait();
+        let handles: Vec<_> = threads
+            .into_iter()
+            .map(|t| t.join().expect("producer panicked"))
+            .collect();
+        drop(guard);
+        assert!(reserved <= u64::cast_from(budget + SMALL * 8));
+        assert!(pool.stats().direct_extent_inserts > 0);
+        for (seed, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, u64::cast_from(seed)));
+        }
+        drop(handles);
+        assert_eq!(pool.stats().resident_bytes, 0);
+        assert_eq!(pool.stats().live_chunks, 0);
+    }
+
+    #[mz_ore::test]
     fn set_budget_retunes_in_place() {
         let pool = test_pool(usize::MAX);
         let mut handles = Vec::new();
@@ -3638,6 +4063,61 @@ mod tests {
         let mut range = Vec::new();
         h.read_range_into(8..24, &mut range);
         assert_eq!(range, want[8..24], "range reads copy the range directly");
+    }
+
+    #[mz_ore::test]
+    fn cold_insert_skips_resident_admission() {
+        let codecs: [&'static dyn ExtentCodec; 2] = [&TEST_CODEC, &IDENTITY_CODEC];
+        for codec in codecs {
+            let pool = test_pool(256 << 20);
+            pool.set_rss_target(1 << 30);
+            let want = payload(SMALL, 703);
+            let handle = pool.insert_cold(&want, ChunkHints { depth: 3 }, codec);
+            assert_eq!(handle.residency(), Residency::Evicted);
+            assert_eq!(handle.meta.depth, 3);
+            let stats = pool.stats();
+            assert_eq!(stats.inserts, 1);
+            assert_eq!(stats.cold_inserts, 1);
+            assert_eq!(stats.direct_extent_inserts, 0);
+            assert_eq!(stats.resident_bytes, 0);
+            assert_eq!(stats.live_chunks, 1);
+            assert!(stats.extent_resident_bytes > 0);
+            assert_eq!(read(&handle), want);
+            assert_eq!(pool.stats().resident_bytes, 0);
+            let mut range = Vec::new();
+            handle.read_range_into(3..11, &mut range);
+            assert_eq!(range, want[3..11]);
+            assert_eq!(read_admit(&handle), want);
+            assert!(pool.stats().resident_bytes > 0);
+            pool.evict(&handle);
+            assert_eq!(
+                pool.stats().extent_bytes_written,
+                stats.extent_bytes_written
+            );
+            assert_eq!(read(&handle), want);
+            drop(handle);
+            let stats = pool.stats();
+            assert_eq!(stats.resident_bytes, 0);
+            assert_eq!(stats.live_chunks, 0);
+            assert_eq!(stats.extent_resident_bytes, 0);
+            assert_eq!(stats.frees, 1);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn cold_insert_empty_and_oversize_fallbacks() {
+        let pool = test_pool(usize::MAX);
+        let empty = pool.insert_cold(&[], ChunkHints::default(), &TEST_CODEC);
+        assert_eq!(read(&empty), Vec::<u64>::new());
+        let want = payload(SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1, 704);
+        let big = pool.insert_cold(&want, ChunkHints::default(), &TEST_CODEC);
+        assert_eq!(big.residency(), Residency::Oversize);
+        assert_eq!(read(&big), want);
+        assert_eq!(pool.stats().inserts, 2);
+        assert_eq!(pool.stats().cold_inserts, 0);
+        drop(big);
+        assert_eq!(pool.stats().resident_bytes, 0);
     }
 
     #[mz_ore::test]

@@ -370,6 +370,26 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_column_chunk_direct_compressed_output",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_payload_stash",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_async_merges",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_async_reads",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_upsert_v2",
             "false",
             ["true", "false"],

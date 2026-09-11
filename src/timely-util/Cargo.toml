@@ -29,12 +29,17 @@ harness = false
 name = "column_pager"
 harness = false
 
+[[bench]]
+name = "payload_consolidation"
+harness = false
+
 [dependencies]
 ahash.workspace = true
 bytemuck.workspace = true
 columnar.workspace = true
 columnation.workspace = true
 differential-dataflow.workspace = true
+differential-dataflow-next.workspace = true
 futures-util.workspace = true
 lz4_flex.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing", "pager", "pool"] }
@@ -42,6 +47,7 @@ num-traits.workspace = true
 serde.workspace = true
 smallvec.workspace = true
 timely.workspace = true
+timely-next.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
@@ -52,6 +58,7 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 allocation-counter = { workspace = true, optional = true }
 
 [dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["panic"] }
 criterion.workspace = true
 itertools.workspace = true
 proptest.workspace = true

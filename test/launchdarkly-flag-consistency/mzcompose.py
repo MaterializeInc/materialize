@@ -414,6 +414,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     ssh_connect_timeout
     ssh_keepalives_idle
     statement_logging_use_reproducible_rng
+    storage_arrangement_exert_proportionality
     storage_cluster_shutdown_grace_period
     storage_downgrade_since_during_finalization
     storage_record_source_sink_namespaced_errors
@@ -579,6 +580,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
     enable_upsert_chunked_stash
+    enable_upsert_payload_stash
     enable_upsert_paged_spill
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout

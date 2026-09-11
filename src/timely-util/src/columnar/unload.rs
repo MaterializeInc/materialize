@@ -92,6 +92,16 @@ pub trait UnloadChunk: Chunk {
         staging: &mut Self::Staging,
     );
 
+    /// As `extract_into`, allowing a spilled body to be read asynchronously.
+    fn extract_into_async(
+        &self,
+        probes: Self::Probes<'_>,
+        probe_index: &mut usize,
+        staging: &mut Self::Staging,
+    ) -> impl std::future::Future<Output = ()> {
+        async move { self.extract_into(probes, probe_index, staging) }
+    }
+
     /// Append the whole chunk into `staging` (the scan path).
     fn fetch_into(&self, staging: &mut Self::Staging);
 }
@@ -110,51 +120,32 @@ pub trait UnloadBatch<C: UnloadChunk> {
     /// whose continuation follows in staging.
     fn extract_into(&self, probes: C::Probes<'_>, staging: &mut C::Staging);
 
+    /// Extract probe hits in order, awaiting each selected chunk's read.
+    fn extract_into_async(
+        &self,
+        probes: C::Probes<'_>,
+        staging: &mut C::Staging,
+    ) -> impl std::future::Future<Output = ()>;
+
     /// Materialize the batch's full contents into `staging` (the scan path).
     fn fetch_into(&self, staging: &mut C::Staging);
 }
 
 impl<C: UnloadChunk> UnloadBatch<C> for ChunkBatch<C> {
     fn extract_into(&self, probes: C::Probes<'_>, staging: &mut C::Staging) {
-        let count = C::probe_count(probes);
-        let chunks = &self.chunks[..];
-        let (mut probe_index, mut chunk) = (0usize, 0usize);
-        while probe_index < count && chunk < chunks.len() {
-            // Whether chunk `c` lies entirely below `probes[probe_index]`
-            // (its last key is smaller), read from resident metadata.
-            let below = |c: usize| chunks[c].locate(probes, probe_index) == Ordering::Greater;
-            // Gallop to the first chunk not below the probe: exponential
-            // search from the current chunk, then binary within the bracket.
-            if below(chunk) {
-                let (mut prev, mut step) = (chunk, 1usize);
-                while prev + step < chunks.len() && below(prev + step) {
-                    prev += step;
-                    step <<= 1;
-                }
-                let (mut a, mut b) = (prev + 1, (prev + step).min(chunks.len()));
-                while a < b {
-                    let m = a + (b - a) / 2;
-                    if below(m) { a = m + 1 } else { b = m }
-                }
-                chunk = a;
-            }
-            if chunk >= chunks.len() {
-                return;
-            }
-            // Consume probes in the gap below this chunk's first key: they
-            // match nothing in the batch, and deciding so from resident
-            // metadata is what keeps an untouched body unopened.
-            while probe_index < count && chunks[chunk].locate(probes, probe_index) == Ordering::Less
-            {
-                probe_index += 1;
-            }
-            if probe_index < count && chunks[chunk].locate(probes, probe_index) == Ordering::Equal {
-                chunks[chunk].extract_into(probes, &mut probe_index, staging);
-            }
-            // Everything strictly below this chunk's last key is consumed; a
-            // probe equal to it was extracted but left for the next chunk
-            // (the straddle re-offer).
-            chunk += 1;
+        let (mut probe_index, mut chunk) = (0, 0);
+        while let Some(next) = next_probe_chunk(&self.chunks, probes, &mut probe_index, &mut chunk)
+        {
+            next.extract_into(probes, &mut probe_index, staging);
+        }
+    }
+
+    async fn extract_into_async(&self, probes: C::Probes<'_>, staging: &mut C::Staging) {
+        let (mut probe_index, mut chunk) = (0, 0);
+        while let Some(next) = next_probe_chunk(&self.chunks, probes, &mut probe_index, &mut chunk)
+        {
+            next.extract_into_async(probes, &mut probe_index, staging)
+                .await;
         }
     }
 
@@ -163,6 +154,42 @@ impl<C: UnloadChunk> UnloadBatch<C> for ChunkBatch<C> {
             chunk.fetch_into(staging);
         }
     }
+}
+
+// Select from resident fences only. The caller advances the probe index
+// through the returned chunk, leaving its last-key probe for the next one.
+fn next_probe_chunk<'a, C: UnloadChunk>(
+    chunks: &'a [C],
+    probes: C::Probes<'_>,
+    probe_index: &mut usize,
+    chunk: &mut usize,
+) -> Option<&'a C> {
+    let count = C::probe_count(probes);
+    while *probe_index < count && *chunk < chunks.len() {
+        let below = |c: usize| chunks[c].locate(probes, *probe_index) == Ordering::Greater;
+        if below(*chunk) {
+            let (mut prev, mut step) = (*chunk, 1usize);
+            while prev + step < chunks.len() && below(prev + step) {
+                prev += step;
+                step <<= 1;
+            }
+            let (mut a, mut b) = (prev + 1, (prev + step).min(chunks.len()));
+            while a < b {
+                let m = a + (b - a) / 2;
+                if below(m) { a = m + 1 } else { b = m }
+            }
+            *chunk = a;
+        }
+        let next = chunks.get(*chunk)?;
+        *chunk += 1;
+        while *probe_index < count && next.locate(probes, *probe_index) == Ordering::Less {
+            *probe_index += 1;
+        }
+        if *probe_index < count && next.locate(probes, *probe_index) == Ordering::Equal {
+            return Some(next);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

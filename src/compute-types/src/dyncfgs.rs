@@ -150,6 +150,15 @@ pub const COLUMN_CHUNK_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Bypass resident pool slots when committing compression-eligible chunk bodies.
+pub const ENABLE_COLUMN_CHUNK_DIRECT_COMPRESSED_OUTPUT: Config<bool> = Config::new(
+    "enable_column_chunk_direct_compressed_output",
+    false,
+    "Compress spilled chunk output directly into extents without resident slot admission. \
+     Applies at the compression depth floor and above, at each spill.",
+    ParameterScope::Replica,
+);
+
 /// Resident-bytes budget fraction for chunk spilling. Two consumers read
 /// it: the column pager's tiered policy multiplies it against the
 /// announced memory limit, and the buffer pool (`mz_ore::pool`)
@@ -869,4 +878,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
         .add(&COLUMN_CHUNK_COMPRESS_MIN_DEPTH)
+        .add(&ENABLE_COLUMN_CHUNK_DIRECT_COMPRESSED_OUTPUT)
 }

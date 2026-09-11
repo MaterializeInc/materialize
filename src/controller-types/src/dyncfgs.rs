@@ -76,6 +76,13 @@ pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
     ParameterScope::Replica,
 );
 
+pub const STORAGE_ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
+    "storage_arrangement_exert_proportionality",
+    1337,
+    "Storage arrangement maintenance proportionality. Zero disables optional maintenance. Applies when a replica is provisioned.",
+    ParameterScope::Replica,
+);
+
 pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "enable_paused_cluster_readhold_downgrade",
     true,
@@ -94,5 +101,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
+        .add(&STORAGE_ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
 }

@@ -556,6 +556,22 @@ metrics:
   help: Evicted chunks re-admitted by an admitting read stealing the slot of a clean backed victim of the same size class.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_column_pool_async_reads_in_flight
+  help: Submitted pool reads that have not released their concurrency permit.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_async_reads_total
+  help: Pool reads submitted to the blocking executor.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_cold_inserts_total
+  help: Chunks inserted directly into an extent by caller request.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_direct_extent_inserts_total
+  help: Inserts written directly to an extent because resident admission was full.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_column_pool_eager_backs_total
   help: Chunks eagerly compressed to compressed-but-resident by idle spill threads; their later eviction is a pure page release.
   source: src/timely-util/src/pool_config/metrics.rs

@@ -442,6 +442,35 @@ pub const ENABLE_UPSERT_CHUNKED_STASH: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Offload chunked upsert stash drains and feedback lookups to the blocking
+/// executor. Merge reads remain synchronous. Read at operator construction.
+pub const ENABLE_UPSERT_ASYNC_READS: Config<bool> = Config::new(
+    "enable_upsert_async_reads",
+    false,
+    "Read sealed stash and feedback chunks asynchronously when enable_upsert_v2 and \
+     enable_upsert_chunked_stash are true. Takes effect on new dataflows.",
+    ParameterScope::Replica,
+);
+
+/// Yield during source-stash merges and feedback compaction reads.
+/// Applies to newly constructed chunked upsert-v2 dataflows without payload separation.
+/// Independent of drain/probe read offload in `ENABLE_UPSERT_ASYNC_READS`.
+pub const ENABLE_UPSERT_ASYNC_MERGES: Config<bool> = Config::new(
+    "enable_upsert_async_merges",
+    false,
+    "Use resumable source and feedback merges in chunked upsert-v2. Takes effect on new dataflows. Decoded merge inputs share a 256 MiB process budget.",
+    ParameterScope::Replica,
+);
+
+/// Separate upsert-v2 payload blocks from columnar merge metadata.
+/// Read once per dataflow. Uses the process pool and asynchronous payload reads.
+pub const ENABLE_UPSERT_PAYLOAD_STASH: Config<bool> = Config::new(
+    "enable_upsert_payload_stash",
+    false,
+    "Use payload-separated columnar state for upsert-v2. Takes effect on new dataflows.",
+    ParameterScope::Replica,
+);
+
 // RocksDB
 
 /// How many times to try to cleanup old RocksDB DB's on disk before giving up.
@@ -566,6 +595,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SUSPENDABLE_SOURCES)
         .add(&ENABLE_UPSERT_PAGED_SPILL)
         .add(&ENABLE_UPSERT_CHUNKED_STASH)
+        .add(&ENABLE_UPSERT_ASYNC_READS)
+        .add(&ENABLE_UPSERT_ASYNC_MERGES)
+        .add(&ENABLE_UPSERT_PAYLOAD_STASH)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)

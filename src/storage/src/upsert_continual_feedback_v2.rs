@@ -63,10 +63,13 @@
 //!
 //! ## Stash flavors
 //!
-//! [`UpsertStashFlavor`], resolved from `enable_upsert_chunked_stash` at
-//! operator construction, selects between two instantiations of the same
+//! [`UpsertStashFlavor`], resolved from the replica configuration at
+//! operator construction, selects between three instantiations of the same
 //! loop:
 //!
+//! * **Payload**: columnar chunks contain metadata and payload locators.
+//!   Separate manifests own pool-backed rows, and feedback uses exact,
+//!   operator-local payload identities for consolidation.
 //! * **Chunked**: the stash is differential's chunk merge batcher over
 //!   `ColumnChunk`s and the feedback arrangement is a spine of chunk batches.
 //!   Committed chunk bodies spill to the process buffer pool, the drain
@@ -77,7 +80,9 @@
 //!   through the storage-owned column pager, and prior state comes back
 //!   through a trace cursor.
 //!
-//! Both flavors' spill paths are gated by `enable_upsert_paged_spill`.
+//! Paged and chunked spill paths are gated by `enable_upsert_paged_spill`.
+//! The experimental payload flavor is selected by `enable_upsert_payload_stash`
+//! and always allocates its external payloads through the process pool.
 //!
 //! ## Eligibility condition (total order)
 //!
@@ -88,6 +93,8 @@
 //! with `p < ts` is ineligible (persist hasn't caught up), and one with
 //! `ts < p` is already persisted and dropped.
 
+mod payload;
+
 use std::fmt::Debug;
 
 use differential_dataflow::difference::{IsZero, Semigroup};
@@ -97,7 +104,7 @@ use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::{Arranged, arrange_core};
 use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder, ChunkSpine};
-use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
+use differential_dataflow::trace::{BatchReader, Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_dyncfg::ConfigSet;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -105,7 +112,10 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 #[cfg(feature = "fuzzing")]
 use mz_row_spine::DatumSeq;
 use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
-use mz_storage_types::dyncfgs::ENABLE_UPSERT_CHUNKED_STASH;
+use mz_storage_types::dyncfgs::{
+    ENABLE_UPSERT_ASYNC_MERGES, ENABLE_UPSERT_ASYNC_READS, ENABLE_UPSERT_CHUNKED_STASH,
+    ENABLE_UPSERT_PAYLOAD_STASH,
+};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -137,7 +147,7 @@ use crate::upsert::UpsertSourceTime;
 use crate::upsert::UpsertValue;
 
 /// Which stash and feedback-arrangement representation the upsert-v2
-/// operator instantiates. The two flavors run the same operator loop; they
+/// operator instantiates. All flavors run the same operator loop. They
 /// differ in the batcher, the feedback trace, and how the drain reads prior
 /// state. See the module docs for the comparison.
 #[derive(Clone, Copy, Debug)]
@@ -146,9 +156,13 @@ pub enum UpsertStashFlavor {
     /// arrangement, cursor-based drain. Spills through the storage-owned
     /// column pager.
     Paged,
+    /// Columnar metadata with independently owned payload blocks.
+    Payload,
     /// Chunk merge batcher stash, chunk-spine feedback arrangement,
     /// bulk-probe drain. Spills through the process buffer pool.
-    Chunked,
+    Chunked { async_reads: bool },
+    /// Async source batching and feedback trace compaction.
+    Resumable { async_reads: bool },
 }
 
 impl UpsertStashFlavor {
@@ -156,8 +170,17 @@ impl UpsertStashFlavor {
     /// source at operator construction time, so a dataflow keeps one flavor
     /// for its whole life even if the flag flips underneath it.
     pub fn from_config(config: &ConfigSet) -> Self {
-        if ENABLE_UPSERT_CHUNKED_STASH.get(config) {
-            Self::Chunked
+        if ENABLE_UPSERT_PAYLOAD_STASH.get(config) {
+            Self::Payload
+        } else if ENABLE_UPSERT_CHUNKED_STASH.get(config) && ENABLE_UPSERT_ASYNC_MERGES.get(config)
+        {
+            Self::Resumable {
+                async_reads: ENABLE_UPSERT_ASYNC_READS.get(config),
+            }
+        } else if ENABLE_UPSERT_CHUNKED_STASH.get(config) {
+            Self::Chunked {
+                async_reads: ENABLE_UPSERT_ASYNC_READS.get(config),
+            }
         } else {
             Self::Paged
         }
@@ -245,18 +268,18 @@ type FeedbackSpine<T> = ChunkSpine<FeedbackChunk<T>>;
 // `(key, time)` runs.
 #[derive(Clone, Debug, Default, columnar::Columnar)]
 #[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
-struct UpsertDiff<O> {
+struct UpsertDiff<O, V> {
     from_time: O,
-    value: Option<Row>,
+    value: Option<V>,
 }
 
-impl<O> IsZero for UpsertDiff<O> {
+impl<O, V> IsZero for UpsertDiff<O, V> {
     fn is_zero(&self) -> bool {
         false
     }
 }
 
-impl<O: Ord + Clone> Semigroup for UpsertDiff<O> {
+impl<O: Ord + Clone, V: Clone> Semigroup for UpsertDiff<O, V> {
     fn plus_equals(&mut self, rhs: &Self) {
         if rhs.from_time > self.from_time {
             *self = rhs.clone();
@@ -270,15 +293,16 @@ impl<O: Ord + Clone> Semigroup for UpsertDiff<O> {
 // wins" comparison — copying the value `Row` out of the column solely when `rhs`
 // wins. Losing folds (the common case for a repeatedly-updated key) then pay no
 // `Row` copy at all.
-impl<'a, O> Semigroup<columnar::Ref<'a, UpsertDiff<O>>> for UpsertDiff<O>
+impl<'a, O, V> Semigroup<columnar::Ref<'a, UpsertDiff<O, V>>> for UpsertDiff<O, V>
 where
     O: columnar::Columnar + Ord + Clone,
+    V: columnar::Columnar + Clone,
 {
-    fn plus_equals(&mut self, rhs: &columnar::Ref<'a, UpsertDiff<O>>) {
+    fn plus_equals(&mut self, rhs: &columnar::Ref<'a, UpsertDiff<O, V>>) {
         let rhs_from_time = <O as columnar::Columnar>::into_owned(rhs.from_time);
         if rhs_from_time > self.from_time {
             self.from_time = rhs_from_time;
-            self.value = <Option<Row> as columnar::Columnar>::into_owned(rhs.value);
+            self.value = <Option<V> as columnar::Columnar>::into_owned(rhs.value);
         }
     }
 }
@@ -286,11 +310,11 @@ where
 /// One source-stash update: a key, its dataflow time, and the payload diff.
 /// `O` is the columnar order key projected from the source `FromTime` (see
 /// [`UpsertSourceTime`]).
-type UpsertUpdate<T, O> = (UpsertKey, T, UpsertDiff<O>);
+type UpsertUpdate<T, O, V = Row> = (UpsertKey, T, UpsertDiff<O, V>);
 
 /// One stash chunk: a sorted, consolidated run of updates, resident or
 /// spilled to the buffer pool.
-type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>>;
+type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O, Row>>;
 
 /// The chunked flavor's stash: differential's chunk merge batcher over
 /// `ColumnChunk`s. Data is pushed in unsorted. The batcher maintains
@@ -305,11 +329,11 @@ type UpsertChunkBatcher<T, O> = ChunkBatcher<UpsertChunk<T, O>>;
 /// like [`UpsertChunkBatcher`] but storing each chain entry as a `Column`
 /// routed through the storage-owned pager, which pages cold chains out of
 /// RSS.
-type UpsertPagedBatcher<T, O> = ColumnMergeBatcher<UpsertKey, T, UpsertDiff<O>>;
+type UpsertPagedBatcher<T, O> = ColumnMergeBatcher<UpsertKey, T, UpsertDiff<O, Row>>;
 
 /// The chunker that sorts and consolidates raw input into the `Column` chunks
 /// both stash batchers consume.
-type UpsertChunker<T, O> = ColumnChunker<UpsertUpdate<T, O>>;
+type UpsertChunker<T, O, V = Row> = ColumnChunker<UpsertUpdate<T, O, V>>;
 
 /// The operator's data-output handle. A fueled `Vec` builder so the drain can
 /// `give_fueled` each emitted update and yield to timely under large snapshot
@@ -442,7 +466,55 @@ where
         source_config.source_statistics.clone(),
     );
     match flavor {
-        UpsertStashFlavor::Chunked => {
+        UpsertStashFlavor::Payload => {
+            let pool = mz_timely_util::columnar::chunk::spill_pool()
+                .or_else(mz_timely_util::pool_config::global_pool)
+                .expect("payload upsert requires a buffer pool");
+            let store = payload::store(pool);
+            let (encoded, token) = payload::encode_feedback(encoded, store.clone());
+            let persist_arranged = arrange_core::<
+                _,
+                _,
+                payload::FeedbackChunker<T>,
+                ChunkBatcher<payload::FeedbackChunk<T>>,
+                ChunkBuilder<payload::FeedbackChunk<T>>,
+                payload::FeedbackSpine<T>,
+            >(encoded, Pipeline, "Persist payload feedback");
+            let mut persist_token = persist_token.unwrap_or_default();
+            persist_token.push(token);
+            build_upsert_operator::<payload::PayloadArm, _, _>(
+                input,
+                resume_upper,
+                persist_arranged,
+                Some(persist_token),
+                upsert_metrics,
+                source_config,
+                true,
+                Some(store),
+            )
+        }
+
+        UpsertStashFlavor::Resumable { async_reads } => {
+            let (persist_arranged, token) = mz_timely_util::columnar::chunk::asynchronous::arrange(
+                encoded,
+                merge_read_budget(),
+                "Persist resumable feedback",
+            );
+            let mut persist_token = persist_token.unwrap_or_default();
+            persist_token.push(token);
+            build_upsert_operator::<ResumableArm, _, _>(
+                input,
+                resume_upper,
+                persist_arranged,
+                Some(persist_token),
+                upsert_metrics,
+                source_config,
+                async_reads,
+                None,
+            )
+        }
+
+        UpsertStashFlavor::Chunked { async_reads } => {
             // Chains and sealed batches alike are `FeedbackChunk`s whose
             // bodies spill to the buffer pool, behind the same process spill
             // gate as the source stash.
@@ -461,6 +533,8 @@ where
                 persist_token,
                 upsert_metrics,
                 source_config,
+                async_reads,
+                None,
             )
         }
         UpsertStashFlavor::Paged => {
@@ -484,6 +558,8 @@ where
                 persist_token,
                 upsert_metrics,
                 source_config,
+                false,
+                None,
             )
         }
     }
@@ -568,6 +644,8 @@ fn build_upsert_operator<'scope, A, T, FromTime>(
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
+    async_reads: bool,
+    payload_store: Option<mz_timely_util::out_of_core::Store>,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -576,6 +654,7 @@ fn build_upsert_operator<'scope, A, T, FromTime>(
 )
 where
     A: UpsertStashArm<T, FromTime::Order>,
+    for<'a> columnar::Ref<'a, A::Value>: Copy + Ord,
     T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
@@ -629,13 +708,13 @@ where
         // pushed in, bounding memory to O(unique key-time pairs) even during
         // large initial snapshots. How cold stash state leaves RSS is
         // flavor-specific; see the arm impls.
-        let mut batcher = A::new_batcher();
+        let mut batcher = A::new_batcher(payload_store);
         // The chunker sorts and consolidates raw input into the `Column` chunks
         // the batcher consumes.
-        let mut chunker: UpsertChunker<T, FromTime::Order> = Default::default();
+        let mut chunker: UpsertChunker<T, FromTime::Order, A::Value> = Default::default();
         // Scratch buffer for accumulating source events before flushing to
         // the batcher. Drained on each iteration via the chunker.
-        let mut push_buffer: Vec<UpsertUpdate<T, FromTime::Order>> = Vec::new();
+        let mut push_buffer: Vec<UpsertUpdate<T, FromTime::Order, A::Value>> = Vec::new();
 
         // Capability held at the minimum time of any buffered data. When
         // Some, the operator may still produce output; when None, the
@@ -660,7 +739,13 @@ where
             tokio::select! {
                 _ = input.ready() => {}
                 _ = persist_wakeup.ready() => {
-                    while persist_wakeup.next_sync().is_some() {}
+                    while let Some(event) = persist_wakeup.next_sync() {
+                        if let AsyncEvent::Data(_, batches) = event {
+                            for batch in batches {
+                                mz_timely_util::columnar::chunk::metrics::record_batch(batch.len());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -679,7 +764,8 @@ where
                             {
                                 continue;
                             }
-                            let value = value.as_ref().map(upsert_value_to_row);
+                            let value =
+                                A::encode(value.as_ref().map(upsert_value_to_row), &mut batcher);
                             let from_time = from_time.upsert_order();
                             push_buffer.push((key, ts, UpsertDiff { from_time, value }));
                             pushed_any = true;
@@ -706,7 +792,7 @@ where
             // Flush buffered events through the chunker into the batcher. This
             // triggers the chunker + geometric chain merging, which consolidates
             // entries for the same (key, time) via the UpsertDiff Semigroup.
-            A::flush(&mut push_buffer, &mut chunker, &mut batcher);
+            A::flush(&mut push_buffer, &mut chunker, &mut batcher).await;
 
             // Step 2: Read persist frontier.
             // The persist probe tells us which output times have been
@@ -789,9 +875,9 @@ where
                 // Step 1 already consolidated `push_buffer` through the chunker
                 // (which readies a complete chunk per `push_into`), so the
                 // chunker holds nothing pending here and we can seal directly.
-                let (sealed, _description) = batcher.seal(input_upper.clone());
+                let sealed = A::seal(&mut batcher, input_upper.clone()).await;
                 // Frontier of data remaining in the batcher (ts >= input_upper).
-                let remaining_frontier = batcher.frontier().to_owned();
+                let remaining_frontier = A::frontier(&mut batcher);
 
                 let mut ineligible = Vec::new();
                 // The drain emits eligible output directly through
@@ -806,6 +892,8 @@ where
                     &mut persist_trace,
                     source_config.worker_id,
                     source_config.id,
+                    async_reads,
+                    &mut batcher,
                 )
                 .await;
 
@@ -830,7 +918,7 @@ where
                 // remaining data: either entries still in the batcher (above
                 // input_upper) or ineligible entries being pushed back.
                 let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
-                A::flush(&mut ineligible, &mut chunker, &mut batcher);
+                A::flush(&mut ineligible, &mut chunker, &mut batcher).await;
 
                 // `Option::min` alone would be wrong here, `None` sorts low.
                 // Chain the candidates and take the min over present ones.
@@ -878,54 +966,76 @@ where
     O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
+    /// Representation of a value in source metadata.
+    type Value: columnar::Columnar + Default + Clone;
+
+    /// Prepare a source value for offset consolidation.
+    fn encode(value: Option<Row>, batcher: &mut Self::Batcher) -> Option<Self::Value>;
+    /// Release temporary owners after all buffered updates have entered chunks.
+    fn end_flush(_batcher: &mut Self::Batcher) {}
+
     /// The feedback arrangement's spine. `'static` because the operator
     /// future owns a trace agent for it.
     type Spine: TraceReader<Time = T> + 'static;
     /// The source-stash batcher. `'static` because the operator future owns
     /// it.
-    type Batcher: Batcher<Time = T> + 'static;
+    type Batcher: 'static;
+    type Sealed;
+
+    /// Seal complete input, allowing the worker to yield during merges.
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed;
+    /// Times remaining after the most recent seal.
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T>;
 
     /// A new stash batcher for one source dataflow.
-    fn new_batcher() -> Self::Batcher;
+    fn new_batcher(store: Option<mz_timely_util::out_of_core::Store>) -> Self::Batcher;
 
     /// Push one sorted, consolidated `Column` chunk into the batcher, in the
     /// batcher's chunk representation.
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>);
+    async fn push_chunk(
+        batcher: &mut Self::Batcher,
+        chunk: Column<UpsertUpdate<T, O, Self::Value>>,
+    );
 
     /// Consolidate `updates` through `chunker` into `Column` chunks and push
     /// them into `batcher`, emptying `updates` (keeping its capacity). The
     /// chunker readies a fully-consolidated chunk per `push_into`, so the
     /// `extract` loop drains everything it produced.
-    fn flush(
-        updates: &mut Vec<UpsertUpdate<T, O>>,
-        chunker: &mut UpsertChunker<T, O>,
+    async fn flush(
+        updates: &mut Vec<UpsertUpdate<T, O, Self::Value>>,
+        chunker: &mut UpsertChunker<T, O, Self::Value>,
         batcher: &mut Self::Batcher,
-    ) {
+    ) where
+        for<'a> columnar::Ref<'a, Self::Value>: Copy + Ord,
+    {
         use timely::container::{ContainerBuilder as _, PushInto as _};
         if updates.is_empty() {
             return;
         }
-        let mut raw: Column<UpsertUpdate<T, O>> = Default::default();
+        let mut raw: Column<UpsertUpdate<T, O, Self::Value>> = Default::default();
         for update in updates.drain(..) {
             raw.push_into(&update);
         }
         chunker.push_into(&mut raw);
         while let Some(chunk) = chunker.extract() {
-            Self::push_chunk(batcher, std::mem::take(chunk));
+            Self::push_chunk(batcher, std::mem::take(chunk)).await;
         }
+        Self::end_flush(batcher);
     }
 
     /// Classify one sealed stash against `persist_upper` and emit eligible
     /// output; see [`DrainStats`].
     async fn drain(
-        sealed: Vec<<Self::Batcher as Batcher>::Output>,
-        ineligible: &mut Vec<UpsertUpdate<T, O>>,
+        sealed: Self::Sealed,
+        ineligible: &mut Vec<UpsertUpdate<T, O, Self::Value>>,
         output_handle: &UpsertOutputHandle<T>,
         output_cap: &Capability<T>,
         persist_upper: &Antichain<T>,
         trace: &mut TraceAgent<Self::Spine>,
         worker_id: usize,
         source_id: GlobalId,
+        async_reads: bool,
+        batcher: &mut Self::Batcher,
     ) -> DrainStats;
 }
 
@@ -950,14 +1060,27 @@ where
     O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
+    type Value = Row;
+
+    fn encode(value: Option<Row>, _batcher: &mut Self::Batcher) -> Option<Row> {
+        value
+    }
+
     type Spine = FeedbackSpine<T>;
     type Batcher = UpsertChunkBatcher<T, O>;
+    type Sealed = Vec<UpsertChunk<T, O>>;
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed {
+        batcher.seal(upper).0
+    }
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T> {
+        batcher.frontier().to_owned()
+    }
 
-    fn new_batcher() -> Self::Batcher {
+    fn new_batcher(_store: Option<mz_timely_util::out_of_core::Store>) -> Self::Batcher {
         Batcher::new(None, 0)
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+    async fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
         batcher.push_into(ColumnChunk::from_column(chunk));
     }
 
@@ -970,9 +1093,11 @@ where
         trace: &mut TraceAgent<Self::Spine>,
         worker_id: usize,
         source_id: GlobalId,
+        async_reads: bool,
+        _batcher: &mut Self::Batcher,
     ) -> DrainStats {
         drain_sealed_input_chunked(
-            sealed.into_iter().map(ColumnChunk::into_column),
+            sealed.into_iter(),
             ineligible,
             output_handle,
             output_cap,
@@ -980,6 +1105,80 @@ where
             trace,
             worker_id,
             source_id,
+            async_reads,
+        )
+        .await
+    }
+}
+
+/// Production arm for resumable columnar batching and compaction.
+struct ResumableArm;
+
+fn merge_read_budget() -> mz_timely_util::columnar::chunk::merge::ReadBudget {
+    // Shared across source and feedback operators on every worker in this process.
+    // This bounds decoded merge inputs only, independently of pool residency.
+    static BUDGET: std::sync::OnceLock<mz_timely_util::columnar::chunk::merge::ReadBudget> =
+        std::sync::OnceLock::new();
+    BUDGET
+        .get_or_init(|| mz_timely_util::columnar::chunk::merge::ReadBudget::new(256 << 20))
+        .clone()
+}
+
+impl<T, O> UpsertStashArm<T, O> for ResumableArm
+where
+    T: Timestamp + TotalOrder + Lattice + Sync,
+    T: columnation::Columnation + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
+    for<'a> columnar::Ref<'a, O>: Ord + Copy,
+{
+    type Value = Row;
+
+    fn encode(value: Option<Row>, _batcher: &mut Self::Batcher) -> Option<Row> {
+        value
+    }
+
+    type Spine = mz_timely_util::columnar::chunk::asynchronous::Spine<(UpsertKey, Row), T, Diff>;
+    type Batcher =
+        mz_timely_util::columnar::chunk::asynchronous::Batcher<UpsertKey, T, UpsertDiff<O, Row>>;
+    type Sealed = Vec<UpsertChunk<T, O>>;
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed {
+        batcher.seal(upper).await.0
+    }
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T> {
+        batcher.frontier().to_owned()
+    }
+
+    fn new_batcher(_store: Option<mz_timely_util::out_of_core::Store>) -> Self::Batcher {
+        Self::Batcher::new(merge_read_budget())
+    }
+
+    async fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+        batcher.push(ColumnChunk::from_column(chunk)).await;
+    }
+
+    async fn drain(
+        sealed: Vec<UpsertChunk<T, O>>,
+        ineligible: &mut Vec<UpsertUpdate<T, O>>,
+        output_handle: &UpsertOutputHandle<T>,
+        output_cap: &Capability<T>,
+        persist_upper: &Antichain<T>,
+        trace: &mut TraceAgent<Self::Spine>,
+        worker_id: usize,
+        source_id: GlobalId,
+        async_reads: bool,
+        _batcher: &mut Self::Batcher,
+    ) -> DrainStats {
+        drain_sealed_input_chunked(
+            sealed.into_iter(),
+            ineligible,
+            output_handle,
+            output_cap,
+            persist_upper,
+            trace,
+            worker_id,
+            source_id,
+            async_reads,
         )
         .await
     }
@@ -998,16 +1197,29 @@ where
     O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
+    type Value = Row;
+
+    fn encode(value: Option<Row>, _batcher: &mut Self::Batcher) -> Option<Row> {
+        value
+    }
+
     type Spine = ValRowSpine<UpsertKey, T, Diff>;
     type Batcher = UpsertPagedBatcher<T, O>;
+    type Sealed = Vec<Column<UpsertUpdate<T, O>>>;
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed {
+        batcher.seal(upper).0
+    }
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T> {
+        batcher.frontier().to_owned()
+    }
 
-    fn new_batcher() -> Self::Batcher {
+    fn new_batcher(_store: Option<mz_timely_util::out_of_core::Store>) -> Self::Batcher {
         let mut batcher: UpsertPagedBatcher<T, O> = Batcher::new(None, 0);
         batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
         batcher
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+    async fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
         batcher.push_into(chunk);
     }
 
@@ -1020,6 +1232,8 @@ where
         trace: &mut TraceAgent<Self::Spine>,
         worker_id: usize,
         source_id: GlobalId,
+        _async_reads: bool,
+        _batcher: &mut Self::Batcher,
     ) -> DrainStats {
         drain_sealed_input_paged(
             sealed,
@@ -1104,14 +1318,15 @@ struct DrainStats {
 /// probe hits for its keys) is resident regardless of drain size. Only the
 /// re-stashed ineligible set is materialized.
 async fn drain_sealed_input_chunked<T, O>(
-    sealed: impl Iterator<Item = Column<UpsertUpdate<T, O>>>,
+    sealed: impl Iterator<Item = UpsertChunk<T, O>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<FeedbackSpine<T>>,
+    trace: &mut impl TraceReader<Time = T, Batch = <FeedbackSpine<T> as TraceReader>::Batch>,
     worker_id: usize,
     source_id: GlobalId,
+    async_reads: bool,
 ) -> DrainStats
 where
     T: Timestamp + TotalOrder + Lattice + Sync,
@@ -1141,6 +1356,11 @@ where
 
     for chunk in sealed {
         use columnar::{Index, Len};
+        let chunk = if async_reads {
+            chunk.into_column_async().await
+        } else {
+            chunk.into_column()
+        };
         let view = chunk.borrow();
         let total = view.len();
         let mut start = 0;
@@ -1184,7 +1404,13 @@ where
                 use columnar::Borrow;
                 let mut staging = <FeedbackUpdate<T> as columnar::Columnar>::Container::default();
                 for batch in &batches {
-                    batch.extract_into(probe_col.borrow(), &mut staging);
+                    if async_reads {
+                        batch
+                            .extract_into_async(probe_col.borrow(), &mut staging)
+                            .await;
+                    } else {
+                        batch.extract_into(probe_col.borrow(), &mut staging);
+                    }
                 }
                 let staged = staging.borrow();
                 let mut hits: Vec<_> = (0..staged.len())
@@ -1229,7 +1455,7 @@ where
                         ineligible.push((
                             *key,
                             ts,
-                            <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
+                            <UpsertDiff<O, Row> as columnar::Columnar>::into_owned(diff),
                         ));
                         continue;
                     }
@@ -1363,7 +1589,7 @@ where
                     ineligible.push((
                         *key,
                         ts,
-                        <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
+                        <UpsertDiff<O, Row> as columnar::Columnar>::into_owned(diff),
                     ));
                     continue;
                 }
@@ -1499,10 +1725,8 @@ mod test {
         Row::pack_slice(&[Datum::Int64(k), Datum::Int64(v)])
     }
 
-    // Runs the test body once per stash flavor and asserts the two flavors
-    // produce identical (consolidated) output, so every scenario covers both
-    // operator arms. Returns one flavor's output for the caller's own
-    // expected-value assertion.
+    // Compare paged, synchronous chunked, and asynchronous chunked output
+    // before checking each scenario's expected result.
     macro_rules! upsert_test {
         (|$input:ident, $persist:ident, $worker:ident| $body:block) => {{
             let run = |flavor: UpsertStashFlavor| {
@@ -1571,8 +1795,10 @@ mod test {
             };
 
             let paged = run(UpsertStashFlavor::Paged);
-            let chunked = run(UpsertStashFlavor::Chunked);
+            let chunked = run(UpsertStashFlavor::Chunked { async_reads: false });
             assert_eq!(paged, chunked, "stash flavors must produce equal output");
+            let asynchronous = run(UpsertStashFlavor::Chunked { async_reads: true });
+            assert_eq!(chunked, asynchronous, "async reads must preserve output");
             chunked
         }};
     }
@@ -1751,14 +1977,24 @@ mod test {
     /// paged flavor (which the harness also runs) routes through the column
     /// pager rather than the chunk override, so it stays resident and serves
     /// as the reference.
-    #[mz_ore::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
-    fn drain_reads_spilled_chunks() {
+    async fn drain_reads_spilled_chunks() {
+        for direct in [false, true] {
+            assert_spilled_drain(direct);
+        }
+    }
+
+    fn assert_spilled_drain(direct: bool) {
         use mz_ore::pool::Pool;
-        use mz_timely_util::columnar::chunk::set_spill_override;
+        use mz_timely_util::columnar::chunk::{
+            set_direct_compressed_output_override, set_spill_override,
+        };
 
         let pool = Pool::new().expect("pool creation");
+        pool.set_budget(0);
         set_spill_override(Some(pool.clone()));
+        set_direct_compressed_output_override(Some(direct));
 
         const KEYS: i64 = 1500;
         let actual = upsert_test!(|input, persist, worker| {
@@ -1770,6 +2006,10 @@ mod test {
 
             for k in 0..KEYS {
                 input.send(((key(k), Some(Ok(row(k, k + 1))), 1), new_ts(1), Diff::ONE));
+                if k % 500 == 499 {
+                    input.flush();
+                    worker.step();
+                }
             }
             input.advance_to(new_ts(2));
             worker.step();
@@ -1778,9 +2018,16 @@ mod test {
         });
 
         set_spill_override(None);
+        set_direct_compressed_output_override(None);
+        assert_eq!(pool.stats().cold_inserts > 0, direct);
         assert!(
             pool.stats().inserts > 0,
             "chunks should have spilled through the pool"
+        );
+
+        assert!(
+            pool.stats().async_reads > 0,
+            "the async drain must read spilled chunks"
         );
 
         let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
@@ -1961,7 +2208,11 @@ mod test {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn lagging_replacement_below_upper_strands_data() {
-        for flavor in [UpsertStashFlavor::Paged, UpsertStashFlavor::Chunked] {
+        for flavor in [
+            UpsertStashFlavor::Paged,
+            UpsertStashFlavor::Chunked { async_reads: false },
+            UpsertStashFlavor::Chunked { async_reads: true },
+        ] {
             let (frontier, emitted) = run_below_upper_scenario_v2(flavor);
 
             // The below-upper data is discarded (no output) and the output
@@ -2072,5 +2323,228 @@ mod test {
             .collect();
         differential_dataflow::consolidation::consolidate_updates(&mut emitted);
         (frontier, emitted)
+    }
+    #[mz_ore::test]
+    fn resumable_state_matches_feedback_across_resume_and_restash() {
+        let pool = mz_ore::pool::Pool::new().unwrap();
+        pool.set_budget(0);
+        pool.set_spill_threads(0);
+        mz_timely_util::columnar::chunk::with_spill_override(pool.clone(), || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let _enter = runtime.enter();
+            for width in [32, 1900, 3 << 20] {
+                let baseline = run_payload_feedback_scenario(
+                    UpsertStashFlavor::Chunked { async_reads: false },
+                    width,
+                );
+                let reads = pool.stats().async_reads;
+                assert_eq!(
+                    baseline,
+                    run_payload_feedback_scenario(
+                        UpsertStashFlavor::Resumable { async_reads: false },
+                        width
+                    )
+                );
+                if width >= 1900 {
+                    assert!(
+                        pool.stats().async_reads > reads,
+                        "merge reads must be offloaded with drain offload disabled"
+                    );
+                }
+            }
+        });
+    }
+
+    #[mz_ore::test]
+    fn payload_state_matches_columnar_feedback_across_resume_and_restash() {
+        let pool = mz_ore::pool::Pool::new().unwrap();
+        pool.set_budget(0);
+        pool.set_rss_target(1 << 20);
+        mz_timely_util::columnar::chunk::with_spill_override(pool.clone(), || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let _enter = runtime.enter();
+            let baseline = run_payload_feedback_scenario(UpsertStashFlavor::Paged, 32);
+            assert_eq!(
+                baseline,
+                run_payload_feedback_scenario(UpsertStashFlavor::Chunked { async_reads: true }, 32)
+            );
+            assert_eq!(
+                baseline,
+                run_payload_feedback_scenario(UpsertStashFlavor::Payload, 32)
+            );
+            assert_eq!(
+                run_payload_feedback_scenario(
+                    UpsertStashFlavor::Chunked { async_reads: true },
+                    1900
+                ),
+                run_payload_feedback_scenario(UpsertStashFlavor::Payload, 1900)
+            );
+            assert_eq!(
+                run_payload_feedback_scenario(UpsertStashFlavor::Paged, 3 << 20),
+                run_payload_feedback_scenario(UpsertStashFlavor::Payload, 3 << 20)
+            );
+            assert_eq!(
+                pool.stats().live_chunks,
+                0,
+                "shutdown must release metadata and payload blocks"
+            );
+        });
+    }
+
+    fn run_payload_feedback_scenario(
+        flavor: UpsertStashFlavor,
+        width: usize,
+    ) -> Vec<(Result<Row, DataflowError>, Ts, Diff)> {
+        use timely::dataflow::operators::Probe;
+        timely::execute_directly(move |worker| {
+            let (mut input, mut persist, probe, capture, button) = worker
+                .dataflow::<MzTimestamp, _, _>(|scope| {
+                    scope.scoped::<Ts, _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let source_id = GlobalId::User(0);
+
+                        let reg = MetricsRegistry::new();
+                        let upsert_defs = UpsertMetricDefs::register_with(&reg);
+                        let upsert_metrics = UpsertMetrics::new(&upsert_defs, source_id, 0, None);
+
+                        let reg2 = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&reg2);
+
+                        let reg3 = MetricsRegistry::new();
+                        let stats_defs = SourceStatisticsMetricDefs::register_with(&reg3);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &stats_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+                        let source_config = SourceExportCreationConfig {
+                            id: source_id,
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            flavor,
+                            input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(new_ts(1)),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                        );
+                        let captured = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                        let records = std::rc::Rc::clone(&captured);
+                        let output =
+                            output.inspect(move |update| records.borrow_mut().push(update.clone()));
+                        let (probe, _) = output.inner.probe();
+                        (input_handle, persist_handle, probe, captured, button)
+                    })
+                });
+
+            let drive = |worker: &mut timely::worker::Worker, upper: u64| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                while probe.less_than(&new_ts(upper)) {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "upsert frontier stalled: {flavor:?}"
+                    );
+                    worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+                }
+            };
+            let extra = if width < 1 << 20 { 2050 } else { 0 };
+            let extra_row = |key, version| {
+                let value = format!("{version}:{}", "x".repeat(width));
+                Row::pack_slice(&[Datum::Int64(key), Datum::String(&value)])
+            };
+            let error = UpsertError::NullKey(mz_storage_types::errors::UpsertNullKeyError);
+            let error_key = UpsertKey::from_key(Err(&error));
+            let wide = Row::pack_slice(&[Datum::Int64(3), Datum::String(&"x".repeat(width))]);
+            persist.send((Ok(row(1, 10)), new_ts(0), Diff::ONE));
+            persist.send((Ok(row(2, 20)), new_ts(0), Diff::ONE));
+            persist.advance_to(new_ts(1));
+            input.send(((key(1), Some(Ok(row(1, 999))), 100), new_ts(0), Diff::ONE));
+            input.send(((key(1), Some(Ok(row(1, 11))), 3), new_ts(1), Diff::ONE));
+            input.send(((key(1), Some(Ok(row(1, 12))), 2), new_ts(1), Diff::ONE));
+            input.send(((key(2), None, 4), new_ts(1), Diff::ONE));
+            input.send(((key(3), Some(Ok(wide.clone())), 5), new_ts(1), Diff::ONE));
+            for k in 100..100 + extra {
+                input.send((
+                    (key(k), Some(Ok(extra_row(k, 10))), 1),
+                    new_ts(1),
+                    Diff::ONE,
+                ));
+            }
+            input.send((
+                (error_key, Some(Err(Box::new(error))), 1),
+                new_ts(1),
+                Diff::ONE,
+            ));
+            input.advance_to(new_ts(2));
+            drive(worker, 2);
+            let first = capture.borrow().clone();
+            assert_eq!(
+                first.len(),
+                5 + usize::try_from(extra).unwrap(),
+                "initial insert, replacement, and delete"
+            );
+            for update in first {
+                persist.send(update);
+            }
+            persist.advance_to(new_ts(2));
+            input.send(((key(1), Some(Ok(row(1, 13))), 6), new_ts(2), Diff::ONE));
+            input.send(((key(1), Some(Ok(row(1, 14))), 7), new_ts(3), Diff::ONE));
+            input.send(((key(3), None, 8), new_ts(3), Diff::ONE));
+            for k in 100..100 + extra {
+                input.send((
+                    (key(k), Some(Ok(extra_row(k, 20))), 2),
+                    new_ts(2),
+                    Diff::ONE,
+                ));
+                input.send(((key(k), None, 3), new_ts(3), Diff::ONE));
+            }
+            input.send(((error_key, None, 2), new_ts(3), Diff::ONE));
+            input.advance_to(new_ts(4));
+            drive(worker, 3);
+            let second: Vec<_> = capture
+                .borrow()
+                .iter()
+                .filter(|(_, time, _)| *time == new_ts(2))
+                .cloned()
+                .collect();
+            assert_eq!(second.len(), 2 + 2 * usize::try_from(extra).unwrap());
+            for update in second {
+                persist.send(update);
+            }
+            persist.advance_to(new_ts(3));
+            drive(worker, 4);
+            let mut result = capture.borrow().clone();
+            assert_eq!(
+                result
+                    .iter()
+                    .filter(|(_, time, _)| *time == new_ts(3))
+                    .count(),
+                4 + usize::try_from(extra).unwrap()
+            );
+            drop(input);
+            drop(persist);
+            drop(button);
+            while worker.has_dataflows() {
+                worker.step();
+            }
+            differential_dataflow::consolidation::consolidate_updates(&mut result);
+            result
+        })
     }
 }
