@@ -608,7 +608,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ancestor_built_raw, ancestor_build_failures = build_benches(
                 src, ancestor_targets, ancestor_manifests, ancestor_env
             )
-            target.rename(ancestor_target)
+            # A checkout without bench targets for the shard's packages runs
+            # no cargo build, and `cargo metadata` alone does not create the
+            # target dir, so there is nothing to park.
+            if target.exists():
+                target.rename(ancestor_target)
             target_owner = None
             # Keeps the checkout registered and valid so its bench binaries,
             # which read fixtures relative to their manifest dir, keep
@@ -644,7 +648,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             head_built_raw, current_build_failures = build_benches(
                 src, current_targets, current_manifests, current_env
             )
-            target.rename(current_target)
+            if target.exists():
+                target.rename(current_target)
             target_owner = None
             head_built = [
                 BuiltBench(
