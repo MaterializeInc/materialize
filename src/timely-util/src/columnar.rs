@@ -43,26 +43,27 @@ use crate::columnation::ColInternalMerger;
 
 /// A batcher for columnar storage.
 ///
-/// The chunker is supplied to the arrange operator separately. Callers pass
-/// it explicitly: [`ColumnationChunker`](crate::columnation::ColumnationChunker)
-/// for `Vec<_>` input, or [`batcher::Chunker`] (over a `ColumnationStack<_>`) for
-/// [`Column`] input.
-pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<ColInternalMerger<(K, V), T, R>>;
+/// `Chu` melds raw input containers into the chunks the batcher merges:
+/// [`ColumnationChunker`](crate::columnation::ColumnationChunker) for `Vec<_>`
+/// input, or [`batcher::Chunker`] (over a `ColumnationStack<_>`) for [`Column`]
+/// input. `Se` seals each extracted chain; a spine builder seals into a batch,
+/// [`ChainSealer`](crate::operator::ChainSealer) hands the chain back as-is.
+pub type Col2ValBatcher<K, V, T, R, Chu, Se> =
+    MergeBatcher<Chu, ColInternalMerger<(K, V), T, R>, Se>;
 /// A batcher for columnar storage with unit values.
-pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
+pub type Col2KeyBatcher<K, T, R, Chu, Se> = Col2ValBatcher<K, (), T, R, Chu, Se>;
 
 /// Pageable counterpart to [`Col2ValBatcher`]. Routes every chunk produced
 /// by chunking, merging, or extract through a [`crate::column_pager::ColumnPager`],
 /// so memory pressure can spill chains to a backing store without touching
 /// the merge / extract bodies.
 ///
-/// Drop-in shape at the type level: both aliases take `(K, V, T, R)` and
-/// produce a `Batcher<Input = Column<((K, V), T, R)>, Output = Column<((K,
-/// V), T, R)>>`. Call sites can swap with `cargo fix`–style renaming once
-/// downstream `Trace`/`Builder` impls have been wired up. The pager itself
-/// defaults to [`crate::column_pager::ColumnPager::disabled`]; inject a
-/// real one via [`merge_batcher::ColumnMergeBatcher::set_pager`].
-pub type Col2ValPagedBatcher<K, V, T, R> = merge_batcher::ColumnMergeBatcher<(K, V), T, R>;
+/// Drop-in shape at the type level: both aliases take the same parameters and
+/// produce a `Batcher<C>` over the same chunk type. The pager itself defaults
+/// to [`crate::column_pager::ColumnPager::disabled`]; inject a real one via
+/// [`merge_batcher::ColumnMergeBatcher::set_pager`].
+pub type Col2ValPagedBatcher<K, V, T, R, Chu, Se> =
+    merge_batcher::ColumnMergeBatcher<Chu, (K, V), T, R, Se>;
 
 /// Columnar-native counterpart to [`Col2ValBatcher`], holding [`Column`]
 /// chunks rather than columnation stacks and merging them through
@@ -71,7 +72,8 @@ pub type Col2ValPagedBatcher<K, V, T, R> = merge_batcher::ColumnMergeBatcher<(K,
 /// Pairs with [`batcher::ColumnChunker`] and any builder whose `Input` is
 /// `Column<((K, V), T, R)>`. Unlike [`Col2ValPagedBatcher`] the chains stay
 /// resident, so this arm carries no pager and no spill budget.
-pub type Col2ValColBatcher<K, V, T, R> = MergeBatcher<batcher::ColumnMerger<(K, V), T, R>>;
+pub type Col2ValColBatcher<K, V, T, R, Chu, Se> =
+    MergeBatcher<Chu, batcher::ColumnMerger<(K, V), T, R>, Se>;
 
 /// A container based on a columnar store, encoded in aligned bytes.
 ///

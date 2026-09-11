@@ -9,9 +9,6 @@
 
 //! An interactive dataflow server.
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
 use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_cluster_client::client::TimelyConfig;
 use mz_ore::metrics::MetricsRegistry;
@@ -23,9 +20,12 @@ use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ScheduleEvent, ShutdownEvent, TimelyEvent,
 };
+use timely::progress::Stamp;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -166,7 +166,8 @@ impl ClusterSpec for Config {
                             remap_timely_event_ids(event);
                             true
                         });
-                        event_pusher.push(Event::Messages(time_ms, data));
+                        // One capability per logged batch: the stamp is a singleton.
+                        event_pusher.push(Event::Messages(Stamp::from_elem(time_ms), data));
                     } else {
                         // Advance progress.
                         let new_time_ms: u64 = (((time.as_millis() / interval_ms) + 1)

@@ -13,7 +13,6 @@ use columnar::{Columnar, Index, Len};
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Batcher;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
@@ -194,7 +193,7 @@ where
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
     chunker: ColumnChunker<(D, T, R)>,
-    inner: ColumnMergeBatcher<D, T, R>,
+    inner: ColumnMergeBatcher<ColumnChunker<(D, T, R)>, D, T, R, ()>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
@@ -233,7 +232,7 @@ where
         }
         self.chunker.push_into(&mut raw);
         while let Some(chunk) = self.chunker.extract() {
-            self.inner.push_into(std::mem::take(chunk));
+            self.inner.push_chunk(std::mem::take(chunk));
         }
     }
 
@@ -241,14 +240,14 @@ where
     fn flush(&mut self) {
         use timely::container::ContainerBuilder as _;
         while let Some(chunk) = self.chunker.finish() {
-            self.inner.push_into(std::mem::take(chunk));
+            self.inner.push_chunk(std::mem::take(chunk));
         }
     }
 
     /// Reveal the contents of the merge batcher, returning a vector of `Column` chunks.
     fn done(mut self) -> Vec<Column<(D, T, R)>> {
         self.flush();
-        let (chain, _description) = self.inner.seal(Antichain::new());
+        let (chain, _frontier) = self.inner.extract_chain(Antichain::new().borrow());
         chain
     }
 }
@@ -274,7 +273,7 @@ where
         let upper = Antichain::from_elem(timestamp.clone());
         let mut lower = Self::new(self.logger.clone(), self.operator_id);
         let mut buffer = Vec::new();
-        let (chain, _description) = self.inner.seal(upper);
+        let (chain, _frontier) = self.inner.extract_chain(upper.borrow());
         for chunk in chain {
             *fuel = fuel.saturating_sub(chunk.record_count());
             // TODO: Avoid this cloning.

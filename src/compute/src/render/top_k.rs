@@ -11,16 +11,13 @@
 //!
 //! Consult [TopKPlan] documentation for details.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
 use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
@@ -35,8 +32,14 @@ use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
+use mz_row_spine::{
+    DatumContainer, DatumSeq, RowBatcher, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
+};
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
@@ -48,11 +51,8 @@ use crate::render::Pairer;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
-use mz_row_spine::{
-    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder,
-    RowValSpine,
-};
+use crate::typedefs::ConsolidateBatcher;
+use crate::typedefs::{ErrBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTime>
@@ -176,8 +176,9 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // the advertised permutation, exactly as for an index arrangement.
                     let errs: KeyCollection<_, _, _> = err_collection.clone().into();
                     let err_arrangement = errs
-                        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                        .mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, _>(
                             "Arrange bundle err",
+                            MergeBatcher::new,
                         );
                     CollectionBundle::from_columns(
                         group_key.iter().copied(),
@@ -211,7 +212,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                             };
                             (group_row, row)
                         })
-                        .consolidate_named_if::<KeyBatcher<_, _, _>>(
+                        .consolidate_named_if::<ConsolidateBatcher<_, _, _>>(
                             must_consolidate,
                             "Consolidated MonotonicTopK input",
                         );
@@ -271,7 +272,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-                    let result = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                    let result = CollectionExt::consolidate_named::<ConsolidateBatcher<_, _, _>>(
                         result,
                         "Monotonic TopK final consolidate",
                     );
@@ -405,8 +406,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             collection, order_key, 1u64, offset, limit, arity, validating,
         );
         // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-        let oks =
-            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(oks, "TopK final consolidate");
+        let oks = CollectionExt::consolidate_named::<ConsolidateBatcher<_, _, _>>(
+            oks,
+            "TopK final consolidate",
+        );
         collection = oks;
         if validating {
             err_collection = errs;
@@ -553,7 +556,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     (group_key, row)
                 }
             })
-            .consolidate_named_if::<KeyBatcher<_, _, _>>(
+            .consolidate_named_if::<ConsolidateBatcher<_, _, _>>(
                 must_consolidate,
                 "Consolidated MonotonicTop1 input",
             );
@@ -580,26 +583,19 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             })
             .into();
         let result = partial
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, _>,
-            >(
+            .mz_arrange::<RowBatcher<_, _, ColumnationChunker<_>>, RowSpine<_, _>>(
                 "Arranged MonotonicTop1 partial [val: empty]",
+                MergeBatcher::new,
             )
-            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
-                "MonotonicTop1",
-                {
-                    let mut datum_vec = mz_repr::DatumVec::new();
-                    move |_key, input, output| {
-                        let accum: &monoids::Top1Monoid = &input[0].1;
-                        let datums = datum_vec.borrow_with(&accum.row);
-                        let value = SharedRow::pack(thinning.iter().map(|i| datums[*i]));
-                        output.push((value, Diff::ONE));
-                    }
-                },
-            );
+            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>("MonotonicTop1", {
+                let mut datum_vec = mz_repr::DatumVec::new();
+                move |_key, input, output| {
+                    let accum: &monoids::Top1Monoid = &input[0].1;
+                    let datums = datum_vec.borrow_with(&accum.row);
+                    let value = SharedRow::pack(thinning.iter().map(|i| datums[*i]));
+                    output.push((value, Diff::ONE));
+                }
+            });
         (result, errs)
     }
 }
@@ -646,13 +642,9 @@ where
     // built-in view mz_introspection.mz_expected_group_size_advice.
     let arranged = input
         .clone()
-        .mz_arrange::<
-            ColumnationChunker<_>,
-            RowRowBatcher<_, _>,
-            RowRowBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(
+        .mz_arrange::<RowRowBatcher<_, _, ColumnationChunker<_>>, RowRowSpine<_, _>>(
             "Arranged TopK input",
+            MergeBatcher::new,
         );
 
     // Eagerly evaluate literal limits.
@@ -792,12 +784,16 @@ where
             "TopKIntraTimeThinning",
             [],
             move |input, output, notificator| {
-                input.for_each_time(|time, data| {
-                    let agg_time = aggregates
-                        .entry(time.time().clone())
-                        .or_insert_with(BTreeMap::new);
+                input.for_each_time(|cap, data| {
+                    // Bucket by the record's own time rather than the message's: a message is
+                    // stamped by a multiset of capabilities, so it has no one time, and the
+                    // records already carry the time their output is emitted at.
+                    let mut notify_times = BTreeSet::new();
                     for ((grp_row, row), record_time, diff) in data.flat_map(|data| data.drain(..))
                     {
+                        let agg_time = aggregates
+                            .entry(record_time.clone())
+                            .or_insert_with(BTreeMap::new);
                         let monoid = monoids::Top1MonoidLocal {
                             row,
                             shared: Rc::clone(&shared),
@@ -822,17 +818,23 @@ where
                         };
 
                         let topk = agg_time
-                            .entry((grp_row, record_time))
+                            .entry(grp_row)
                             .or_insert_with(move || topk_agg::TopKBatch::new(limit));
                         topk.update(monoid, diff.into_inner());
+                        notify_times.insert(record_time);
                     }
-                    notificator.notify_at(time.retain(0));
+                    // Each record's time is greater or equal to an element of the message's
+                    // stamp, so the capability can be delayed to it.
+                    for time in notify_times {
+                        notificator.notify_at(cap.delayed(&time, 0));
+                    }
                 });
 
                 notificator.for_each(|time, _, _| {
                     if let Some(aggs) = aggregates.remove(time.time()) {
+                        let record_time = time.time().clone();
                         let mut session = output.session(&time);
-                        for ((grp_row, record_time), topk) in aggs {
+                        for (grp_row, topk) in aggs {
                             session.give_iterator(topk.into_iter().map(|(monoid, diff)| {
                                 (
                                     (grp_row.clone(), monoid.into_row()),

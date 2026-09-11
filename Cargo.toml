@@ -686,6 +686,14 @@ iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rus
 # Hopefully we can upstream these changes eventually.
 # Additionally we keep the apache crates updated to latest versions.
 duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
+# Build against the next differential-dataflow, which pins timely by git in turn.
+#
+# `branch` is not reproducible: pin a `rev` (or a release) before this merges. Recursive
+# dataflows additionally need differential's `leave_dynamic` to stop reading a single time
+# off a multi-capability message; the pull request carries the patch.
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow", branch = "master-next" }
+differential-dogs3 = { git = "https://github.com/TimelyDataflow/differential-dataflow", branch = "master-next" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
 
 
 # BEGIN LINT CONFIG

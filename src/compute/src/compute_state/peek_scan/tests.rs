@@ -9,25 +9,23 @@
 
 //! Tests of the budgeted scan that answers an index peek.
 
+use differential_dataflow::batcher::Batcher;
+use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::cursor::CursorList;
-use differential_dataflow::trace::implementations::ord_neu::OrdValBatcher;
-use differential_dataflow::trace::{Batcher, Builder, Navigable};
 use mz_expr::row::RowCollection;
 use mz_expr::{ColumnOrder, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_repr::Datum;
-use mz_row_spine::{ArcOrdValBuilder, ArcOrdValSpine};
-use timely::container::PushInto;
+use mz_row_spine::{ArcOrdValBatcher, ArcOrdValSpine};
 use timely::progress::Antichain;
 
+use super::*;
 use crate::arrangement::manager::{PaddedTrace, TraceBundle};
 use crate::compute_state::error_scan::tests::PEEK_TIMESTAMP;
 use crate::compute_state::index_peek_tests::{
     answering_errors, cancelling_errors, index_peek, ok_row as row, trace_bundle, trivial_finishing,
 };
 use crate::typedefs::RowRowAgent;
-
-use super::*;
 
 type TestTrace = ArcOrdValSpine<Row, Row, Timestamp, Diff>;
 
@@ -86,14 +84,17 @@ fn ok_iterator(keys: &[Row]) -> PeekResultIterator<TestTrace> {
 
 /// A walk over an ok trace holding `copies` of each of `keys`.
 fn ok_iterator_with_copies(keys: &[Row], copies: Diff) -> PeekResultIterator<TestTrace> {
-    let updates: Vec<((Row, Row), Timestamp, Diff)> = keys
+    let mut updates: Vec<((Row, Row), Timestamp, Diff)> = keys
         .iter()
         .map(|key| ((key.clone(), Row::default()), Timestamp::MIN, copies))
         .collect();
-    let mut batcher = OrdValBatcher::<Row, Row, Timestamp, Diff>::new(None, 0);
-    batcher.push_into(updates);
-    let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
-    let batch = ArcOrdValBuilder::<Row, Row, Timestamp, Diff>::seal(&mut chain, description);
+    let mut batcher = ArcOrdValBatcher::<Row, Row, Timestamp, Diff>::new(None, 0);
+    Batcher::<Vec<((Row, Row), Timestamp, Diff)>>::insert(&mut batcher, &mut updates);
+    let (batch, _frontier) = Batcher::<Vec<((Row, Row), Timestamp, Diff)>>::extract(
+        &mut batcher,
+        Antichain::from_elem(Timestamp::MAX).borrow(),
+    );
+    let batch = batch.expect("updates were pushed, so the batch is non-empty");
     let storage = vec![batch];
     let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
     // The cursor's key is the only datum. The values are empty.

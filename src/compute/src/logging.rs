@@ -29,6 +29,7 @@ use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
 use ::timely::dataflow::operators::generic::Session;
 use ::timely::dataflow::operators::{Capability, CapabilityTrait, InputCapability, Operator};
+use ::timely::progress::Stamp;
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use ::timely::{Container, ContainerBuilder};
@@ -38,7 +39,7 @@ use mz_expr::{MirScalarExpr, permutation_for_arrangement};
 use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::operator::consolidate_pact;
+use mz_timely_util::operator::{BatcherNew, consolidate_pact};
 
 use crate::logging::compute::Logger as ComputeLogger;
 use crate::typedefs::RowRowAgent;
@@ -95,7 +96,9 @@ where
 {
     /// Publishes a batch of logged events.
     fn publish_batch(&mut self, data: C) {
-        self.event_pusher.push(Event::Messages(self.time_ms, data));
+        // One capability per logged batch: the stamp is a singleton.
+        self.event_pusher
+            .push(Event::Messages(Stamp::from_elem(self.time_ms), data));
     }
 
     /// Indicate progress up to `time`, advances the capability.
@@ -294,26 +297,25 @@ struct LogCollection {
 /// the updates into `(Row, Row)` pairs using the provided logic function. It is crucial that the
 /// data is not exchanged between workers, as the consolidation would not function as desired
 /// otherwise.
-pub(super) fn consolidate_and_pack<'scope, Chu, B, CB, L, F, C>(
+pub(super) fn consolidate_and_pack<'scope, B, CB, L, F, C, Ch>(
     input: Stream<'scope, Timestamp, C>,
     log: L,
     mut logic: F,
 ) -> Stream<'scope, Timestamp, CB::Container>
 where
-    B: Batcher<Time = Timestamp> + 'static,
-    Chu: ContainerBuilder<Container = B::Output> + for<'a> PushInto<&'a mut C> + 'static,
+    B: Batcher<C, Time = Timestamp, Output = Vec<Ch>> + BatcherNew + 'static,
     C: Container + Clone + 'static,
-    B::Output: Clone,
+    Ch: Clone + 'static,
     CB: ContainerBuilder,
     L: Into<LogVariant>,
-    F: FnMut(B::Output, &mut PermutedRowPacker, &mut OutputSession<CB>) + 'static,
+    F: FnMut(Ch, &mut PermutedRowPacker, &mut OutputSession<CB>) + 'static,
 {
     let log = log.into();
     // TODO: Use something other than the debug representation of the log variant as a name.
     let c_name = &format!("Consolidate {log:?}");
     let u_name = &format!("ToRow {log:?}");
     let mut packer = PermutedRowPacker::new(log);
-    let consolidated = consolidate_pact::<Chu, B, _, _>(input, Pipeline, c_name);
+    let consolidated = consolidate_pact::<B, _, _>(input, Pipeline, c_name, B::new_batcher);
     consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
         move |input, output| {
             input.for_each_time(|time, data| {

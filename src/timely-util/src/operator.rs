@@ -15,14 +15,16 @@
 
 //! Common operator transformations on timely streams and differential collections.
 
-use std::hash::{BuildHasher, Hash, Hasher};
-
 use columnation::Columnation;
+use differential_dataflow::batcher::Batcher;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Batcher;
+use differential_dataflow::logging::BatcherEvent;
+use differential_dataflow::logging::Logger;
+use differential_dataflow::trace::implementations::merge_batcher::Merger;
 use differential_dataflow::{AsCollection, Collection, Hashable, VecCollection};
+use std::hash::{BuildHasher, Hash, Hasher};
 use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Capability;
@@ -34,11 +36,12 @@ use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputBuilder, OutputBuilderSession,
 };
 use timely::dataflow::{Scope, Stream, StreamVec};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, ContainerBuilder, PartialOrder};
 
-use crate::columnation::{ColumnationChunker, ColumnationStack};
+use crate::columnation::ColumnationStack;
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<'scope, T, C1>
@@ -198,7 +201,12 @@ where
         D1: differential_dataflow::ExchangeData + Hash + Columnation,
         R: Semigroup + differential_dataflow::ExchangeData + Columnation,
         T: Lattice + Columnation,
-        Ba: Batcher<Time = T, Output = ColumnationStack<((D1, ()), T, R)>> + 'static;
+        Ba: Batcher<
+                Vec<((D1, ()), T, R)>,
+                Time = T,
+                Output = Vec<ColumnationStack<((D1, ()), T, R)>>,
+            > + 'static,
+        Ba: BatcherNew;
 
     /// Consolidates the collection.
     fn consolidate_named<Ba>(self, name: &str) -> Self
@@ -206,7 +214,12 @@ where
         D1: differential_dataflow::ExchangeData + Hash + Columnation,
         R: Semigroup + differential_dataflow::ExchangeData + Columnation,
         T: Lattice + Columnation,
-        Ba: Batcher<Time = T, Output = ColumnationStack<((D1, ()), T, R)>> + 'static;
+        Ba: Batcher<
+                Vec<((D1, ()), T, R)>,
+                Time = T,
+                Output = Vec<ColumnationStack<((D1, ()), T, R)>>,
+            > + 'static,
+        Ba: BatcherNew;
 }
 
 impl<'scope, T, C1> StreamExt<'scope, T, C1> for Stream<'scope, T, C1>
@@ -451,7 +464,12 @@ where
         D1: differential_dataflow::ExchangeData + Hash + Columnation,
         R: Semigroup + differential_dataflow::ExchangeData + Columnation,
         T: Lattice + Ord + Columnation,
-        Ba: Batcher<Time = T, Output = ColumnationStack<((D1, ()), T, R)>> + 'static,
+        Ba: Batcher<
+                Vec<((D1, ()), T, R)>,
+                Time = T,
+                Output = Vec<ColumnationStack<((D1, ()), T, R)>>,
+            > + 'static,
+        Ba: BatcherNew,
     {
         if must_consolidate {
             // We employ AHash below instead of the default hasher in DD to obtain
@@ -473,10 +491,11 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
-            consolidate_pact::<ColumnationChunker<((D1, ()), T, R)>, Ba, _, _>(
+            consolidate_pact::<Ba, _, _>(
                 self.map(|k| (k, ())).inner,
                 exchange,
                 name,
+                Ba::new_batcher,
             )
             .unary(Pipeline, "unpack consolidated", |_, _| {
                 |input, output| {
@@ -500,26 +519,28 @@ where
         D1: differential_dataflow::ExchangeData + Hash + Columnation,
         R: Semigroup + differential_dataflow::ExchangeData + Columnation,
         T: Lattice + Ord + Columnation,
-        Ba: Batcher<Time = T, Output = ColumnationStack<((D1, ()), T, R)>> + 'static,
+        Ba: Batcher<
+                Vec<((D1, ()), T, R)>,
+                Time = T,
+                Output = Vec<ColumnationStack<((D1, ()), T, R)>>,
+            > + 'static,
+        Ba: BatcherNew,
     {
         let exchange = Exchange::new(move |update: &((D1, ()), T, R)| (update.0).0.hashed());
 
-        consolidate_pact::<ColumnationChunker<((D1, ()), T, R)>, Ba, _, _>(
-            self.map(|k| (k, ())).inner,
-            exchange,
-            name,
-        )
-        .unary(Pipeline, &format!("Unpack {name}"), |_, _| {
-            |input, output| {
-                input.for_each(|time, data| {
-                    let mut session = output.session(&time);
-                    for ((k, ()), t, d) in data.iter().flatten().flat_map(|chunk| chunk.iter()) {
-                        session.give((k.clone(), t.clone(), d.clone()))
-                    }
-                })
-            }
-        })
-        .as_collection()
+        consolidate_pact::<Ba, _, _>(self.map(|k| (k, ())).inner, exchange, name, Ba::new_batcher)
+            .unary(Pipeline, &format!("Unpack {name}"), |_, _| {
+                |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session(&time);
+                        for ((k, ()), t, d) in data.iter().flatten().flat_map(|chunk| chunk.iter())
+                        {
+                            session.give((k.clone(), t.clone(), d.clone()))
+                        }
+                    })
+                }
+            })
+            .as_collection()
     }
 }
 
@@ -529,16 +550,17 @@ where
 /// data is sorted according to `Ba`. For each timestamp, it produces at most one chain.
 ///
 /// The data are accumulated in place, each held back until their timestamp has completed.
-pub fn consolidate_pact<'scope, Chu, Ba, C, P>(
+pub fn consolidate_pact<'scope, Ba, C, P>(
     stream: Stream<'scope, Ba::Time, C>,
     pact: P,
     name: &str,
-) -> StreamVec<'scope, Ba::Time, Vec<Ba::Output>>
+    batcher: impl FnOnce(Option<Logger>, usize) -> Ba + 'static,
+) -> StreamVec<'scope, Ba::Time, Ba::Output>
 where
-    Ba: Batcher + 'static,
-    Chu: ContainerBuilder<Container = Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
+    Ba: Batcher<C> + 'static,
+    Ba::Time: Timestamp,
     C: Container + Clone + 'static,
-    Ba::Output: Clone,
+    Ba::Output: Default + Clone + 'static,
     P: ParallelizationContract<Ba::Time, C>,
 {
     let logger = stream
@@ -546,33 +568,26 @@ where
         .worker()
         .logger_for("differential/arrange")
         .map(Into::into);
-    stream.unary_frontier(pact, name, |_cap, info| {
-        // Acquire a logger for arrange events.
-
-        let mut batcher = Ba::new(logger, info.global_id);
-        // The chunker consolidates raw input containers into the chunks the
-        // batcher consumes.
-        let mut chunker = Chu::default();
+    stream.unary_frontier(pact, name, move |_cap, info| {
+        let mut batcher = batcher(logger, info.global_id);
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<Ba::Time>>::new();
         let mut prev_frontier = Antichain::from_elem(Ba::Time::minimum());
+        // `extract` reports the batcher's retained lower bound borrowed from the batcher
+        // itself, so it must be copied out before the next call reborrows the batcher.
+        let mut batcher_frontier = Antichain::<Ba::Time>::new();
 
         move |(input, frontier), output| {
             input.for_each(|cap, data| {
-                capabilities.insert(cap.retain(0));
-                chunker.push_into(data);
-                while let Some(chunk) = chunker.extract() {
-                    batcher.push_into(std::mem::take(chunk));
+                // A message's stamp need not be a singleton, so retain the whole set rather
+                // than asking for the one time `retain` would insist on.
+                for capability in cap.retain_stamp(0).iter() {
+                    capabilities.insert(capability.clone());
                 }
+                batcher.insert(data);
             });
 
             if prev_frontier.borrow() != frontier.frontier() {
-                // Flush any data the chunker is still accumulating into the
-                // batcher before we seal.
-                while let Some(chunk) = chunker.finish() {
-                    batcher.push_into(std::mem::take(chunk));
-                }
-
                 if capabilities
                     .elements()
                     .iter()
@@ -594,11 +609,14 @@ where
                                 upper.insert(other_capability.time().clone());
                             }
 
+                            // Extract updates not in advance of `upper`.
+                            let (chain, retained) = batcher.extract(upper.borrow());
+                            batcher_frontier.clear();
+                            batcher_frontier.extend(retained.iter().cloned());
+
                             // send the batch to downstream consumers, empty or not.
                             let mut session = output.session(&capabilities.elements()[index]);
-                            // Extract updates not in advance of `upper`.
-                            let (chain, _description) = batcher.seal(upper.clone());
-                            session.give(chain);
+                            session.give(chain.unwrap_or_default());
                         }
                     }
 
@@ -608,7 +626,7 @@ where
                     // in messages with new capabilities.
 
                     let mut new_capabilities = Antichain::new();
-                    for time in batcher.frontier().iter() {
+                    for time in batcher_frontier.iter() {
                         if let Some(capability) = capabilities
                             .elements()
                             .iter()
@@ -628,6 +646,203 @@ where
             }
         }
     })
+}
+
+/// Accumulates updates into sorted, consolidated chains, and releases what a frontier unblocks.
+///
+/// This is the [`Batcher`] a consolidation wants. Differential's own `MergeBatcher` seals each
+/// extracted chain into a trace batch, which a caller that only needs the updates consolidated
+/// would immediately have to take apart again; this one hands the chain over as it is.
+///
+/// `Chu` melds raw input containers into sorted, consolidated chunks, and `M` merges those
+/// chunks and splits them by time. The batcher's own work is the geometric ladder of chains
+/// and the carve-by-frontier, mirroring `MergeBatcher`'s.
+pub struct ConsolidatingBatcher<Chu, M: Merger> {
+    /// Melds input containers into sorted, consolidated chunks.
+    chunker: Chu,
+    /// Sorted, consolidated chains, each paired with its cached summed update count.
+    ///
+    /// The cached count is the chain's merge weight. A chain is immutable until merged, so
+    /// the weight is computed once, at push. Go through [`Self::chain_push`] and
+    /// [`Self::chain_pop`] rather than touching this directly, or the accounting drifts.
+    chains: Vec<(usize, Vec<M::Chunk>)>,
+    /// Stash of empty chunks, recycled through the merging process.
+    stash: Vec<M::Chunk>,
+    /// Merges consolidated chunks, and splits a chain at a frontier.
+    merger: M,
+    /// The lower-bound frontier of the data retained after the last extract.
+    frontier: Antichain<M::Time>,
+    /// Logger for size accounting.
+    logger: Option<Logger>,
+    /// Timely operator ID, which the accounting is attributed to.
+    operator_id: usize,
+}
+
+impl<Chu: Default, M: Merger<Time: Timestamp>> ConsolidatingBatcher<Chu, M> {
+    /// Allocates a new empty batcher.
+    pub fn new(logger: Option<Logger>, operator_id: usize) -> Self {
+        Self {
+            chunker: Chu::default(),
+            chains: Vec::new(),
+            stash: Vec::new(),
+            merger: M::default(),
+            frontier: Antichain::new(),
+            logger,
+            operator_id,
+        }
+    }
+}
+
+impl<C, Chu, M> Batcher<C> for ConsolidatingBatcher<Chu, M>
+where
+    M: Merger<Time: Timestamp>,
+    Chu: ContainerBuilder<Container = M::Chunk> + for<'a> PushInto<&'a mut C>,
+{
+    type Time = M::Time;
+    type Output = Vec<M::Chunk>;
+
+    fn insert(&mut self, container: &mut C) {
+        self.chunker.push_into(container);
+        while let Some(chunk) = self.chunker.extract().map(std::mem::take) {
+            self.insert_chain(vec![chunk]);
+        }
+    }
+
+    fn extract<'a>(
+        &'a mut self,
+        upper: AntichainRef<'_, M::Time>,
+    ) -> (Option<Self::Output>, AntichainRef<'a, M::Time>) {
+        // Flush whatever the chunker is still accumulating: a partial final chunk would
+        // otherwise never reach the merge ladder.
+        while let Some(chunk) = self.chunker.finish().map(std::mem::take) {
+            self.insert_chain(vec![chunk]);
+        }
+
+        while self.chains.len() > 1 {
+            let list1 = self.chain_pop().unwrap();
+            let list2 = self.chain_pop().unwrap();
+            let merged = self.merge_by(list1, list2);
+            self.chain_push(merged);
+        }
+        let merged = self.chain_pop().unwrap_or_default();
+
+        let mut kept = Vec::new();
+        let mut readied = Vec::new();
+        self.frontier.clear();
+        self.merger.extract(
+            merged,
+            upper,
+            &mut self.frontier,
+            &mut readied,
+            &mut kept,
+            &mut self.stash,
+        );
+
+        if !kept.is_empty() {
+            self.chain_push(kept);
+        }
+        self.stash.clear();
+
+        let readied = (!readied.is_empty()).then_some(readied);
+        (readied, self.frontier.borrow())
+    }
+}
+
+impl<Chu, M: Merger> ConsolidatingBatcher<Chu, M> {
+    /// Insert one already sorted and consolidated chunk, bypassing the chunker.
+    ///
+    /// The ladder assumes each chunk it holds is sorted and consolidated, so a caller that
+    /// prepared the chunk itself uses this; everything else goes through [`Batcher::insert`].
+    pub fn push_chunk(&mut self, chunk: M::Chunk) {
+        self.insert_chain(vec![chunk]);
+    }
+
+    /// Insert a chain and restore the ladder: chains are geometrically sized by summed
+    /// updates and ordered by decreasing weight.
+    fn insert_chain(&mut self, chain: Vec<M::Chunk>) {
+        if !chain.is_empty() {
+            self.chain_push(chain);
+            while self.chains.len() > 1
+                && (self.chains[self.chains.len() - 1].0
+                    >= self.chains[self.chains.len() - 2].0 / 2)
+            {
+                let list1 = self.chain_pop().unwrap();
+                let list2 = self.chain_pop().unwrap();
+                let merged = self.merge_by(list1, list2);
+                self.chain_push(merged);
+            }
+        }
+    }
+
+    fn merge_by(&mut self, list1: Vec<M::Chunk>, list2: Vec<M::Chunk>) -> Vec<M::Chunk> {
+        let mut output = Vec::with_capacity(list1.len() + list2.len());
+        self.merger
+            .merge(list1, list2, &mut output, &mut self.stash);
+        output
+    }
+
+    fn chain_pop(&mut self) -> Option<Vec<M::Chunk>> {
+        let (_weight, chain) = self.chains.pop()?;
+        self.account(chain.iter().map(Self::record), -1);
+        Some(chain)
+    }
+
+    fn chain_push(&mut self, chain: Vec<M::Chunk>) {
+        let weight = chain.iter().map(M::len).sum();
+        self.account(chain.iter().map(Self::record), 1);
+        self.chains.push((weight, chain));
+    }
+
+    fn record(chunk: &M::Chunk) -> (usize, usize, usize, usize) {
+        let (size, capacity, allocations) = M::allocation(chunk);
+        (M::len(chunk), size, capacity, allocations)
+    }
+
+    /// Report a signed change in the resident chains, if a logger is attached.
+    fn account<I: IntoIterator<Item = (usize, usize, usize, usize)>>(&self, items: I, diff: isize) {
+        let Some(logger) = &self.logger else {
+            return;
+        };
+        let (mut records, mut size, mut capacity, mut allocations) =
+            (0isize, 0isize, 0isize, 0isize);
+        for (records_, size_, capacity_, allocations_) in items {
+            records = records.saturating_add_unsigned(records_);
+            size = size.saturating_add_unsigned(size_);
+            capacity = capacity.saturating_add_unsigned(capacity_);
+            allocations = allocations.saturating_add_unsigned(allocations_);
+        }
+        logger.log(BatcherEvent {
+            operator: self.operator_id,
+            records_diff: records.saturating_mul(diff),
+            size_diff: size.saturating_mul(diff),
+            capacity_diff: capacity.saturating_mul(diff),
+            allocations_diff: allocations.saturating_mul(diff),
+        });
+    }
+}
+
+impl<Chu, M: Merger> Drop for ConsolidatingBatcher<Chu, M> {
+    fn drop(&mut self) {
+        // Retract the accounting for whatever is still resident, so the per-operator
+        // counters end at zero.
+        while self.chain_pop().is_some() {}
+    }
+}
+
+/// A batcher with differential's constructor shape, for generic code that must build one.
+///
+/// [`Batcher`] itself has no constructor: differential's operators take one as an `FnOnce`
+/// argument, which callers can supply because they name the batcher type. A generic caller
+/// that does not, such as [`CollectionExt::consolidate_named`], needs this instead.
+pub trait BatcherNew {
+    /// Allocates an empty batcher, reporting its footprint against `operator_id`.
+    fn new_batcher(logger: Option<Logger>, operator_id: usize) -> Self;
+}
+
+impl<Chu: Default, M: Merger<Time: Timestamp>> BatcherNew for ConsolidatingBatcher<Chu, M> {
+    fn new_batcher(logger: Option<Logger>, operator_id: usize) -> Self {
+        Self::new(logger, operator_id)
+    }
 }
 
 /// Merge the contents of multiple streams and combine the containers using a container builder.

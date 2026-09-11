@@ -10,23 +10,23 @@
 //! Tests of the inline index-peek driver, and the fixtures a peek scan is tested over.
 
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::{Batcher, Builder, Trace};
+use differential_dataflow::trace::{Batcher, Trace};
+use differential_dataflow::trace::{Description, Span};
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, RelationDesc, SqlScalarType};
-use mz_row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
-use mz_timely_util::columnation::ColumnationStack;
-use timely::container::PushInto;
+use mz_row_spine::{RowRowBatcher, RowRowSpine};
+use mz_timely_util::columnation::ColumnationChunker;
 use timely::dataflow::operators::generic::OperatorInfo;
-
-use crate::metrics::ComputeMetrics;
-use crate::server::ComputeRuntimeRole;
-use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent};
+use timely::progress::Stamp;
 
 use super::error_scan::tests::{
     ErrorUpdates, PEEK_TIMESTAMP, cancelling, error, error_batch, holding,
 };
 use super::*;
+use crate::metrics::ComputeMetrics;
+use crate::server::ComputeRuntimeRole;
+use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent};
 
 /// The collection the peeks in these tests read.
 pub(crate) const TARGET_ID: GlobalId = GlobalId::User(1);
@@ -50,13 +50,23 @@ const STASH_EVERYTHING: StashBounds = StashBounds {
 /// The writer is dropped here, which seals the trace to the empty frontier. That is what lets
 /// `TraceReader::cursor` hand out a cursor covering every batch, which is the only way a peek
 /// reads a trace.
-fn agent<Tr>(batch: Tr::Batch) -> TraceAgent<Tr>
+fn agent<Tr>(batch: Option<Tr::Batch>) -> TraceAgent<Tr>
 where
     Tr: Trace<Time = Timestamp> + 'static,
 {
     let info = OperatorInfo::new(0, 0, [].into());
     let (agent, mut writer) = TraceAgent::new(Tr::new(info.clone(), None, None), info, None);
-    writer.insert(batch, Some(Timestamp::MIN));
+    writer.insert(
+        Span::new(
+            Description::new(
+                Antichain::from_elem(Timestamp::MIN),
+                Antichain::from_elem(Timestamp::MAX),
+                Antichain::from_elem(Timestamp::MIN),
+            ),
+            batch,
+        ),
+        Stamp::from_elem(Timestamp::MIN),
+    );
     agent
 }
 
@@ -76,14 +86,13 @@ pub(crate) fn trivial_finishing() -> RowSetFinishing {
 /// The ok trace of an index holding one update per key in `keys`, all at [`Timestamp::MIN`] so
 /// that every one of them is visible at [`PEEK_TIMESTAMP`]. The values are empty.
 fn oks_trace(keys: &[Row]) -> RowRowAgent<Timestamp, Diff> {
-    let mut chunk = ColumnationStack::with_capacity(keys.len());
-    for key in keys {
-        chunk.push_into(((key.clone(), Row::default()), Timestamp::MIN, Diff::ONE));
-    }
-    let mut batcher = RowRowBatcher::<Timestamp, Diff>::new(None, 0);
-    batcher.push_into(chunk);
-    let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
-    let batch = RowRowBuilder::<Timestamp, Diff>::seal(&mut chain, description);
+    let mut updates: Vec<_> = keys
+        .iter()
+        .map(|key| ((key.clone(), Row::default()), Timestamp::MIN, Diff::ONE))
+        .collect();
+    let mut batcher = RowRowBatcher::<Timestamp, Diff, ColumnationChunker<_>>::new(None, 0);
+    batcher.insert(&mut updates);
+    let (batch, _frontier) = batcher.extract(Antichain::from_elem(Timestamp::MAX).borrow());
     agent::<RowRowSpine<Timestamp, Diff>>(batch)
 }
 

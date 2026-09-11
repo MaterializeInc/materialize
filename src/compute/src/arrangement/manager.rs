@@ -9,16 +9,15 @@
 
 //! Management of arrangements across dataflows.
 
+use differential_dataflow::lattice::antichain_join;
+use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
+use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
+use differential_dataflow::trace::{Span, TraceReader};
+use mz_repr::{Diff, GlobalId, Timestamp};
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
-
-use differential_dataflow::lattice::antichain_join;
-use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
-use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
@@ -165,6 +164,13 @@ where
     type Time = Tr::Time;
     type Batch = Tr::Batch;
 
+    fn spans_through(
+        &mut self,
+        upper: AntichainRef<Self::Time>,
+    ) -> Option<Vec<Span<Self::Time, Self::Batch>>> {
+        self.trace.spans_through(upper)
+    }
+
     fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
         self.trace.batches_through(upper)
     }
@@ -204,8 +210,8 @@ where
         self.trace.get_physical_compaction()
     }
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
-        self.trace.map_batches(f)
+    fn map_spans<F: FnMut(&Span<Self::Time, Self::Batch>)>(&self, f: F) {
+        self.trace.map_spans(f)
     }
 }
 

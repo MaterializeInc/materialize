@@ -503,6 +503,10 @@ where
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
+                // A message carries more than one capability only under a partially ordered
+                // timestamp or across a scope boundary. This input is a totally ordered root-scope
+                // stream, so its stamp is a singleton.
+                #[allow(clippy::disallowed_methods)]
                 let capability = time.retain(0);
                 for fetched_blob in data.drain(..) {
                     pending_work.push_back(PendingWork {

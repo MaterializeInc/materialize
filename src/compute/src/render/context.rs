@@ -10,13 +10,11 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
 use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -31,17 +29,21 @@ use mz_expr::{Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
+use mz_row_spine::{DatumSeq, RowRowBuilder, RowRowColPagedBuilder};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::columnar::{
     Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
 };
 use mz_timely_util::columnation::ColumnationChunker;
+use std::collections::BTreeMap;
+use std::rc::Rc;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::{Scope, Stream};
@@ -53,11 +55,10 @@ use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, M
 use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::CollectionEdge;
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
-use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
+use crate::render::{MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
-use mz_row_spine::{DatumSeq, RowRowBuilder, RowRowColPagedBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -90,7 +91,6 @@ pub struct Context<'scope, T: RenderTimestamp> {
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
-    pub(super) linear_join_spec: LinearJoinSpec,
     /// The expiration time for dataflows in this context. The output's frontier should never advance
     /// past this frontier, except the empty frontier.
     pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
@@ -134,7 +134,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             until,
             bindings: BTreeMap::new(),
             compute_logger,
-            linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
             config_set: Rc::clone(&compute_state.worker_config),
         }
@@ -208,7 +207,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             as_of_frontier: self.as_of_frontier.clone(),
             until: self.until.clone(),
             compute_logger: self.compute_logger.clone(),
-            linear_join_spec: self.linear_join_spec.clone(),
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
             config_set: Rc::clone(&self.config_set),
@@ -467,10 +465,10 @@ pub(crate) fn distinct_errs_collection<'a, T: RenderTimestamp>(
     errs: VecCollection<'a, T, DataflowErrorSer, Diff>,
 ) -> VecCollection<'a, T, DataflowErrorSer, Diff> {
     let errs: KeyCollection<_, _, _> = errs.into();
-    let errs = errs
-        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
-            "Arrange errors",
-        );
+    let errs = errs.mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, ErrSpine<_, _>>(
+        "Arrange errors",
+        MergeBatcher::new,
+    );
     distinct_arranged_errs(errs, "Distinct errors").as_collection(|err, _| err.clone())
 }
 
@@ -810,9 +808,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 input.for_each(|time, data| {
                     // Retain a capability for each output, as the work may complete across
                     // multiple activations.
-                    let ok_cap = time.retain(0);
-                    let err_cap = time.retain(1);
-                    for batch in data.iter() {
+                    let ok_cap = time.retain_stamp(0);
+                    let err_cap = time.retain_stamp(1);
+                    for span in data.iter() {
+                        let Some(batch) = &span.inner else {
+                            continue;
+                        };
                         todo.push_back(PendingWork::new(
                             ok_cap.clone(),
                             err_cap.clone(),
@@ -919,8 +920,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 let mut ok_output = ok_output.activate();
 
                 input.for_each(|time, data| {
-                    let cap = time.retain(0);
-                    for batch in data.iter() {
+                    let cap = time.retain_stamp(0);
+                    for span in data.iter() {
+                        let Some(batch) = &span.inner else {
+                            continue;
+                        };
                         todo.push_back(PendingWorkOk::new(
                             cap.clone(),
                             batch.cursor(),
@@ -1180,14 +1184,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((CollectionEdge::Vec(passthrough), errs));
-                let errs =
-                    errs_concat.mz_arrange::<
-                        ColumnationChunker<_>,
-                        ErrBatcher<_, _>,
-                        ErrBuilder<_, _>,
-                        ErrSpine<_, _>,
-                    >(
+                let errs = errs_concat
+                    .mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, ErrSpine<_, _>>(
                         &format!("{}-errors", name),
+                        MergeBatcher::new,
                     );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
@@ -1268,27 +1268,35 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let exchange =
             ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
         let oks = match batcher {
-            ArrangementBatcher::ColumnarPaged => ok_stream.mz_arrange_core::<
+            ArrangementBatcher::ColumnarPaged => ok_stream
+                .mz_arrange_core::<_, Col2ValPagedBatcher<
+                    _,
+                    _,
+                    _,
+                    _,
+                    batcher::ColumnChunker<_>,
+                    RowRowColPagedBuilder<_, _>,
+                >, RowRowSpine<_, _>>(exchange, name, ColumnMergeBatcher::new),
+            ArrangementBatcher::Columnar => {
+                ok_stream.mz_arrange_core::<_, Col2ValColBatcher<
+                    _,
+                    _,
+                    _,
+                    _,
+                    batcher::ColumnChunker<_>,
+                    RowRowColPagedBuilder<_, _>,
+                >, RowRowSpine<_, _>>(exchange, name, MergeBatcher::new)
+            }
+            ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<_, Col2ValBatcher<
                 _,
-                batcher::ColumnChunker<_>,
-                Col2ValPagedBatcher<_, _, _, _>,
-                RowRowColPagedBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
-            ArrangementBatcher::Columnar => ok_stream.mz_arrange_core::<
                 _,
-                batcher::ColumnChunker<_>,
-                Col2ValColBatcher<_, _, _, _>,
-                RowRowColPagedBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
-            ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<
+                _,
                 _,
                 batcher::Chunker<_>,
-                Col2ValBatcher<_, _, _, _>,
                 RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(exchange, name),
+            >, RowRowSpine<_, _>>(
+                exchange, name, MergeBatcher::new
+            ),
         };
         (
             oks,
@@ -1301,8 +1309,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 /// Type alias for a timely output `Session` whose capability is a `Capability<T>`. The container
 /// builder `CB` is left to the caller; sessions can therefore drive consolidating, capacity, or
 /// (in the future) columnar output builders without changing call sites.
+/// A session over one output of an arrangement-reading operator.
+///
+/// The capability is a whole [`CapabilitySet`]: a batch message's stamp carries every capability
+/// the arrange operator retired with it, and need not be a singleton.
 pub(crate) type Session<'a, 'b, T, CB> =
-    timely::dataflow::operators::generic::Session<'a, 'b, T, CB, Capability<T>>;
+    timely::dataflow::operators::generic::Session<'a, 'b, T, CB, CapabilitySet<T>>;
 
 /// Container builder used for the err output of every flat_map variant. Pre-refactor the
 /// merged Ok/Err stream flowed through a [`ConsolidatingContainerBuilder`] before the
@@ -1319,10 +1331,10 @@ struct PendingWork<C>
 where
     C: Cursor,
 {
-    /// Capability for the `ok` output (output port 0).
-    ok_capability: Capability<C::Time>,
-    /// Capability for the `err` output (output port 1).
-    err_capability: Capability<C::Time>,
+    /// Capabilities for the `ok` output (output port 0), one per element of the batch's stamp.
+    ok_capability: CapabilitySet<C::Time>,
+    /// Capabilities for the `err` output (output port 1), one per element of the batch's stamp.
+    err_capability: CapabilitySet<C::Time>,
     cursor: C,
     batch: C::Storage,
 }
@@ -1334,8 +1346,8 @@ where
     /// Create a new bundle of pending work, from a pair of capabilities (one per output),
     /// a cursor, and backing storage.
     fn new(
-        ok_capability: Capability<C::Time>,
-        err_capability: Capability<C::Time>,
+        ok_capability: CapabilitySet<C::Time>,
+        err_capability: CapabilitySet<C::Time>,
         cursor: C,
         batch: C::Storage,
     ) -> Self {
@@ -1381,7 +1393,7 @@ struct PendingWorkOk<C>
 where
     C: Cursor,
 {
-    capability: Capability<C::Time>,
+    capability: CapabilitySet<C::Time>,
     cursor: C,
     batch: C::Storage,
 }
@@ -1390,7 +1402,7 @@ impl<C> PendingWorkOk<C>
 where
     C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
 {
-    fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {
+    fn new(capability: CapabilitySet<C::Time>, cursor: C, batch: C::Storage) -> Self {
         Self {
             capability,
             cursor,

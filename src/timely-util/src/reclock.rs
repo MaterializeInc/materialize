@@ -170,16 +170,15 @@
 //! 11. Q.E.D
 //!     * _Proof: By <1>5 and <1>10_
 
-use std::cmp::{Ordering, Reverse};
-use std::collections::VecDeque;
-use std::collections::binary_heap::{BinaryHeap, PeekMut};
-use std::iter::FromIterator;
-
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolidation};
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
+use std::cmp::{Ordering, Reverse};
+use std::collections::VecDeque;
+use std::collections::binary_heap::{BinaryHeap, PeekMut};
+use std::iter::FromIterator;
 use timely::communication::{Pull, Push};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::CapabilitySet;
@@ -608,8 +607,8 @@ mod test {
     use timely::dataflow::operators::vec::UnorderedInput;
     use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
     use timely::dataflow::operators::{ActivateCapability, Capture};
-    use timely::progress::PathSummary;
     use timely::progress::timestamp::Refines;
+    use timely::progress::{PathSummary, Stamp};
     use timely::worker::Worker;
 
     use crate::capture::PusherCapture;
@@ -751,7 +750,7 @@ mod test {
                 assert_eq!(
                     reclocked.try_recv(),
                     Ok(Event::Messages(
-                        0u64,
+                        Stamp::from_elem(0u64),
                         vec![
                             (1, 1000, Diff::ONE),
                             (1, 1000, Diff::ONE),
@@ -776,7 +775,7 @@ mod test {
                 assert_eq!(
                     reclocked.try_recv(),
                     Ok(Event::Messages(
-                        1000u64,
+                        Stamp::from_elem(1000u64),
                         vec![(3, 1000, Diff::ONE), (3, 1000, Diff::ONE)]
                     ))
                 );
@@ -899,7 +898,7 @@ mod test {
                 assert_eq!(
                     reclocked.try_recv(),
                     Ok(Event::Messages(
-                        0,
+                        Stamp::from_elem(0),
                         vec![(1, 1000, Diff::ONE), (2, 1000, Diff::ONE)]
                     ))
                 );
@@ -930,7 +929,7 @@ mod test {
                 assert_eq!(
                     reclocked.try_recv(),
                     Ok(Event::Messages(
-                        1001,
+                        Stamp::from_elem(1001),
                         vec![
                             (3, 2000, Diff::ONE),
                             (3, 2000, Diff::ONE),
@@ -992,7 +991,10 @@ mod test {
                 step(worker);
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Messages(0, vec![(50, 3000, Diff::ONE),]))
+                    Ok(Event::Messages(
+                        Stamp::from_elem(0),
+                        vec![(50, 3000, Diff::ONE),]
+                    ))
                 );
                 assert_eq!(
                     reclocked.try_recv(),

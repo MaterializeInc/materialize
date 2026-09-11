@@ -7,18 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-use std::iter;
-use std::sync::LazyLock;
-
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
+use differential_dataflow::trace::{Cursor, Navigable};
 use itertools::EitherOrBoth;
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
 use mz_repr::{
     CatalogItemId, ColumnName, Datum, Diff, Row, RowPacker, SqlColumnType, SqlScalarType,
 };
+use std::collections::BTreeMap;
+use std::iter;
+use std::sync::LazyLock;
 use timely::progress::Antichain;
 
 use crate::avro::DiffPair;
@@ -29,7 +28,7 @@ use crate::avro::DiffPair;
 /// Thin wrapper around `iter_diff_pairs`.
 pub fn for_each_diff_pair<B, C, F>(batch: &B, mut on_diff_pair: F)
 where
-    B: BatchReader<Time = C::Time> + Navigable<Cursor = C>,
+    B: Navigable<Cursor = C>,
     C: Cursor<Storage = B, Diff = Diff>,
     C::Time: Copy,
     C::ValOwn: 'static,
@@ -52,7 +51,7 @@ pub async fn for_each_diff_pair_async<B, C, F, E>(
     mut on_diff_pair: F,
 ) -> Result<(), E>
 where
-    B: BatchReader<Time = C::Time> + Navigable<Cursor = C>,
+    B: Navigable<Cursor = C>,
     C: Cursor<Storage = B, Diff = Diff>,
     C::Time: Copy,
     C::ValOwn: 'static,
@@ -98,7 +97,7 @@ pub fn iter_diff_pairs<B, C>(
     ),
 >
 where
-    B: BatchReader<Time = C::Time> + Navigable<Cursor = C>,
+    B: Navigable<Cursor = C>,
     C: Cursor<Storage = B, Diff = Diff>,
     C::Time: Copy,
     C::ValOwn: 'static,
@@ -221,10 +220,10 @@ pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {
 mod tests {
     use std::cell::Cell;
 
-    use differential_dataflow::trace::implementations::chunker::ContainerChunker;
+    use differential_dataflow::batcher::Batcher;
+    use differential_dataflow::trace::Builder;
     use differential_dataflow::trace::implementations::{ValBatcher, ValBuilder};
-    use differential_dataflow::trace::{Batcher, Builder};
-    use timely::container::{ContainerBuilder, PushInto};
+
     use timely::progress::Antichain;
 
     use super::*;
@@ -235,19 +234,14 @@ mod tests {
         mut tuples: Vec<((String, V), u64, Diff)>,
         upper: u64,
     ) -> <ValBuilder<String, V, u64, Diff> as Builder>::Output {
-        // The batcher consumes already-chunked input via `PushInto`; chunking
-        // is the caller's responsibility.
         let mut batcher = ValBatcher::<String, V, u64, Diff>::new(None, 0);
-        let mut chunker = ContainerChunker::<Vec<((String, V), u64, Diff)>>::default();
-        chunker.push_into(&mut tuples);
-        while let Some(chunk) = chunker.extract() {
-            batcher.push_into(std::mem::take(chunk));
-        }
-        while let Some(chunk) = chunker.finish() {
-            batcher.push_into(std::mem::take(chunk));
-        }
-        let (mut chain, description) = batcher.seal(Antichain::from_elem(upper));
-        ValBuilder::<String, V, u64, Diff>::seal(&mut chain, description)
+        // `Batcher` is generic in its input container, so name it.
+        Batcher::<Vec<((String, V), u64, Diff)>>::insert(&mut batcher, &mut tuples);
+        let (batch, _frontier) = Batcher::<Vec<((String, V), u64, Diff)>>::extract(
+            &mut batcher,
+            Antichain::from_elem(upper).borrow(),
+        );
+        batch.expect("updates were pushed, so the batch is non-empty")
     }
 
     /// `batch_from_tuples_with` pinned to `String` values, so call sites can
@@ -263,7 +257,7 @@ mod tests {
     /// sorted list for easy assertion.
     fn collect_diff_pairs<B, C>(batch: &B) -> Vec<(String, u64, Option<String>, Option<String>)>
     where
-        B: BatchReader<Time = C::Time> + Navigable<Cursor = C>,
+        B: Navigable<Cursor = C>,
         C: Cursor<Storage = B, Diff = Diff>,
         C::Time: Copy + Into<u64>,
         C::ValOwn: 'static + Into<String>,
@@ -290,7 +284,7 @@ mod tests {
         upper: Option<u64>,
     ) -> Vec<(String, Vec<(u64, Option<String>, Option<String>)>)>
     where
-        B: BatchReader<Time = u64> + Navigable<Cursor = C>,
+        B: Navigable<Cursor = C>,
         C: Cursor<Storage = B, Diff = Diff, Time = u64>,
         C::ValOwn: 'static + Into<String>,
         <C::KeyContainer as BatchContainer>::Owned: Into<String>,

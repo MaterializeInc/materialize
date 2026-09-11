@@ -18,7 +18,7 @@ use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
 
@@ -60,7 +60,12 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                 let mut budget = budget;
 
                 input.for_each(|cap, data| {
-                    queue.push_back((cap.retain(0), cap.retain(1), std::mem::take(data)))
+                    // A message's stamp need not be a singleton, so hold the whole set.
+                    queue.push_back((
+                        cap.retain_stamp(0),
+                        cap.retain_stamp(1),
+                        std::mem::take(data),
+                    ))
                 });
 
                 while let Some((ok_cap, err_cap, data)) = queue.pop_front() {
@@ -143,14 +148,14 @@ fn drain_through_mfp<T>(
         '_,
         T,
         ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>,
-        Capability<T>,
+        CapabilitySet<T>,
     >,
     err_output: &mut Session<
         '_,
         '_,
         T,
         ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>,
-        Capability<T>,
+        CapabilitySet<T>,
     >,
     budget: &mut usize,
 ) where

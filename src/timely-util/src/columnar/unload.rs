@@ -19,9 +19,8 @@
 //! this crate); the method names and signatures match, so call sites survive
 //! a future switch to upstream re-exports unchanged.
 
-use std::cmp::Ordering;
-
 use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
+use std::cmp::Ordering;
 
 /// Look up a sorted set of keys in a chunk, copying the matching updates out
 /// into caller-owned staging.
@@ -173,7 +172,6 @@ mod tests {
 
     use std::collections::VecDeque;
 
-    use differential_dataflow::trace::Description;
     use timely::progress::Antichain;
     use timely::progress::frontier::AntichainRef;
 
@@ -265,12 +263,7 @@ mod tests {
 
     fn batch_of(rows: &[(u64, u64)], cut: usize) -> ChunkBatch<Rows> {
         let chunks: Vec<Rows> = rows.chunks(cut).map(|c| Rows(c.to_vec())).collect();
-        let description = Description::new(
-            Antichain::from_elem(0u64),
-            Antichain::new(),
-            Antichain::from_elem(0u64),
-        );
-        ChunkBatch::new(chunks, description)
+        ChunkBatch::new(chunks)
     }
 
     /// Every (chunk cut, contiguous probe range) placement over rows with a

@@ -46,7 +46,7 @@ use timely::dataflow::{Scope, Stream, StreamVec};
 use crate::render::RenderTimestamp;
 use crate::render::context::{ECB, Session};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::KeyBatcher;
+use crate::typedefs::ConsolidateBatcher;
 
 /// A columnar collection of `(D, T, R)` updates traveling on a compute
 /// dataflow edge.
@@ -191,8 +191,8 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
                         input.for_each(|time, data| {
                             // Retain the input capability to derive a `Capability` for each output;
                             // the `Session` type alias is fixed to `Capability<T>`.
-                            let ok_cap = time.retain(0);
-                            let err_cap = time.retain(1);
+                            let ok_cap = time.retain_stamp(0);
+                            let err_cap = time.retain_stamp(1);
                             let mut ok_session = ok_output.session_with_builder(&ok_cap);
                             let mut err_session = err_output.session_with_builder(&err_cap);
                             for (v, t, d) in data.drain(..) {
@@ -225,8 +225,8 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
                         input.for_each(|time, data| {
                             // Retain the input capability to derive a `Capability` for each output;
                             // the `Session` type alias is fixed to `Capability<T>`.
-                            let ok_cap = time.retain(0);
-                            let err_cap = time.retain(1);
+                            let ok_cap = time.retain_stamp(0);
+                            let err_cap = time.retain_stamp(1);
                             let mut ok_session = ok_output.session_with_builder(&ok_cap);
                             let mut err_session = err_output.session_with_builder(&err_cap);
                             // Rows are read from the borrowed column, never
@@ -252,14 +252,14 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
     pub fn consolidate_named(self, name: &str) -> Self {
         match self {
             CollectionEdge::Vec(c) => CollectionEdge::Vec(CollectionExt::consolidate_named::<
-                KeyBatcher<_, _, _>,
+                ConsolidateBatcher<_, _, _>,
             >(c, name)),
             CollectionEdge::Columnar(c) => {
                 // TODO: Consolidate natively over columns. The pieces exist
                 // (`columnar_exchange`, the columnar merge batchers), which
                 // would avoid the row round-trip below.
                 let c = columnar_to_vec(c);
-                let c = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(c, name);
+                let c = CollectionExt::consolidate_named::<ConsolidateBatcher<_, _, _>>(c, name);
                 CollectionEdge::Columnar(vec_to_columnar(c))
             }
         }

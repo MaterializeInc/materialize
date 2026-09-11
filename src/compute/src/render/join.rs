@@ -13,6 +13,3 @@
 
 mod delta_join;
 mod linear_join;
-mod mz_join_core;
-
-pub use linear_join::LinearJoinSpec;

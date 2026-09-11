@@ -9,17 +9,16 @@
 
 //! Tests of the fueled walk over a peek's error trace.
 
+use differential_dataflow::batcher::Batcher;
+use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::cursor::CursorList;
-use differential_dataflow::trace::{Batcher, Builder, Navigable};
 use mz_expr::EvalError;
-use mz_timely_util::columnation::ColumnationStack;
-use timely::container::PushInto;
+use mz_timely_util::columnation::ColumnationChunker;
 use timely::progress::Antichain;
 
-use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine};
-
 use super::*;
+use crate::render::errors::DataflowErrorSer;
+use crate::typedefs::{ErrBatcher, ErrSpine};
 
 /// The time at which the peeks in these tests read.
 pub(crate) const PEEK_TIMESTAMP: Timestamp = Timestamp::new(1);
@@ -36,24 +35,24 @@ pub(crate) fn error(index: usize) -> DataflowErrorSer {
 }
 
 /// Builds a single batch holding `updates`, covering `[0, Timestamp::MAX)`.
+///
+/// Absent when `updates` consolidates to nothing, which is how an interval with no updates is
+/// represented.
 pub(crate) fn error_batch(
     updates: ErrorUpdates,
-) -> <ErrSpine<Timestamp, Diff> as TraceReader>::Batch {
-    let mut batcher = ErrBatcher::<Timestamp, Diff>::new(None, 0);
-    let mut chunk = ColumnationStack::with_capacity(updates.len());
-    for update in updates {
-        chunk.push_into(update);
-    }
-    batcher.push_into(chunk);
-    let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
-    ErrBuilder::<Timestamp, Diff>::seal(&mut chain, description)
+) -> Option<<ErrSpine<Timestamp, Diff> as TraceReader>::Batch> {
+    let mut updates: Vec<_> = updates.into_iter().collect();
+    let mut batcher = ErrBatcher::<Timestamp, Diff, ColumnationChunker<_>>::new(None, 0);
+    batcher.insert(&mut updates);
+    let (batch, _frontier) = batcher.extract(Antichain::from_elem(Timestamp::MAX).borrow());
+    batch
 }
 
 /// Builds a walk over a single-batch error trace holding `updates`, bounded by
 /// `row_iteration_limit`.
 pub(crate) fn error_scan(updates: ErrorUpdates, row_iteration_limit: Option<usize>) -> ErrorScan {
-    let storage = vec![error_batch(updates)];
-    let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
+    let storage: Vec<_> = error_batch(updates).into_iter().collect();
+    let cursor = CursorList::new(storage.iter().map(Navigable::cursor).collect(), &storage);
     let mut scan = ErrorScan::from_cursor(cursor, storage);
     scan.set_row_iteration_limit(row_iteration_limit);
     scan

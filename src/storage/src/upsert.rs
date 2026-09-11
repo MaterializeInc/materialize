@@ -781,6 +781,9 @@ where
                     updates.append(data);
                     match capability.as_mut() {
                         Some(capability) => {
+                            // `T: TotalOrder` here, and this stream is not downstream of a
+                            // scope boundary, so the stamp is a singleton.
+                            #[allow(clippy::disallowed_methods)]
                             if cap.time() <= capability.time() {
                                 *capability = cap;
                             }

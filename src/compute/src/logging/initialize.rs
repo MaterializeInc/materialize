@@ -5,14 +5,10 @@
 
 //! Initialization of logging dataflows.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
-
 use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
@@ -23,6 +19,10 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 use timely::ContainerBuilder;
 use timely::container::{ContainerBuilder as _, PushInto};
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
@@ -35,7 +35,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder};
+use crate::typedefs::ErrBatcher;
 
 /// Initialize logging dataflows.
 ///
@@ -197,8 +197,9 @@ impl LoggingContext<'_> {
                 let collection: KeyCollection<_, DataflowErrorSer, Diff> =
                     VecCollection::empty(scope).into();
                 collection
-                    .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                    .mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, _>(
                         "Arrange logging err",
+                        MergeBatcher::new,
                     )
                     .trace
             });

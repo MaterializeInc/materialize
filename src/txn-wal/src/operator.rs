@@ -9,14 +9,6 @@
 
 //! Timely operators for the crate
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::future::Future;
-use std::rc::Rc;
-use std::sync::mpsc::TryRecvError;
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
-
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
@@ -32,7 +24,15 @@ use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::activator::ArcActivator;
 use mz_timely_util::builder_async::{PressOnDropButton, button};
+use std::any::Any;
+use std::fmt::Debug;
+use std::future::Future;
+use std::rc::Rc;
+use std::sync::mpsc::TryRecvError;
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 use timely::dataflow::channels::pact::Pipeline;
+
 #[cfg(test)]
 use timely::dataflow::operators::Input;
 use timely::dataflow::operators::capture::Event;
@@ -1066,7 +1066,11 @@ mod tests {
         let frontier = probe.with_frontier(|f| *f.as_option().unwrap_or(&u64::MAX));
         let mut output = Vec::new();
         while let Ok(event) = capture.try_recv() {
-            if let Event::Messages(time, msgs) = event {
+            if let Event::Messages(stamp, msgs) = event {
+                // A message may be stamped by several capabilities; the records it carries are
+                // at times greater or equal to one of them, so the largest is the tightest
+                // single time to attribute them to.
+                let time = stamp.iter().copied().max().expect("non-empty stamp");
                 for payload in msgs {
                     output.push((payload, time, 1));
                 }
@@ -1295,16 +1299,16 @@ mod tests {
         ];
         assert_eq!(actual_records, expected_records);
 
-        // Verify the differential invariant: each batch's stream
-        // timestamp `ts` must be `<= record_time` for every record it
-        // carries. The operator's contract requires this so that
-        // downstream differential operators can integrate the records
-        // at their declared times.
-        for (ts, data) in &actual_events {
+        // Verify the differential invariant: every record a batch carries must be at a time
+        // greater or equal to some element of the batch's stamp. The operator's contract
+        // requires this so that downstream differential operators can integrate the records at
+        // their declared times.
+        for (stamp, data) in &actual_events {
             for (_key, record_ts, _diff) in data {
                 assert!(
-                    ts <= record_ts,
-                    "differential invariant violated: stream ts {ts} > record time {record_ts}",
+                    stamp.less_equal(record_ts),
+                    "differential invariant violated: no element of stamp {stamp:?} is \
+                     less or equal to record time {record_ts}",
                 );
             }
         }

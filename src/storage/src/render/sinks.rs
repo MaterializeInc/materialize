@@ -9,21 +9,20 @@
 
 //! Logic related to the creation of dataflow sinks.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
-use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::implementations::ord_neu::OrdValBatcher;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::SpanOf;
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use mz_row_spine::{ArcOrdValBuilder, ArcOrdValSpine};
+use mz_row_spine::{ArcOrdValBatcher, ArcOrdValSpine};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use timely::dataflow::operators::Leave;
 use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;
@@ -43,8 +42,7 @@ pub(crate) type SinkTrace = TraceAgent<ArcOrdValSpine<Option<Row>, Row, Timestam
 /// a `TraceAgent` alive. Dropping the reader lets the spine's compaction
 /// frontiers advance to the empty antichain, so the arrange operator can
 /// aggressively compact / release batch state as updates flow through.
-pub(crate) type SinkBatchStream<'scope> =
-    StreamVec<'scope, Timestamp, <SinkTrace as TraceReader>::Batch>;
+pub(crate) type SinkBatchStream<'scope> = StreamVec<'scope, Timestamp, SpanOf<SinkTrace>>;
 
 /// _Renders_ complete _differential_ collections
 /// that represent the sink and its errors as requested
@@ -147,7 +145,11 @@ fn arrange_sink_input<'scope>(
     // Allow access to `arrange_named` because we cannot access Mz's wrapper
     // from here. TODO(database-issues#5046): Revisit with cluster unification.
     #[allow(clippy::disallowed_methods)]
-    let Arranged {stream, trace: _} = keyed.arrange_named::<OrdValBatcher<_, _, _, _>, ArcOrdValBuilder<_, _, _, _>, ArcOrdValSpine<_, _, _, _>>("Arrange Sink");
+    let Arranged { stream, trace: _ } = keyed
+        .arrange_named::<ArcOrdValBatcher<_, _, _, _>, ArcOrdValSpine<_, _, _, _>>(
+            "Arrange Sink",
+            MergeBatcher::new,
+        );
     stream
 }
 

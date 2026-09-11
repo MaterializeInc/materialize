@@ -378,6 +378,11 @@ impl<T: Timestamp> InputConnection<T> for Disconnected {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
+        // Async operators run in totally ordered scopes, and the exits from the partially
+        // ordered ones (`leave_dynamic`) minimize their capability set, so a message reaching
+        // an async operator is stamped by exactly one capability. If either stops holding,
+        // these three `accept` implementations have to hand back a `CapabilitySet`.
+        #[allow(clippy::disallowed_methods)]
         input_cap.time().clone()
     }
 }
@@ -395,6 +400,7 @@ impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
+        #[allow(clippy::disallowed_methods)]
         input_cap.retain(self.0)
     }
 }
@@ -414,6 +420,7 @@ impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
+        #[allow(clippy::disallowed_methods)]
         self.0.map(|output| input_cap.retain(output))
     }
 }

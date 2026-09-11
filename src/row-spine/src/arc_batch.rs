@@ -15,7 +15,7 @@
 //! thread.
 //!
 //! The blanket `impl Trait for Arc<B>` that would express this lives outside this crate: both `Arc`
-//! and differential's `Batch`/`Builder`/`Merger`/`Cursor` traits are foreign, so the orphan rule
+//! and differential's `SpineBatch`/`Builder`/`Merger`/`Cursor` traits are foreign, so the orphan rule
 //! forbids it here. [`ArcBatch`] is a local newtype around `Arc<B>` that carries those impls
 //! instead. The impls delegate straight through to the inner batch, so `ArcBatch<B>` behaves
 //! exactly like `B` except that its handle is atomically reference counted.
@@ -24,12 +24,11 @@
 //! here as a newtype lets cross-thread arrangement sharing build against a released
 //! differential-dataflow, with no differential-side `Arc` batch impls required.
 
+use differential_dataflow::trace::implementations::merge_batcher::Sealer;
+use differential_dataflow::trace::implementations::spine_fueled::{Merger, SpineBatch};
+use differential_dataflow::trace::{Builder, Cursor, Navigable};
 use std::sync::Arc;
-
-use differential_dataflow::trace::{
-    Batch, BatchReader, Builder, Cursor, Description, Merger, Navigable,
-};
-use timely::progress::{Antichain, frontier::AntichainRef};
+use timely::progress::frontier::AntichainRef;
 
 /// An `Arc`-backed batch, shareable across threads when `B`'s contents are `Send + Sync`.
 ///
@@ -61,7 +60,7 @@ impl<B> std::ops::Deref for ArcBatch<B> {
     }
 }
 
-impl<B: BatchReader + Navigable> Navigable for ArcBatch<B> {
+impl<B: Navigable> Navigable for ArcBatch<B> {
     type Cursor = ArcBatchCursor<B::Cursor>;
     fn cursor(&self) -> Self::Cursor {
         // Disambiguate to the inner batch's cursor, reached through the `Deref`, so the wrapper's
@@ -70,13 +69,11 @@ impl<B: BatchReader + Navigable> Navigable for ArcBatch<B> {
     }
 }
 
-impl<B: BatchReader> BatchReader for ArcBatch<B> {
+impl<B: SpineBatch> SpineBatch for ArcBatch<B> {
     type Time = B::Time;
+    type Merger = ArcMerger<B>;
     fn len(&self) -> usize {
         self.0.len()
-    }
-    fn description(&self) -> &Description<Self::Time> {
-        self.0.description()
     }
 }
 
@@ -170,70 +167,69 @@ impl<C: Cursor> Cursor for ArcBatchCursor<C> {
     }
 }
 
-impl<B: Batch> Batch for ArcBatch<B> {
-    type Merger = ArcMerger<B>;
-    fn empty(lower: Antichain<Self::Time>, upper: Antichain<Self::Time>) -> Self {
-        ArcBatch::new(B::empty(lower, upper))
-    }
-}
-
 /// Builds [`ArcBatch`]es, delegating to the inner batch's builder.
-pub struct ArcBuilder<B: Builder> {
+pub struct ArcBuilder<B> {
     builder: B,
 }
 
-impl<B: Builder> Builder for ArcBuilder<B> {
+impl<B: Default> Default for ArcBuilder<B> {
+    fn default() -> Self {
+        ArcBuilder {
+            builder: B::default(),
+        }
+    }
+}
+
+impl<B: Builder + Default> Builder for ArcBuilder<B> {
     type Input = B::Input;
     type Time = B::Time;
     type Output = ArcBatch<B::Output>;
-    fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-        ArcBuilder {
-            builder: B::with_capacity(keys, vals, upds),
-        }
-    }
     fn push(&mut self, input: &mut Self::Input) {
         self.builder.push(input)
     }
-    fn done(self, description: Description<Self::Time>) -> ArcBatch<B::Output> {
-        ArcBatch::new(self.builder.done(description))
+    fn done(self) -> Option<ArcBatch<B::Output>> {
+        self.builder.done().map(ArcBatch::new)
     }
-    fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
-        ArcBatch::new(B::seal(chain, description))
+}
+
+impl<C, B: Sealer<C>> Sealer<C> for ArcBuilder<B> {
+    type Output = ArcBatch<B::Output>;
+    fn seal(chain: &mut Vec<C>) -> Option<Self::Output> {
+        B::seal(chain).map(ArcBatch::new)
     }
 }
 
 /// Merges [`ArcBatch`]es, delegating to the inner batch's merger.
-pub struct ArcMerger<B: Batch> {
+pub struct ArcMerger<B: SpineBatch> {
     merger: B::Merger,
 }
 
-impl<B: Batch> Merger<ArcBatch<B>> for ArcMerger<B> {
+impl<B: SpineBatch> Merger<ArcBatch<B>> for ArcMerger<B> {
     fn new(
         source1: &ArcBatch<B>,
         source2: &ArcBatch<B>,
         compaction_frontier: AntichainRef<B::Time>,
     ) -> Self {
         ArcMerger {
-            merger: B::begin_merge(&source1.0, &source2.0, compaction_frontier),
+            merger: B::Merger::new(&source1.0, &source2.0, compaction_frontier),
         }
     }
     fn work(&mut self, source1: &ArcBatch<B>, source2: &ArcBatch<B>, fuel: &mut isize) {
         self.merger.work(&source1.0, &source2.0, fuel)
     }
-    fn done(self) -> ArcBatch<B> {
-        ArcBatch::new(self.merger.done())
+    fn done(self) -> Option<ArcBatch<B>> {
+        self.merger.done().map(ArcBatch::new)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use differential_dataflow::batcher::Batcher;
+    use differential_dataflow::trace::Navigable;
     use differential_dataflow::trace::cursor::Cursor;
-    use differential_dataflow::trace::implementations::ord_neu::OrdValBatcher;
-    use differential_dataflow::trace::{Batcher, Builder, Navigable};
-    use timely::container::PushInto;
     use timely::progress::Antichain;
 
-    use crate::ArcOrdValBuilder;
+    use crate::ArcOrdValBatcher;
 
     /// An `ArcBatch`'s cursor can be constructed and read from a thread other than the one that
     /// built it, proving the newtype's batches are usable across a thread boundary. This is the
@@ -247,10 +243,14 @@ mod tests {
     fn arc_batch_reads_from_other_thread() {
         fn assert_send_sync<T: Send + Sync>(_: &T) {}
 
-        let mut batcher = OrdValBatcher::<u64, u64, usize, i64>::new(None, 0);
-        batcher.push_into(vec![((1, 2), 0, 1), ((2, 3), 1, 1)]);
-        let (mut chain, description) = batcher.seal(Antichain::from_elem(2));
-        let batch = ArcOrdValBuilder::<u64, u64, usize, i64>::seal(&mut chain, description);
+        let mut batcher = ArcOrdValBatcher::<u64, u64, usize, i64>::new(None, 0);
+        let mut updates: Vec<((u64, u64), usize, i64)> = vec![((1, 2), 0, 1), ((2, 3), 1, 1)];
+        Batcher::<Vec<((u64, u64), usize, i64)>>::insert(&mut batcher, &mut updates);
+        let (batch, _frontier) = Batcher::<Vec<((u64, u64), usize, i64)>>::extract(
+            &mut batcher,
+            Antichain::from_elem(2).borrow(),
+        );
+        let batch = batch.expect("updates were pushed, so the batch is non-empty");
 
         assert_send_sync(&batch);
 
