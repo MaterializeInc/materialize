@@ -232,10 +232,13 @@ impl Default for TestHarness {
             deploy_generation: 0,
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
-            system_parameter_defaults: BTreeMap::from([(
-                "log_filter".to_string(),
-                "error".to_string(),
-            )]),
+            system_parameter_defaults: BTreeMap::from([
+                ("log_filter".to_string(), "error".to_string()),
+                (
+                    "enable_compute_read_hold_invariant_checks".to_string(),
+                    "true".to_string(),
+                ),
+            ]),
             internal_console_redirect_url: None,
             metrics_registry: None,
             orchestrator_tracing_cli_args: TracingCliArgs {

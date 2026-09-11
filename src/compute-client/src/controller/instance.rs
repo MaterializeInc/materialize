@@ -24,7 +24,8 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
-    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_COMPUTE_READ_HOLD_INVARIANT_CHECKS, ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
@@ -121,6 +122,40 @@ pub(super) type Command = Box<dyn FnOnce(&mut Instance) + Send>;
 /// compute response itself.
 pub(super) type ReplicaResponse = (ReplicaId, u64, ComputeResponse);
 
+/// Number of consecutive maintenance ticks a compaction progress violation has to persist before
+/// it is reported.
+///
+/// A collection whose dataflow legitimately terminates passes through the same instantaneous state
+/// as one whose upper is wrong: one replica has retired from it while another has not yet. Only
+/// persistence separates the two, and maintenance runs about once a second.
+const PROGRESS_VIOLATION_TICKS: u64 = 10;
+
+/// A collection whose emitted compaction frontier has fallen behind the progress its replicas
+/// report.
+struct ProgressViolation {
+    /// The state that makes up the violation, for the report.
+    description: String,
+    /// Whether an introspection-disabled replica sealing a log collection that its peers still
+    /// maintain explains the violation.
+    known_log_seal: bool,
+}
+
+/// A read hold this instance can attribute to the collection it holds back.
+///
+/// Attribution is by provenance, never by [`GlobalId`]: a materialized view occupies the same ID
+/// twice, once as the compute sink that writes it and once as the persist shard it writes to, and
+/// the two have unrelated sinces.
+struct AttributedHold<'a> {
+    /// What installed the hold.
+    kind: &'static str,
+    /// The collection whose dataflow requires the hold.
+    holder: GlobalId,
+    /// The replica the holder runs on, for per-replica holds.
+    replica: Option<ReplicaId>,
+    /// The frontier the hold holds back to.
+    since: &'a Antichain<Timestamp>,
+}
+
 /// The state we keep for a compute instance.
 pub(super) struct Instance {
     /// Build info for spawning replicas
@@ -216,6 +251,11 @@ pub(super) struct Instance {
     /// Copies of this sender are given to [`ReadHold`]s that are created in
     /// [`CollectionState::new`].
     read_hold_tx: read_holds::ChangeTx,
+    /// For each collection currently violating the compaction progress invariant, the number of
+    /// consecutive maintenance ticks it has done so.
+    ///
+    /// See [`PROGRESS_VIOLATION_TICKS`].
+    progress_violation_ticks: BTreeMap<GlobalId, u64>,
     /// A sender for responses from replicas.
     replica_tx: mz_ore::channel::InstrumentedUnboundedSender<ReplicaResponse, IntCounter>,
     /// A receiver for responses from replicas.
@@ -879,6 +919,7 @@ impl Instance {
             wallclock_lag: _,
             wallclock_lag_last_recorded,
             read_hold_tx: _,
+            progress_violation_ticks: _,
             replica_tx: _,
             replica_rx: _,
         } = self;
@@ -985,6 +1026,7 @@ impl Instance {
             wallclock_lag,
             wallclock_lag_last_recorded: now_dt,
             read_hold_tx,
+            progress_violation_ticks: Default::default(),
             replica_tx,
             replica_rx,
         }
@@ -1792,6 +1834,7 @@ impl Instance {
                 otel_ctx: otel_ctx.clone(),
                 requested_at: Instant::now(),
                 read_hold,
+                index_target: matches!(peek_target, PeekTarget::Index { .. }),
                 peek_response_tx,
                 limit: finishing.limit.map(usize::cast_from),
                 offset: finishing.offset,
@@ -1989,6 +2032,10 @@ impl Instance {
             read_hold
                 .try_downgrade(new_since.clone())
                 .expect("frontiers don't regress");
+        }
+
+        if self.invariant_checks_enabled() {
+            Self::check_collection_capabilities(id, self.expect_collection(id));
         }
 
         // Produce `AllowCompaction` command.
@@ -2475,6 +2522,265 @@ impl Instance {
         Ok(hold)
     }
 
+    /// Whether the read hold and compaction invariant checks are enabled.
+    fn invariant_checks_enabled(&self) -> bool {
+        ENABLE_COMPUTE_READ_HOLD_INVARIANT_CHECKS.get(&self.dyncfg)
+    }
+
+    /// Checks the invariants of this instance's read capabilities and of the compaction frontiers
+    /// it derives from them.
+    ///
+    /// Note that `since <= upper` is deliberately not among the invariants. Read frontiers beyond
+    /// a collection's upper are permitted, see [`ComputeCommand::AllowCompaction`], and
+    /// `ReadPolicy::ValidFrom` relies on that permission.
+    fn check_invariants(&mut self) {
+        if !self.invariant_checks_enabled() {
+            self.progress_violation_ticks.clear();
+            return;
+        }
+
+        for (id, collection) in &self.collections {
+            Self::check_collection_capabilities(*id, collection);
+        }
+        self.check_hold_coverage();
+
+        // A progress violation is only reported once it has persisted, so keep a per-collection
+        // tick count and drop the counts of collections that are in the clear again.
+        let violations = self.find_progress_violations();
+        self.progress_violation_ticks
+            .retain(|id, _| violations.contains_key(id));
+        for (id, violation) in violations {
+            let ticks = self.progress_violation_ticks.entry(id).or_default();
+            *ticks += 1;
+            if *ticks != PROGRESS_VIOLATION_TICKS {
+                continue;
+            }
+
+            let ProgressViolation {
+                description,
+                known_log_seal,
+            } = violation;
+            if known_log_seal {
+                // TODO(CPU-234): report this like any other violation once an
+                // introspection-disabled replica no longer seals its cluster's log collections.
+                // Until then the condition is reachable on a cluster that mixes
+                // introspection-enabled and -disabled replicas, and erroring would fail tests
+                // over a known defect.
+                tracing::warn!("compaction progress invariant violated: {description}");
+            } else {
+                soft_panic_or_log!("compaction progress invariant violated: {description}");
+            }
+        }
+    }
+
+    /// Checks the capability accounting of a single collection.
+    ///
+    /// Cheap enough for the `AllowCompaction` emission path, as it only touches the given
+    /// collection's own state.
+    fn check_collection_capabilities(id: GlobalId, collection: &CollectionState) {
+        let since = collection.shared.lock_read_capabilities(|caps| {
+            for (time, count) in caps.updates() {
+                soft_assert_or_log!(
+                    *count >= 0,
+                    "negative read capability count (id={id}, time={time:?}, count={count})"
+                );
+            }
+            caps.frontier().to_owned()
+        });
+
+        // The since is the meet of all capabilities held on the collection, so it is `less_equal`
+        // each individual hold. A violation means capability changes went missing.
+        for (kind, hold) in [
+            ("implied", &collection.implied_read_hold),
+            ("warmup", &collection.warmup_read_hold),
+        ] {
+            soft_assert_or_log!(
+                PartialOrder::less_equal(&since, hold.since()),
+                "since ahead of the {kind} read hold (id={id}, since={since:?}, hold={:?})",
+                hold.since(),
+            );
+        }
+    }
+
+    /// Checks that no collection's since has advanced beyond a read hold installed on it.
+    ///
+    /// These are the holds that make the emitted compaction frontier safe for the readers that
+    /// still have to read the times behind it: the input holds of dependent collections, the
+    /// holds of outstanding peeks, and the storage input holds of installed replica dataflows. A
+    /// since is the meet of all capabilities held on a collection, so a violation means
+    /// capability changes went missing.
+    ///
+    /// Holds handed out to controller clients are not visible here, which only weakens the check:
+    /// an unobserved hold holds a since further back, never further forward. A peek against a
+    /// persist shard is skipped, as the compute controller does not track that shard's since.
+    fn check_hold_coverage(&self) {
+        for (id, collection) in &self.collections {
+            for (dependency_id, hold) in &collection.compute_dependencies {
+                let Some(dependency) = self.collections.get(dependency_id) else {
+                    continue; // already removed from the instance state
+                };
+                let since = dependency.read_frontier();
+                soft_assert_or_log!(
+                    PartialOrder::less_equal(&since, hold.since()),
+                    "since ahead of a compute dependency read hold (id={dependency_id}, \
+                     dependent={id}, since={since:?}, hold={:?})",
+                    hold.since(),
+                );
+            }
+        }
+
+        for (uuid, peek) in &self.peeks {
+            if !peek.index_target {
+                continue;
+            }
+            let id = peek.read_hold.id();
+            let Some(collection) = self.collections.get(&id) else {
+                continue; // already removed from the instance state
+            };
+            let since = collection.read_frontier();
+            soft_assert_or_log!(
+                PartialOrder::less_equal(&since, peek.read_hold.since()),
+                "since ahead of a peek read hold (id={id}, peek={uuid}, since={since:?}, \
+                 hold={:?})",
+                peek.read_hold.since(),
+            );
+        }
+
+        // Storage sinces live in the storage controller, and reading one takes a lock, so group
+        // the holds by input and look each input up once.
+        let mut storage_holds: BTreeMap<GlobalId, Vec<AttributedHold>> = BTreeMap::new();
+        for (id, collection) in &self.collections {
+            for (input_id, hold) in &collection.storage_dependencies {
+                storage_holds
+                    .entry(*input_id)
+                    .or_default()
+                    .push(AttributedHold {
+                        kind: "storage dependency",
+                        holder: *id,
+                        replica: None,
+                        since: hold.since(),
+                    });
+            }
+        }
+        for replica in self.replicas.values() {
+            for (id, collection) in &replica.collections {
+                for hold in &collection.input_read_holds {
+                    storage_holds
+                        .entry(hold.id())
+                        .or_default()
+                        .push(AttributedHold {
+                            kind: "replica input",
+                            holder: *id,
+                            replica: Some(replica.id),
+                            since: hold.since(),
+                        });
+                }
+            }
+        }
+        for (input_id, holds) in storage_holds {
+            let Ok(frontiers) = self.storage_collections.collection_frontiers(input_id) else {
+                continue; // already dropped from the storage controller
+            };
+            let since = frontiers.read_capabilities;
+            for hold in holds {
+                let AttributedHold {
+                    kind,
+                    holder,
+                    replica,
+                    since: hold_since,
+                } = hold;
+                soft_assert_or_log!(
+                    PartialOrder::less_equal(&since, hold_since),
+                    "storage since ahead of a {kind} read hold (id={input_id}, holder={holder}, \
+                     replica={replica:?}, since={since:?}, hold={hold_since:?})",
+                );
+            }
+        }
+    }
+
+    /// Finds collections whose implied capability has fallen behind what their replicas' reported
+    /// progress permits, keyed by collection ID and described for the violation report.
+    ///
+    /// The reference quantity is the *agreed upper*: the meet of the write frontiers reported by
+    /// the hosting replicas that have not retired from the collection. A check phrased over the
+    /// collection's own upper cannot catch a wrong upper, because that upper is derived from the
+    /// first replica to report an advance. One replica sealing therefore carries the whole
+    /// collection with it, and every invariant statable about the recorded value still holds.
+    ///
+    /// Read policies are monotone away from the empty upper, and the agreed upper is always
+    /// `less_equal` the recorded upper, so the policy applied to the agreed upper has to be
+    /// `less_equal` the implied capability. Where it is not, some replica is still producing
+    /// output for a collection the controller treats as sealed, and the collection's since can
+    /// never advance again.
+    fn find_progress_violations(&self) -> BTreeMap<GlobalId, ProgressViolation> {
+        let mut violations = BTreeMap::new();
+
+        for (id, collection) in &self.collections {
+            // Write-only collections have no read policy. The step back the controller applies to
+            // their write frontier instead is monotone at the empty upper, so this class of
+            // defect cannot reach them.
+            let Some(read_policy) = &collection.read_policy else {
+                continue;
+            };
+
+            let mut agreed_upper = Antichain::new();
+            let mut live = Vec::new();
+            let mut retired = Vec::new();
+            let mut retired_with_logging_off = false;
+            for replica in self.replicas.values() {
+                // `ReplicaState::collections` holds exactly the collections a replica maintains,
+                // which for log collections and replica-targeted collections is a strict subset
+                // of all collections.
+                let Some(replica_collection) = replica.collections.get(id) else {
+                    continue;
+                };
+                if replica_collection.write_frontier.is_empty() {
+                    retired.push(replica.id);
+                    retired_with_logging_off |= !replica.config.logging.enable_logging;
+                    continue;
+                }
+                live.push(replica.id);
+                agreed_upper.extend(replica_collection.write_frontier.iter().cloned());
+            }
+
+            let implied = collection.implied_read_hold.since();
+            let description = if !live.is_empty() {
+                let required = read_policy.frontier(agreed_upper.borrow());
+                if PartialOrder::less_equal(&required, implied) {
+                    continue;
+                }
+                format!(
+                    "implied capability behind the agreed upper (id={id}, implied={implied:?}, \
+                     required={required:?}, agreed_upper={agreed_upper:?}, upper={:?}, \
+                     live_replicas={live:?}, retired_replicas={retired:?})",
+                    collection.write_frontier(),
+                )
+            } else if !retired.is_empty() && !collection.write_frontier().is_empty() {
+                format!(
+                    "upper not sealed although every hosting replica retired (id={id}, \
+                     upper={:?}, implied={implied:?}, retired_replicas={retired:?})",
+                    collection.write_frontier(),
+                )
+            } else {
+                continue;
+            };
+
+            // A log collection an introspection-disabled replica has sealed is the one shape of
+            // this violation the controller produces today, so it needs to be distinguishable
+            // from a genuine regression.
+            let known_log_seal = collection.log_collection && retired_with_logging_off;
+            violations.insert(
+                *id,
+                ProgressViolation {
+                    description,
+                    known_log_seal,
+                },
+            );
+        }
+
+        violations
+    }
+
     /// Process pending maintenance work.
     ///
     /// This method is invoked periodically by the global controller.
@@ -2490,6 +2796,7 @@ impl Instance {
         self.update_frontier_introspection();
         self.refresh_state_metrics();
         self.refresh_wallclock_lag();
+        self.check_invariants();
     }
 }
 
@@ -3073,6 +3380,9 @@ struct PendingPeek {
     requested_at: Instant,
     /// The read hold installed to serve this peek.
     read_hold: ReadHold,
+    /// Whether the peek targets an index, in which case `read_hold` holds back a collection of
+    /// this instance rather than a persist shard.
+    index_target: bool,
     /// The channel to send peek results.
     peek_response_tx: oneshot::Sender<PeekResponse>,
     /// An optional limit of the peek's result size.
