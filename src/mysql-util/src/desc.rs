@@ -99,11 +99,7 @@ impl MySqlTableDesc {
         }
 
         if self.schema_name != other.schema_name || self.name != other.name {
-            return Err(self.build_schema_change_error(SchemaChange::TableRenamed {
-                schema: other.schema_name.clone(),
-                name: other.name.clone(),
-                oid: None,
-            }));
+            return Err(self.build_schema_change_error(SchemaChange::TableRenamed {}));
         }
 
         // In the case that we don't have full binlog row metadata, `columns` is ordered by the
