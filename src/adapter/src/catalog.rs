@@ -2146,10 +2146,10 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         name: &str,
     ) -> Result<&dyn mz_sql::catalog::CatalogQueryPolicy, SqlCatalogError> {
-        self.state
+        Ok(self
+            .state
             .try_get_query_policy_by_name(name)
-            .map(|policy| policy as &dyn mz_sql::catalog::CatalogQueryPolicy)
-            .ok_or_else(|| SqlCatalogError::UnknownQueryPolicy(name.into()))
+            .ok_or_else(|| SqlCatalogError::UnknownQueryPolicy(name.into()))?)
     }
 
     fn get_query_policy(&self, id: &QueryPolicyId) -> &dyn mz_sql::catalog::CatalogQueryPolicy {
@@ -2160,7 +2160,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state
             .query_policies_by_id
             .values()
-            .map(|policy| policy as &dyn mz_sql::catalog::CatalogQueryPolicy)
+            .map(|policy| -> &dyn mz_sql::catalog::CatalogQueryPolicy { policy })
             .collect()
     }
 
