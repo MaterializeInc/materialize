@@ -220,7 +220,7 @@ and broken include references.
 ## Commits and Pull Requests
 
 ### PR body
-Your PR body should be very concise, and provide a link to the pages 
+Your PR body should be very concise, and provide a link to the pages
 relevant for review. For instance
 
 --
