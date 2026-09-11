@@ -91,7 +91,7 @@ one of the sources stalls, the object as a whole freezes consistently. Reading
 it is then a single-collection query, so it keeps serving stale results for as
 long as the stall lasts. This is also the recommended pattern for query
 latency in general, since point lookups on the index are served directly from
-memory.
+the index.
 
 ## Keep ad hoc queries serving: align frontiers with a maintained object
 
