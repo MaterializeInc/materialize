@@ -108,8 +108,9 @@ ALTER TABLE t1 DROP COLUMN f2;
 1 "test"
 1 "test"
 
-# A key over an excluded column is dropped with the column, so the table can
-# be created and the upstream index can later be dropped without stalling it.
+# A key over an excluded column is not recorded as a Materialize key, so the
+# table can be created and the upstream index can later be dropped without
+# stalling it.
 $ mysql-execute name=mysql
 USE public;
 CREATE TABLE t2 (f1 INTEGER PRIMARY KEY, f2 INTEGER NOT NULL, f3 VARCHAR(64), UNIQUE KEY uq_f2 (f2), UNIQUE KEY uq_f1_f2 (f1, f2));
@@ -133,3 +134,28 @@ INSERT INTO t2 VALUES (2, 20, 'b');
 > SELECT * FROM t2;
 1 a
 2 b
+
+# The same holds when the key also spans a nullable included column, a shape
+# that constraint planning does not otherwise validate.
+$ mysql-execute name=mysql
+USE public;
+CREATE TABLE t3 (f1 INTEGER PRIMARY KEY, a INTEGER, b INTEGER NOT NULL, UNIQUE KEY uq_ab (a, b));
+INSERT INTO t3 VALUES (1, NULL, 10);
+
+> CREATE TABLE t3 FROM SOURCE da (REFERENCE public.t3) WITH (EXCLUDE COLUMNS (b));
+
+> SELECT * FROM t3;
+1 <null>
+
+> CREATE DEFAULT INDEX ON t3;
+> SELECT key FROM (SHOW INDEXES ON t3);
+{f1}
+
+$ mysql-execute name=mysql
+USE public;
+ALTER TABLE t3 DROP INDEX uq_ab;
+INSERT INTO t3 VALUES (2, NULL, 20);
+
+> SELECT * FROM t3;
+1 <null>
+2 <null>

@@ -166,8 +166,25 @@ pub(super) fn generate_source_export_statement_values(
         }
     }
 
+    // A key over an excluded column is not recorded as a Materialize key: the
+    // table has no such column, and the key cannot be re-verified once the
+    // column is dropped upstream. The key stays in the persisted description,
+    // where `determine_compatibility` skips it for the same reason.
+    let excluded_columns: BTreeSet<&str> = table
+        .columns
+        .iter()
+        .filter(|c| c.column_type.is_none())
+        .map(|c| c.name.as_str())
+        .collect();
     let mut constraints = vec![];
     for key in table.keys.iter() {
+        if key
+            .columns
+            .iter()
+            .any(|c| excluded_columns.contains(c.as_str()))
+        {
+            continue;
+        }
         let columns: Result<Vec<Ident>, _> = key.columns.iter().map(Ident::new).collect();
 
         let constraint = mz_sql_parser::ast::TableConstraint::Unique {
