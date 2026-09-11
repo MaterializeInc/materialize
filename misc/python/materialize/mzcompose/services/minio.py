@@ -64,10 +64,16 @@ class Minio(Service):
 
 
 class Mc(Service):
+    # `mc` comes from quay.io because MinIO deleted `minio/mc` and
+    # `minio/minio` from Docker Hub, where both repositories 404. An
+    # unqualified image name resolves to Docker Hub and fails with "pull access
+    # denied", which reads like a credentials problem rather than a missing
+    # repository. The upstream source repository is archived and its final tag
+    # is the one pinned here, so there is no newer release to move to.
     def __init__(
         self,
         name: str = "mc",
-        image: str = "minio/mc:RELEASE.2025-08-13T08-35-41Z",
+        image: str = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z",
     ) -> None:
         super().__init__(
             name=name,
