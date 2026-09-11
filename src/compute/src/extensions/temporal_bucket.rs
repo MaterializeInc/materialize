@@ -24,7 +24,7 @@ use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketRange, BucketTimestamp};
 use timely::Accountable;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::channels::pact::{Exchange, ExchangeCore};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Stream, StreamVec};
 use timely::order::TotalOrder;
@@ -196,56 +196,134 @@ where
 
 /// Implementation for `Vec` streams in scopes where timestamps define a total order.
 ///
-/// Kept alongside the columnar implementation for consumers that re-encode what
-/// they read, where a `Vec` is the cheaper intermediate. The reduce key-value
-/// path is the one such caller: its bucketed output feeds an arrangement.
+/// A caller whose consumer wants owned records keeps a `Vec`-native operator, because
+/// staging the whole stream through a column would copy every pass-through record and
+/// allocate it again on the way out. Only records that enter the chain are encoded, which
+/// they were anyway: the chain's batcher is columnar. The reduce key-value path is the one
+/// such caller, and this implementation goes away once its consumer reads columns.
 impl<'scope, T, D> TemporalBucketing<'scope, T> for StreamVec<'scope, T, (D, T, mz_repr::Diff)>
 where
     T: Timestamp + Default + ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
-    for<'a> columnar::Ref<'a, D>: Copy + Ord + Hash,
-    for<'a> columnar::Ref<'a, mz_repr::Diff>: Ord,
-    for<'a> <(D, T, mz_repr::Diff) as Columnar>::Container:
-        Push<&'a (D, T, mz_repr::Diff)> + Push<columnar::Ref<'a, (D, T, mz_repr::Diff)>>,
+    for<'a> <(D, T, mz_repr::Diff) as Columnar>::Container: Push<&'a (D, T, mz_repr::Diff)>,
 {
     fn bucket(self, as_of: Antichain<T>, threshold: T::Summary) -> Self {
-        // Stage the `Vec` updates into a column and run the columnar operator, so
-        // there is one bucketing implementation rather than two. The staging copy
-        // is the price of a `Vec` caller, paid here rather than at the call site.
-        let staged = self.unary::<ColumnBuilder<(D, T, mz_repr::Diff)>, _, _, _>(
-            Pipeline,
-            "BucketStage",
-            |_cap, _info| {
-                move |input, output| {
-                    input.for_each(|time, data| {
+        let scope = self.scope();
+        let logger = scope
+            .worker()
+            .logger_for("differential/arrange")
+            .map(Into::into);
+
+        let pact = Exchange::new(|(d, _, _): &(D, T, mz_repr::Diff)| d.hashed().into());
+        self.unary_frontier::<CapacityContainerBuilder<Vec<(D, T, mz_repr::Diff)>>, _, _, _>(
+            pact,
+            "Temporal delay",
+            |cap, info| {
+                let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
+                let activator = scope.activator_for(info.address);
+
+                // Cap tracking the lower bound of potentially outstanding data.
+                let mut cap = Some(cap);
+
+                // Staging column for the records of one bucket. The chain's batcher is
+                // columnar, so a stored record is encoded either way.
+                let mut buffer: Column<(D, T, mz_repr::Diff)> = Default::default();
+
+                move |(input, frontier), output| {
+                    // The upper frontier is the join of the input frontier and the `as_of`
+                    // frontier, with the `threshold` summary applied to it.
+                    let mut upper = Antichain::new();
+                    for time1 in &frontier.frontier() {
+                        for time2 in as_of.elements() {
+                            // TODO: Use `join_assign` if we ever use a timestamp with allocations.
+                            if let Some(time) = threshold.results_in(&time1.join(time2)) {
+                                upper.insert(time);
+                            }
+                        }
+                    }
+
+                    input.for_each_time(|time, data| {
                         let mut session = output.session_with_builder(&time);
-                        for update in data.drain(..) {
-                            session.give(&update);
+                        for data in data {
+                            // Skip data that is about to be revealed.
+                            let pass_through =
+                                data.extract_if(.., |(_, t, _)| !upper.less_equal(t));
+                            session.give_iterator(pass_through);
+
+                            // Sort data by time, then drain it into a buffer that contains data
+                            // for a single bucket. We scan the data for ranges of time that fall
+                            // into the same bucket so we can push batches of data at once.
+                            data.sort_unstable_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
+
+                            let mut drain = data.drain(..);
+                            if let Some(update) = drain.next() {
+                                let mut range = chain.range_of(&update.1).expect("Must exist");
+                                buffer.push_into(&update);
+                                for update in drain {
+                                    // If we have a range, check if the time is not within it.
+                                    if !range.contains(&update.1) {
+                                        // If the time is outside the range, push the current
+                                        // buffer to the chain and reset the range.
+                                        if !buffer.is_empty() {
+                                            let bucket =
+                                                chain.find_mut(&range.start).expect("Must exist");
+                                            bucket.push_container(&mut buffer);
+                                        }
+                                        range = chain.range_of(&update.1).expect("Must exist");
+                                    }
+                                    buffer.push_into(&update);
+                                }
+
+                                // Handle leftover data in the buffer.
+                                if !buffer.is_empty() {
+                                    let bucket = chain.find_mut(&range.start).expect("Must exist");
+                                    bucket.push_container(&mut buffer);
+                                }
+                            }
                         }
                     });
-                }
-            },
-        );
 
-        staged
-            .bucket(as_of, threshold)
-            .unary::<CapacityContainerBuilder<Vec<(D, T, mz_repr::Diff)>>, _, _, _>(
-                Pipeline,
-                "BucketUnstage",
-                |_cap, _info| {
-                    move |input, output| {
-                        input.for_each(|time, data| {
-                            let mut session = output.session_with_builder(&time);
+                    // Check for data that is ready to be revealed.
+                    let peeled = chain.peel(upper.borrow());
+                    if let Some(cap) = cap.as_ref() {
+                        let mut session = output.session_with_builder(cap);
+                        for chunk in peeled.into_iter().flat_map(|x| x.done()) {
                             session.give_iterator(
-                                data.borrow()
+                                chunk
+                                    .borrow()
                                     .into_index_iter()
                                     .map(<(D, T, mz_repr::Diff)>::into_owned),
                             );
-                        });
+                        }
+                    } else {
+                        // If we don't have a cap, we should not have any data to reveal.
+                        assert!(
+                            peeled
+                                .into_iter()
+                                .flat_map(|x| x.done())
+                                .all(|chunk| chunk.record_count() == 0),
+                            "Unexpected data revealed without a cap."
+                        );
                     }
-                },
-            )
+
+                    // Downgrade the cap to the current input frontier.
+                    if frontier.is_empty() || upper.is_empty() {
+                        cap = None;
+                    } else if let Some(cap) = cap.as_mut() {
+                        // TODO: This assumes that the time is total ordered.
+                        cap.downgrade(&upper[0]);
+                    }
+
+                    // Maintain the bucket chain by restoring it with fuel.
+                    let mut fuel = 1_000_000;
+                    chain.restore(&mut fuel);
+                    if fuel <= 0 {
+                        // If we run out of fuel, we activate the operator to continue processing.
+                        activator.activate();
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -333,9 +411,10 @@ where
     type Timestamp = T;
 
     fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
-        // Re-chunks the sealed chunks into the lower batcher rather than splitting
-        // the batcher's chains in place. Each chunk moves as a container, so this
-        // visits no record.
+        // Re-chunks the sealed chunks into the lower batcher rather than splitting the
+        // batcher's chains in place, so the chunker sorts and re-pushes every record,
+        // which is what the per-record `fuel` charge below accounts for. No record is
+        // reconstituted as an owned tuple on the way.
         //
         // TODO: Split the batcher's chains directly without re-chunking.
         self.flush();
