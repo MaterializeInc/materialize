@@ -23,7 +23,10 @@ use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, ENABLE_COMPUTE_TOPK_RETAINED_STAGES,
+    TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::{
@@ -268,8 +271,16 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // intra-ts thinning. The maximum number of records per timestamp is
                     // (num_workers * limit), which we expect to be a small number and so we render
                     // a single topk stage.
-                    let (result, errs) =
-                        self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
+                    let (result, errs) = self.build_topk_stage(
+                        thinned,
+                        order_key,
+                        Some(1),
+                        0,
+                        limit,
+                        arity,
+                        false,
+                        StageOutput::Dropped,
+                    );
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
                     let result = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
                         result,
@@ -334,18 +345,69 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
     ) {
         let pairer = Pairer::new(1);
         let mut datum_vec = mz_repr::DatumVec::new();
+        // Key each row for the first stage directly: its bucket of the row hash, or zero when
+        // the only stage is the final one and the hash would be discarded anyway.
+        let first_modulus = buckets.first().copied().unwrap_or(1);
+        // A group key that is the row's leading columns is a byte prefix of the row.
+        let prefix_len = group_key
+            .iter()
+            .enumerate()
+            .all(|(index, column)| *column == index)
+            .then_some(group_key.len());
         let mut collection = collection.map({
             move |row| {
-                let group_row = {
-                    let row_hash = row.hashed();
-                    let datums = datum_vec.borrow_with(&row);
-                    let iterator = group_key.iter().map(|i| datums[*i]);
-                    pairer.merge(std::iter::once(Datum::from(row_hash)), iterator)
+                let bucket = if first_modulus == 1 {
+                    0
+                } else {
+                    row.hashed() % first_modulus
+                };
+                let group_row = match prefix_len {
+                    Some(prefix_len) => {
+                        let (group, _) = row.split_at_datum(prefix_len);
+                        let mut group_row = Row::default();
+                        let mut packer = group_row.packer();
+                        packer.push(Datum::from(bucket));
+                        packer.extend_by_row_ref(group);
+                        group_row
+                    }
+                    None => {
+                        let datums = datum_vec.borrow_with(&row);
+                        let iterator = group_key.iter().map(|i| datums[*i]);
+                        pairer.merge(std::iter::once(Datum::from(bucket)), iterator)
+                    }
                 };
                 (group_row, row)
             }
         });
 
+        // Rows a stage keeps per key: the literal limit plus the offset it must see past.
+        let kept_per_key = limit
+            .as_ref()
+            .and_then(|l| l.as_literal_int64())
+            .and_then(|l| u64::try_from(l).ok())
+            .map(|l| l.saturating_add(u64::cast_from(offset)));
+        let retain_allowed = ENABLE_COMPUTE_TOPK_RETAINED_STAGES.get(&self.config_set);
+        // Whether a stage emits kept rows or negated dropped rows. Kept rows cost less state when
+        // a key's group holds at least twice what the stage keeps. The plan carries the group
+        // size hint only as its bucket list: an empty list means the hint was at most sixteen,
+        // the fan-in of one stage, so the lone final stage keeps rows when twice its kept count
+        // fits in sixteen. With bucket stages the hint is unknown here (or absent, in which case
+        // the planner assumed billions), and every stage emits dropped rows, since a kept-row
+        // stage whose keys hold a single row each would copy its whole input into its output
+        // arrangement.
+        let single_stage = buckets.is_empty();
+        let stage_output = |_modulus: u64| -> StageOutput {
+            let Some(kept) = kept_per_key else {
+                return StageOutput::Dropped;
+            };
+            if retain_allowed && single_stage && kept.saturating_mul(2) <= 16 {
+                StageOutput::Kept
+            } else {
+                StageOutput::Dropped
+            }
+        };
+        // The input arrives keyed for the first stage; later stages rekey it.
+        let mut first = true;
         let mut validating = true;
         let mut err_collection: Option<VecCollection<'s, T, _, _>> = None;
 
@@ -384,12 +446,14 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 let (oks, errs) = self.build_topk_stage(
                     collection,
                     order_key.clone(),
-                    bucket,
+                    (!first).then_some(bucket),
                     0,
                     Some(limit.clone()),
                     arity,
                     validating,
+                    stage_output(bucket),
                 );
+                first = false;
                 collection = oks;
                 if validating {
                     err_collection = errs;
@@ -401,13 +465,26 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         // We do a final step, both to make sure that we complete the reduction, and to correctly
         // apply `offset` to the final group, as we have not yet been applying it to the partially
         // formed groups.
+        let final_output = stage_output(1);
         let (oks, errs) = self.build_topk_stage(
-            collection, order_key, 1u64, offset, limit, arity, validating,
+            collection,
+            order_key,
+            (!first).then_some(1),
+            offset,
+            limit,
+            arity,
+            validating,
+            final_output,
         );
-        // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-        let oks =
-            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(oks, "TopK final consolidate");
-        collection = oks;
+        // A stage that emits its input plus negations leaves cancellations behind; one that
+        // emits kept rows comes out of a reduce, already consolidated.
+        collection = match final_output {
+            StageOutput::Dropped => CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                oks,
+                "TopK final consolidate",
+            ),
+            StageOutput::Kept => oks,
+        };
         if validating {
             err_collection = errs;
         }
@@ -453,32 +530,36 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         &self,
         collection: VecCollection<'s, T, (Row, Row), Diff>,
         order_key: Vec<mz_expr::ColumnOrder>,
-        modulus: u64,
+        modulus: Option<u64>,
         offset: usize,
         limit: Option<LirScalarExpr>,
         arity: usize,
         validating: bool,
+        output: StageOutput,
     ) -> (
         VecCollection<'s, T, (Row, Row), Diff>,
         Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) {
-        // Form appropriate input by updating the `hash` column (first datum in `hash_key`) by
-        // applying `modulus`.
-        let input = collection.map(move |(hash_key, row)| {
-            let mut hash_key_iter = hash_key.iter();
-            let hash = hash_key_iter.next().unwrap().unwrap_uint64() % modulus;
-            let hash_key = SharedRow::pack(std::iter::once(hash.into()).chain(hash_key_iter));
-            (hash_key, row)
-        });
+        // Rekey the input by applying `modulus` to the hash column (first datum in `hash_key`),
+        // unless the input already arrives keyed for this stage.
+        let input = match modulus {
+            Some(modulus) => collection.map(move |(hash_key, row)| {
+                let mut hash_key_iter = hash_key.iter();
+                let hash = hash_key_iter.next().unwrap().unwrap_uint64() % modulus;
+                let hash_key = SharedRow::pack(std::iter::once(hash.into()).chain(hash_key_iter));
+                (hash_key, row)
+            }),
+            None => collection,
+        };
 
         // If validating: demux errors, otherwise we cannot produce errors.
         let (input, oks, errs) = if validating {
             // Build topk stage, produce errors for invalid multiplicities.
-            let (input, stage) = build_topk_negated_stage::<
+            let (input, stage) = build_topk_stage_arrangements::<
                 T,
                 RowValBuilder<_, _, _>,
                 RowValSpine<Result<Row, Row>, _, _>,
-            >(&input, order_key, offset, limit, arity);
+            >(&input, order_key, offset, limit, arity, output);
             let stage = stage.as_collection(|k, v| (k.to_row(), v.clone()));
 
             // Demux oks and errors.
@@ -502,16 +583,21 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         } else {
             // Build non-validating topk stage.
             let (input, stage) =
-                build_topk_negated_stage::<T, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                    &input, order_key, offset, limit, arity,
+                build_topk_stage_arrangements::<T, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    &input, order_key, offset, limit, arity, output,
                 );
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.to_row(), v.to_row()));
 
             (input, stage, None)
         };
-        let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
-        (oks.concat(input), errs)
+        match output {
+            StageOutput::Kept => (oks, errs),
+            StageOutput::Dropped => {
+                let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
+                (oks.concat(input), errs)
+            }
+        }
     }
 
     fn render_top1_monotonic<'s>(
@@ -604,19 +690,29 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
     }
 }
 
-/// Build a stage of a topk reduction. Maintains the _retractions_ of the output instead of emitted
-/// rows. This has the benefit that we have to maintain state proportionally to size of the output
-/// instead of the size of the input.
+/// What a TopK stage's reduce emits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StageOutput {
+    /// The rows the stage keeps. The stage's result is the reduce output alone.
+    Kept,
+    /// Negations of the rows the stage drops. The stage's result is its input plus the
+    /// negations, so the maintained state is proportional to the rows dropped rather than kept,
+    /// which is smaller when groups are barely larger than the limit.
+    Dropped,
+}
+
+/// Build a stage of a topk reduction.
 ///
 /// Returns two arrangements:
 /// * The arranged input data without modifications, and
-/// * the maintained negated output data.
-fn build_topk_negated_stage<'s, T, Bu, Tr>(
+/// * the maintained output data, as `output` selects.
+fn build_topk_stage_arrangements<'s, T, Bu, Tr>(
     input: &VecCollection<'s, T, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<LirScalarExpr>,
     arity: usize,
+    output: StageOutput,
 ) -> (
     Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
     Arranged<'s, TraceAgent<Tr>>,
@@ -702,16 +798,32 @@ where
                     || limit
                         .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
                         .unwrap_or(false);
-                if !must_shrink {
-                    return;
-                }
-
-                // First go ahead and emit all records. Note that we ensure target
-                // has the capacity to hold at least these records, and avoid any
-                // dependencies on the user-provided (potentially unbounded) limit.
-                target.reserve(source.len());
-                for (datums, diff) in source.iter() {
-                    target.push((BatchValOwn::<Tr>::ok((*datums).to_row()), -diff));
+                match output {
+                    StageOutput::Dropped => {
+                        if !must_shrink {
+                            return;
+                        }
+                        // First go ahead and emit all records negated; the kept rows are emitted
+                        // again below and cancel. Note that we ensure target has the capacity to
+                        // hold at least these records, and avoid any dependencies on the
+                        // user-provided (potentially unbounded) limit.
+                        target.reserve(source.len());
+                        for (datums, diff) in source.iter() {
+                            target.push((BatchValOwn::<Tr>::ok((*datums).to_row()), -diff));
+                        }
+                    }
+                    StageOutput::Kept => {
+                        if !must_shrink {
+                            // Every row is kept.
+                            target.reserve(source.len());
+                            for (datums, diff) in source.iter() {
+                                if diff.is_positive() {
+                                    target.push((BatchValOwn::<Tr>::ok((*datums).to_row()), *diff));
+                                }
+                            }
+                            return;
+                        }
+                    }
                 }
                 // local copies that may count down to zero.
                 let mut offset = offset;
@@ -757,10 +869,9 @@ where
                         diff = std::cmp::min(diff, Diff::from(*limit));
                         *limit -= diff;
                     }
-                    // Output the indicated number of rows.
+                    // Output the indicated number of rows: the kept rows themselves, or, on
+                    // the dropped path, the positive counterparts that cancel their negations.
                     if diff.is_positive() {
-                        // Emit retractions for the elements actually part of
-                        // the set of TopK elements.
                         target.push((BatchValOwn::<Tr>::ok(datums.to_row()), diff));
                     }
                 }
