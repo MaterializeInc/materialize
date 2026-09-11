@@ -93,6 +93,11 @@ where
             chunk,
             budget: self.budget.clone(),
         }]);
+        super::metrics::record(
+            super::metrics::Stage::InitialSettle,
+            input.iter().map(|c| c.chunk.records()).sum(),
+            0,
+        );
         let mut settled = VecDeque::new();
         PoolChunk::settle(&mut input, true, &mut settled);
         let mut chunks: Vec<_> = settled.into();

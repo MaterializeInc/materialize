@@ -299,6 +299,8 @@ where
         right: &mut VecDeque<Self>,
         output: &mut VecDeque<Self>,
     ) -> Poll<()> {
+        let input_rows =
+            left.front().unwrap().chunk.records() + right.front().unwrap().chunk.records();
         let (left_first, left_last) = left.front().unwrap().chunk.data_span();
         let (right_first, right_last) = right.front().unwrap().chunk.data_span();
         let disjoint = if super::super::rr::<D>(left_last) < super::super::rr::<D>(right_first) {
@@ -309,6 +311,7 @@ where
             None
         };
         if let Some(disjoint) = disjoint {
+            super::super::metrics::record(super::super::metrics::Stage::Merge, input_rows, 0);
             // The synchronous survivor path may migrate codecs by reading the body.
             // Keep this metadata-only path cold, while retaining merge-depth accounting.
             let mut chunk = disjoint.pop_front().unwrap();

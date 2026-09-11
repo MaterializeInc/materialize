@@ -302,6 +302,11 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
         }
         self.tidy_layers();
         if let Some(effort) = self.exert_effort() {
+            crate::columnar::chunk::metrics::record(
+                crate::columnar::chunk::metrics::Stage::OptionalExert,
+                effort,
+                0,
+            );
             if self.merging.iter().any(|b| b.is_double()) {
                 self.queue_fuel(effort.cast_signed());
             } else {
@@ -539,6 +544,13 @@ impl<B: SpineBatch> Spine<B> {
     }
 
     fn queue_introduction(&mut self, level: usize, pending: bool) {
+        if !pending {
+            crate::columnar::chunk::metrics::record(
+                crate::columnar::chunk::metrics::Stage::VirtualIntroduction,
+                1usize << level,
+                0,
+            );
+        }
         assert!(self.maintenance.is_empty());
         // Preserve the fueled spine's virtual update accounting, independent of
         // cancellation and of how many times a read wakes its continuation.
@@ -914,6 +926,11 @@ impl<B: SpineBatch> MergeState<B> {
                     Description::new(batch1.lower().clone(), batch2.upper().clone(), since);
                 match (&batch1.inner, &batch2.inner) {
                     (Some(source1), Some(source2)) => {
+                        crate::columnar::chunk::metrics::record(
+                            crate::columnar::chunk::metrics::Stage::TraceMerge,
+                            source1.len() + source2.len(),
+                            0,
+                        );
                         let merger = B::Merger::new(source1, source2, description.since().borrow());
                         MergeVariant::InProgress(batch1, batch2, description, merger)
                     }

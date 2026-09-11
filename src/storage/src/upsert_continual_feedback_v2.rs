@@ -104,7 +104,7 @@ use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::{Arranged, arrange_core};
 use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder, ChunkSpine};
-use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
+use differential_dataflow::trace::{BatchReader, Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_dyncfg::ConfigSet;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -739,7 +739,13 @@ where
             tokio::select! {
                 _ = input.ready() => {}
                 _ = persist_wakeup.ready() => {
-                    while persist_wakeup.next_sync().is_some() {}
+                    while let Some(event) = persist_wakeup.next_sync() {
+                        if let AsyncEvent::Data(_, batches) = event {
+                            for batch in batches {
+                                mz_timely_util::columnar::chunk::metrics::record_batch(batch.len());
+                            }
+                        }
+                    }
                 }
             }
 

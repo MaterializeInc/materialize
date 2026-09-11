@@ -86,6 +86,11 @@ where
             for index in 0..INPUT_EVENTS_PER_TURN {
                 match event.take() {
                     Some(Event::Data(time, mut data)) => {
+                        super::metrics::record(
+                            super::metrics::Stage::AsyncInput,
+                            columnar::Len::len(&data.borrow()),
+                            0,
+                        );
                         if cap.as_ref().is_none_or(|old| time.time() < old.time()) {
                             cap = Some(time);
                         }
