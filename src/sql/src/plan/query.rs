@@ -1001,6 +1001,94 @@ where
 
 /// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE`, or `CREATE MATERIALIZED
 /// VIEW` statement.
+/// Plans `name AS OF SYSTEM TIME time SINCE since` by desugaring it to the correlated query
+///
+/// ```sql
+/// SELECT cols FROM (
+///   SELECT cols, sum(mz_diff) AS c FROM CHANGES(name AS OF since)
+///   WHERE mz_timestamp <= time AND time <= mz_now() GROUP BY cols
+/// ), repeat_row(c)
+/// ```
+///
+/// The contents of `name` at virtual time `time` are the consolidated sum of its changes up to
+/// `time`. A `time` before `since` selects no changes and yields the empty relation, and a `time`
+/// in the future delays the output until then. Definiteness is inherited from CHANGES: with the
+/// history pinned, the result depends only on `time`, `since`, and the data.
+///
+/// Returns the plan, its scope, and the alias to use when the user gave none.
+fn plan_as_of_system_time(
+    qcx: &QueryContext,
+    name: &ResolvedItemName,
+    time: &Expr<Aug>,
+    since: &Expr<Aug>,
+) -> Result<(HirRelationExpr, Scope, TableAlias), PlanError> {
+    let ResolvedItemName::Item {
+        id,
+        full_name,
+        version,
+        ..
+    } = name
+    else {
+        sql_bail!("AS OF SYSTEM TIME requires a table, source, or materialized view");
+    };
+    let item = qcx.scx.get_item(id).at_version(*version);
+    let desc = item
+        .relation_desc()
+        .ok_or_else(|| PlanError::InvalidDependency {
+            name: full_name.to_string(),
+            item_type: item.item_type().to_string(),
+        })?;
+    let cols = desc
+        .iter_names()
+        .map(|n| Ok::<_, PlanError>(Ident::new(n.as_str())?.to_ast_string_stable()))
+        .collect::<Result<Vec<_>, _>>()?
+        .join(", ");
+    let sql = format!(
+        "SELECT {cols} FROM (SELECT {cols}, sum(mz_diff)::pg_catalog.int8 AS __mz_count \
+         FROM CHANGES({name} AS OF {since}) \
+         WHERE mz_timestamp <= ({time}) AND ({time}) <= mz_now() GROUP BY {cols}) AS __mz_history, \
+         mz_catalog.repeat_row(__mz_count)",
+        name = name.to_ast_string_stable(),
+        since = since.to_ast_string_stable(),
+        time = time.to_ast_string_stable(),
+    );
+    let stmt = crate::parse::parse(&sql)
+        .map_err(|e| {
+            PlanError::Unstructured(format!("internal error: AS OF SYSTEM TIME desugaring: {e}"))
+        })?
+        .into_element()
+        .ast;
+    let mz_sql_parser::ast::Statement::Select(mz_sql_parser::ast::SelectStatement {
+        query, ..
+    }) = stmt
+    else {
+        unreachable!("desugared AS OF SYSTEM TIME is a SELECT")
+    };
+    let (mut query, _) = crate::names::resolve(qcx.scx.catalog, query)?;
+    transform_ast::transform(qcx.scx, &mut query)?;
+    // Plan as a LATERAL derived table: `time` may refer to the enclosing scope.
+    let mut qcx = qcx.clone();
+    qcx.outer_scopes[0].lateral_barrier = true;
+    let (expr, scope) = plan_nested_query(&mut qcx, &query)?;
+    let default_alias = TableAlias {
+        name: Ident::new(full_name.item.as_str())?,
+        columns: vec![],
+        strict: false,
+    };
+    Ok((expr, scope, default_alias))
+}
+
+/// The relation description of `CHANGES(x AS OF t)` for a collection described by `desc`: its
+/// columns followed by `mz_timestamp` and `mz_diff`, with no keys (a key of `x` is not a key of
+/// its history).
+pub fn changes_desc(desc: &RelationDesc) -> RelationDesc {
+    RelationDesc::builder()
+        .with_columns(desc.iter().map(|(name, typ)| (name.clone(), typ.clone())))
+        .with_column("mz_timestamp", SqlScalarType::MzTimestamp.nullable(false))
+        .with_column("mz_diff", SqlScalarType::Int64.nullable(false))
+        .finish()
+}
+
 pub fn plan_as_of(
     scx: &StatementContext,
     as_of: Option<AsOf<Aug>>,
@@ -3099,6 +3187,24 @@ fn plan_table_factor(
     match table_factor {
         TableFactor::Table { name, alias } => {
             let (expr, scope) = qcx.resolve_table_name(name.clone())?;
+            let scope = plan_table_alias(scope, alias.as_ref())?;
+            Ok((expr, scope))
+        }
+
+        TableFactor::Changes { name, as_of, alias } => {
+            let (expr, scope) = qcx.resolve_changes(name.clone(), as_of)?;
+            let scope = plan_table_alias(scope, alias.as_ref())?;
+            Ok((expr, scope))
+        }
+
+        TableFactor::AsOfSystemTime {
+            name,
+            time,
+            since,
+            alias,
+        } => {
+            let (expr, scope, default_alias) = plan_as_of_system_time(qcx, name, time, since)?;
+            let alias = alias.clone().or(Some(default_alias));
             let scope = plan_table_alias(scope, alias.as_ref())?;
             Ok((expr, scope))
         }
@@ -6864,6 +6970,63 @@ impl<'a> QueryContext<'a> {
 
     /// Resolves `object` to a table expr, i.e. creating a `Get` or inlining a
     /// CTE.
+    /// Plans `CHANGES(object AS OF as_of)`: the object's consolidated update history from `as_of`
+    /// onward, as rows extended with `mz_timestamp` and `mz_diff`.
+    ///
+    /// The object must be backed by a persist shard whose history is pinned (`RETAIN HISTORY PIN
+    /// AT`) at or before `as_of`; the pin is what makes the result a function of the data and
+    /// `as_of` alone rather than of compaction.
+    pub fn resolve_changes(
+        &self,
+        object: ResolvedItemName,
+        as_of: &Expr<Aug>,
+    ) -> Result<(HirRelationExpr, Scope), PlanError> {
+        let ResolvedItemName::Item {
+            id,
+            full_name,
+            version,
+            ..
+        } = object
+        else {
+            sql_bail!("CHANGES requires a table, source, or materialized view");
+        };
+        let entry = self.scx.get_item(&id);
+        match entry.item_type() {
+            CatalogItemType::Table
+            | CatalogItemType::Source
+            | CatalogItemType::MaterializedView => {}
+            other => sql_bail!("CHANGES is not supported on {other} {full_name}"),
+        }
+        let item = entry.at_version(version);
+        let desc = item
+            .relation_desc()
+            .ok_or_else(|| PlanError::InvalidDependency {
+                name: full_name.to_string(),
+                item_type: item.item_type().to_string(),
+            })?
+            .into_owned();
+        let as_of = plan_as_of_or_up_to(self.scx, as_of.clone())?;
+        match entry.compaction_window().and_then(|cw| cw.pinned_from()) {
+            Some(pin) if pin <= as_of => {}
+            Some(pin) => sql_bail!(
+                "CHANGES AS OF {as_of} on {full_name} requires its RETAIN HISTORY PIN AT ({pin}) \
+                 to be at or before the AS OF time"
+            ),
+            None => sql_bail!(
+                "CHANGES requires {full_name} to have RETAIN HISTORY PIN AT at or before {as_of}"
+            ),
+        }
+        let desc = changes_desc(&desc);
+        let expr = HirRelationExpr::Get {
+            id: Id::Global(item.global_id()),
+            typ: desc.typ().clone(),
+            changes_as_of: Some(as_of),
+        };
+        let name = full_name.into();
+        let scope = Scope::from_source(Some(name), desc.iter_names().cloned());
+        Ok((expr, scope))
+    }
+
     pub fn resolve_table_name(
         &self,
         object: ResolvedItemName,
@@ -6888,6 +7051,7 @@ impl<'a> QueryContext<'a> {
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.global_id()),
                     typ: desc.typ().clone(),
+                    changes_as_of: None,
                 };
 
                 let name = full_name.into();
@@ -6901,6 +7065,7 @@ impl<'a> QueryContext<'a> {
                 let expr = HirRelationExpr::Get {
                     id: Id::Local(id),
                     typ: cte.desc.typ().clone(),
+                    changes_as_of: None,
                 };
 
                 let scope = Scope::from_source(Some(name), cte.desc.iter_names());

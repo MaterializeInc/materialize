@@ -305,6 +305,7 @@ impl Bindings {
                     id: Id::Local(LocalId::new(*id)),
                     typ,
                     access_strategy: AccessStrategy::UnknownOrLocal,
+                    changes_as_of: None,
                 }
             }
 

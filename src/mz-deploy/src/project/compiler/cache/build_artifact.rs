@@ -1250,7 +1250,9 @@ impl<'ast> Visit<'ast, Raw> for AliasVisitor<'_> {
 
     fn visit_table_factor(&mut self, node: &'ast TableFactor<Raw>) {
         match node {
-            TableFactor::Table { name, alias } => {
+            TableFactor::Table { name, alias }
+            | TableFactor::Changes { name, alias, .. }
+            | TableFactor::AsOfSystemTime { name, alias, .. } => {
                 let unresolved = name.name();
                 if unresolved.0.len() == 1 && self.cte_scope.is_cte(&unresolved.0[0].to_string()) {
                     return;

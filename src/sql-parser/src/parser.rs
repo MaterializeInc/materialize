@@ -4295,6 +4295,11 @@ impl<'a> Parser<'a> {
 
     fn parse_retain_history(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
+        if self.parse_keyword(PIN) {
+            self.expect_keyword(AT)?;
+            let value = self.parse_value()?;
+            return Ok(WithOptionValue::RetainHistoryPinAt(value));
+        }
         self.expect_keyword(FOR)?;
         let value = self.parse_value()?;
         Ok(WithOptionValue::RetainHistoryFor(value))
@@ -8754,6 +8759,16 @@ impl<'a> Parser<'a> {
             })
         } else if self.parse_keywords(&[ROWS, FROM]) {
             Ok(self.parse_rows_from()?)
+        } else if self.peek_keyword(CHANGES) && self.peek_nth_token(1) == Some(Token::LParen) {
+            self.expect_keyword(CHANGES)?;
+            self.expect_token(&Token::LParen)?;
+            let name = self.parse_raw_name()?;
+            self.expect_keyword(AS)?;
+            self.expect_keyword(OF)?;
+            let as_of = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+            let alias = self.parse_optional_table_alias()?;
+            Ok(TableFactor::Changes { name, as_of, alias })
         } else {
             let name = self.parse_raw_name()?;
             if self.consume_token(&Token::LParen) {
@@ -8769,6 +8784,20 @@ impl<'a> Parser<'a> {
                     },
                     alias,
                     with_ordinality,
+                })
+            } else if self.peek_keywords(&[AS, OF, SYSTEM, TIME]) {
+                for kw in [AS, OF, SYSTEM, TIME] {
+                    self.expect_keyword(kw)?;
+                }
+                let time = self.parse_expr()?;
+                self.expect_keyword(SINCE)?;
+                let since = self.parse_expr()?;
+                let alias = self.parse_optional_table_alias()?;
+                Ok(TableFactor::AsOfSystemTime {
+                    name,
+                    time,
+                    since,
+                    alias,
                 })
             } else {
                 Ok(TableFactor::Table {

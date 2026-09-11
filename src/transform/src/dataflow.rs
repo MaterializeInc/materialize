@@ -371,6 +371,10 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     // Push predicate information into the SourceDesc.
     for (source_id, source_import) in dataflow.source_imports.iter_mut() {
         let source = &mut source_import.desc;
+        // A CHANGES import's rows differ from the shard's rows, so nothing can be pushed into it.
+        if source.arguments.changes_as_of.is_some() {
+            continue;
+        }
         if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
             if !list.is_empty() {
                 // Canonicalize the order of predicates, for stable plans.
@@ -746,6 +750,7 @@ id: {}, key: {:?}",
                         id: Id::Global(global_id),
                         typ: _,
                         access_strategy: persist_or_index,
+                        ..
                     } => {
                         if let Some(new_idx_id) = full_scan_changes.get(global_id) {
                             match persist_or_index {
@@ -836,6 +841,7 @@ id: {}, key: {:?}",
                     id: Id::Global(global_id),
                     typ: _,
                     access_strategy,
+                    ..
                 } => match access_strategy {
                     AccessStrategy::Persist => {
                         if objects_to_build_ids.contains(global_id) {
@@ -858,6 +864,7 @@ id: {}, key: {:?}",
                     id: Id::Global(_),
                     typ: _,
                     access_strategy: AccessStrategy::Index(accesses),
+                    ..
                 } => {
                     for (idx_id, _) in accesses {
                         soft_assert_or_log!(
@@ -1050,6 +1057,19 @@ impl<'a> CollectIndexRequests<'a> {
                 MirRelationExpr::ArrangeBy { input, keys } => {
                     let ctx = &IndexUsageContext::add_keys(contexts, keys);
                     this.collect_index_reqs_inner(input, ctx)?;
+                }
+                MirRelationExpr::Get {
+                    id: Id::Global(global_id),
+                    access_strategy: persist_or_index,
+                    changes_as_of: Some(_),
+                    ..
+                } => {
+                    // A CHANGES read always comes from the persist shard: it needs the shard's
+                    // pinned history, which an index does not durably hold.
+                    this.index_reqs_by_id
+                        .entry(*global_id)
+                        .or_insert_with(Vec::new);
+                    *persist_or_index = AccessStrategy::Persist;
                 }
                 MirRelationExpr::Get {
                     id: Id::Global(global_id),
@@ -1474,6 +1494,7 @@ mod tests {
             id: Id::Global(id),
             typ: typ(),
             access_strategy: AccessStrategy::Persist,
+            changes_as_of: None,
         }
     }
 

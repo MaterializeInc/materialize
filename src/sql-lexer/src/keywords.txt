@@ -84,6 +84,7 @@ Catalog
 Certificate
 Chain
 Chains
+Changes
 Char
 Character
 Characteristics
@@ -361,6 +362,7 @@ Password
 Path
 Pattern
 Physical
+Pin
 Plan
 Plans
 Policies
@@ -453,6 +455,7 @@ Session
 Set
 Shard
 Show
+Since
 Sink
 Sinks
 Size

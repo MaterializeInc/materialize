@@ -158,10 +158,34 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
             SourceImport {
                 desc: SourceInstanceDesc {
                     storage_metadata: (),
-                    arguments: SourceInstanceArguments { operators: None },
+                    arguments: SourceInstanceArguments {
+                        operators: None,
+                        changes_as_of: None,
+                    },
                     typ,
                 },
                 monotonic,
+                with_snapshot: true,
+                upper: Antichain::new(),
+            },
+        );
+    }
+
+    /// Imports the history of the source `id` from `as_of` onward as an append-only collection
+    /// of promoted `(row..., mz_timestamp, mz_diff)` rows; `typ` describes those rows.
+    pub fn import_changes(&mut self, id: GlobalId, typ: SqlRelationType, as_of: Timestamp) {
+        self.source_imports.insert(
+            id,
+            SourceImport {
+                desc: SourceInstanceDesc {
+                    storage_metadata: (),
+                    arguments: SourceInstanceArguments {
+                        operators: None,
+                        changes_as_of: Some(as_of),
+                    },
+                    typ,
+                },
+                monotonic: true,
                 with_snapshot: true,
                 upper: Antichain::new(),
             },
@@ -684,7 +708,10 @@ mod tests {
     fn dataflow(plan: MirRelationExpr) -> DataflowDesc {
         let source_import = || SourceImport {
             desc: SourceInstanceDesc {
-                arguments: SourceInstanceArguments { operators: None },
+                arguments: SourceInstanceArguments {
+                    operators: None,
+                    changes_as_of: None,
+                },
                 storage_metadata: (),
                 typ: SqlRelationType::from_repr(&typ()),
             },
@@ -723,6 +750,7 @@ mod tests {
             id: Id::Global(READ),
             typ: typ(),
             access_strategy: AccessStrategy::Persist,
+            changes_as_of: None,
         });
 
         assert_eq!(df.used_import_ids(), BTreeSet::from([READ]));
@@ -755,6 +783,7 @@ mod tests {
                 id: Id::Global(UNREAD),
                 typ: typ(),
                 access_strategy: AccessStrategy::Persist,
+                changes_as_of: None,
             }),
         });
         df.index_exports.insert(
@@ -782,6 +811,7 @@ mod tests {
             id: Id::Global(indexed_view),
             typ: typ(),
             access_strategy: AccessStrategy::Index(Vec::new()),
+            changes_as_of: None,
         });
         df.index_imports.insert(
             imported_index,
