@@ -222,6 +222,15 @@ guidance.
 To detect and address stalled sources, follow the [`Ingest data` troubleshooting](/ingest-data/troubleshooting)
 guide.
 
+While a source is stalled, whether a query blocks or keeps serving (stale)
+results depends on the isolation level and the shape of the query. Queries that
+read only data that stalled together keep serving under the `serializable`
+isolation level, while queries that mix stalled and still-advancing inputs
+block, as does any query that reads stalled data under `strict serializable`
+or inside an explicit transaction. For the full behavior matrix and patterns
+that keep serving available through an upstream outage, see [Serving during
+source stalls](/serve-results/source-stalls/).
+
 ### Snapshotting source
 
 When a source is created, it must first _snapshot_ the existing data from the
