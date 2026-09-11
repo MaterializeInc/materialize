@@ -10,7 +10,7 @@ cluster restarts, the cluster must
 [hydrate](/fundamentals/concepts/hydration/) the affected
 objects before they can serve results. Hydration reads the input data
 and rebuilds in-memory state, and its speed scales with the cluster
-[size](#available-sizes).
+[size](/sql/create-cluster/#available-sizes).
 
 The `AUTO SCALING STRATEGY (ON HYDRATION)` option lets a cluster **automatically
 provision an extra burst replica at the configured `HYDRATION SIZE` while it has
@@ -44,7 +44,7 @@ You can specify the following options:
 
 Option | Description
 -------|------------
-`HYDRATION SIZE` | The [size](#available-sizes) of the burst replica provisioned while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration.
+`HYDRATION SIZE` | The [size](/sql/create-cluster/#available-sizes) of the burst replica provisioned while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration.
 `LINGER DURATION` | Optional. How long the burst replica lingers after a steady-size replica catches up, before it is removed. Default: `0s`.
 
 Provisioning the burst replica requires enough compute capacity to run it. In
