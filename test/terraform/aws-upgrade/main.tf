@@ -46,6 +46,33 @@ module "eks" {
 }
 
 # 2.1 Create base node group for system workloads and Karpenter
+# Clusters created with EKS module v21 no longer bootstrap the VPC CNI, and
+# nodes cannot become Ready without one, so it must be installed before any
+# node group.
+module "vpc_cni" {
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/vpc-cni?ref=main"
+
+  name_prefix       = var.name_prefix
+  oidc_provider_arn = module.eks.oidc_provider_arn
+  oidc_issuer_url   = module.eks.cluster_oidc_issuer_url
+
+  # Enforcement stays off, as it effectively was before EKS module v21: the
+  # operator module's allow-environmentd-egress policy permits only 6876, but
+  # orchestratord probes the leader API on the internal HTTP port 6878 when
+  # authenticator_kind is None, so with enforcement on the environment is never
+  # promoted and balancerd is never created.
+  enable_network_policy    = false
+  enable_policy_event_logs = false
+
+  kubeconfig_data = local.kubeconfig_data
+
+  tags = var.tags
+
+  depends_on = [
+    module.eks,
+  ]
+}
+
 module "base_node_group" {
   source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks-node-group?ref=main"
 
@@ -61,14 +88,38 @@ module "base_node_group" {
   labels                            = local.base_node_labels
   cluster_service_cidr              = module.eks.cluster_service_cidr
   cluster_primary_security_group_id = module.eks.node_security_group_id
-  tags                              = var.tags
+  # Known at plan time despite the depends_on, see the module's variable docs.
+  partition  = data.aws_partition.current.partition
+  account_id = data.aws_caller_identity.current.account_id
+  tags       = var.tags
 
   depends_on = [
-    module.eks,
+    module.vpc_cni,
   ]
 }
 
 # 2.2 Install Karpenter to manage creation of additional nodes
+# v21 clusters do not bootstrap CoreDNS either, so the deployment, its service
+# account and the kube-dns Service are created here.
+module "coredns" {
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/coredns?ref=main"
+
+  node_selector                      = local.base_node_labels
+  disable_default_coredns_autoscaler = false
+  create_coredns_service_account     = true
+  create_kube_dns_service            = true
+  kube_dns_service_cluster_ip        = cidrhost(module.eks.cluster_service_cidr, 10)
+  kubeconfig_data                    = local.kubeconfig_data
+  cluster_identifier                 = module.eks.cluster_name
+
+  depends_on = [
+    module.eks,
+    module.base_node_group,
+    module.networking,
+    module.vpc_cni,
+  ]
+}
+
 module "karpenter" {
   source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter?ref=main"
 
@@ -173,6 +224,7 @@ module "aws_lbc" {
   depends_on = [
     module.eks,
     module.nodepool_generic,
+    module.coredns,
   ]
 }
 
@@ -219,6 +271,12 @@ module "database" {
   cluster_security_group_id = module.eks.cluster_security_group_id
   node_security_group_id    = module.eks.node_security_group_id
   tags                      = var.tags
+
+  # A throwaway test database needs no point-in-time recovery, and the module
+  # default of 7 days makes every teardown wait on deleting a week of automated
+  # backups: nightly 18272's destroy was still on the RDS instance after 55
+  # minutes against a 90 minute step budget.
+  backup_retention_period = 0
 
   depends_on = [
     module.eks,
@@ -285,6 +343,8 @@ module "operator" {
     module.eks,
     module.networking,
     module.nodepool_generic,
+    module.coredns,
+    module.vpc_cni,
     # The operator chart renders cert-manager Certificate/Issuer resources for
     # the conversion webhook (install_v1_crd defaults to true), so cert-manager
     # CRDs must be registered before the operator's helm_release applies.

@@ -721,6 +721,54 @@ class AWS(State):
         except (subprocess.CalledProcessError, json.JSONDecodeError):
             return []
 
+    def _node_group_status(self, cluster: str, node_group: str) -> str:
+        """Node group status, empty if it cannot be read."""
+        try:
+            return json.loads(
+                spawn.capture(
+                    [
+                        "aws",
+                        "eks",
+                        "describe-nodegroup",
+                        "--cluster-name",
+                        cluster,
+                        "--nodegroup-name",
+                        node_group,
+                        "--region",
+                        "us-east-1",
+                        "--output",
+                        "json",
+                    ]
+                )
+            )["nodegroup"]["status"]
+        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
+            return ""
+
+    def _eks_cluster_name(self) -> str:
+        """EKS cluster name from Terraform state, empty if none is left in it.
+
+        Read from the resources rather than from `terraform output`: a destroy
+        removes the root outputs before the resources they reference, so once a
+        destroy has failed the state has no outputs left while the cluster is
+        still there. `terraform output -raw` then exits 0 and writes a "No
+        outputs found" warning to stdout, which only a validated match tells
+        apart from a real name.
+        """
+        try:
+            state = json.loads(
+                spawn.capture(["terraform", "state", "pull"], cwd=self.path)
+            )
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            return ""
+        for resource in state.get("resources", []):
+            if resource.get("type") != "aws_eks_cluster":
+                continue
+            for instance in resource.get("instances", []):
+                name = instance.get("attributes", {}).get("name", "")
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+                    return name
+        return ""
+
     def unblock_destroy(self) -> None:
         # A node group whose creation failed keeps its cluster undeletable
         # ("ResourceInUseException: Cluster has nodegroups attached"), and
@@ -728,18 +776,27 @@ class AWS(State):
         # fails, so every attempt hits the same wall. The cluster, its VPC and
         # its KMS key then leak, and since each test root uses a fixed name
         # prefix, the leak fails every later run on "already exists".
-        try:
-            cluster = spawn.capture(
-                ["terraform", "output", "-raw", "eks_cluster_name"], cwd=self.path
-            ).strip()
-        except subprocess.CalledProcessError:
-            cluster = ""
+        cluster = self._eks_cluster_name()
         if not cluster:
-            # Nothing left in state to clean up after.
+            # Distinguish this from a hook that ran and found nothing to do.
+            print("No EKS cluster in Terraform state, nothing to unblock")
             return
 
+        # Only the node groups Terraform cannot clear by itself. An ACTIVE one
+        # is Terraform's to delete in its own dependency order: the base node
+        # group is where Karpenter runs, so deleting it out from under a
+        # destroy that failed earlier takes the controller down while its
+        # provisioned instances are still live, and the next attempt then
+        # wedges on EC2NodeClass finalizers and DependencyViolation. That is
+        # the leak this hook exists to prevent. A status that cannot be read
+        # is left alone for the same reason.
+        deleted = []
         for node_group in self._list_node_groups(cluster):
-            print(f"Deleting EKS node group {node_group} to unblock the destroy")
+            status = self._node_group_status(cluster, node_group)
+            if status in ("ACTIVE", "DELETING", ""):
+                print(f"Leaving EKS node group {node_group} ({status or 'unknown'})")
+                continue
+            print(f"Deleting EKS node group {node_group} ({status}) to unblock")
             run_ignore_error(
                 [
                     "aws",
@@ -753,6 +810,10 @@ class AWS(State):
                     "us-east-1",
                 ]
             )
+            deleted.append(node_group)
+
+        if not deleted:
+            return
 
         # Deletion is asynchronous and the cluster stays undeletable until it
         # finishes, so give it a moment before the next attempt. Only best
@@ -762,9 +823,9 @@ class AWS(State):
         # left, so overrunning here risks the timeout leaking the very cluster
         # this is trying to free.
         deadline = time.time() + 300
-        while node_groups := self._list_node_groups(cluster):
+        while remaining := [n for n in self._list_node_groups(cluster) if n in deleted]:
             if time.time() > deadline:
-                print(f"EKS node groups still deleting, leaving them: {node_groups}")
+                print(f"EKS node groups still deleting, leaving them: {remaining}")
                 break
             time.sleep(15)
 

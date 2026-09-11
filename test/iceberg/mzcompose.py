@@ -130,6 +130,19 @@ def workflow_oauth2_server_url(c: Composition) -> None:
     )
 
 
+def workflow_storage_provider(c: Composition) -> None:
+    """STORAGE PROVIDER names the object store behind a REST catalog's tables.
+    The catalog protocol does not report it, so a table on GCS or ADLS is
+    unreadable until the connection says so. This exercises connection planning
+    only and needs no Iceberg backend."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "storage-provider.td",
+    )
+
+
 def workflow_mode_append(c: Composition) -> None:
     key = _setup(c)
 

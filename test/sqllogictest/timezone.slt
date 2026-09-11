@@ -358,6 +358,44 @@ SELECT timezone_offset('Asia/Almaty', '2026-07-15 00:00:00 UTC'), timezone_offse
 (+05,05:00:00,00:00:00)
 (EEST,02:00:00,01:00:00)
 
+# Zones whose rules changed in tzdata 2025c through 2026c: Morocco moved to
+# permanent +00 on 2026-09-20, Alberta and British Columbia abolished DST on
+# their 2026 fall-back dates and keep the summer offset, and Moldova follows
+# EU transition instants. Both Canadian zones now render a neighbouring
+# region's standard-time abbreviation for their permanent offset.
+
+statement ok
+SET unsafe_new_transaction_wall_time = '2026-12-15 00:00:00 UTC';
+
+query TTTT
+SELECT * FROM pg_catalog.pg_timezone_names
+WHERE name IN ('Africa/Casablanca', 'America/Edmonton', 'America/Vancouver', 'Europe/Chisinau')
+ORDER BY name
+----
+Africa/Casablanca
++00
+00:00:00
+false
+America/Edmonton
+CST
+-06:00:00
+false
+America/Vancouver
+MST
+-07:00:00
+false
+Europe/Chisinau
+EET
+02:00:00
+false
+
+query TTT
+SELECT timezone_offset('Africa/Casablanca', '2026-09-21 00:00:00 UTC'), timezone_offset('America/Edmonton', '2026-11-15 00:00:00 UTC'), timezone_offset('America/Vancouver', '2026-11-15 00:00:00 UTC')
+----
+(+00,00:00:00,00:00:00)
+(CST,-06:00:00,00:00:00)
+(MST,-07:00:00,00:00:00)
+
 # These pin historical rules: a timestamp from before a zone's rule change
 # must resolve under the rules in force at that instant, not current rules.
 
@@ -385,3 +423,22 @@ query T
 SELECT timezone_offset('Asia/Choibalsan', '1995-06-15 00:00:00 UTC')
 ----
 (+09,08:00:00,01:00:00)
+
+# Moldova has switched at the EU instant, 01:00 UTC, since 2022. Older data
+# had it one hour earlier, so for one hour around each transition the two
+# disagree. This asserts the current belief about the past. If a data update
+# breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('Europe/Chisinau', '2023-03-26 00:30:00 UTC')
+----
+(EET,02:00:00,00:00:00)
+
+# Baja California observed DST in 1953 and 1961 through 1975, following
+# California, where earlier data had none. This asserts the current belief
+# about the past. If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('America/Tijuana', '1970-07-15 12:00:00 UTC')
+----
+(PDT,-08:00:00,01:00:00)
