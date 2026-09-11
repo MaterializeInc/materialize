@@ -92,7 +92,7 @@ GRANT CREATECLUSTER ON SYSTEM TO PUBLIC;
 ----
 COMPLETE 0
 
-query TTT
+query TTT rowsort
 SELECT * FROM mz_internal.mz_show_system_privileges ORDER BY grantee
 ----
 mz_system  PUBLIC       CREATECLUSTER
@@ -282,7 +282,7 @@ COMPLETE 4
 
 # SHOW ALL PRIVILEGES
 
-query TTTTTTT
+query TTTTTTT rowsort
 SELECT * FROM mz_internal.mz_show_all_privileges ORDER BY object_type, database, schema, name, grantee
 ----
 materialize  PUBLIC       NULL         NULL    c            cluster   USAGE
@@ -366,7 +366,7 @@ materialize,r1,materialize,public,t,table,SELECT
 materialize,r2,materialize,public,t,table,SELECT
 COMPLETE 23
 
-query TTTTTTT
+query TTTTTTT rowsort
 SELECT * FROM (SHOW PRIVILEGES) ORDER BY object_type, database, schema, name, grantee
 ----
 materialize  PUBLIC       NULL         NULL    c            cluster   USAGE
