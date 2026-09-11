@@ -462,6 +462,16 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_object_dependencies",
         ),
+        // Adding the `swap_bytes` column to `mz_cluster_replica_metrics_history`
+        // is a backward-compatible append, so the shard schema can evolve in
+        // place. See the NOTE above: this version must stay at the workspace's
+        // current dev version until the change ships.
+        MigrationStep::evolution(
+            "26.43.0-dev.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_replica_metrics_history",
+        ),
     ]
 });
 

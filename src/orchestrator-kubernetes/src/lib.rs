@@ -1592,6 +1592,7 @@ impl OrchestratorWorker {
                 };
 
                 process_metrics.heap_limit = usage.heap_limit;
+                process_metrics.swap_bytes = usage.swap_bytes;
             }
 
             process_metrics
