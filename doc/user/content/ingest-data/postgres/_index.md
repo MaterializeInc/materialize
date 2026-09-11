@@ -40,7 +40,7 @@ Materialize gives you the following benefits:
 When a source is created, Materialize parallelizes the initial snapshot
 across the cluster's workers and, on PostgreSQL 14 and later, splits each
 table's read across workers. See [Snapshot
-parallelism](/concepts/snapshotting/#parallelism).
+parallelism](/fundamentals/concepts/snapshotting/#parallelism).
 
 ## Supported versions and services
 

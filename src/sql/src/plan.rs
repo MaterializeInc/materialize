@@ -116,9 +116,10 @@ pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
-    AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
-    PlannedAlterRoleOption, PlannedRoleAttributes, PlannedRoleVariable,
-    SqlServerConfigOptionExtracted, validate_metric_sink_desc, validate_metric_sink_prefix,
+    AlterSourceAddSubsourceOptionExtracted, METRIC_SINK_CURATED_PREFIX_MARKER,
+    MySqlConfigOptionExtracted, PgConfigOptionExtracted, PlannedAlterRoleOption,
+    PlannedRoleAttributes, PlannedRoleVariable, SqlServerConfigOptionExtracted,
+    validate_metric_sink_desc, validate_metric_sink_prefix, validate_user_metric_sink_prefix,
 };
 pub use statement::{
     StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,

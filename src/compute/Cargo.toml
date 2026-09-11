@@ -12,7 +12,6 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-stream.workspace = true
-bytesize.workspace = true
 chrono.workspace = true
 columnar.workspace = true
 columnation.workspace = true

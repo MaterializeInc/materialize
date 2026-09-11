@@ -102,6 +102,7 @@ def get_minimal_system_parameters(
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
+        "enable_exclude_constraints_option": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
         "enable_introspection_subscribes": "true",
@@ -204,8 +205,7 @@ def get_variable_system_parameters(
     # the lockless CRDB_* consensus queries are only linearizable under
     # SERIALIZABLE and persist asserts on the connection's isolation level. On
     # Postgres-backed consensus the query family is linearizable under READ
-    # COMMITTED, so default it on and let it vary. FoundationDB does not use the
-    # Postgres consensus, so leaving it off there is a harmless no-op.
+    # COMMITTED, so default it on and let it vary.
     read_committed_safe = metadata_store in ("postgres-metadata", "alloydb")
     persist_pg_consensus_read_committed = VariableSystemParameter(
         "persist_pg_consensus_read_committed",
@@ -283,6 +283,11 @@ def get_variable_system_parameters(
         # off in production while it earns trust.
         VariableSystemParameter(
             "enable_columnar_merge_batcher", "true", ["true", "false"]
+        ),
+        # On by default so CI exercises the columnar accumulable diff layout, which
+        # is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_columnar_accumulable_diff", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",

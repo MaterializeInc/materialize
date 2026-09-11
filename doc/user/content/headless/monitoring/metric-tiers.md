@@ -20,8 +20,8 @@ same set of metrics as the same tier selected in Helm. For the membership of eac
 tier, see [List of metrics
 ⧉](https://materializeinc.github.io/materialize-monitoring/reference/stable-metrics/list-metrics/).
 For the metrics Materialize recommends dashboarding and alerting on, see
-[essential metrics](/manage/monitor/essential-metrics/), and for everything it
-exposes, the [appendix of all metrics](/manage/monitor/appendix-metrics/).
+[essential metrics](/observability/essential-metrics/), and for everything it
+exposes, the [appendix of all metrics](/observability/appendix-metrics/).
 
 {{< note >}}
 The `extended` and `diagnostic` tiers are still being populated, so today they

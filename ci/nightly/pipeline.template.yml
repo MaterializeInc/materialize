@@ -474,21 +474,6 @@ steps:
               composition: testdrive
               args: [--default-size=8, --azurite, --slow]
 
-      - id: testdrive-fdb
-        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
-        label: "testdrive with FoundationDB"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        parallelism: 2
-        inputs: [test/testdrive]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: testdrive
-              env:
-                - EXTERNAL_METADATA_STORE: foundationdb
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
       - id: testdrive-alloydb
         topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: "testdrive with AlloyDB"
@@ -1278,7 +1263,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
-        skip: "flaky due to https://linear.app/materializeinc/issue/DB-85"
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
         topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
@@ -3008,19 +2992,6 @@ steps:
     agents:
       # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
       queue: hetzner-x86-64-4cpu-8gb
-
-  - id: fdb
-    topics: [cockroach]
-    label: "FoundationDB"
-    depends_on: build-aarch64
-    timeout_in_minutes: 40
-    inputs: [test/foundationdb]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: foundationdb
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-
 
 
   - group: Language

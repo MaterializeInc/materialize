@@ -360,19 +360,34 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
+
+        # Curated metric sinks install one dataflow per definition on every replica,
+        # so they add to the aggregate history dataflow counts above. That metric
+        # carries no per-dataflow label to filter on, so subtract the live count of
+        # curated sink dataflows rather than hardcoding it, keeping the bounds
+        # correct as the CURATED set grows. Read the count off cluster1's own
+        # replica, the one whose history the metrics above describe.
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            cursor.execute(
+                b"SELECT count(*) FROM mz_introspection.mz_dataflows"
+                b" WHERE name LIKE '%metric-sink-%'"
+            )
+            metric_sink_dataflows = int(cursor.fetchall()[0][0])
+
         assert controller_command_count > 0, "controller history cannot be empty"
         assert (
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count < 6
+            controller_dataflow_count - metric_sink_dataflows < 6
         ), "more dataflows than expected in controller history"
         assert replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count < 6
+            replica_dataflow_count - metric_sink_dataflows < 6
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
@@ -418,7 +433,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count < 6
+            controller_dataflow_count - metric_sink_dataflows < 6
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
             replica_command_count < 100
@@ -427,7 +442,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count < 6
+            replica_dataflow_count - metric_sink_dataflows < 6
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 
@@ -5204,6 +5219,89 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
         write = "INSERT INTO dst SELECT a FROM sealed"
         rows = rows_surviving(write)
         assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+
+
+def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
+    """A panic during optimization fails the statement and leaves environmentd
+    running, on every sequencing path and at every optimization stage the
+    path reaches.
+
+    Each path is meant to run the optimizer through `catch_unwind_optimize`,
+    which turns a panic into an internal error. A path that calls the
+    optimizer directly lets the panic reach the panic hook, which aborts the
+    process; the OCC read-then-write path did that (SQL-686). The
+    `optimize_mir_local`, `optimize_dataflow` and `finalize_dataflow`
+    failpoints sit at the start of the three stages, so a path with two
+    wrapped calls gets both of them exercised.
+    """
+    LOCAL = "optimize_mir_local"
+    GLOBAL = "optimize_dataflow"
+    LIR = "finalize_dataflow"
+    # Statements are expected to fail, so nothing they would create exists
+    # for the next round.
+    cases = [
+        ("SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("SUBSCRIBE (SELECT * FROM t)", [LOCAL, GLOBAL, LIR]),
+        ("CREATE VIEW v2 AS SELECT * FROM t", [LOCAL]),
+        ("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("CREATE INDEX i ON t (a)", [GLOBAL, LIR]),
+        ("DELETE FROM t WHERE a IN (SELECT a FROM v)", [LOCAL, GLOBAL, LIR]),
+    ]
+
+    def check(frontend_peek: bool) -> None:
+        c.sql(
+            f"ALTER SYSTEM SET enable_frontend_peek_sequencing = {frontend_peek}",
+            port=6877,
+            user="mz_system",
+        )
+        # The peek flag is read when a connection is set up, so use a fresh one.
+        with c.sql_cursor() as cur:
+            # A SUBSCRIBE that unexpectedly succeeds would otherwise wait for
+            # rows forever.
+            cur.execute("SET statement_timeout = '30s'")
+            for statement, failpoints in cases:
+                for failpoint in failpoints:
+                    cur.execute(
+                        f"SET failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
+                    )
+                    try:
+                        cur.execute(statement.encode())
+                    except DatabaseError as e:
+                        assert "unexpected panic during query optimization" in str(e), (
+                            statement,
+                            failpoint,
+                            e,
+                        )
+                    else:
+                        raise AssertionError(
+                            f"{statement!r} succeeded with {failpoint} set to panic"
+                        )
+                    finally:
+                        cur.execute(f"SET failpoints = '{failpoint}=off'".encode())
+            # The statements failed on their own; the process they ran in did not.
+            cur.execute("SELECT count(*) FROM t")
+            assert cur.fetchall() == [(1,)]
+
+    # Read at startup, so the read-then-write path needs a restart to switch.
+    for occ in (False, True):
+        with c.override(
+            Materialized(
+                additional_system_parameter_defaults={
+                    "enable_adapter_frontend_occ_read_then_write": str(occ).lower()
+                },
+            )
+        ):
+            c.up("materialized")
+            c.sql(dedent("""
+                DROP TABLE IF EXISTS t CASCADE;
+                CREATE TABLE t (a int);
+                INSERT INTO t VALUES (1);
+                CREATE VIEW v AS SELECT a FROM t;
+                """))
+            for frontend_peek in (False, True):
+                check(frontend_peek)
+            c.kill("materialized")
+            c.rm("materialized")
 
 
 def workflow_test_refresh_mv_warmup(

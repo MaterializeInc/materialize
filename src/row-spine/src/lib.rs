@@ -34,6 +34,7 @@ pub static DICTIONARY_COMPRESSION: std::sync::atomic::AtomicBool =
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
     use columnation::Columnation;
+    use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::implementations::Vector;
@@ -76,9 +77,12 @@ mod spines {
     pub type RowValBuilder<V, T, R> =
         ArcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
 
-    pub type RowSpine<T, R> = Spine<ArcBatch<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
+    /// Key-only `Row` spine. `DC` is the diff container, see `RowLayout`.
+    pub type RowSpine<T, R, DC = ColumnationStack<R>> =
+        Spine<ArcBatch<OrdKeyBatch<RowLayout<((Row, ()), T, R), DC>>>>;
     pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
-    pub type RowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowBuilder<T, R>>;
+    pub type RowBuilder<T, R, DC = ColumnationStack<R>> =
+        ArcBuilder<crate::dictionary::builders::RowBuilder<T, R, DC>>;
 
     pub type ValRowSpine<K, T, R> = Spine<ArcBatch<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
     pub type ValRowBatcher<K, T, R> = KeyValBatcher<K, Row, T, R>;
@@ -116,8 +120,13 @@ mod spines {
     pub struct RowValLayout<U: Update<Key = Row>> {
         phantom: std::marker::PhantomData<U>,
     }
-    pub struct RowLayout<U: Update<Key = Row, Val = ()>> {
-        phantom: std::marker::PhantomData<U>,
+    /// Layout for key-only `Row` updates. `DC` is the diff `BatchContainer`, a
+    /// columnation stack by default.
+    pub struct RowLayout<U, DC = ColumnationStack<<U as Update>::Diff>>
+    where
+        U: Update<Key = Row, Val = ()>,
+    {
+        phantom: std::marker::PhantomData<(U, DC)>,
     }
     /// Mirror of [`RowValLayout`] with the roles swapped: arbitrary `Columnation`
     /// keys with `Row` values stored as packed bytes in a [`DatumContainer`].
@@ -148,15 +157,15 @@ mod spines {
         type DiffContainer = ColumnationStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
-    impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
+    impl<U: Update<Key = Row, Val = ()>, DC> Layout for RowLayout<U, DC>
     where
         U::Time: Columnation,
-        U::Diff: Columnation,
+        DC: BatchContainer<Owned = U::Diff>,
     {
         type KeyContainer = DatumContainer;
         type ValContainer = ColumnationStack<()>;
         type TimeContainer = ColumnationStack<U::Time>;
-        type DiffContainer = ColumnationStack<U::Diff>;
+        type DiffContainer = DC;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Val = Row>> Layout for ValRowLayout<U>
@@ -903,6 +912,7 @@ mod dictionary {
         use differential_dataflow::lattice::Lattice;
         use differential_dataflow::trace::Builder;
         use differential_dataflow::trace::Description;
+        use differential_dataflow::trace::implementations::BatchContainer;
         use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
         use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
         use mz_timely_util::columnar::Column;
@@ -1081,16 +1091,20 @@ mod dictionary {
         pub struct RowBuilder<
             T: Lattice + Timestamp + Columnation,
             R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R> = TimelyStack<R>,
         > {
-            inner: OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, TimelyStack<((Row, ()), T, R)>>,
+            inner: OrdKeyBuilder<RowLayout<((Row, ()), T, R), DC>, TimelyStack<((Row, ()), T, R)>>,
         }
 
-        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
-            Builder for RowBuilder<T, R>
+        impl<T, R, DC> Builder for RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
         {
             type Input = TimelyStack<((Row, ()), T, R)>;
             type Time = T;
-            type Output = OrdKeyBatch<RowLayout<((Row, ()), T, R)>>;
+            type Output = OrdKeyBatch<RowLayout<((Row, ()), T, R), DC>>;
 
             fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
                 Self {
@@ -1998,8 +2012,8 @@ mod row_codec {
         /// All byte values >= this are safe to use as dictionary tags without
         /// observing the data, since no datum's first byte can have this value.
         ///
-        /// `mz_repr`'s `Row` `Tag` enum currently has 94 variants (discriminants
-        /// 0..=93), so the truly tight bound is 94. We deliberately pick a larger,
+        /// `mz_repr`'s `Row` `Tag` enum currently has 84 variants (discriminants
+        /// 0..=83), so the truly tight bound is 84. We deliberately pick a larger,
         /// round-ish constant to leave headroom for new tags without having to also
         /// bump the safe set, and the `test_safe_tag_base` test pins the real
         /// invariant: every datum the row format produces must encode with a first

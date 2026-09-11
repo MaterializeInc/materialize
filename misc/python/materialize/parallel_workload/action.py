@@ -3141,6 +3141,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_columnar_merge_batcher"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_columnar_accumulable_diff"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -6249,6 +6250,9 @@ class ExplainFilterPushdownAction(Action):
                 'is not allowed from the "mz_catalog_server" cluster',
                 # Scanning persist part stats can outrun statement_timeout.
                 "canceling statement due to statement timeout",
+                # Under real-time recency the EXPLAIN waits for the source
+                # like a SELECT does, and can hit the RTR timeout (SS-303).
+                "timed out before ingesting the source's visible frontier when real-time-recency query issued",
             ]
         )
         if exe.db.complexity == Complexity.DDL:

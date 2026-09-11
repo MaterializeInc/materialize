@@ -498,7 +498,9 @@ def download_repo_file_at_tag(path: str, tag: str) -> bytes:
     requests/hour), which is what CI relies on. Falls back to anonymous
     raw.githubusercontent.com otherwise. Anonymous raw content throttles
     shared CI IPs with 429, so retry with backoff on rate-limit and 5xx
-    statuses, honoring Retry-After when present.
+    statuses, honoring Retry-After when present. The Contents API also
+    occasionally answers 404 for a path that exists at the tag, so 404 is
+    retried too; a genuine 404 surfaces after the full backoff.
     """
     token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
         "GITHUB_TOKEN"
@@ -519,7 +521,7 @@ def download_repo_file_at_tag(path: str, tag: str) -> bytes:
         response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
             return response.content
-        if response.status_code not in (429, 500, 502, 503, 504):
+        if response.status_code not in (404, 429, 500, 502, 503, 504):
             break
         wait = float(response.headers.get("Retry-After", delay))
         print(f"Got {response.status_code} for {url}, retrying in {wait}s")
@@ -765,6 +767,84 @@ class BalancerdNodeSelector(Modification):
                 assert not balancerd["items"], f"Unexpected items: {balancerd['items']}"
 
         # Balancerd can take a while to start up
+        retry(check, 240)
+
+
+# Must match test/orchestratord/priorityclass.yaml.
+PRIORITY_CLASS_NAME = "mz-test-priority"
+PRIORITY_CLASS_VALUE = 1000000000
+# Release in which environmentd learned
+# --orchestrator-kubernetes-priority-class-name.
+PRIORITY_CLASS_VERSION = "v26.40.0"
+
+
+def assert_priority_class(pod: dict[str, Any], expected: str | None) -> None:
+    """Assert a pod's priority class by name and by resolved value.
+
+    `spec.priority` is filled in by the API server from the named class, so
+    checking it is what distinguishes a class Kubernetes actually resolved from
+    a string the operator copied into the spec.
+    """
+    spec = pod["spec"]
+    name = pod["metadata"]["name"]
+    actual = spec.get("priorityClassName")
+    priority = spec.get("priority")
+    if expected is None:
+        assert not actual, f"{name}: unexpected priorityClassName {actual}"
+        assert not priority, f"{name}: unexpected priority {priority}"
+    else:
+        assert actual == expected, f"{name}: expected {expected}, got {actual}"
+        assert (
+            priority == PRIORITY_CLASS_VALUE
+        ), f"{name}: expected priority {PRIORITY_CLASS_VALUE}, got {priority}"
+
+
+class PriorityClassName(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None, PRIORITY_CLASS_NAME]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if not self.value:
+            return
+        definition["operator"]["environmentd"]["priorityClassName"] = self.value
+        definition["operator"]["clusterd"]["priorityClassName"] = self.value
+        # environmentd and clusterd only pick up generation-affecting changes on
+        # a requested rollout, so without this the pods keep the spec they were
+        # created with and the assertions below check the wrong generation.
+        request = str(uuid.uuid4())
+        if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+            definition["materialize"]["spec"]["requestRollout"] = request
+        definition["materialize"]["spec"]["forceRollout"] = request
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        # The operator sets environmentd's class directly, but forwards
+        # clusterd's to environmentd behind a version gate, so an older image
+        # gets one and not the other.
+        clusterd_expected = (
+            self.value
+            if version >= MzVersion.parse_mz(PRIORITY_CLASS_VERSION)
+            else None
+        )
+
+        def check() -> None:
+            environmentd = get_environmentd_data()["items"]
+            clusterd = get_clusterd_data()["items"]
+            # A class the API server cannot resolve yields no pod at all, which
+            # an assertion over an empty list would otherwise call a pass.
+            assert environmentd, "no environmentd pods"
+            assert clusterd, "no clusterd pods"
+            for pod in environmentd:
+                assert_priority_class(pod, self.value)
+            for pod in clusterd:
+                assert_priority_class(pod, clusterd_expected)
+
+        # Clusterd is recreated by the rollout and can take a while
         retry(check, 240)
 
 
@@ -4569,6 +4649,14 @@ def setup(c: Composition, args) -> dict[str, Any]:
                 "apply",
                 "-f",
                 MZ_ROOT / "test" / "orchestratord" / "storageclass.yaml",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "apply",
+                "-f",
+                MZ_ROOT / "test" / "orchestratord" / "priorityclass.yaml",
             ]
         )
 

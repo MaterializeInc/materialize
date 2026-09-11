@@ -1,7 +1,7 @@
 ---
 headless: true
 ---
-When using the [serializable](/reference/isolation-level#serializable)
+When using the [serializable](/serve-results/isolation-level#serializable)
 isolation level, the logical timestamp may be arbitrarily ahead of or behind the
 system clock. For example, at a wall clock time of 9pm, Materialize may choose
 to execute a serializable query as of logical time 8:30pm, perhaps because data

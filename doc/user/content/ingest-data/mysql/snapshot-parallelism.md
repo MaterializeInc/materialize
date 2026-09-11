@@ -16,7 +16,7 @@ snapshot dominates the time until the source becomes healthy.
 
 How snapshot work is spread across the workers of a cluster, and what that
 means for the upstream database, is covered in
-[Snapshotting](/concepts/snapshotting/#parallelism). Materialize can split
+[Snapshotting](/fundamentals/concepts/snapshotting/#parallelism). Materialize can split
 the read of a **single table** across all the workers of the cluster, so
 that even a source dominated by one very large table benefits from a larger
 cluster. This page covers what is specific to MySQL: which tables are

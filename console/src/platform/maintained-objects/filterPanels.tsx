@@ -144,7 +144,7 @@ export const MultiSelectFilterPanel = <
                 isChecked={selected.includes(item)}
                 onChange={() => toggle(item)}
               >
-                <Text textStyle="text-ui-reg" noOfLines={1}>
+                <Text textStyle="text-ui-reg" noOfLines={1} mr={4}>
                   {getLabel ? getLabel(item) : item}
                 </Text>
               </FilterCheckboxRow>

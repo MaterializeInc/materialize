@@ -10,11 +10,8 @@
 import {
   Button,
   HStack,
-  NumberDecrementStepper,
-  NumberIncrementStepper,
   NumberInput,
   NumberInputField,
-  NumberInputStepper,
   Text,
   useTheme,
   VStack,
@@ -93,14 +90,6 @@ export const UtilizationFilterPanel = <TData,>({
               if (e.key === "Enter") apply();
             }}
           />
-          <NumberInputStepper>
-            <NumberIncrementStepper
-              aria-label={`Increase ${label} threshold`}
-            />
-            <NumberDecrementStepper
-              aria-label={`Decrease ${label} threshold`}
-            />
-          </NumberInputStepper>
         </NumberInput>
         <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
           %

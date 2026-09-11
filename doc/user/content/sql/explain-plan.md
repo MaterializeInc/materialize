@@ -157,7 +157,7 @@ Plan Stage | Description
 **DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
 **OPTIMIZED PLAN** | Display the optimized plan.
-**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping). _(Default)_
+**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping). _(Default)_
 
 ### Output modifiers
 
@@ -170,7 +170,7 @@ Modifier | Description
 **cardinality** | Annotate each subplan with a symbolic estimate of its cardinality.
 **join implementations** | Render details about the [implementation strategy of optimized MIR `Join` nodes](#explain-with-join-implementations).
 **keys** | Annotates each subplan with a parenthesized list of unique keys. Each unique key is presented as a bracketed list of column identifiers. A list of column identifiers is reported as a unique key when for each setting of those columns to values there is at most one record in the collection. For example, `([0], [1,2])` is a list of two unique keys: column zero is a unique key, and columns 1 and 2 also form a unique key. Materialize only reports the most succinct form of keys, so for example while `[0]` and `[0, 1]` might both be unique keys, the latter is implied by the former and omitted. `()` indicates that the collection does not have any unique keys, while `([])` indicates that the empty projection is a unique key, meaning that the collection consists of 0 or 1 rows.
-**node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID, which is the `lir_id` of the operator's row in [`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping). Per-operator introspection, such as the SQL behind [`EXPLAIN ANALYZE`](/sql/explain-analyze/), can be matched to the plan by that ID instead of by operator text, which the two render differently.
+**node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID, which is the `lir_id` of the operator's row in [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping). Per-operator introspection, such as the SQL behind [`EXPLAIN ANALYZE`](/sql/explain-analyze/), can be matched to the plan by that ID instead of by operator text, which the two render differently.
 **redacted** | Anonymize literals in the output.
 **timing** | Annotate the output with the optimization time.
 **types** | Annotate each subplan with its inferred type, as a _representation type_. These types, written with a `r_` prefix, reflect how the types in your SQL query are actually represented inside Materialize---don't be alarmed if you wrote `VARCHAR` or `CHAR` but see `r_string`.
@@ -227,7 +227,7 @@ In this stage, the planner performs various optimizing rewrites:
 In this stage, the planner:
 
 - Decides on the exact execution details of each operator, and maps plan operators to differential dataflow operators.
-- Makes the final choices about creating or reusing [arrangements](/get-started/arrangements/#arrangements).
+- Makes the final choices about creating or reusing [arrangements](/fundamentals/concepts/arrangements/#arrangements).
 
 #### From physical plan to dataflow
 
@@ -359,7 +359,7 @@ Below the plan, a "Used indexes" section indicates which indexes will be used by
 
 Materialize offers several output formats for `EXPLAIN` and debugging.
 LIR plans as rendered in
-[`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping)
+[`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping)
 are deliberately succinct, while the plans in other formats give more
 detail.
 

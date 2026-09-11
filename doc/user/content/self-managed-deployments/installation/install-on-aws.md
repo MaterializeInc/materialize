@@ -106,8 +106,8 @@ and load balancer were added in v10.1.0, and are both billable. Starting with
 v11.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
 do not want the stack. For what the stack stores and where else it can send
 it, see [How logs and metrics are
-stored](/manage/monitor/self-managed/storage/). For reaching Grafana, see
-[Grafana](/manage/monitor/self-managed/grafana/).
+stored](/observability/self-managed/storage/). For reaching Grafana, see
+[Grafana](/observability/self-managed/grafana/).
 
 ## Prerequisites
 
@@ -209,7 +209,7 @@ authentication mechanisms.
    With `enable_observability` on, the modules also create a `db.t4g.micro`
    RDS instance for Grafana's own state and an internal NLB to reach Grafana
    on. Both are billable. See
-   [Grafana](/manage/monitor/self-managed/grafana/).
+   [Grafana](/observability/self-managed/grafana/).
    {{< /note >}}
 
    {{% include-from-yaml data="self_managed/installation"

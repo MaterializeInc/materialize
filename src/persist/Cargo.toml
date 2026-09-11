@@ -40,7 +40,6 @@ deadpool-postgres.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true
 futures-util.workspace = true
-mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
 itertools.workspace = true
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-dyncfg = { path = "../dyncfg" }
@@ -87,7 +86,6 @@ prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
-foundationdb = ["mz-foundationdb"]
 turmoil = ["dep:serde_json", "dep:turmoil"]
 
 [package.metadata.unused-deps]

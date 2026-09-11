@@ -583,9 +583,18 @@ class State:
                         f"terraform destroy failed (attempt {attempt + 1}/3), "
                         "waiting 60s for resources to be released..."
                     )
+                    self.unblock_destroy()
                     time.sleep(60)
                 else:
                     raise
+
+    def unblock_destroy(self) -> None:
+        """Clear state that a failed `terraform destroy` cannot clear itself.
+
+        Called between destroy attempts, so it must tolerate a partially
+        destroyed deployment and must never raise: whatever it cannot fix is
+        the next attempt's problem, not a new failure.
+        """
 
     def test(
         self, c: Composition, tag: str, run_testdrive_files: bool, files: list[str]
@@ -690,6 +699,135 @@ class AWS(State):
     def __init__(self, path: Path):
         super().__init__(path)
         self.base_vars = []
+
+    def _list_node_groups(self, cluster: str) -> list[str]:
+        """Node groups attached to `cluster`, empty if the cluster is gone."""
+        try:
+            return json.loads(
+                spawn.capture(
+                    [
+                        "aws",
+                        "eks",
+                        "list-nodegroups",
+                        "--cluster-name",
+                        cluster,
+                        "--region",
+                        "us-east-1",
+                        "--output",
+                        "json",
+                    ]
+                )
+            )["nodegroups"]
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            return []
+
+    def _node_group_status(self, cluster: str, node_group: str) -> str:
+        """Node group status, empty if it cannot be read."""
+        try:
+            return json.loads(
+                spawn.capture(
+                    [
+                        "aws",
+                        "eks",
+                        "describe-nodegroup",
+                        "--cluster-name",
+                        cluster,
+                        "--nodegroup-name",
+                        node_group,
+                        "--region",
+                        "us-east-1",
+                        "--output",
+                        "json",
+                    ]
+                )
+            )["nodegroup"]["status"]
+        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
+            return ""
+
+    def _eks_cluster_name(self) -> str:
+        """EKS cluster name from Terraform state, empty if none is left in it.
+
+        Read from the resources rather than from `terraform output`: a destroy
+        removes the root outputs before the resources they reference, so once a
+        destroy has failed the state has no outputs left while the cluster is
+        still there. `terraform output -raw` then exits 0 and writes a "No
+        outputs found" warning to stdout, which only a validated match tells
+        apart from a real name.
+        """
+        try:
+            state = json.loads(
+                spawn.capture(["terraform", "state", "pull"], cwd=self.path)
+            )
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            return ""
+        for resource in state.get("resources", []):
+            if resource.get("type") != "aws_eks_cluster":
+                continue
+            for instance in resource.get("instances", []):
+                name = instance.get("attributes", {}).get("name", "")
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+                    return name
+        return ""
+
+    def unblock_destroy(self) -> None:
+        # A node group whose creation failed keeps its cluster undeletable
+        # ("ResourceInUseException: Cluster has nodegroups attached"), and
+        # Terraform does not retry the node group once the cluster delete
+        # fails, so every attempt hits the same wall. The cluster, its VPC and
+        # its KMS key then leak, and since each test root uses a fixed name
+        # prefix, the leak fails every later run on "already exists".
+        cluster = self._eks_cluster_name()
+        if not cluster:
+            # Distinguish this from a hook that ran and found nothing to do.
+            print("No EKS cluster in Terraform state, nothing to unblock")
+            return
+
+        # Only the node groups Terraform cannot clear by itself. An ACTIVE one
+        # is Terraform's to delete in its own dependency order: the base node
+        # group is where Karpenter runs, so deleting it out from under a
+        # destroy that failed earlier takes the controller down while its
+        # provisioned instances are still live, and the next attempt then
+        # wedges on EC2NodeClass finalizers and DependencyViolation. That is
+        # the leak this hook exists to prevent. A status that cannot be read
+        # is left alone for the same reason.
+        deleted = []
+        for node_group in self._list_node_groups(cluster):
+            status = self._node_group_status(cluster, node_group)
+            if status in ("ACTIVE", "DELETING", ""):
+                print(f"Leaving EKS node group {node_group} ({status or 'unknown'})")
+                continue
+            print(f"Deleting EKS node group {node_group} ({status}) to unblock")
+            run_ignore_error(
+                [
+                    "aws",
+                    "eks",
+                    "delete-nodegroup",
+                    "--cluster-name",
+                    cluster,
+                    "--nodegroup-name",
+                    node_group,
+                    "--region",
+                    "us-east-1",
+                ]
+            )
+            deleted.append(node_group)
+
+        if not deleted:
+            return
+
+        # Deletion is asynchronous and the cluster stays undeletable until it
+        # finishes, so give it a moment before the next attempt. Only best
+        # effort, and deliberately far shorter than the deletion can take: the
+        # next `terraform destroy` waits on a node group already in DELETING
+        # properly, while cleanup as a whole has ~30 minutes of step budget
+        # left, so overrunning here risks the timeout leaking the very cluster
+        # this is trying to free.
+        deadline = time.time() + 300
+        while remaining := [n for n in self._list_node_groups(cluster) if n in deleted]:
+            if time.time() > deadline:
+                print(f"EKS node groups still deleting, leaving them: {remaining}")
+                break
+            time.sleep(15)
 
     def setup(
         self,

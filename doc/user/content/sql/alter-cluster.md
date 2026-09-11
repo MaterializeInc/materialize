@@ -77,7 +77,7 @@ To swap the name of this cluster with another cluster:
 {{< tip >}}
 
 For help sizing your clusters, navigate to **Materialize Console >**
-[**Monitoring**](/console/monitoring/)>**Environment Overview**. This page
+[**Monitoring**](/developer-tools/console/monitoring/)>**Environment Overview**. This page
 displays cluster resource utilization and sizing advice.
 
 {{< /tip >}}
@@ -142,7 +142,7 @@ See also:
 #### Resource allocation
 
 To determine the specific resource allocation for a given cluster size, query
-the [`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
+the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 system catalog table.
 
 {{< warning >}}
@@ -165,7 +165,7 @@ immediately.
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
-   [hydrate](/concepts/hydration/).
+   [hydrate](/fundamentals/concepts/hydration/).
 3. Retires the old replicas.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
@@ -203,18 +203,18 @@ You can monitor a resize through the following:
   summarizes any in-flight reconfiguration or hydration burst, and is `NULL`
   when the cluster is steady.
 
-- [`mz_internal.mz_cluster_reconfigurations`](/reference/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+- [`mz_internal.mz_cluster_reconfigurations`](/sql/system-catalog/mz_internal/#mz_cluster_reconfigurations),
   which shows the target shape, deadline, timeout action, and lifecycle status
   of the latest reconfiguration.
 
-- [`mz_internal.mz_cluster_auto_scaling_strategies`](/reference/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies),
+- [`mz_internal.mz_cluster_auto_scaling_strategies`](/sql/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies),
   which shows any in-flight hydration burst.
 
-- [`mz_internal.mz_hydration_statuses`](/reference/system-catalog/mz_internal/#mz_hydration_statuses),
+- [`mz_internal.mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses),
   which shows per-object hydration status.
 
 - The audit log
-  ([`mz_catalog.mz_audit_events`](/reference/system-catalog/mz_catalog/#mz_audit_events)),
+  ([`mz_catalog.mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events)),
   which records each reconfiguration transition.
 
 ##### Cancel a resize
@@ -273,7 +273,7 @@ The `REPLICATION FACTOR` option determines the number of replicas provisioned
 for the cluster. Each replica of the cluster provisions a new pool of compute
 resources to perform exactly the same computations on exactly the same data.
 Each replica incurs cost, calculated as `cluster size * replication factor` per
-second. See [Usage & billing](/administration/billing/) for more details.
+second. See [Usage & billing](/materialize-cloud/billing/) for more details.
 
 #### Replication factor and fault tolerance
 
@@ -286,7 +286,7 @@ available, the cluster can continue to maintain dataflows and serve queries.
 
 - Each replica incurs cost, calculated as `cluster size *
   replication factor` per second. See [Usage &
-  billing](/administration/billing/) for more details.
+  billing](/materialize-cloud/billing/) for more details.
 
 - Increasing the replication factor does **not** increase the cluster's work
   capacity. Replicas are exact copies of one another: each replica must do
@@ -386,7 +386,7 @@ ALTER CLUSTER c1 RESET (AUTO SCALING STRATEGY);
 ```
 
 To inspect the configured strategy and any in-flight burst, query
-[`mz_internal.mz_cluster_auto_scaling_strategies`](/reference/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies).
+[`mz_internal.mz_cluster_auto_scaling_strategies`](/sql/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies).
 The `strategy` column holds the configured policy, and the `state` column holds
 the in-flight burst details, or `NULL` when no burst is running:
 

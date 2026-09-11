@@ -43,7 +43,6 @@ members = [
     "src/expr-derive-impl",
     "src/expr-parser",
     "src/fivetran-destination",
-    "src/foundationdb",
     "src/frontegg-auth",
     "src/frontegg-client",
     "src/frontegg-mock",
@@ -170,7 +169,6 @@ default-members = [
     "src/expr-derive",
     "src/expr-derive-impl",
     "src/expr-parser",
-    "src/foundationdb",
     "src/frontegg-auth",
     "src/frontegg-client",
     "src/frontegg-mock",
@@ -357,7 +355,6 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 fallible-iterator = "0.2.0"
 fancy-regex = "0.17.0"
 flate2 = "1.1.9"
-foundationdb = { version = "0.10.0", default-features = false, features = ["embedded-fdb-include", "fdb-7_3"] }
 futures = "0.3.32"
 futures-core = "0.3.32"
 futures-task = "0.3.32"
@@ -386,7 +383,7 @@ hyper-util = "0.1.20"
 tower-service = "0.3.3"
 iceberg = "0.10.1"
 iceberg-catalog-rest = "0.10.1"
-iceberg-storage-opendal = { version = "0.10.1", default-features = false, features = ["opendal-s3", "opendal-gcs"] }
+iceberg-storage-opendal = { version = "0.10.1", default-features = false, features = ["opendal-s3", "opendal-gcs", "opendal-azdls"] }
 imbl = { version = "7.0.0", features = ["serde"] }
 include_dir = "0.7.4"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
@@ -651,6 +648,12 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
+# Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
+# `mz_changes` branch carries current IANA data only, no code changes. To bump
+# tzdata, update the fork, then follow the bump ceremony documented in
+# src/environmentd/tests/testdata/timezones/regenerate.sh.
+chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "5999cdd1b971694f834ec3467d11ef9147fc297c" }
+
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 
@@ -673,9 +676,9 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 # NOTE: The `[workspace.dependencies]` version requirement above must stay
 # semver-compatible with this revision's crate version, otherwise Cargo drops
 # these patches into `[[patch.unused]]` and silently builds against crates.io.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "985929c6c5cc7083bac30c881e7ec43ec4d57b64" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "985929c6c5cc7083bac30c881e7ec43ec4d57b64" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "985929c6c5cc7083bac30c881e7ec43ec4d57b64" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.

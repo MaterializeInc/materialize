@@ -352,3 +352,69 @@ class MaterializedViewReplacement(Check):
                 # `validate` remains idempotent.
                 > DROP MATERIALIZED VIEW mv_replacement_replacement
             """))
+
+
+class MaterializedViewReplacementDropInput(Check):
+    """Applies a replacement and drops the old definition's input in the first
+    manipulate phase. The zero-downtime upgrade scenarios run that phase while
+    the next generation, built at a different version, is already booted
+    read-only, so its boot after promotion must not pair the new definition
+    with the expressions it cached before the apply. The tables retain history
+    so that a restart cannot hit CPU-95 (an input's read frontier overtaking
+    the output's write frontier).
+    """
+
+    def _can_run(self, e: Executor) -> bool:
+        # The first version whose expression cache records item versions. A
+        # generation of an earlier version that boots after the apply reuses
+        # the expressions cached for the old definition, and crash-loops on
+        # the dropped input.
+        return self.base_version >= MzVersion.parse_mz("v26.41.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE mv_repl_drop_input_t1 (a INT) WITH (RETAIN HISTORY FOR '1 hour')
+                > INSERT INTO mv_repl_drop_input_t1 VALUES (1)
+                > CREATE VIEW mv_repl_drop_input_v1 AS SELECT a FROM mv_repl_drop_input_t1
+                > CREATE MATERIALIZED VIEW mv_repl_drop_input_mv AS SELECT a FROM mv_repl_drop_input_v1
+                > CREATE TABLE mv_repl_drop_input_t2 (a INT) WITH (RETAIN HISTORY FOR '1 hour')
+                > INSERT INTO mv_repl_drop_input_t2 VALUES (2)
+                > CREATE VIEW mv_repl_drop_input_v2 AS SELECT a FROM mv_repl_drop_input_t2
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_repl_drop_input_rp1 FOR mv_repl_drop_input_mv AS SELECT a FROM mv_repl_drop_input_v2
+                > SELECT * FROM mv_repl_drop_input_rp1
+                2
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > ALTER MATERIALIZED VIEW mv_repl_drop_input_mv APPLY REPLACEMENT mv_repl_drop_input_rp1
+                > DROP VIEW mv_repl_drop_input_v1
+                > SELECT * FROM mv_repl_drop_input_mv
+                2
+                """,
+                """
+                > CREATE TABLE mv_repl_drop_input_t3 (a INT) WITH (RETAIN HISTORY FOR '1 hour')
+                > INSERT INTO mv_repl_drop_input_t3 VALUES (3)
+                > CREATE VIEW mv_repl_drop_input_v3 AS SELECT a FROM mv_repl_drop_input_t3
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_repl_drop_input_rp2 FOR mv_repl_drop_input_mv AS SELECT a FROM mv_repl_drop_input_v3
+                > SELECT * FROM mv_repl_drop_input_rp2
+                3
+                > ALTER MATERIALIZED VIEW mv_repl_drop_input_mv APPLY REPLACEMENT mv_repl_drop_input_rp2
+                > DROP VIEW mv_repl_drop_input_v2
+                > SELECT * FROM mv_repl_drop_input_mv
+                3
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > SELECT * FROM mv_repl_drop_input_mv
+                3
+
+                > SELECT name FROM mz_materialized_views WHERE name LIKE 'mv_repl_drop_input_%'
+                mv_repl_drop_input_mv
+            """))

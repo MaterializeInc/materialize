@@ -38,6 +38,7 @@ mod connection;
 mod deployment_ops;
 mod dev_overlays;
 mod errors;
+mod humanized_type;
 mod introspection;
 mod models;
 mod provisioning;

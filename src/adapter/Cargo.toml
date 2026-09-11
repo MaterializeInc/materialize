@@ -115,4 +115,3 @@ harness = false
 
 [features]
 default = []
-foundationdb = ["mz-timestamp-oracle/foundationdb"]

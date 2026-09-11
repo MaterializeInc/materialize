@@ -16,11 +16,11 @@ that fixed input, and compares the result to a set of expected rows. Tests are
 written inline in the same `.sql` file as the view they exercise.
 
 {{< warning >}}
-`EXECUTE UNIT TEST` is executed only by [`mz-deploy`](/manage/mz-deploy/), not by
+`EXECUTE UNIT TEST` is executed only by [`mz-deploy`](/developer-tools/mz-deploy/), not by
 Materialize itself. The Materialize SQL layer parses the statement but rejects
 it during planning, so running it through a SQL client such as `psql` returns an
 `EXECUTE UNIT TEST statement not yet supported` error. Use
-[`mz-deploy test`](/manage/mz-deploy/local-development/#write-and-run-unit-tests)
+[`mz-deploy test`](/developer-tools/mz-deploy/local-development/#write-and-run-unit-tests)
 to discover and run these tests.
 {{< /warning >}}
 
@@ -45,7 +45,7 @@ difference is empty.
 Every object the target view depends on must have a `MOCK` clause; an unmocked
 dependency is a validation error. A mock's column names and types must match the
 real object's schema, and the target view's output columns must match the
-`EXPECTED` column list. Run [`mz-deploy lock`](/manage/mz-deploy/local-development/#lock-types)
+`EXPECTED` column list. Run [`mz-deploy lock`](/developer-tools/mz-deploy/local-development/#lock-types)
 to refresh the schema information used for this validation when an external
 dependency changes.
 
@@ -104,7 +104,7 @@ EXPECTED(id bigint, ts timestamptz) AS (
 
 ## Related pages
 
-- [Local development with mz-deploy](/manage/mz-deploy/local-development/#write-and-run-unit-tests)
+- [Local development with mz-deploy](/developer-tools/mz-deploy/local-development/#write-and-run-unit-tests)
 - [`CREATE VIEW`](/sql/create-view/)
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/)
 - [`VALUES`](/sql/values/)

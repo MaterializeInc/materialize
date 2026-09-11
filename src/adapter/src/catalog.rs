@@ -62,7 +62,9 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, SqlScalarType};
+use mz_repr::{
+    CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, SqlScalarType,
+};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -1560,7 +1562,8 @@ impl Catalog {
     }
 
     /// Cache global and, optionally, local expressions for the given
-    /// `GlobalId`.
+    /// `GlobalId` of an item being created, whose only version is therefore
+    /// the root [`RelationVersion`].
     ///
     /// Takes the plans and metainfo directly as parameters (rather than
     /// fishing them out of catalog state), so this can be called **before**
@@ -1593,6 +1596,7 @@ impl Catalog {
                 LocalExpressions {
                     local_mir,
                     optimizer_features: optimizer_features.clone(),
+                    item_version: RelationVersion::root(),
                 },
             ));
         }
@@ -1603,6 +1607,7 @@ impl Catalog {
                 physical_plan,
                 dataflow_metainfos,
                 optimizer_features,
+                item_version: RelationVersion::root(),
             },
         )];
         self.update_expression_cache(local_exprs, global_exprs, Default::default())

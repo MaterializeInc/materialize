@@ -19,6 +19,8 @@ pub use replication::{
 #[cfg(feature = "schemas")]
 pub mod desc;
 #[cfg(feature = "schemas")]
+pub mod schema_change;
+#[cfg(feature = "schemas")]
 pub mod schemas;
 #[cfg(feature = "schemas")]
 pub use schemas::{get_schemas, publication_info};

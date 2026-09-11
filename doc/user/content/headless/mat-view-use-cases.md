@@ -11,7 +11,7 @@ For example:
 architecture](/images/3-tier-architecture.svg)
 
 In a [3-tier
-architecture](/manage/operational-guidelines/#three-tier-architecture)
+architecture](/clusters/operational-guidelines/#three-tier-architecture)
 where queries are served from a cluster different from the compute/transform
 cluster that maintains the view results:
 
@@ -30,7 +30,7 @@ from memory.
 ![Image of the 2-tier-architecture](/images/2-tier-architecture.svg)
 
 In a [2-tier
-architecture](/manage/appendix-alternative-cluster-architectures/#two-tier-architecture)
+architecture](/clusters/operational-guidelines/appendix-alternative-cluster-architectures/#two-tier-architecture)
 where queries are served from the same cluster that performs the
 compute/transform operations:
 
@@ -47,7 +47,7 @@ results from memory.
 ![Image of the 1-tier-architecture](/images/1-tier-architecture.svg)
 
 In a [1-tier
-architecture](/manage/appendix-alternative-cluster-architectures/#one-tier-architecture)
+architecture](/clusters/operational-guidelines/appendix-alternative-cluster-architectures/#one-tier-architecture)
 where queries are served from the same cluster that performs the
 compute/transform operations:
 

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_read_then_write.rs
-revision: a1bcaebfe6
+revision: ab330a3fad
 ---
 
 # adapter::frontend_read_then_write
@@ -24,7 +24,7 @@ Disagreement between the two predicates is caught by `soft_assert_or_log!` in th
 
 The loop drains the subscribe, accumulates diffs in `OccState::all_diffs`, and consolidates incrementally on each progress message. When the consolidated state is ready to write (progress past `as_of` and nonempty diffs), it submits a `Command::AttemptWrite` at the observed frontier as the write timestamp.
 
-On `WriteResult::TimestampPassed` (concurrent write advanced the target's upper), the loop clears `write_submitted`, increments `retry_count`, and waits for the subscribe to advance before retrying. Retries are bounded by `max_occ_retries`; exceeding the limit yields `AdapterError::ReadThenWriteContention`.
+On `WriteResult::TimestampPassed` (concurrent write advanced the target's upper), the loop clears `write_submitted`, increments `retry_count`, and waits for the subscribe to advance before retrying. Retries are bounded by `max_occ_retries`; exceeding the limit yields `AdapterError::ReadThenWriteContention`. After the loop, `retry_count` is recorded in the `occ_retry_count` histogram labeled with the `caller` dimension (`"session"` or `"background"`).
 
 A subscribe channel that closes on its own exits via `OccOutcome::Blind`, returning frontier-independent diffs for the caller to stage or submit. A consolidated empty result at a progress timestamp past `as_of` exits via `OccOutcome::NoRowsMatched`.
 

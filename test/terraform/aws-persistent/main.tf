@@ -15,7 +15,7 @@ resource "random_password" "db_password" {
 
 # 1. Create network infrastructure
 module "networking" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/networking?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/networking?ref=v13.2.1"
 
   name_prefix          = var.name_prefix
   vpc_cidr             = "10.0.0.0/16"
@@ -28,7 +28,7 @@ module "networking" {
 
 # 2. Create EKS cluster
 module "eks" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks?ref=v13.2.1"
 
   name_prefix                              = var.name_prefix
   cluster_version                          = "1.32"
@@ -46,8 +46,35 @@ module "eks" {
 }
 
 # 2.1 Create base node group for system workloads and Karpenter
+# Clusters created with EKS module v21 no longer bootstrap the VPC CNI, and
+# nodes cannot become Ready without one, so it must be installed before any
+# node group.
+module "vpc_cni" {
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/vpc-cni?ref=v13.2.1"
+
+  name_prefix       = var.name_prefix
+  oidc_provider_arn = module.eks.oidc_provider_arn
+  oidc_issuer_url   = module.eks.cluster_oidc_issuer_url
+
+  # Enforcement stays off, as it effectively was before EKS module v21: the
+  # operator module's allow-environmentd-egress policy permits only 6876, but
+  # orchestratord probes the leader API on the internal HTTP port 6878 when
+  # authenticator_kind is None, so with enforcement on the environment is never
+  # promoted and balancerd is never created.
+  enable_network_policy    = false
+  enable_policy_event_logs = false
+
+  kubeconfig_data = local.kubeconfig_data
+
+  tags = var.tags
+
+  depends_on = [
+    module.eks,
+  ]
+}
+
 module "base_node_group" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks-node-group?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks-node-group?ref=v13.2.1"
 
   cluster_name                      = module.eks.cluster_name
   aws_region                        = var.aws_region
@@ -61,16 +88,40 @@ module "base_node_group" {
   labels                            = local.base_node_labels
   cluster_service_cidr              = module.eks.cluster_service_cidr
   cluster_primary_security_group_id = module.eks.node_security_group_id
-  tags                              = var.tags
+  # Known at plan time despite the depends_on, see the module's variable docs.
+  partition  = data.aws_partition.current.partition
+  account_id = data.aws_caller_identity.current.account_id
+  tags       = var.tags
 
   depends_on = [
-    module.eks,
+    module.vpc_cni,
   ]
 }
 
 # 2.2 Install Karpenter to manage creation of additional nodes
+# v21 clusters do not bootstrap CoreDNS either, so the deployment, its service
+# account and the kube-dns Service are created here.
+module "coredns" {
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/coredns?ref=v13.2.1"
+
+  node_selector                      = local.base_node_labels
+  disable_default_coredns_autoscaler = false
+  create_coredns_service_account     = true
+  create_kube_dns_service            = true
+  kube_dns_service_cluster_ip        = cidrhost(module.eks.cluster_service_cidr, 10)
+  kubeconfig_data                    = local.kubeconfig_data
+  cluster_identifier                 = module.eks.cluster_name
+
+  depends_on = [
+    module.eks,
+    module.base_node_group,
+    module.networking,
+    module.vpc_cni,
+  ]
+}
+
 module "karpenter" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter?ref=v13.2.1"
 
   name_prefix             = var.name_prefix
   cluster_name            = module.eks.cluster_name
@@ -89,7 +140,7 @@ module "karpenter" {
 
 # Create a generic nodeclass and nodepool for system workloads
 module "ec2nodeclass_generic" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-ec2nodeclass?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-ec2nodeclass?ref=v13.2.1"
 
   name               = local.nodeclass_name_generic
   ami_selector_terms = local.ami_selector_terms
@@ -107,7 +158,7 @@ module "ec2nodeclass_generic" {
 }
 
 module "nodepool_generic" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-nodepool?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-nodepool?ref=v13.2.1"
 
   name            = local.nodeclass_name_generic
   nodeclass_name  = local.nodeclass_name_generic
@@ -124,7 +175,7 @@ module "nodepool_generic" {
 
 # Create a dedicated nodeclass and nodepool for Materialize pods
 module "ec2nodeclass_materialize" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-ec2nodeclass?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-ec2nodeclass?ref=v13.2.1"
 
   name               = local.nodeclass_name_materialize
   ami_selector_terms = local.ami_selector_terms
@@ -141,7 +192,7 @@ module "ec2nodeclass_materialize" {
 }
 
 module "nodepool_materialize" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-nodepool?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-nodepool?ref=v13.2.1"
 
   name            = local.nodeclass_name_materialize
   nodeclass_name  = local.nodeclass_name_materialize
@@ -159,7 +210,7 @@ module "nodepool_materialize" {
 
 # 3. Install AWS Load Balancer Controller
 module "aws_lbc" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/aws-lbc?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/aws-lbc?ref=v13.2.1"
 
   name_prefix       = var.name_prefix
   eks_cluster_name  = module.eks.cluster_name
@@ -173,12 +224,13 @@ module "aws_lbc" {
   depends_on = [
     module.eks,
     module.nodepool_generic,
+    module.coredns,
   ]
 }
 
 # 4. Install Certificate Manager for TLS
 module "cert_manager" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=v13.2.1"
 
   node_selector = local.generic_node_labels
 
@@ -191,7 +243,7 @@ module "cert_manager" {
 }
 
 module "self_signed_cluster_issuer" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=v13.2.1"
 
   name_prefix = var.name_prefix
 
@@ -202,7 +254,7 @@ module "self_signed_cluster_issuer" {
 
 # 5. Setup dedicated database instance for Materialize
 module "database" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/database?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/database?ref=v13.2.1"
 
   name_prefix               = var.name_prefix
   postgres_version          = "15"
@@ -228,7 +280,7 @@ module "database" {
 
 # 6. Setup S3 bucket for Materialize
 module "storage" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/storage?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/storage?ref=v13.2.1"
 
   name_prefix            = var.name_prefix
   bucket_lifecycle_rules = []
@@ -253,7 +305,7 @@ module "storage" {
 
 # 7. Install Materialize Operator
 module "operator" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/operator?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/operator?ref=v13.2.1"
 
   name_prefix    = var.name_prefix
   aws_region     = var.aws_region
@@ -285,6 +337,8 @@ module "operator" {
     module.eks,
     module.networking,
     module.nodepool_generic,
+    module.coredns,
+    module.vpc_cni,
     # The operator chart renders cert-manager Certificate/Issuer resources for
     # the conversion webhook (install_v1_crd defaults to true), so cert-manager
     # CRDs must be registered before the operator's helm_release applies.
@@ -294,7 +348,7 @@ module "operator" {
 
 # 8. Setup Materialize instance
 module "materialize_instance" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=v13.2.1"
 
   instance_name        = local.materialize_instance_name
   instance_namespace   = local.materialize_instance_namespace

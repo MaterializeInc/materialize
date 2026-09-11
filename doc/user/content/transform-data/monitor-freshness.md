@@ -9,7 +9,7 @@ menu:
     weight: 84
 ---
 
-[Freshness](/concepts/reaction-time/#freshness) measures the time from when a
+[Freshness](/fundamentals/concepts/reaction-time/#freshness) measures the time from when a
 change occurs in an upstream system to when it becomes visible in the results of
 a query. This guide shows how to track freshness for an object over time and how
 to summarize a whole window of freshness observations with a CCDF or an HDR
@@ -54,22 +54,67 @@ healthy pattern for a lightly loaded object.
 
 {{< note >}}
 
-Materialize exposes wallclock lag history through two relations. Which one you
-query has a large impact on performance.
-
-- [`mz_internal.mz_wallclock_global_lag_recent_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history)
-  is indexed and holds only the past 24 hours of data. Querying it is fast, so
-  it is the right choice for frequent or interactive monitoring and for
-  dashboards. Use this relation by default, as in the query above.
-
-- [`mz_internal.mz_wallclock_global_lag_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_history)
-  covers the full retention window (at least 30 days) but is unindexed, so it
-  can be slow to query. A single query can occupy `mz_catalog_server` for
-  several seconds. Reach for this
-  relation only when you specifically need data older than 24 hours, and avoid
-  querying it frequently.
+[`mz_internal.mz_wallclock_global_lag_recent_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history)
+is indexed and holds only the past 24 hours of data. Querying it is fast, so it
+is the right choice for frequent or interactive monitoring and for dashboards.
+Use this relation by default, as in the query above. For older data, see
+[Monitor historical freshness](#monitor-historical-freshness).
 
 {{< /note >}}
+
+## Monitor historical freshness
+
+`mz_wallclock_global_lag_recent_history` holds only the past 24 hours. To look
+further back, query
+[`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history)
+instead, which covers the full retention window of at least 30 days. The
+columns are identical, so any query in this guide works against it by swapping
+the relation name and widening the time filter:
+
+```mzsql
+SELECT wl.occurred_at, wl.lag
+FROM mz_internal.mz_wallclock_global_lag_history wl
+JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+WHERE o.name = '<your_mv_name>'
+  AND wl.occurred_at > now() - INTERVAL '7 days'
+ORDER BY wl.occurred_at DESC;
+```
+
+Because the relation is unindexed, a single query can occupy
+`mz_catalog_server` for several seconds. Keep the `occurred_at` filter as
+narrow as the question allows, and aggregate in the query rather than pulling
+raw rows out for a longer window. For example, the following returns one
+maximum lag per day over the past 30 days:
+
+```mzsql
+SELECT
+    date_trunc('day', wl.occurred_at) AS day,
+    max(wl.lag) AS max_lag
+FROM mz_internal.mz_wallclock_global_lag_history wl
+JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+WHERE o.name = '<your_mv_name>'
+  AND wl.occurred_at > now() - INTERVAL '30 days'
+GROUP BY 1
+ORDER BY 1 DESC;
+```
+
+For recurring or dashboard queries that fit within the last 24 hours, stay on
+`mz_wallclock_global_lag_recent_history`.
+
+If you need historical data on a recurring basis, run the query from a separate
+cluster instead of the default `mz_catalog_server`. A slow scan of the unindexed
+relation can tie up `mz_catalog_server` for seconds at a time, and because it
+also serves the `SHOW` commands and catalog lookups behind the Console and
+interactive tooling, that slows catalog queries across your whole environment.
+These queries read only system catalog relations, so Materialize routes them to
+`mz_catalog_server` by default. Point the session at your own cluster and turn
+off catalog auto-routing so the query actually runs there:
+
+```mzsql
+CREATE CLUSTER freshness_monitoring (SIZE = '25cc');
+SET cluster = freshness_monitoring;
+SET auto_route_catalog_queries = false;
+```
 
 ## Summarize freshness with a CCDF
 

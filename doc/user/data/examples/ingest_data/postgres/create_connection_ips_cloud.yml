@@ -1,6 +1,6 @@
 - name: "create-secret"
   description: |-
-    In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
+    In the [Materialize Console's SQL Shell](/developer-tools/console/), or your preferred SQL
     client connected to Materialize, use the [`CREATE
     SECRET`](/sql/create-secret/) command to securely store the password for the
     `materialize` PostgreSQL user you created

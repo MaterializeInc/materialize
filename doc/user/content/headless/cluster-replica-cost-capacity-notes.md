@@ -3,7 +3,7 @@ headless: true
 ---
 - For Cloud, each replica incurs cost, calculated as `cluster size *
   replication factor` per second. See [Usage &
-  billing (Cloud)](/administration/billing/) for more details.
+  billing (Cloud)](/materialize-cloud/billing/) for more details.
 
 - Increasing the replication factor does **not** increase the cluster's work
   capacity. Replicas are exact copies of one another: each replica must do

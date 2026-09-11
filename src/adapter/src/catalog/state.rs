@@ -27,7 +27,7 @@ use mz_catalog::builtin::{
     BUILTINS, Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
-use mz_catalog::expr_cache::LocalExpressions;
+use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
@@ -374,18 +374,20 @@ impl LocalExpressionCache {
     }
 
     /// Inform the cache that `id` was not found in the cache and that we should add it as
-    /// `local_mir` and `optimizer_features`.
+    /// `local_mir` and `optimizer_features`, recorded at `item_version`.
     pub(super) fn insert_uncached_expression(
         &mut self,
         id: GlobalId,
         local_mir: OptimizedMirRelationExpr,
         optimizer_features: OptimizerFeatures,
+        item_version: RelationVersion,
     ) {
         match self {
             LocalExpressionCache::Open { uncached_exprs, .. } => {
                 let local_expr = LocalExpressions {
                     local_mir,
                     optimizer_features,
+                    item_version,
                 };
                 // If we are trying to cache the same item a second time, with a different
                 // expression, then we must be migrating the object or doing something else weird.
@@ -1307,6 +1309,7 @@ impl CatalogState {
                         global_id,
                         uncached_expr,
                         optimizer_features,
+                        latest_item_version(extra_versions),
                     );
                 }
                 Ok(item)
