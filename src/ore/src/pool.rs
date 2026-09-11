@@ -2019,13 +2019,17 @@ impl ChunkHandle {
         self.read_impl(0..self.meta.len, dst, false);
     }
 
-    /// Copy this chunk on the blocking executor without admitting it to the pool.
+    /// Copy this chunk without admitting it to the pool, offloading nonresident reads.
     ///
-    /// Requires a Tokio runtime. A submitted read retains its handle and
+    /// Resident slots are copied inline if their state lock is available. Other
+    /// reads require a Tokio runtime. A submitted read retains its handle and
     /// concurrency permit until it finishes, even if the caller cancels.
     /// The returned buffer belongs to the caller.
     #[cfg(feature = "async")]
     pub async fn read_async(self: &Arc<Self>) -> Vec<u64> {
+        if let Some(words) = self.try_read_resident() {
+            return words;
+        }
         let permit = Arc::clone(&self.meta.pool.read_slots)
             .acquire_owned()
             .await
@@ -2048,6 +2052,29 @@ impl ChunkHandle {
             },
         )
         .await
+    }
+
+    #[cfg(feature = "async")]
+    fn try_read_resident(&self) -> Option<Vec<u64>> {
+        if self.meta.len == 0 {
+            return Some(Vec::new());
+        }
+        let mut state = match self.meta.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+            Err(std::sync::TryLockError::Poisoned(_)) => panic!("chunk state poisoned"),
+        };
+        match state.residency {
+            Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
+                state.touched = true;
+                let slot = state.slot.expect("resident non-empty chunk has a slot");
+                // SAFETY: the state lock prevents eviction from releasing this slot.
+                let words = unsafe { self.meta.pool.slot_data(&self.meta, slot) };
+                Some(words.to_vec())
+            }
+            // Oversize heap copies have no slot-size bound, so keep them off-worker.
+            Residency::Oversize | Residency::Evicted => None,
+        }
     }
 
     /// As [`ChunkHandle::read_into`], restricted to the word range `range`
@@ -2309,7 +2336,11 @@ impl Drop for ChunkHandle {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "async")]
+    use std::future::Future;
+    #[cfg(feature = "async")]
     use std::sync::atomic::{AtomicBool, AtomicUsize};
+    #[cfg(feature = "async")]
+    use std::task::{Context, Poll, Waker};
 
     use super::*;
     use crate::pool::extent::TEST_CODEC;
@@ -2386,8 +2417,66 @@ mod tests {
             let resident = pool.stats().resident_bytes;
             assert_eq!(handle.read_async().await, expected);
             assert_eq!(pool.stats().resident_bytes, resident);
-            assert_eq!(pool.stats().async_reads, 1);
+            assert_eq!(pool.stats().async_reads, u64::from(budget == 0));
             assert_eq!(pool.stats().async_reads_in_flight, 0);
+        }
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test]
+    fn resident_async_reads_complete_without_a_runtime() {
+        let pool = test_pool(usize::MAX);
+        let expected = payload(8192, 42);
+        let handle = Arc::new(insert(&pool, &mut expected.clone()));
+        let mut read = Box::pin(handle.read_async());
+        assert_eq!(
+            read.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(expected)
+        );
+        assert_eq!(pool.stats().async_reads, 0);
+        pool.evict(&handle);
+        assert!(handle.try_read_resident().is_none());
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn contended_resident_reads_yield() {
+        let pool = test_pool(usize::MAX);
+        let expected = payload(8192, 42);
+        let handle = Arc::new(insert(&pool, &mut expected.clone()));
+        let mut read = Box::pin(handle.read_async());
+        {
+            let _state = handle.meta.state();
+            assert!(
+                read.as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+        }
+        assert_eq!(read.await, expected);
+        assert_eq!(pool.stats().async_reads, 1);
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test(tokio::test)]
+    #[ignore = "local resident-read dispatch comparison"]
+    async fn resident_read_microbench() {
+        for words in [8 << 10, 256 << 10] {
+            let pool = test_pool(usize::MAX);
+            let expected = payload(words, 42);
+            let handle = Arc::new(insert(&pool, &mut expected.clone()));
+            assert_eq!(handle.read_async().await, expected);
+            let start = std::time::Instant::now();
+            for _ in 0..1024 {
+                std::hint::black_box(handle.read_async().await);
+            }
+            eprintln!(
+                "RESIDENT_READ bytes={} iterations=1024 us={} offloaded={}",
+                words * 8,
+                start.elapsed().as_micros(),
+                pool.stats().async_reads,
+            );
         }
     }
 

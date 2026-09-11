@@ -147,13 +147,18 @@ where
         match chunk {
             ColumnChunk::Spilled(body, depth) => {
                 let handle = Arc::clone(&body.handle);
-                // NOTE: Dropping the operator cannot cancel a submitted blocking
-                // read. This owned task keeps input admission until that read ends.
-                let task = mz_ore::task::spawn(|| "native_merge_read", async move {
+                let mut read = Box::pin(async move {
                     let words = handle.read_async().await;
                     (words, reservation)
                 });
-                let (words, _reservation) = task.await;
+                let (words, _reservation) = match futures_util::poll!(read.as_mut()) {
+                    Poll::Ready(loaded) => loaded,
+                    Poll::Pending => {
+                        // NOTE: A submitted blocking read outlives cancellation.
+                        // This task retains its input admission until the read ends.
+                        mz_ore::task::spawn(|| "native_merge_read", read).await
+                    }
+                };
                 ColumnChunk::Resident(Rc::new(Column::Align(words)), depth)
             }
             chunk @ ColumnChunk::Resident(..) => chunk,
@@ -451,6 +456,26 @@ mod tests {
             chunk: ColumnChunk::spill_body(column, pool, 1),
             budget: budget.clone(),
         }
+    }
+
+    #[mz_ore::test]
+    fn resident_inputs_do_not_spawn_read_tasks() {
+        let pool = Pool::new().unwrap();
+        pool.set_budget(usize::MAX);
+        let budget = ReadBudget::new(1 << 20);
+        let input = chunk(&[((1, vec![7; 128]), 0, 1)], &pool, &budget);
+        let mut io = TestChunk::pending_for(std::slice::from_ref(&input), &[]);
+        let Poll::Ready(loaded) = io.poll_load(
+            vec![input.chunk.clone()],
+            &mut Context::from_waker(std::task::Waker::noop()),
+        ) else {
+            panic!("resident input should load in one poll");
+        };
+        assert_eq!(loaded.chunks[0].records(), 1);
+        assert!(budget.reserved_bytes() > 0);
+        drop(loaded);
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(pool.stats().async_reads, 0);
     }
 
     #[mz_ore::test]
