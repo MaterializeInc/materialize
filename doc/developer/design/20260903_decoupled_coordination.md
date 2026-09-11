@@ -237,6 +237,25 @@ query-local dataflows and receives their responses. Its protection is the
 [durable client protection](#client-read-protection) from the start. No remote
 controller access API or volatile hold forwarding is introduced as a bridge.
 
+### Cooperating catalog writers
+
+The deployment generation is the catalog fence. Components of the active
+generation write without fencing each other, and promotion fences the whole old
+generation. Persist compare-and-append is the commit authority: metadata-only
+writes such as protection and heartbeats retry on contention, while DDL refreshes
+and revalidates and reports a planning conflict when structural changes
+invalidated it rather than merging. Each writer follows the durable stream it
+commits to. Within a generation, safety comes from validation at commit, not from
+per-process epochs.
+
+Persist critical since handles follow the committed bound only. Every valid read
+requirement is in that bound, so applying it is monotone and needs no per-process
+opaque. Local hold accounting does not drive critical handles. A prewarming
+process that needs client protection writes under the active generation, since a
+writer opened under its own pending generation would fence the leader before
+promotion. Where an enactment proves unsafe under two same-generation lifecycle
+instances, that case gets a narrow fence of its own, not a general epoch.
+
 ## Alternatives
 
 ### Plan-specific recovery protection
