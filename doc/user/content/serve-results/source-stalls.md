@@ -22,19 +22,25 @@ keep serving available through an upstream outage.
 
 ## How a stall affects queries
 
-Materialize serves every query at a single logical timestamp that must be
-valid for **all** of the query's inputs: for each input collection, the
-timestamp must lie between its [read frontier and write
-frontier](/sql/explain-timestamp/#details). When a source stalls, the write
-frontiers of the collections that depend on it freeze at the moment of the
-stall, while unaffected collections keep advancing.
+Materialize serves every query at a single logical timestamp. This means that
+each input must have overlapping timestamps. Imagine you have two sources, A
+and B. When source A stalls, its timestamp is frozen at the point of the
+stall, but source B will continue advancing.
+
+{{< note >}}
+Every collection has a **read frontier** (the earliest timestamp it can still
+answer correctly, advanced by compaction) and a **write frontier** (all data
+before this point has been fully processed). A query's timestamp must fall
+between the [read and write frontiers](/sql/explain-timestamp/#details) of
+every input it reads.
+{{< /note >}}
 
 Queries confined to the stalled data can still be served at the frozen
 timestamp. The results are stale, but consistent. Queries that mix stalled and
 still-advancing inputs may find that no common timestamp exists, in which case
 the query **blocks** until one does (typically, when the source resumes).
 
-## Behavior by query shape
+## Behavior by query shape and isolation level
 
 Under the **serializable** isolation level, queries whose inputs stalled
 together keep serving; queries that mix stalled and live inputs block. Under
@@ -131,27 +137,10 @@ For this to work, note:
 - **Reads of stalled data inside explicit transactions are not rescued**
   (see below).
 
-## Explicit transactions
+## Don't use transactions
 
-An explicit read transaction ([`BEGIN ... COMMIT`](/sql/begin/)) does not take
-its read set from the queries inside it: it pins a
-[timedomain](/sql/begin/#same-timedomain-error) covering every object in the
-referenced schemas, plus the system catalog. The transaction timestamp must
-sit above the read frontiers of everything in that timedomain, and those
-frontiers keep advancing during a stall. As a consequence, once the stall
-outlasts the compaction window, **any read of stalled data inside an explicit
-transaction blocks**, including query shapes that serve fine outside a
-transaction, such as an indexed point lookup.
-
-Transactions that read only healthy objects keep serving, under both
-isolation levels, even when a stalled source exists in the same schema.
-
-For reads of stalled data during a stall, issue single-statement queries, or
-use [`SUBSCRIBE`](/sql/subscribe/) with a cursor. `SUBSCRIBE` does not pin a
-timedomain, so subscribing to a single stalled collection serves stale even
-inside a transaction. `SUBSCRIBE` remains subject to the query-shape rules
-above, however: a subscription over a join of stalled and live inputs blocks
-just like the equivalent `SELECT`.
+Explicit read transactions that touch stalled data are unable to serve
+during a stall. Issue single-statement queries instead.
 
 {{< if-released "v26.29" >}}
 ## Fail fast instead of blocking
