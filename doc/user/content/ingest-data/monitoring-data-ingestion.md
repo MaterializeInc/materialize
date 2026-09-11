@@ -32,6 +32,10 @@ INNER JOIN mz_objects AS o ON (s.id = o.id)
 WHERE NOT s.snapshot_committed;
 ```
 
+Materialize commits the snapshot only once all of it has been read, so a
+source's committed statistics do not move while it snapshots. See [Understand
+the lifecycle of a source](/ingest-data/lifecycle-of-a-source/#snapshotting).
+
 It's also important to monitor CPU and memory utilization for the cluster
 hosting the source during snapshotting. If there are signs of resource
 exhaustion, you may need to [resize the cluster](/sql/alter-cluster/#alter-cluster-size).

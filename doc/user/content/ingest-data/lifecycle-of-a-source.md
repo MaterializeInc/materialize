@@ -35,6 +35,9 @@ one upstream relation.
 | `stalled`  | The object hit an error. The `error` column reports the cause.                |
 | `dropped`  | The object was dropped. Terminal.                                             |
 
+`stalled` covers both errors that Materialize retries on its own and errors that
+do not clear until you act. See [Stalled](#stalled).
+
 The examples below use a PostgreSQL source and a Kafka source on a dedicated
 cluster. Substitute your own object names.
 
@@ -131,12 +134,45 @@ While the snapshot is in progress, `snapshot_records_staged` climbs toward
 `snapshot_records_known` and `snapshot_committed` is `f`. A table cannot serve
 queries until its snapshot completes: queries against it block until then.
 
+Nothing is committed until the whole snapshot has been read, because
+Materialize ingests it at a single timestamp. So `offset_committed` does not
+advance for the duration, and on upsert sources even `updates_staged` sits at
+`0`, because the source buffers the snapshot while it builds its in-memory
+index. In those statistics a snapshot that is progressing normally is
+indistinguishable from a stuck one, so read progress from
+`snapshot_records_staged`, `messages_received`, and `bytes_received`.
+
 {{< note >}}
 These statistics are collected periodically, so for a window after an object
 starts running they can read `NULL` and `f` even though the data is already
 ingested and queryable. They also reset when a replica restarts. Track how they
 evolve rather than reading them at a single moment.
 {{< /note >}}
+
+[`mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses)
+answers the same question one level up, per source and replica rather than per
+table:
+
+```mzsql
+SELECT o.name, h.hydrated
+FROM mz_internal.mz_hydration_statuses h
+JOIN mz_objects o ON o.id = h.object_id
+WHERE o.name IN ('pg_src', 'kafka_src')
+ORDER BY o.name;
+```
+
+```nofmt
+   name    | hydrated
+-----------+----------
+ kafka_src | t
+ pg_src    | t
+(2 rows)
+```
+
+`hydrated` is `false` while any table attached to the source is still
+snapshotting, whatever the source type, which makes it a cheap source-level
+check. It is not specific to the initial snapshot: a replica restart resets it
+too, after which it tracks the source rebuilding its in-memory state.
 
 Snapshot duration and upstream impact vary by source type. CDC sources
 (PostgreSQL, MySQL, SQL Server) require the upstream system to retain its
@@ -245,6 +281,27 @@ reported it, which tells you which part of the pipeline failed:
 ```nofmt
 {"namespaced":{"postgres":"publication \"mz_orders\" does not exist"}}
 ```
+
+### Which stalls clear on their own
+
+Errors unrelated to the ingested data, such as a connection failure, an
+authentication failure, or an upstream restart, are retried. Materialize
+restarts the ingestion dataflow when it needs to, and the object moves back
+through `starting` to `running` once the upstream problem clears. Repeated
+`stalled` and `starting` transitions in
+[`mz_source_status_history`](#reviewing-the-full-history) are the signature of
+an error being retried.
+
+Other errors are definite: the upstream system changed in a way that invalidates
+what Materialize has already ingested. Dropping the publication a PostgreSQL
+source replicates from, dropping or truncating an upstream table, invalidating a
+replication slot, and an incompatible upstream schema change all land here.
+Materialize records a definite error durably against the affected table, so
+reads of that table return it and restarting the dataflow does not clear it.
+Recovery means fixing the upstream cause and recreating the affected tables, as
+in [Absorbing upstream schema
+changes](/ingest-data/patterns/upstream-schema-changes/#recover-from-an-unplanned-change).
+The stall above is one of these, so `orders` cannot be repaired in place.
 
 For causes and fixes, see [Troubleshooting data
 ingestion](/ingest-data/troubleshooting/) for any source type, and the
