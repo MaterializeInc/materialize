@@ -180,7 +180,12 @@ struct MaintenanceSample {
 // Two equal batches start a merge without doing any merge work during setup.
 // Each permit represents one row made available by a completed read. The same
 // maintenance future used by the arranger decides when input can resume.
-fn maintenance_sample(rows: u64, fuel: usize, read_rows: Option<usize>) -> MaintenanceSample {
+fn maintenance_sample(
+    rows: u64,
+    fuel: usize,
+    read_rows: Option<usize>,
+    allow_consolidation: bool,
+) -> MaintenanceSample {
     use std::cell::RefCell;
     use std::future::Future;
     use std::pin::pin;
@@ -223,7 +228,7 @@ fn maintenance_sample(rows: u64, fuel: usize, read_rows: Option<usize>) -> Maint
     let mut completions = 0;
     let start = Instant::now();
     {
-        let mut future = pin!(maintain(&state, &notify));
+        let mut future = pin!(maintain(&state, &notify, allow_consolidation));
         let wake_count = Arc::new(WakeCount(std::sync::atomic::AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&wake_count));
         let mut cx = Context::from_waker(&waker);
@@ -274,17 +279,61 @@ fn maintenance_sample(rows: u64, fuel: usize, read_rows: Option<usize>) -> Maint
 
 #[mz_ore::test]
 fn maintenance_readiness_preserves_work_allowance() {
-    for fuel in [1, 1000] {
-        let ready = maintenance_sample(4096, fuel, None);
-        assert_eq!(ready.worked, fuel);
-        for read_rows in [1, 64, 1024] {
-            let pending = maintenance_sample(4096, fuel, Some(read_rows));
-            assert_eq!(
-                pending.worked, ready.worked,
-                "fuel={fuel}, read_rows={read_rows}"
-            );
+    for allow_consolidation in [false, true] {
+        for fuel in [1, 1000] {
+            let ready = maintenance_sample(4096, fuel, None, allow_consolidation);
+            assert_eq!(ready.worked, fuel);
+            for read_rows in [1, 64, 1024] {
+                let pending = maintenance_sample(4096, fuel, Some(read_rows), allow_consolidation);
+                assert_eq!(
+                    pending.worked, ready.worked,
+                    "fuel={fuel}, read_rows={read_rows}, allow_consolidation={allow_consolidation}"
+                );
+            }
         }
     }
+}
+
+#[mz_ore::test]
+fn merge_only_maintenance_defers_consolidation_until_idle() {
+    let gate = Arc::new(Mutex::new(Gate {
+        permits: usize::MAX,
+        ..Gate::default()
+    }));
+    let mut trace = Spine::new(OperatorInfo::new(0, 0, [].into()), None, None);
+    // Descending sizes place the batches in separate layers without starting a merge.
+    for (time, count) in [(0, 32), (1, 1)] {
+        trace.insert(Span::new(
+            Description::new(
+                Antichain::from_elem(time),
+                Antichain::from_elem(time + 1),
+                Antichain::from_elem(0),
+            ),
+            Some(Batch {
+                rows: (0..count).map(|key| (key, time, 1)).collect(),
+                gate: Arc::clone(&gate),
+            }),
+        ));
+    }
+    trace.set_physical_compaction(Antichain::from_elem(2).borrow());
+    let expected = contents(&trace);
+    trace.set_exert_logic(Arc::new(|levels| {
+        let batches: usize = levels.iter().map(|(_, count, _)| count).sum();
+        (batches > 1).then_some(1000)
+    }));
+    for _ in 0..100 {
+        trace.exert_merges();
+        assert_eq!(gate.lock().unwrap().worked, 0);
+        assert_eq!(contents(&trace), expected);
+    }
+    for _ in 0..100 {
+        trace.exert();
+    }
+    assert_eq!(gate.lock().unwrap().worked, 33);
+    let mut batches = 0;
+    trace.map_spans(|span| batches += usize::from(span.inner.is_some()));
+    assert_eq!(batches, 1, "idle maintenance must complete consolidation");
+    assert_eq!(contents(&trace), expected);
 }
 
 /// Run with `cargo test -p mz-timely-util maintenance_microbench -- --ignored --nocapture`.
@@ -299,7 +348,7 @@ fn maintenance_microbench() {
         for fuel in [1, 1000] {
             for read_rows in [None, Some(1), Some(64), Some(1024)] {
                 for sample in 0..5 {
-                    let result = maintenance_sample(rows, fuel, read_rows);
+                    let result = maintenance_sample(rows, fuel, read_rows, true);
                     println!(
                         "{rows},{fuel},{},{sample},{},{},{}",
                         read_rows.map_or_else(|| "ready".to_owned(), |n| n.to_string()),

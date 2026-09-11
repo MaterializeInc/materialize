@@ -292,6 +292,18 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
     ///
     /// Whether and how much effort to apply is determined by `self.exert_logic`, a closure the user can set.
     pub fn exert(&mut self) {
+        self.exert_inner(true);
+    }
+
+    /// Apply policy-funded effort to active merges without forcing separate batches together.
+    ///
+    /// Pending introductions retain their insertion-funded work. Call `exert` when
+    /// input drains to satisfy the configured optional consolidation policy.
+    pub fn exert_merges(&mut self) {
+        self.exert_inner(false);
+    }
+
+    fn exert_inner(&mut self, allow_consolidation: bool) {
         // Finish the old grant before asking policy for another one.
         if !self.drive_maintenance() {
             return;
@@ -302,12 +314,16 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
         }
         self.tidy_layers();
         if let Some(effort) = self.exert_effort() {
+            let active_merge = self.merging.iter().any(|b| b.is_double());
+            if !active_merge && !allow_consolidation {
+                return;
+            }
             crate::columnar::chunk::metrics::record(
                 crate::columnar::chunk::metrics::Stage::OptionalExert,
                 effort,
                 0,
             );
-            if self.merging.iter().any(|b| b.is_double()) {
+            if active_merge {
                 self.queue_fuel(effort.cast_signed());
             } else {
                 let level = usize::cast_from(effort.next_power_of_two().trailing_zeros());

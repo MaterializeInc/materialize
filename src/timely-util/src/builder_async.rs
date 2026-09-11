@@ -158,6 +158,11 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, C: InputConnection<T>> {
 }
 
 impl<T: Timestamp, D: Container, C: InputConnection<T>> AsyncInputHandle<T, D, C> {
+    /// Whether the input currently has no queued data or frontier changes.
+    pub fn is_empty(&self) -> bool {
+        self.queue.borrow().is_empty()
+    }
+
     pub fn next_sync(&mut self) -> Option<Event<T, C::Capability, D>> {
         let mut queue = self.queue.borrow_mut();
         match queue.pop_front()? {

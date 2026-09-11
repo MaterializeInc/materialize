@@ -576,7 +576,7 @@ mod tests {
                 0,
                 "callbacks must not acquire admission while the arranger can be awaiting its batcher"
             );
-            super::super::maintain(&trace.state, &trace.notify).await;
+            super::super::maintain(&trace.state, &trace.notify, true).await;
             assert!(pool.stats().async_reads > 0);
             assert_eq!(budget.reserved_bytes(), 0);
         });

@@ -330,11 +330,20 @@ impl Wake for NotifyWake {
 /// This does not force all batches to compact. DD's exertion policy determines
 /// the work allowance. The caller must use the notification installed by
 /// `Spine::with_budget` and poll this future on the owning Timely worker.
-pub(super) async fn maintain<B>(state: &RefCell<vendor::spine::Spine<B>>, notify: &Notify)
-where
+/// Set `allow_consolidation` when input drains so policy can also initiate merges
+/// between separate batches. Otherwise only active merges receive optional fuel.
+pub(super) async fn maintain<B>(
+    state: &RefCell<vendor::spine::Spine<B>>,
+    notify: &Notify,
+    allow_consolidation: bool,
+) where
     B: differential_dataflow_next::trace::asynchronous::Batch + Clone + 'static,
 {
-    state.borrow_mut().exert();
+    if allow_consolidation {
+        state.borrow_mut().exert();
+    } else {
+        state.borrow_mut().exert_merges();
+    }
     while state.borrow().maintenance_pending() {
         // No trace borrow may cross this await. Reader compaction can change the
         // same spine while a read is pending, and its wakeup uses this notification.

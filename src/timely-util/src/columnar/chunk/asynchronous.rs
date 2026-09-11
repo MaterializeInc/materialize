@@ -130,7 +130,9 @@ where
                     upper = next;
                 }
             }
-            maintain(&state, &notify).await;
+            // Queued input will fund introductions itself. Continue active merges,
+            // but wait for input to drain before forcing separate batches together.
+            maintain(&state, &notify, input.is_empty()).await;
             tokio::task::yield_now().await;
         }
     });
@@ -258,7 +260,7 @@ mod tests {
             reader.set_logical_compaction(frontier.borrow());
             reader.set_physical_compaction(frontier.borrow());
 
-            maintain(&state, &notify).await;
+            maintain(&state, &notify, true).await;
             assert_eq!(
                 reader
                     .batches_through(Antichain::new().borrow())
@@ -269,7 +271,7 @@ mod tests {
             );
             hold.set_logical_compaction(frontier.borrow());
             hold.set_physical_compaction(frontier.borrow());
-            let mut maintenance = Box::pin(maintain(&state, &notify));
+            let mut maintenance = Box::pin(maintain(&state, &notify, true));
             assert!(futures_util::poll!(&mut maintenance).is_pending());
             assert_eq!(
                 reader
