@@ -54,3 +54,105 @@ TRUNCATE TABLE t1;
 # https://www.postgresql.org/docs/10/logical-replication-restrictions.html
 ! SELECT * FROM t1;
 contains:table was truncated
+
+#
+# Test that a truncated table stays dead across an ingestion dataflow restart.
+#
+# While the dataflow is running, a TRUNCATE drops the table from the in-memory
+# table map, so every later change to it is ignored. The map is rebuilt from the
+# catalog when the dataflow restarts, which brings the table back as a live
+# output resuming from the current replication position. Rows inserted upstream
+# while the table was stalled were never ingested, so their later deletes are
+# written as retractions of rows that do not exist. Downstream Reduce and TopK
+# operators then report negative accumulations.
+#
+# Those retractions cannot be read back over SQL, because the same shard also
+# holds the permanent "table was truncated" error and every peek on it fails on
+# that error instead. So we assert the cause rather than the symptom: after the
+# restart the source must commit no updates at all for the truncated table.
+
+$ set-sql-timeout duration=120s
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+CREATE TABLE t_trunc (f1 INTEGER);
+ALTER TABLE t_trunc REPLICA IDENTITY FULL;
+INSERT INTO t_trunc VALUES (1);
+
+CREATE TABLE t_barrier (f1 INTEGER);
+ALTER TABLE t_barrier REPLICA IDENTITY FULL;
+INSERT INTO t_barrier VALUES (1);
+
+CREATE PUBLICATION mz_source_restart FOR TABLE t_trunc, t_barrier;
+
+> CREATE CLUSTER restart_cluster SIZE '${arg.default-replica-size}'
+
+> BEGIN
+> CREATE SOURCE mz_source_restart
+  IN CLUSTER restart_cluster
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_restart');
+
+> CREATE TABLE t_trunc FROM SOURCE mz_source_restart (REFERENCE t_trunc);
+> CREATE TABLE t_barrier FROM SOURCE mz_source_restart (REFERENCE t_barrier);
+> COMMIT
+
+> SELECT * FROM t_trunc;
+1
+
+> SELECT * FROM t_barrier;
+1
+
+# Truncate and reload upstream. The reloaded rows are dropped on the floor: the
+# running dataflow has already forgotten the table.
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+TRUNCATE TABLE t_trunc;
+INSERT INTO t_trunc VALUES (100), (200);
+
+! SELECT * FROM t_trunc;
+contains:table was truncated
+
+# Restart the ingestion dataflow without touching the truncated table. Dropping
+# any other subsource of the same source has the same effect.
+> ALTER CLUSTER restart_cluster SET (REPLICATION FACTOR 0)
+
+> ALTER CLUSTER restart_cluster SET (REPLICATION FACTOR 1)
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 't_barrier'
+running
+
+# Pin the new replica so the stats queries below cannot pick up the pre-restart
+# replica's counters.
+$ set-from-sql var=replica_id
+SELECT cr.id
+  FROM mz_clusters c, mz_cluster_replicas cr
+  WHERE c.name = 'restart_cluster' AND c.id = cr.cluster_id
+
+# Delete the reloaded rows, then write to `t_barrier`. Replication is ordered,
+# so once the `t_barrier` row is visible the DELETE has already been processed.
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DELETE FROM t_trunc;
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+INSERT INTO t_barrier VALUES (2);
+
+> SELECT * FROM t_barrier;
+1
+2
+
+# Wait for this replica's statistics to reflect the `t_barrier` write, so that a
+# zero for `t_trunc` below means "nothing was committed" and not "not reported
+# yet". Both tables are reported in the same statistics update.
+> SELECT SUM(u.updates_committed) > 0
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
+  WHERE t.name = 't_barrier' AND u.replica_id = '${replica_id}'
+true
+
+> SELECT SUM(u.updates_committed)
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
+  WHERE t.name = 't_trunc' AND u.replica_id = '${replica_id}'
+0
