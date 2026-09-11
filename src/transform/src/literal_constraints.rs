@@ -869,18 +869,15 @@ impl LiteralConstraints {
             return Ok(None);
         }
 
-        // Completing a key is only ever an improvement over a full scan. When
-        // some index *is* fully covered the `Get` case turns the input into an
-        // `IndexedFilter`, and re-arranging that by a wider key trades an
-        // existing arrangement for a new one. This is the same condition under
-        // which the `Get` case reports an index as too wide.
-        if transform_ctx
+        // Indexes the literals cover fully. Those are the `Get` case's lookups,
+        // and a candidate below competes with them only under the conditions
+        // checked there.
+        let usable_keys = transform_ctx
             .indexes
             .indexes_on(*get_id)
-            .any(|(_, key)| matches!(Self::match_index(key, &or_args), IndexMatch::Usable(..)))
-        {
-            return Ok(None);
-        }
+            .filter(|(_, key)| matches!(Self::match_index(key, &or_args), IndexMatch::Usable(..)))
+            .map(|(_, key)| key.to_owned())
+            .collect_vec();
 
         let bound_by = Self::join_bound_columns(i, input_mapper, equivalences);
         // Every other input that the join equates with any column of this one.
@@ -905,6 +902,26 @@ impl LiteralConstraints {
                 else {
                     return None;
                 };
+
+                // Against a fully covered index this key wins only if it
+                // strictly extends every such index (stripping its literals
+                // then leaves the `Get` case nothing to act on) and contains a
+                // unique key. Ideally we would weigh |narrow lookup result|
+                // against |binder| x |literal values| with statistics, but none
+                // are available to estimate either. A unique key at least caps
+                // the wide probe at |binder| x |literal values|, one row per
+                // probe, and rules out the narrow index being a point lookup.
+                if !usable_keys.is_empty()
+                    && !(usable_keys
+                        .iter()
+                        .all(|u| u.len() < key.len() && u.iter().all(|f| key.contains(f)))
+                        && inner_typ
+                            .keys
+                            .iter()
+                            .any(|unique| unique.iter().all(|c| key_cols.contains(c))))
+                {
+                    return None;
+                }
 
                 // Every key field the literals do not cover has to be visible
                 // to the join and equated there with another input. `binders`
