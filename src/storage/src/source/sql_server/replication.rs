@@ -23,7 +23,7 @@ use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::SqlServerCdcMetrics;
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
-use mz_sql_server_util::desc::SqlServerRowDecoder;
+use mz_sql_server_util::desc::{SqlServerRowDecoder, SqlServerTableConstraint, SqlServerTableDesc};
 use mz_sql_server_util::inspect::{
     ensure_database_cdc_enabled, ensure_sql_server_agent_running, get_latest_restore_history_id,
 };
@@ -97,6 +97,7 @@ pub(crate) fn render<'scope>(
 
             // The decoder is specific to the export, and each export pulls data from a specific capture instance.
             let mut decoder_map: BTreeMap<_, _> = BTreeMap::new();
+            let mut upstream_descs: BTreeMap<u64, Arc<SqlServerTableDesc>> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for only those outputs that this worker will snapshot
             let mut capture_instance_to_snapshot: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for all outputs of this worker
@@ -112,6 +113,7 @@ pub(crate) fn render<'scope>(
                 if decoder_map.insert(key, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
+                upstream_descs.insert(key, Arc::clone(&output.upstream_desc));
                 // Collect the included columns from decoder for schema
                 // change validation. The decoder serves as an effective
                 // source of truth for which columns are "included", as we
@@ -530,6 +532,43 @@ pub(crate) fn render<'scope>(
                             &mut deferred_updates,
                         ).await?
                     },
+                    CdcEvent::Constraints {
+                        capture_instance,
+                        constraints,
+                    } => {
+                        let Some(partition_indexes) =
+                            capture_instances.get(&capture_instance)
+                        else {
+                            continue;
+                        };
+                        let current = constraints
+                            .into_iter()
+                            .map(SqlServerTableConstraint::try_from)
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(TransientError::from)?;
+                        for partition_idx in partition_indexes {
+                            if errored_partitions.contains(partition_idx) {
+                                continue;
+                            }
+                            let desc = upstream_descs
+                                .get(partition_idx)
+                                .expect("description for output");
+                            if let Err(error) = desc.check_constraint_compatibility(&current) {
+                                let error =
+                                    DefiniteError::IncompatibleConstraintChange(error);
+                                let update = (
+                                    (*partition_idx, Err(error.into())),
+                                    *data_cap_set[0].time(),
+                                    Diff::ONE,
+                                );
+                                let size = update.fuel_size();
+                                data_output
+                                    .give_fueled(&data_cap_set[0], update, size)
+                                    .await;
+                                errored_partitions.insert(*partition_idx);
+                            }
+                        }
+                    }
                     CdcEvent::SchemaUpdate {
                         capture_instance,
                         table,

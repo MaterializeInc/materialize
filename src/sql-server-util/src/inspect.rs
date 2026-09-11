@@ -428,6 +428,88 @@ pub async fn get_tables_for_capture_instance(
     Ok(tables)
 }
 
+/// Returns the PRIMARY KEY and UNIQUE constraints of the table tracked by each
+/// of the given capture instances, keyed by capture instance.
+///
+/// The table is resolved through `cdc.change_tables.source_object_id`, so a
+/// table renamed upstream is still found. Capture instances whose table has no
+/// such constraints are absent from the result.
+pub async fn get_constraints_for_capture_instances(
+    client: &mut Client,
+    capture_instances: impl IntoIterator<Item = &str>,
+) -> Result<BTreeMap<Arc<str>, Vec<SqlServerTableConstraintRaw>>, SqlServerError> {
+    let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
+    if params.is_empty() {
+        return Ok(BTreeMap::default());
+    }
+    #[allow(clippy::as_conversions)]
+    let params_dyn: SmallVec<[_; 1]> = params
+        .iter()
+        .map(|instance| instance as &dyn tiberius::ToSql)
+        .collect();
+    let param_indexes = params
+        .iter()
+        .enumerate()
+        // Params are 1-based indexed.
+        .map(|(idx, _)| format!("@P{}", idx + 1))
+        .join(", ");
+
+    // KEY_COLUMN_USAGE (not CONSTRAINT_COLUMN_USAGE) because it exposes
+    // ORDINAL_POSITION, letting us preserve composite-key column order.
+    let query = format!(
+        "SELECT \
+        ch.capture_instance, \
+        kcu.column_name, \
+        tc.constraint_name, \
+        tc.constraint_type \
+    FROM cdc.change_tables ch \
+    JOIN sys.tables t ON ch.source_object_id = t.object_id \
+    JOIN sys.schemas s ON t.schema_id = s.schema_id \
+    JOIN information_schema.table_constraints tc \
+        ON tc.table_schema = s.name \
+        AND tc.table_name = t.name \
+    JOIN information_schema.key_column_usage kcu \
+        ON kcu.constraint_schema = tc.constraint_schema \
+        AND kcu.constraint_name = tc.constraint_name \
+        AND kcu.table_schema = tc.table_schema \
+        AND kcu.table_name = tc.table_name \
+    WHERE ch.capture_instance IN ({param_indexes}) \
+        AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE') \
+    ORDER BY ch.capture_instance, tc.constraint_name, kcu.ordinal_position;"
+    );
+    let rows = client.query(&query, &params_dyn[..]).await?;
+
+    let mut constraints_by_instance: BTreeMap<Arc<str>, BTreeMap<_, Vec<_>>> = BTreeMap::new();
+    for row in &rows {
+        let capture_instance: Arc<str> = get_value::<&str>(row, "capture_instance")?.into();
+        let column_name = get_value::<&str>(row, "column_name")?.into();
+        let constraint_name = get_value::<&str>(row, "constraint_name")?.into();
+        let constraint_type = get_value::<&str>(row, "constraint_type")?.into();
+        constraints_by_instance
+            .entry(capture_instance)
+            .or_default()
+            .entry((constraint_name, constraint_type))
+            .or_default()
+            .push(column_name);
+    }
+    Ok(constraints_by_instance
+        .into_iter()
+        .map(|(capture_instance, constraints)| {
+            let constraints = constraints
+                .into_iter()
+                .map(
+                    |((constraint_name, constraint_type), columns)| SqlServerTableConstraintRaw {
+                        constraint_name,
+                        constraint_type,
+                        columns,
+                    },
+                )
+                .collect();
+            (capture_instance, constraints)
+        })
+        .collect())
+}
+
 /// Retrieves column metdata from the CDC table maintained by the provided capture instance. The
 /// resulting column information collection is similar to the information collected for the
 /// upstream table, with the exclusion of nullability and primary key constraints, which contain

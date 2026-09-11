@@ -163,4 +163,138 @@ ALTER TABLE bar DROP COLUMN name, location;
 ! SELECT * FROM bar1;
 contains:Incompatible schema change
 
+$ sql-server-execute name=sql-server
+CREATE TABLE uq (id INT NOT NULL CONSTRAINT uq_pk PRIMARY KEY, wallet VARCHAR(64) NOT NULL CONSTRAINT uq_wallet UNIQUE);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'uq', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO uq VALUES (1, 'a');
+CREATE TABLE addk (id INT NOT NULL CONSTRAINT addk_pk PRIMARY KEY, wallet VARCHAR(64) NOT NULL);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'addk', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO addk VALUES (1, 'a');
+
+> CREATE TABLE uq FROM SOURCE sql_server_src (REFERENCE dbo.uq);
+> CREATE TABLE addk FROM SOURCE sql_server_src (REFERENCE dbo.addk);
+
+> SELECT * FROM uq;
+1 a
+
+$ sql-server-execute name=sql-server
+ALTER TABLE addk ADD CONSTRAINT addk_wallet UNIQUE (wallet);
+INSERT INTO addk VALUES (2, 'b');
+ALTER TABLE addk DROP CONSTRAINT addk_wallet;
+INSERT INTO addk VALUES (3, 'b');
+
+> SELECT * FROM addk;
+1 a
+2 b
+3 b
+
+$ sql-server-execute name=sql-server
+ALTER TABLE uq DROP CONSTRAINT uq_wallet;
+
+! SELECT * FROM uq;
+contains:incompatible schema change on dbo.uq: UNIQUE constraint "uq_wallet" (wallet) was dropped upstream
+hint:CREATE TABLE v2."uq"
+
+> SELECT details->'hints'->>0 LIKE '%CREATE TABLE v2."uq"%' FROM mz_internal.mz_source_statuses WHERE name = 'uq';
+true
+
+$ sql-server-execute name=sql-server
+CREATE TABLE multi (id INT NOT NULL CONSTRAINT multi_pk PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, c INT NOT NULL, CONSTRAINT multi_uq_a UNIQUE (a), CONSTRAINT multi_uq_bc UNIQUE (b, c));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'multi', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO multi VALUES (1, 10, 100, 1000);
+CREATE TABLE excl (id INT NOT NULL CONSTRAINT excl_pk PRIMARY KEY, a INT NOT NULL, meta VARCHAR(32) NOT NULL, CONSTRAINT excl_uq_meta UNIQUE (meta));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'excl', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO excl VALUES (1, 10, 'x');
+CREATE TABLE alt (id INT NOT NULL CONSTRAINT alt_pk PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, CONSTRAINT alt_uq UNIQUE (a));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'alt', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO alt VALUES (1, 10, 100);
+
+> CREATE TABLE multi FROM SOURCE sql_server_src (REFERENCE dbo.multi);
+> CREATE TABLE excl FROM SOURCE sql_server_src (REFERENCE dbo.excl) WITH (EXCLUDE COLUMNS = (meta));
+> CREATE TABLE alt FROM SOURCE sql_server_src (REFERENCE dbo.alt);
+
+> SELECT * FROM multi;
+1 10 100 1000
+
+> SELECT * FROM excl;
+1 10
+
+> SELECT * FROM alt;
+1 10 100
+
+# Dropping one of several constraints names that constraint, with its columns
+# in key order, and the hint names it as the constraint to exclude.
+$ sql-server-execute name=sql-server
+ALTER TABLE multi DROP CONSTRAINT multi_uq_bc;
+INSERT INTO multi VALUES (2, 20, 100, 1000);
+
+! SELECT * FROM multi;
+contains:incompatible schema change on dbo.multi: UNIQUE constraint "multi_uq_bc" (b, c) was dropped upstream
+hint:EXCLUDE CONSTRAINTS ('multi_uq_bc')
+
+# A constraint over an excluded column was never recorded as a key, so dropping
+# it is a non-event.
+$ sql-server-execute name=sql-server
+ALTER TABLE excl DROP CONSTRAINT excl_uq_meta;
+INSERT INTO excl VALUES (2, 20, 'x');
+
+> SELECT * FROM excl;
+1 10
+2 20
+
+# Recreating a constraint under the same name over different columns is
+# reported as an alteration. The statements run as one batch so a poll cannot
+# observe the intermediate state where the constraint is simply gone.
+$ sql-server-execute name=sql-server split-lines=false
+ALTER TABLE alt DROP CONSTRAINT alt_uq;
+ALTER TABLE alt ADD CONSTRAINT alt_uq UNIQUE (b);
+INSERT INTO alt VALUES (2, 10, 200);
+
+! SELECT * FROM alt;
+contains:incompatible schema change on dbo.alt: UNIQUE constraint "alt_uq" (a) was renamed or recreated upstream
+hint:EXCLUDE CONSTRAINTS ('alt_uq')
+
+# A table tracked by two capture instances: both exports see the table's
+# constraints, so neither reports a phantom dropped key, and a real drop is
+# reported on both.
+$ sql-server-execute name=sql-server
+CREATE TABLE dual (id INT NOT NULL CONSTRAINT dual_pk PRIMARY KEY, wallet VARCHAR(64) NOT NULL CONSTRAINT dual_uq UNIQUE);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dual', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'dual_v1';
+INSERT INTO dual VALUES (1, 'a');
+
+> CREATE TABLE dual_v1 FROM SOURCE sql_server_src (REFERENCE dbo.dual);
+
+> SELECT * FROM dual_v1;
+1 a
+
+# The new table picks the most recently created capture instance.
+$ sql-server-execute name=sql-server
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dual', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'dual_v2';
+INSERT INTO dual VALUES (2, 'b');
+
+> CREATE TABLE dual_v2 FROM SOURCE sql_server_src (REFERENCE dbo.dual);
+
+$ sql-server-execute name=sql-server
+INSERT INTO dual VALUES (3, 'c');
+
+> SELECT * FROM dual_v1;
+1 a
+2 b
+3 c
+
+> SELECT * FROM dual_v2;
+1 a
+2 b
+3 c
+
+$ sql-server-execute name=sql-server
+ALTER TABLE dual DROP CONSTRAINT dual_uq;
+INSERT INTO dual VALUES (4, 'c');
+
+! SELECT * FROM dual_v1;
+contains:incompatible schema change on dbo.dual: UNIQUE constraint "dual_uq" (wallet) was dropped upstream
+
+! SELECT * FROM dual_v2;
+contains:incompatible schema change on dbo.dual: UNIQUE constraint "dual_uq" (wallet) was dropped upstream
+
 > DROP SOURCE sql_server_src CASCADE;
