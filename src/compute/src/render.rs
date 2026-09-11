@@ -110,7 +110,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
-use ::columnar::{Columnar as ColumnarData, Push as ColumnarPush};
+use ::columnar::{Columnar as ColumnarData, Index as ColumnarIndex, Push as ColumnarPush};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -293,22 +293,24 @@ pub fn build_compute_dataflow(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) =
-                        persist_source::persist_source::<DataflowErrorSer>(
-                            inner,
-                            *source_id,
-                            Arc::clone(&compute_state.persist_clients),
-                            &compute_state.txns_ctx,
-                            import.desc.storage_metadata.clone(),
-                            read_schema,
-                            dataflow.as_of.clone(),
-                            snapshot_mode,
-                            until.clone(),
-                            mfp.as_mut(),
-                            compute_state.dataflow_max_inflight_bytes(),
-                            start_signal.clone().into_send_future(),
-                            ErrorHandler::Halt("compute_import"),
-                        );
+                    let (mut ok_stream, err_stream, token) = persist_source::persist_source::<
+                        DataflowErrorSer,
+                        ConsolidatingColumnBuilder<Row, mz_repr::Timestamp, Diff>,
+                    >(
+                        inner,
+                        *source_id,
+                        Arc::clone(&compute_state.persist_clients),
+                        &compute_state.txns_ctx,
+                        import.desc.storage_metadata.clone(),
+                        read_schema,
+                        dataflow.as_of.clone(),
+                        snapshot_mode,
+                        until.clone(),
+                        mfp.as_mut(),
+                        compute_state.dataflow_max_inflight_bytes(),
+                        start_signal.clone().into_send_future(),
+                        ErrorHandler::Halt("compute_import"),
+                    );
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -378,10 +380,8 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    // Persist batches are row-shaped and already consolidated, so the
-                    // encode here is non-consolidating.
                     let bundle = crate::render::CollectionBundle::from_edge(
-                        vec_to_columnar(oks.enter(region)),
+                        oks.enter(region),
                         errs.enter(region),
                     );
                     // Associate collection bundle with the source identifier.
@@ -480,10 +480,8 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    // Persist batches are row-shaped and already consolidated, so the
-                    // encode here is non-consolidating.
                     let bundle = crate::render::CollectionBundle::from_edge(
-                        vec_to_columnar(oks.enter_region(region)),
+                        oks.enter_region(region),
                         errs.enter_region(region),
                     );
                     // Associate collection bundle with the source identifier.
@@ -1940,7 +1938,7 @@ fn suppress_early_progress<'scope, T: Timestamp, D>(
     as_of: Antichain<T>,
 ) -> Stream<'scope, T, D>
 where
-    D: Data + timely::Container,
+    D: timely::Container + Clone,
 {
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
@@ -2007,13 +2005,44 @@ trait LimitProgress<T: Timestamp> {
     ) -> Self;
 }
 
+/// Reads the times of the records a container holds, for [`LimitProgress`].
+trait RecordTimes {
+    /// Call `f` once per record, with that record's time.
+    fn for_each_time(&self, f: impl FnMut(mz_repr::Timestamp));
+}
+
+impl<D, R> RecordTimes for Vec<(D, mz_repr::Timestamp, R)> {
+    fn for_each_time(&self, mut f: impl FnMut(mz_repr::Timestamp)) {
+        for (_, time, _) in self {
+            f(*time);
+        }
+    }
+}
+
+impl<D, R> RecordTimes for Column<(D, mz_repr::Timestamp, R)>
+where
+    D: ColumnarData,
+    R: ColumnarData,
+    (D, mz_repr::Timestamp, R): ColumnarData<
+        Container = (
+            D::Container,
+            <mz_repr::Timestamp as ColumnarData>::Container,
+            R::Container,
+        ),
+    >,
+{
+    fn for_each_time(&self, mut f: impl FnMut(mz_repr::Timestamp)) {
+        for time in self.borrow().1.into_index_iter() {
+            f(time);
+        }
+    }
+}
+
 // TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
 // number.
-impl<'scope, D, R> LimitProgress<mz_repr::Timestamp>
-    for StreamVec<'scope, mz_repr::Timestamp, (D, mz_repr::Timestamp, R)>
+impl<'scope, C> LimitProgress<mz_repr::Timestamp> for Stream<'scope, mz_repr::Timestamp, C>
 where
-    D: Clone + 'static,
-    R: Clone + 'static,
+    C: timely::Container + Clone + RecordTimes,
 {
     fn limit_progress(
         self,
@@ -2036,10 +2065,10 @@ where
 
                 move |(input, frontier), output| {
                     input.for_each(|cap, data| {
-                        for time in data
-                            .iter()
-                            .flat_map(|(_, time, _)| u64::from(time).checked_add(slack_ms))
-                        {
+                        data.for_each_time(|time| {
+                            let Some(time) = u64::from(time).checked_add(slack_ms) else {
+                                return;
+                            };
                             // `slack_ms == 0` means no rounding; otherwise round up to the next
                             // multiple of `slack_ms`. Avoids a divide-by-zero panic when the
                             // operator is configured without slack.
@@ -2051,7 +2080,7 @@ where
                             if !upper.less_than(&rounded_time.into()) {
                                 pending_times.insert(rounded_time.into());
                             }
-                        }
+                        });
                         output.session(&cap).give_container(data);
                         if retained_cap.as_ref().is_none_or(|c| {
                             !c.time().less_than(cap.time()) && !upper.less_than(cap.time())
