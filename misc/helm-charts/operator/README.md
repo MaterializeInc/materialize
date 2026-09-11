@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v26.41.0-dev.0](https://img.shields.io/badge/Version-v26.41.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.41.0-dev.0](https://img.shields.io/badge/AppVersion-v26.41.0--dev.0-informational?style=flat-square)
+![Version: v26.43.0-dev.0](https://img.shields.io/badge/Version-v26.43.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.43.0-dev.0](https://img.shields.io/badge/AppVersion-v26.43.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -115,6 +115,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``{}`` |
+| `clusterd.priorityClassName` | PriorityClass to use for clusterd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all. | ``nil`` |
 | `clusterd.scratchfsNodeSelector` | Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/scratch-fs": "true"}`` |
 | `clusterd.swapNodeSelector` | Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/swap": "true"}`` |
 | `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``{}`` |
@@ -129,6 +130,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `environmentd.defaultResources.limits` | Default resource limits for environmentd's CPU and memory if not set in the Materialize CR | ``{"memory":"4Gi"}`` |
 | `environmentd.defaultResources.requests` | Default resources requested for environmentd's CPU and memory if not set in the Materialize CR | ``{"cpu":"1","memory":"4095Mi"}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
+| `environmentd.priorityClassName` | PriorityClass to use for environmentd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all. | ``""`` |
 | `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``{}`` |
 | `networkPolicies.egress.cidrs` | CIDR blocks to allow egress to | ``["0.0.0.0/0"]`` |
 | `networkPolicies.egress.enabled` | Whether to enable egress network policies to sources and sinks | ``false`` |
@@ -176,7 +178,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.swap_enabled` | Configure sizes such that the pod QoS class is not Guaranteed, as is required for swap to be enabled. Disk doesn't make much sense with swap, as swap performs better than lgalloc, so it also gets disabled. | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.39.0"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.41.0"`` |
 | `operator.nodeSelector` | Node selector to use for the operator pod | ``{}`` |
 | `operator.podDisruptionBudget.enabled` | Whether to create a PodDisruptionBudget for the operator. Only created when `replicas` is greater than 1, since a budget over a single replica either blocks node drains or protects nothing. | ``true`` |
 | `operator.podDisruptionBudget.maxUnavailable` | Maximum number of operator pods that may be unavailable at once during voluntary disruptions. Expressed as a maximum rather than a minimum so that node drains are never blocked outright, they are only serialized. | ``1`` |
@@ -206,7 +208,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v26.41.0-dev.0 \
+  --set operator.image.tag=v26.43.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -241,7 +243,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.41.0-dev.0
+  environmentdImageRef: materialize/environmentd:v26.43.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:

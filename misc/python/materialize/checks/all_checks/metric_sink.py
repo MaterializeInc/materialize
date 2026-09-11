@@ -96,9 +96,19 @@ class MetricSink(Check):
 
                 > SET cluster_replica = ${replica-name}
 
+                # Three user sinks came back. Exclude the curated sinks, which the
+                # coordinator installs on every replica labeled by name not id.
                 > SELECT count(DISTINCT labels -> 'sink') FROM mz_introspection.mz_cluster_prometheus_metrics
                   WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+                    AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
                 3
+
+                # The curated sinks come back too, re-installed from the static list
+                # rather than re-parsed from a catalog item.
+                > SELECT count(DISTINCT labels -> 'sink') FROM mz_introspection.mz_cluster_prometheus_metrics
+                  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+                    AND labels -> 'sink' IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
+                2
 
                 > RESET cluster_replica
                 """))

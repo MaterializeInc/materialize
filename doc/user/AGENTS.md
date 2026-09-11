@@ -97,7 +97,7 @@ By contrast, `data/sql_funcs.yml` is hand-maintained and supplies the
 `content/sql/functions/` pages. Add new SQL functions there manually. Chroma
 keywords come from `src/sql-lexer/src/keywords.txt`.
 
-## Writing and Naming Conventions
+## Writing and style guide
 
 Use clear Markdown headings, short paragraphs, fenced code blocks with an
 appropriate language (`sql` for SQL and `nofmt` for expected output), and
@@ -143,6 +143,47 @@ patterns, performance, monitoring, then troubleshooting. Treat setup,
 configuration, and task-oriented how-to pages as guides. Feature pages explain
 a specific capability, such as dictionary compression.
 
+## Choose a documentation mode
+
+Classify each document section by the primary user need it serves. Use one
+Diátaxis mode per section:
+
+* **Tutorials, learning-oriented:** Help the reader gain practical knowledge
+  through a guided learning experience. Give the reader a complete path and
+  explain only what is needed to finish it.
+* **Guides, task-oriented:** Help a competent user accomplish a specific
+  real-world goal. Provide actionable steps, prerequisites, and relevant
+  variations. Do not teach fundamentals or explain the entire system.
+* **Reference, information-oriented:** Describe facts about the system
+  accurately and systematically. Document APIs, parameters, commands,
+  configuration, behavior, constraints, and defaults. Be concise, neutral,
+  structured, and complete. Do not turn reference material into a tutorial.
+* **Explanation, understanding-oriented:** Help the reader understand concepts,
+  design decisions, relationships, tradeoffs, and reasons. Provide context and
+  connect ideas. Do not make completing a task the primary structure.
+
+### Rules
+
+* Determine the reader's primary need before writing: **learn, accomplish, look
+  up, or understand**.
+* Do not mix documentation modes unnecessarily. Split content when the reader's
+  need changes.
+* Keep procedures in tutorials and guides. Keep factual descriptions in
+  reference material and conceptual discussion in explanations.
+* Link between documentation types instead of embedding substantial material
+  from another type.
+* Organize content around the reader's need, not the internal structure of the
+  product.
+* When revising existing documentation, identify mixed modes and separate them
+  into the appropriate Diátaxis categories.
+
+## Draft documentation from PRDs or engineering designs
+
+When asked to draft documentation from a PRD or engineering specification, do
+not invent details or steps. Investigate unclear details and ask for
+clarification. If required details remain unavailable, use a `$TODO` placeholder
+instead of inventing them.
+
 ## Testing Guidelines
 
 There is no unit-test suite for prose. Preview changed pages with Hugo, then
@@ -154,7 +195,7 @@ When changing templates or shortcodes, inspect both the HTML and Markdown
 outputs. A successful HTML render does not prove that the `skill` output is
 valid.
 
-### Test syntax documentation
+## Test syntax as you write the documentation
 
 When documentation adds or changes SQL syntax, test each example using the
 Materialize emulator. Documentation is often written ahead of a public release,
@@ -162,14 +203,11 @@ so use a release candidate version of the emulator when the latest stable
 version does not support the syntax yet. Wherever possible, include sample
 output in the documentation and verify that it matches the emulator output.
 
+Don't try to build Materialize from source; just use the latest emulator verison.
+
 ## Deployments
 
-- Changes merged to `main` deploy immediately to `materialize.com/docs` through
-  `ci/deploy_website/website.sh`.
-- Pull requests publish previews through `ci/test/preview-docs.sh` at
-  `preview.materialize.com/materialize/$PR`.
-- Branches named `self-managed-docs/*` publish a versioned snapshot under
-  `/docs/self-managed/$VERSION` instead of the main site.
+Docs changes are deployed via CI/CD. Don't deploy manually.
 
 ## Reviewing Documentation Changes
 
@@ -181,9 +219,13 @@ and broken include references.
 
 ## Commits and Pull Requests
 
-Recent commits use a concise `<component>: <imperative summary>` format, often
-with the GitHub PR number, for example `docs: clarify source configuration
-(#12345)`. Keep commits focused. PRs should explain the user impact, identify
-affected pages or data files, link relevant issues, and include screenshots or
-preview details for visual changes. Coordinate substantial feature or API
-documentation with a technical writer and add release notes when required.
+### PR body
+Your PR body should be very concise, and provide a link to the pages
+relevant for review. For instance
+
+--
+Adds a new hydration visibility guide
+- https://preview.materialize.com/materialize/38758/clusters/operational-guidelines/
+
+### Commits
+- Keep commits concise, with a concise `<component>: <imperative summary>` format

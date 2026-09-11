@@ -2234,8 +2234,7 @@ dependencies = [
 [[package]]
 name = "chrono-tz"
 version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+source = "git+https://github.com/MaterializeInc/chrono-tz.git?rev=5999cdd1b971694f834ec3467d11ef9147fc297c#5999cdd1b971694f834ec3467d11ef9147fc297c"
 dependencies = [
  "chrono",
  "chrono-tz-build",
@@ -2247,8 +2246,7 @@ dependencies = [
 [[package]]
 name = "chrono-tz-build"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7d8d1efd5109b9c1cd3b7966bd071cdfb53bb6eb0b22a473a68c2f70a11a1eb"
+source = "git+https://github.com/MaterializeInc/chrono-tz.git?rev=5999cdd1b971694f834ec3467d11ef9147fc297c#5999cdd1b971694f834ec3467d11ef9147fc297c"
 dependencies = [
  "parse-zoneinfo",
  "phf_codegen 0.12.1",
@@ -4934,7 +4932,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=958ac5b3c318026aeb362485c593e4956aeabe95#958ac5b3c318026aeb362485c593e4956aeabe95"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=985929c6c5cc7083bac30c881e7ec43ec4d57b64#985929c6c5cc7083bac30c881e7ec43ec4d57b64"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4991,7 +4989,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-rest"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=958ac5b3c318026aeb362485c593e4956aeabe95#958ac5b3c318026aeb362485c593e4956aeabe95"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=985929c6c5cc7083bac30c881e7ec43ec4d57b64#985929c6c5cc7083bac30c881e7ec43ec4d57b64"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5010,7 +5008,7 @@ dependencies = [
 [[package]]
 name = "iceberg-storage-opendal"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=958ac5b3c318026aeb362485c593e4956aeabe95#958ac5b3c318026aeb362485c593e4956aeabe95"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=985929c6c5cc7083bac30c881e7ec43ec4d57b64#985929c6c5cc7083bac30c881e7ec43ec4d57b64"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5021,6 +5019,7 @@ dependencies = [
  "opendal",
  "reqsign-aws-v4",
  "reqsign-core",
+ "reqsign-google",
  "serde",
  "typetag",
  "url",
@@ -6585,7 +6584,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.41.0-dev.0"
+version = "26.43.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6721,7 +6720,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.41.0-dev.0"
+version = "26.43.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6891,7 +6890,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.41.0-dev.0"
+version = "26.43.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7144,7 +7143,7 @@ dependencies = [
 
 [[package]]
 name = "mz-deploy"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "annotate-snippets",
  "async-stream",
@@ -7265,7 +7264,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.41.0-dev.0"
+version = "26.43.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -7665,7 +7664,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.41.0-dev.0"
+version = "26.43.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7878,7 +7877,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.41.0-dev.0"
+version = "26.43.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8061,7 +8060,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.41.0-dev.0"
+version = "26.43.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.8",
@@ -8293,6 +8292,7 @@ dependencies = [
  "mz-tls-util",
  "openssh",
  "openssl",
+ "postgres-protocol",
  "postgres_array",
  "proptest",
  "proptest-derive",
@@ -9139,7 +9139,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.41.0-dev.0"
+version = "26.43.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow 58.4.0",
@@ -9846,6 +9846,7 @@ dependencies = [
  "opendal-core",
  "opendal-layer-retry",
  "opendal-layer-timeout",
+ "opendal-service-azdls",
  "opendal-service-gcs",
  "opendal-service-s3",
 ]
@@ -9897,6 +9898,36 @@ checksum = "1e91f731724c213af81e9d03517859c8fc47b4578e64ad61ae4f099f10fe36e3"
 dependencies = [
  "opendal-core",
  "tokio",
+]
+
+[[package]]
+name = "opendal-service-azdls"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6dea4908d490143a9b0b7f7a790e139ff829b06a023f670455ed3d44f664b361"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "http 1.4.2",
+ "log",
+ "opendal-core",
+ "opendal-service-azure-common",
+ "quick-xml 0.39.4",
+ "reqsign-azure-storage",
+ "reqsign-core",
+ "reqsign-file-read-tokio",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "opendal-service-azure-common"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b489f13c42e69d69bdd72952b634356ec43a7881a20259b38b540fcecdf4051"
+dependencies = [
+ "http 1.4.2",
+ "opendal-core",
 ]
 
 [[package]]
@@ -10318,8 +10349,7 @@ dependencies = [
 [[package]]
 name = "parse-zoneinfo"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3c406c9e2aa74554e662d2c2ee11cd3e73756988800be7e6f5eddb16fed4699"
+source = "git+https://github.com/MaterializeInc/chrono-tz.git?rev=5999cdd1b971694f834ec3467d11ef9147fc297c#5999cdd1b971694f834ec3467d11ef9147fc297c"
 
 [[package]]
 name = "paste"
@@ -11682,6 +11712,27 @@ dependencies = [
  "reqsign-aws-core",
  "reqsign-core",
  "serde",
+]
+
+[[package]]
+name = "reqsign-azure-storage"
+version = "3.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2824e7da3c2cc42ac3406c674eb57c89127fdcd97f3a73c608cfc680505ea134"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "bytes",
+ "form_urlencoded",
+ "http 1.4.2",
+ "log",
+ "pem 3.0.6",
+ "percent-encoding",
+ "reqsign-core",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha1 0.11.0",
 ]
 
 [[package]]

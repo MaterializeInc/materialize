@@ -352,13 +352,16 @@ where
                                 // All errors coming into the data stream are definite.
                                 // Downstream consumers of this data will preserve this
                                 // status.
-                                let update = HealthStatusUpdate::stalled(
-                                    error.to_string(),
-                                    Some(
+                                let hint = match error {
+                                    DataflowError::SourceError(e) if e.hint.is_some() => {
+                                        e.hint.as_deref().map(str::to_string)
+                                    }
+                                    _ => Some(
                                         "retracting the errored value may resume the source"
                                             .to_string(),
                                     ),
-                                );
+                                };
+                                let update = HealthStatusUpdate::stalled(error.to_string(), hint);
                                 let status = HealthStatusMessage {
                                     id: Some(id),
                                     namespace: C::STATUS_NAMESPACE.clone(),
