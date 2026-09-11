@@ -13,7 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Prometheus metrics for the process-wide buffer pool.
+//! Prometheus metrics for the process-wide buffer pool and columnar chunk
+//! work.
 //!
 //! Installed once by compute init via [`register`]. All metrics are computed
 //! gauges that peek at the pool's stats at scrape time, reporting zero until
@@ -25,11 +26,12 @@ use std::sync::OnceLock;
 use mz_ore::metric;
 use mz_ore::metrics::{ComputedUIntGauge, MakeCollectorOpts, MetricsRegistry};
 
-/// Install the buffer-pool metrics into `registry`. Idempotent. Repeated
-/// calls after the first one are no-ops.
+/// Install the buffer-pool metrics and the columnar chunk work counters into
+/// `registry`. Idempotent. Repeated calls after the first one are no-ops.
 pub fn register(registry: &MetricsRegistry) {
     static REGISTERED: OnceLock<()> = OnceLock::new();
     REGISTERED.get_or_init(|| {
+        crate::columnar::chunk::metrics::register(registry);
         // Every name and help string is a literal at the `metric!` call so the
         // metrics-catalog scanner (`bin/gen-metrics-catalog`), which reads the
         // source rather than the expanded macro, can index them.
