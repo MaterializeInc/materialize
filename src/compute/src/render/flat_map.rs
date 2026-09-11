@@ -53,17 +53,14 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         let budget = COMPUTE_FLAT_MAP_FUEL.get(&self.config_set);
 
         // The unarranged path reads the edge directly, so a columnar input is never
-        // decoded here. The keyed path reads an existing arrangement, presented as a
-        // `Vec` edge.
+        // decoded here. The keyed path materializes an existing arrangement, which
+        // `as_specific_collection` presents as a columnar edge.
         let (edge, err_collection) = match input_key.as_deref() {
             None => input
                 .collection
                 .clone()
                 .expect("The unarranged collection doesn't exist."),
-            Some(key) => {
-                let (oks, errs) = input.as_specific_collection(Some(key), &self.config_set);
-                (CollectionEdge::Vec(oks), errs)
-            }
+            Some(key) => input.as_specific_collection(Some(key), &self.config_set),
         };
 
         let (oks, errs) = match edge {
