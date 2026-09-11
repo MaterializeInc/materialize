@@ -5019,7 +5019,7 @@ pub fn plan_alter_query_policy(
     Ok(Plan::AlterQueryPolicy(AlterQueryPolicyPlan {
         id: policy.id(),
         name,
-        mode: mode.unwrap_or(policy.mode()),
+        mode: mode.unwrap_or_else(|| policy.mode()),
         rules: rules.unwrap_or_else(|| policy.rules().to_vec()),
     }))
 }
