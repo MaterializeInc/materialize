@@ -11,13 +11,22 @@ mode cockroach
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_query_policies = true;
-ALTER SYSTEM SET enable_query_policy_enforcement = true;
-ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
-ALTER SYSTEM SET persist_fast_path_limit = 1000;
 ----
 COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_query_policy_enforcement = true;
+----
 COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
+----
 COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_fast_path_limit = 1000;
+----
 COMPLETE 0
 
 # Creation can be delegated without granting superuser or role-management powers.
@@ -293,6 +302,9 @@ DROP ROLE policy_owner;
 
 statement ok
 REVOKE USAGE ON QUERY POLICY no_dataflows FROM policy_owner;
+
+statement ok
+GRANT policy_owner TO materialize;
 
 statement ok
 ALTER QUERY POLICY no_dataflows OWNER TO policy_owner;
