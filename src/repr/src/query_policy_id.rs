@@ -11,7 +11,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
-use mz_lowertest::MzReflect;
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -27,8 +26,7 @@ use serde::{Deserialize, Serialize};
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum QueryPolicyId {

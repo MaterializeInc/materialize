@@ -978,6 +978,7 @@ impl<'a> Transaction<'a> {
                 | CommentObjectId::Schema(_)
                 | CommentObjectId::Cluster(_)
                 | CommentObjectId::ClusterReplica(_)
+                | CommentObjectId::QueryPolicy(_)
                 | CommentObjectId::NetworkPolicy(_) => false,
             },
             self.op_id,
