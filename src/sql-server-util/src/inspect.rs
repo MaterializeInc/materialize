@@ -428,15 +428,16 @@ pub async fn get_tables_for_capture_instance(
     Ok(tables)
 }
 
-/// Returns the `(schema_name, table_name)` tracked by each of the given
-/// capture instances.
+/// Returns the PRIMARY KEY and UNIQUE constraints of the table tracked by each
+/// of the given capture instances, keyed by capture instance.
 ///
-/// Unlike [`get_tables_for_capture_instance`] this reads no column metadata,
-/// so it is cheap enough to run from the CDC stream.
-pub async fn get_table_names_for_capture_instances(
+/// The table is resolved through `cdc.change_tables.source_object_id`, so a
+/// table renamed upstream is still found. Capture instances whose table has no
+/// such constraints are absent from the result.
+pub async fn get_constraints_for_capture_instances(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
-) -> Result<BTreeMap<Arc<str>, (Arc<str>, Arc<str>)>, SqlServerError> {
+) -> Result<BTreeMap<Arc<str>, Vec<SqlServerTableConstraintRaw>>, SqlServerError> {
     let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
     if params.is_empty() {
         return Ok(BTreeMap::default());
@@ -452,23 +453,61 @@ pub async fn get_table_names_for_capture_instances(
         // Params are 1-based indexed.
         .map(|(idx, _)| format!("@P{}", idx + 1))
         .join(", ");
+
+    // KEY_COLUMN_USAGE (not CONSTRAINT_COLUMN_USAGE) because it exposes
+    // ORDINAL_POSITION, letting us preserve composite-key column order.
     let query = format!(
-        "SELECT s.name AS schema_name, t.name AS table_name, ch.capture_instance AS capture_instance \
-         FROM cdc.change_tables ch \
-         JOIN sys.tables t ON ch.source_object_id = t.object_id \
-         JOIN sys.schemas s ON t.schema_id = s.schema_id \
-         WHERE ch.capture_instance IN ({param_indexes});"
+        "SELECT \
+        ch.capture_instance, \
+        kcu.column_name, \
+        tc.constraint_name, \
+        tc.constraint_type \
+    FROM cdc.change_tables ch \
+    JOIN sys.tables t ON ch.source_object_id = t.object_id \
+    JOIN sys.schemas s ON t.schema_id = s.schema_id \
+    JOIN information_schema.table_constraints tc \
+        ON tc.table_schema = s.name \
+        AND tc.table_name = t.name \
+    JOIN information_schema.key_column_usage kcu \
+        ON kcu.constraint_schema = tc.constraint_schema \
+        AND kcu.constraint_name = tc.constraint_name \
+        AND kcu.table_schema = tc.table_schema \
+        AND kcu.table_name = tc.table_name \
+    WHERE ch.capture_instance IN ({param_indexes}) \
+        AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE') \
+    ORDER BY ch.capture_instance, tc.constraint_name, kcu.ordinal_position;"
     );
     let rows = client.query(&query, &params_dyn[..]).await?;
 
-    let mut tables = BTreeMap::new();
+    let mut constraints_by_instance: BTreeMap<Arc<str>, BTreeMap<_, Vec<_>>> = BTreeMap::new();
     for row in &rows {
         let capture_instance: Arc<str> = get_value::<&str>(row, "capture_instance")?.into();
-        let schema_name: Arc<str> = get_value::<&str>(row, "schema_name")?.into();
-        let table_name: Arc<str> = get_value::<&str>(row, "table_name")?.into();
-        tables.insert(capture_instance, (schema_name, table_name));
+        let column_name = get_value::<&str>(row, "column_name")?.into();
+        let constraint_name = get_value::<&str>(row, "constraint_name")?.into();
+        let constraint_type = get_value::<&str>(row, "constraint_type")?.into();
+        constraints_by_instance
+            .entry(capture_instance)
+            .or_default()
+            .entry((constraint_name, constraint_type))
+            .or_default()
+            .push(column_name);
     }
-    Ok(tables)
+    Ok(constraints_by_instance
+        .into_iter()
+        .map(|(capture_instance, constraints)| {
+            let constraints = constraints
+                .into_iter()
+                .map(
+                    |((constraint_name, constraint_type), columns)| SqlServerTableConstraintRaw {
+                        constraint_name,
+                        constraint_type,
+                        columns,
+                    },
+                )
+                .collect();
+            (capture_instance, constraints)
+        })
+        .collect())
 }
 
 /// Retrieves column metdata from the CDC table maintained by the provided capture instance. The

@@ -61,7 +61,7 @@
 //! After completing the snapshot we use [`crate::inspect::get_changes_asc`] which will return
 //! all changes between a `[lower, upper)` bound of [`Lsn`]s.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -265,10 +265,6 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                 }
             }
 
-            // The capture instances are fixed for the life of the stream, so the
-            // tables they track are looked up once, on the first poll that needs them.
-            let mut tracked_tables: Option<BTreeMap<Arc<str>, (Arc<str>, Arc<str>)>> = None;
-
             loop {
                 // Measure the tick before we do any operation so the time it takes
                 // to query SQL Server is included in the time that we wait.
@@ -359,34 +355,15 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                     // re-read every tracked table's constraints whenever the log
                     // advanced. Dropping or adding a constraint writes to the log,
                     // so the poll after such a change always sees it.
-                    if tracked_tables.is_none() {
-                        tracked_tables = Some(
-                            crate::inspect::get_table_names_for_capture_instances(
-                                self.client,
-                                self.capture_instances.keys().map(|instance| instance.as_ref()),
-                            )
-                            .await?,
-                        );
-                    }
-                    let tracked_tables = tracked_tables.as_ref().expect("initialized above");
-                    let table_names: BTreeSet<_> = tracked_tables.values().cloned().collect();
-                    let constraints = crate::inspect::get_constraints_for_tables(
+                    let constraints = crate::inspect::get_constraints_for_capture_instances(
                         self.client,
-                        table_names.iter(),
+                        self.capture_instances.keys().map(|instance| instance.as_ref()),
                     )
                     .await?;
-                    for (instance, (schema_name, table_name)) in tracked_tables {
-                        // Several capture instances can track the same table, so
-                        // the constraints are looked up rather than drained.
-                        let constraints = constraints
-                            .get(&(Arc::clone(schema_name), Arc::clone(table_name)))
-                            .cloned()
-                            .unwrap_or_default();
+                    for instance in self.capture_instances.keys() {
                         yield CdcEvent::Constraints {
                             capture_instance: Arc::clone(instance),
-                            schema_name: Arc::clone(schema_name),
-                            table_name: Arc::clone(table_name),
-                            constraints,
+                            constraints: constraints.get(instance).cloned().unwrap_or_default(),
                         };
                     }
 
@@ -496,12 +473,10 @@ pub enum CdcEvent {
         /// DDL event
         ddl_event: DDLEvent,
     },
-    /// The PRIMARY KEY and UNIQUE constraints currently on a tracked table,
-    /// re-read on every poll that found new changes.
+    /// The PRIMARY KEY and UNIQUE constraints currently on the table a capture
+    /// instance tracks, re-read on every poll that found new changes.
     Constraints {
         capture_instance: Arc<str>,
-        schema_name: Arc<str>,
-        table_name: Arc<str>,
         constraints: Vec<SqlServerTableConstraintRaw>,
     },
 }

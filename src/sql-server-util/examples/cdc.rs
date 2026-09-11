@@ -147,13 +147,10 @@ async fn main() -> Result<(), anyhow::Error> {
             }
             CdcEvent::Constraints {
                 capture_instance,
-                schema_name,
-                table_name,
                 constraints,
             } => {
                 tracing::info!(
-                    "constraints for table {schema_name}.{table_name} capture instance \
-                     {capture_instance}: {constraints:?}"
+                    "constraints for capture instance {capture_instance}: {constraints:?}"
                 );
             }
         }

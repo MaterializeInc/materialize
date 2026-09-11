@@ -535,7 +535,6 @@ pub(crate) fn render<'scope>(
                     CdcEvent::Constraints {
                         capture_instance,
                         constraints,
-                        ..
                     } => {
                         let Some(partition_indexes) =
                             capture_instances.get(&capture_instance)
