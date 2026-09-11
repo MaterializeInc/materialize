@@ -254,4 +254,47 @@ INSERT INTO alt VALUES (2, 10, 200);
 contains:incompatible schema change on dbo.alt: UNIQUE constraint "alt_uq" (a) was renamed or recreated upstream
 hint:EXCLUDE CONSTRAINTS ('alt_uq')
 
+# A table tracked by two capture instances: both exports see the table's
+# constraints, so neither reports a phantom dropped key, and a real drop is
+# reported on both.
+$ sql-server-execute name=sql-server
+CREATE TABLE dual (id INT NOT NULL CONSTRAINT dual_pk PRIMARY KEY, wallet VARCHAR(64) NOT NULL CONSTRAINT dual_uq UNIQUE);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dual', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'dual_v1';
+INSERT INTO dual VALUES (1, 'a');
+
+> CREATE TABLE dual_v1 FROM SOURCE sql_server_src (REFERENCE dbo.dual);
+
+> SELECT * FROM dual_v1;
+1 a
+
+# The new table picks the most recently created capture instance.
+$ sql-server-execute name=sql-server
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dual', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'dual_v2';
+INSERT INTO dual VALUES (2, 'b');
+
+> CREATE TABLE dual_v2 FROM SOURCE sql_server_src (REFERENCE dbo.dual);
+
+$ sql-server-execute name=sql-server
+INSERT INTO dual VALUES (3, 'c');
+
+> SELECT * FROM dual_v1;
+1 a
+2 b
+3 c
+
+> SELECT * FROM dual_v2;
+1 a
+2 b
+3 c
+
+$ sql-server-execute name=sql-server
+ALTER TABLE dual DROP CONSTRAINT dual_uq;
+INSERT INTO dual VALUES (4, 'c');
+
+! SELECT * FROM dual_v1;
+contains:incompatible schema change on dbo.dual: UNIQUE constraint "dual_uq" (wallet) was dropped upstream
+
+! SELECT * FROM dual_v2;
+contains:incompatible schema change on dbo.dual: UNIQUE constraint "dual_uq" (wallet) was dropped upstream
+
 > DROP SOURCE sql_server_src CASCADE;

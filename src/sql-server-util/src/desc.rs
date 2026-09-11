@@ -127,9 +127,20 @@ impl SqlServerTableDesc {
         Ok(decoder)
     }
 
+    /// Checks that every PRIMARY KEY and UNIQUE constraint recorded in `self`
+    /// is still present, unchanged, in `current`, the constraints read from
+    /// upstream.
+    ///
+    /// Constraints are matched by name and compared by type and column set.
+    /// Column order is ignored: a key over a set of columns is a key in any
+    /// index order, and descriptions migrated from before constraints were
+    /// recorded hold the columns in table order rather than key order.
+    /// Constraints that span an excluded column were never recorded as keys
+    /// and are skipped, and added constraints are compatible. Column changes
+    /// are not checked here, they are caught from the DDL history.
     pub fn check_constraint_compatibility(
         &self,
-        other: &SqlServerTableDesc,
+        current: &[SqlServerTableConstraint],
     ) -> Result<(), SchemaChangeError> {
         let spans_excluded_column = |constraint: &&SqlServerTableConstraint| {
             constraint.column_names.iter().any(|name| {
@@ -138,21 +149,24 @@ impl SqlServerTableDesc {
                     .any(|c| c.is_excluded() && c.name.as_ref() == name.as_str())
             })
         };
+        let same_columns = |a: &SqlServerTableConstraint, b: &SqlServerTableConstraint| {
+            a.column_names.iter().collect::<BTreeSet<_>>()
+                == b.column_names.iter().collect::<BTreeSet<_>>()
+        };
         for constraint in self
             .constraints
             .iter()
             .filter(|c| !spans_excluded_column(c))
         {
             let key = KeyRef::from(constraint);
-            let other_constraint = other
-                .constraints
+            let current_constraint = current
                 .iter()
                 .find(|c| c.constraint_name == constraint.constraint_name);
-            let change = match other_constraint {
+            let change = match current_constraint {
                 None => SchemaChange::KeyDropped { key },
-                Some(other_constraint)
-                    if other_constraint.constraint_type != constraint.constraint_type
-                        || other_constraint.column_names != constraint.column_names =>
+                Some(current_constraint)
+                    if current_constraint.constraint_type != constraint.constraint_type
+                        || !same_columns(current_constraint, constraint) =>
                 {
                     SchemaChange::KeyAltered { key }
                 }
@@ -1311,8 +1325,10 @@ mod tests {
 
     use crate::desc::{
         SqlServerCaptureInstanceRaw, SqlServerColumnDecodeType, SqlServerColumnDesc,
-        SqlServerTableDesc, SqlServerTableRaw, tiberius_numeric_to_mz_numeric,
+        SqlServerTableConstraint, SqlServerTableConstraintRaw, SqlServerTableDesc,
+        SqlServerTableRaw, tiberius_numeric_to_mz_numeric,
     };
+    use crate::schema_change::{KeyRef, SchemaChange, SchemaChangeError};
 
     use super::SqlServerColumnRaw;
 
@@ -1350,6 +1366,118 @@ mod tests {
             self.scale = scale;
             self
         }
+    }
+
+    /// `(name, type, columns)` triples, as `get_constraints_for_tables` reports them.
+    type ConstraintSpec<'a> = (&'a str, &'a str, &'a [&'a str]);
+
+    fn raw_constraints(specs: &[ConstraintSpec]) -> Vec<SqlServerTableConstraintRaw> {
+        specs
+            .iter()
+            .map(|(name, ty, columns)| SqlServerTableConstraintRaw {
+                constraint_name: name.to_string(),
+                constraint_type: ty.to_string(),
+                columns: columns.iter().map(|c| c.to_string()).collect(),
+            })
+            .collect()
+    }
+
+    fn constraints(specs: &[ConstraintSpec]) -> Vec<SqlServerTableConstraint> {
+        raw_constraints(specs)
+            .into_iter()
+            .map(|raw| SqlServerTableConstraint::try_from(raw).expect("valid constraint type"))
+            .collect()
+    }
+
+    fn table_desc(columns: &[SqlServerColumnRaw], specs: &[ConstraintSpec]) -> SqlServerTableDesc {
+        let raw = SqlServerTableRaw {
+            schema_name: "dbo".into(),
+            name: "t".into(),
+            capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
+                name: "dbo_t".into(),
+                create_date: Arc::new(NaiveDateTime::default()),
+            }),
+            columns: columns.to_vec().into(),
+        };
+        SqlServerTableDesc::new(raw, raw_constraints(specs)).expect("valid table")
+    }
+
+    #[mz_ore::test]
+    fn constraint_compatibility() {
+        // `meta` has an unsupported type and so is excluded from the export.
+        let columns = [
+            SqlServerColumnRaw::new("a", "int"),
+            SqlServerColumnRaw::new("b", "int"),
+            SqlServerColumnRaw::new("meta", "geography"),
+        ];
+        let recorded: &[ConstraintSpec] = &[
+            ("pk", "PRIMARY KEY", &["b", "a"]),
+            ("uq_a", "UNIQUE", &["a"]),
+            ("uq_meta", "UNIQUE", &["meta"]),
+        ];
+        let desc = table_desc(&columns, recorded);
+        assert!(desc.columns.iter().any(|c| c.is_excluded()));
+
+        let error = |change| SchemaChangeError {
+            schema_name: "dbo".into(),
+            name: "t".into(),
+            change,
+        };
+        let uq_a = KeyRef {
+            name: "uq_a".into(),
+            is_primary: false,
+            columns: vec!["a".into()],
+        };
+
+        // Unchanged.
+        assert_eq!(
+            desc.check_constraint_compatibility(&constraints(recorded)),
+            Ok(())
+        );
+        // The composite key's columns reported in key order rather than table order.
+        assert_eq!(
+            desc.check_constraint_compatibility(&constraints(&[
+                ("pk", "PRIMARY KEY", &["a", "b"]),
+                ("uq_a", "UNIQUE", &["a"]),
+                ("uq_meta", "UNIQUE", &["meta"]),
+            ])),
+            Ok(())
+        );
+        // An added constraint, and a dropped constraint over an excluded column.
+        assert_eq!(
+            desc.check_constraint_compatibility(&constraints(&[
+                ("pk", "PRIMARY KEY", &["b", "a"]),
+                ("uq_a", "UNIQUE", &["a"]),
+                ("uq_b", "UNIQUE", &["b"]),
+            ])),
+            Ok(())
+        );
+        // A recorded constraint is gone.
+        assert_eq!(
+            desc.check_constraint_compatibility(&constraints(&[
+                ("pk", "PRIMARY KEY", &["b", "a"]),
+                ("uq_meta", "UNIQUE", &["meta"]),
+            ])),
+            Err(error(SchemaChange::KeyDropped { key: uq_a.clone() }))
+        );
+        // Same name, different columns.
+        assert_eq!(
+            desc.check_constraint_compatibility(&constraints(&[
+                ("pk", "PRIMARY KEY", &["b", "a"]),
+                ("uq_a", "UNIQUE", &["b"]),
+                ("uq_meta", "UNIQUE", &["meta"]),
+            ])),
+            Err(error(SchemaChange::KeyAltered { key: uq_a.clone() }))
+        );
+        // Same name and columns, different type.
+        assert_eq!(
+            desc.check_constraint_compatibility(&constraints(&[
+                ("pk", "PRIMARY KEY", &["b", "a"]),
+                ("uq_a", "PRIMARY KEY", &["a"]),
+                ("uq_meta", "UNIQUE", &["meta"]),
+            ])),
+            Err(error(SchemaChange::KeyAltered { key: uq_a }))
+        );
     }
 
     #[mz_ore::test]

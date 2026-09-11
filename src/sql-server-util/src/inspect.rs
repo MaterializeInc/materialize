@@ -428,6 +428,49 @@ pub async fn get_tables_for_capture_instance(
     Ok(tables)
 }
 
+/// Returns the `(schema_name, table_name)` tracked by each of the given
+/// capture instances.
+///
+/// Unlike [`get_tables_for_capture_instance`] this reads no column metadata,
+/// so it is cheap enough to run from the CDC stream.
+pub async fn get_table_names_for_capture_instances(
+    client: &mut Client,
+    capture_instances: impl IntoIterator<Item = &str>,
+) -> Result<BTreeMap<Arc<str>, (Arc<str>, Arc<str>)>, SqlServerError> {
+    let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
+    if params.is_empty() {
+        return Ok(BTreeMap::default());
+    }
+    #[allow(clippy::as_conversions)]
+    let params_dyn: SmallVec<[_; 1]> = params
+        .iter()
+        .map(|instance| instance as &dyn tiberius::ToSql)
+        .collect();
+    let param_indexes = params
+        .iter()
+        .enumerate()
+        // Params are 1-based indexed.
+        .map(|(idx, _)| format!("@P{}", idx + 1))
+        .join(", ");
+    let query = format!(
+        "SELECT s.name AS schema_name, t.name AS table_name, ch.capture_instance AS capture_instance \
+         FROM cdc.change_tables ch \
+         JOIN sys.tables t ON ch.source_object_id = t.object_id \
+         JOIN sys.schemas s ON t.schema_id = s.schema_id \
+         WHERE ch.capture_instance IN ({param_indexes});"
+    );
+    let rows = client.query(&query, &params_dyn[..]).await?;
+
+    let mut tables = BTreeMap::new();
+    for row in &rows {
+        let capture_instance: Arc<str> = get_value::<&str>(row, "capture_instance")?.into();
+        let schema_name: Arc<str> = get_value::<&str>(row, "schema_name")?.into();
+        let table_name: Arc<str> = get_value::<&str>(row, "table_name")?.into();
+        tables.insert(capture_instance, (schema_name, table_name));
+    }
+    Ok(tables)
+}
+
 /// Retrieves column metdata from the CDC table maintained by the provided capture instance. The
 /// resulting column information collection is similar to the information collected for the
 /// upstream table, with the exclusion of nullability and primary key constraints, which contain

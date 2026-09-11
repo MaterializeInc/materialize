@@ -145,16 +145,15 @@ async fn main() -> Result<(), anyhow::Error> {
                     ddl_event.lsn
                 );
             }
-            CdcEvent::Schema {
+            CdcEvent::Constraints {
                 capture_instance,
-                table,
+                schema_name,
+                table_name,
                 constraints,
             } => {
                 tracing::info!(
-                    "Schema for table {}.{} capture instance {capture_instance}: {} constraints",
-                    table.schema_name,
-                    table.name,
-                    constraints.len()
+                    "constraints for table {schema_name}.{table_name} capture instance \
+                     {capture_instance}: {constraints:?}"
                 );
             }
         }

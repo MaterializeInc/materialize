@@ -23,7 +23,7 @@ use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::SqlServerCdcMetrics;
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
-use mz_sql_server_util::desc::{SqlServerRowDecoder, SqlServerTableDesc};
+use mz_sql_server_util::desc::{SqlServerRowDecoder, SqlServerTableConstraint, SqlServerTableDesc};
 use mz_sql_server_util::inspect::{
     ensure_database_cdc_enabled, ensure_sql_server_agent_running, get_latest_restore_history_id,
 };
@@ -532,17 +532,20 @@ pub(crate) fn render<'scope>(
                             &mut deferred_updates,
                         ).await?
                     },
-                    CdcEvent::Schema {
+                    CdcEvent::Constraints {
                         capture_instance,
-                        table,
                         constraints,
+                        ..
                     } => {
                         let Some(partition_indexes) =
                             capture_instances.get(&capture_instance)
                         else {
                             continue;
                         };
-                        let current = SqlServerTableDesc::new(table, constraints)
+                        let current = constraints
+                            .into_iter()
+                            .map(SqlServerTableConstraint::try_from)
+                            .collect::<Result<Vec<_>, _>>()
                             .map_err(TransientError::from)?;
                         for partition_idx in partition_indexes {
                             if errored_partitions.contains(partition_idx) {
