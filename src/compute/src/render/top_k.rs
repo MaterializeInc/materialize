@@ -49,7 +49,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
-use crate::render::columnar::CollectionEdge;
+use crate::render::columnar::{CollectionEdge, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -109,8 +109,13 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                  `mz_now()` has been const-folded and no temporal bucketing is set",
             );
         }
-        // Temporal bucketing is `Vec`-internal, so decode the edge here. It fires only
-        // under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the `TemporalBucketing` strategy.
+        // Temporal bucketing is `Vec`-internal, so decode in and encode out. It fires
+        // only under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the `TemporalBucketing`
+        // strategy.
+        //
+        // TODO: `map_topk_key` decodes this encode again one operator later, so a
+        // bucketed TopK pays a round trip that no consumer here wants. Both halves
+        // go away with the columnar push-down noted on `topk_result_to_columnar`.
         let ok_input = if matches!(
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
@@ -120,11 +125,11 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 .get(&self.config_set)
                 .try_into()
                 .expect("must fit");
-            CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+            CollectionEdge::Columnar(vec_to_columnar(T::maybe_apply_temporal_bucketing(
                 ok_input.into_vec().inner,
                 self.as_of_frontier.clone(),
                 summary,
-            ))
+            )))
         } else {
             ok_input
         };

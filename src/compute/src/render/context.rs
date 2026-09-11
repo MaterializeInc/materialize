@@ -54,7 +54,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
-use crate::render::columnar::CollectionEdge;
+use crate::render::columnar::{CollectionEdge, vec_to_columnar};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -1152,12 +1152,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .try_into()
                     .expect("must fit");
                 bucketed = true;
-                // Temporal bucketing is `Vec`-internal, so decode here.
-                CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+                // Temporal bucketing is `Vec`-internal, so decode in and encode out.
+                CollectionEdge::Columnar(vec_to_columnar(T::maybe_apply_temporal_bucketing(
                     oks.into_vec().inner,
                     as_of.clone(),
                     summary,
-                ))
+                )))
             } else {
                 oks
             };
@@ -1181,24 +1181,24 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     strategy
                 };
-                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-                {
-                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                        .get(config_set)
-                        .try_into()
-                        .expect("must fit");
-                    bucketed = true;
-                    // Temporal bucketing is `Vec`-internal, so decode here.
-                    let oks = oks.into_vec();
-                    CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
-                        oks.inner,
-                        as_of.clone(),
-                        summary,
-                    ))
-                } else {
-                    oks
-                };
+                let oks =
+                    if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
+                        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
+                    {
+                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                            .get(config_set)
+                            .try_into()
+                            .expect("must fit");
+                        bucketed = true;
+                        // Temporal bucketing is `Vec`-internal, so decode in and
+                        // encode out.
+                        let oks = oks.into_vec();
+                        CollectionEdge::Columnar(vec_to_columnar(
+                            T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary),
+                        ))
+                    } else {
+                        oks
+                    };
                 let batcher = ArrangementBatcher::from_config(config_set);
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
