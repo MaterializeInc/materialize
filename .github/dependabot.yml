@@ -72,6 +72,26 @@ updates:
       update-types:
         - minor
         - patch
+# The `test/terraform` roots pin the self-managed modules to a tag rather than
+# floating on `main`, so an upstream release arrives here as a PR that can
+# adapt the roots in the same change, instead of breaking the nightly overnight
+# with no PR-time signal. Pin to a tag, not a commit SHA: dependabot does not
+# reliably bump SHA refs (dependabot/dependabot-core#10787).
+- package-ecosystem: terraform
+  directories:
+    - /test/terraform/aws-temporary
+    - /test/terraform/aws-upgrade
+    - /test/terraform/aws-persistent
+    - /test/terraform/gcp-temporary
+    - /test/terraform/azure-temporary
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:
