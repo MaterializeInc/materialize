@@ -195,13 +195,15 @@ When changing templates or shortcodes, inspect both the HTML and Markdown
 outputs. A successful HTML render does not prove that the `skill` output is
 valid.
 
-### Test syntax documentation
+## Test syntax as you write the documentation
 
 When documentation adds or changes SQL syntax, test each example using the
 Materialize emulator. Documentation is often written ahead of a public release,
 so use a release candidate version of the emulator when the latest stable
 version does not support the syntax yet. Wherever possible, include sample
 output in the documentation and verify that it matches the emulator output.
+
+Don't try to build Materialize from source; just use the latest emulator verison.
 
 ## Deployments
 
