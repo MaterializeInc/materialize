@@ -106,8 +106,13 @@ SELECT * FROM indexed;
 2 20
 
 # Aggregation needs a temporary dataflow even though its input is indexed.
-query error query rejected: this query would build a temporary dataflow
+# Peek routing is fixed at connection creation, so use a new connection per path.
+simple conn=backend,user=materialize
 SELECT a, sum(b) FROM indexed GROUP BY a;
+----
+db error: ERROR: query rejected: this query would build a temporary dataflow
+DETAIL: Query policy "no_dataflows" rule "fast_only" applies to this query on cluster "quickstart".
+HINT: Run EXPLAIN to inspect the query plan. Create an index that serves the query on this cluster, or use a cluster and role whose query policies permit this plan.
 
 # A persist fast-path read does not build a temporary dataflow.
 query II rowsort
@@ -160,8 +165,12 @@ SELECT a, sum(b) FROM indexed GROUP BY a;
 1 40
 2 20
 
-query error query rejected: this query would read from object storage
+simple conn=backend,user=materialize
 SELECT * FROM unindexed LIMIT 10;
+----
+db error: ERROR: query rejected: this query would read from object storage
+DETAIL: Query policy "no_persist" rule "memory_only" applies to this query on cluster "quickstart".
+HINT: Run EXPLAIN to inspect the query plan. Create an index that serves the query on this cluster, or use a cluster and role whose query policies permit this plan.
 
 # This is a slow-path persist read, not a persist fast path.
 query error query rejected: this query would read from object storage
@@ -186,8 +195,12 @@ SELECT a, sum(b) FROM indexed GROUP BY a;
 1 40
 2 20
 
-query error query rejected: this query would read from object storage
+simple conn=frontend,user=materialize
 SELECT * FROM unindexed LIMIT 10;
+----
+db error: ERROR: query rejected: this query would read from object storage
+DETAIL: Query policy "no_persist" rule "memory_only" applies to this query on cluster "quickstart".
+HINT: Run EXPLAIN to inspect the query plan. Create an index that serves the query on this cluster, or use a cluster and role whose query policies permit this plan.
 
 query error query rejected: this query would read from object storage
 SELECT a, sum(b) FROM unindexed GROUP BY a;
@@ -195,8 +208,12 @@ SELECT a, sum(b) FROM unindexed GROUP BY a;
 statement ok
 ALTER CLUSTER quickstart SET (QUERY POLICY = no_dataflows);
 
-query error query rejected: this query would build a temporary dataflow
+simple conn=frontend,user=materialize
 SELECT a, sum(b) FROM indexed GROUP BY a;
+----
+db error: ERROR: query rejected: this query would build a temporary dataflow
+DETAIL: Query policy "no_dataflows" rule "fast_only" applies to this query on cluster "quickstart".
+HINT: Run EXPLAIN to inspect the query plan. Create an index that serves the query on this cluster, or use a cluster and role whose query policies permit this plan.
 
 statement error query rejected: this query would build a temporary dataflow
 INSERT INTO indexed SELECT a, sum(b)::int FROM indexed GROUP BY a;
