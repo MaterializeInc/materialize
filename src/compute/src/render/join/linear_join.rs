@@ -30,6 +30,7 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{
     Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
 };
@@ -40,7 +41,7 @@ use timely::dataflow::operators::OkErr;
 
 use crate::extensions::arrange::{ArrangementBatcher, MzArrangeCore};
 use crate::render::RenderTimestamp;
-use crate::render::columnar::CollectionEdge;
+use crate::render::columnar::{CollectionEdge, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
@@ -311,33 +312,45 @@ where
         // For example, we may have expressions not pushed down (e.g. literals)
         // and projections that could not be applied (e.g. column repetition).
         let bundle = if let JoinedFlavor::Collection(joined) = joined {
-            let mut joined = joined.into_vec();
-            if let Some(closure) = linear_plan.final_closure {
+            let ok_edge = if let Some(closure) = linear_plan.final_closure {
+                // The finalization closure computes fresh output rows, so the owned give
+                // into the consolidating builder is a move.
                 let name = "LinearJoinFinalization";
-                type CB<C> = ConsolidatingContainerBuilder<C>;
-                let (updates, errs) = joined.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
-                    // Reuseable allocation for unpacking.
-                    let mut datums = DatumVec::new();
-                    move |row| {
-                        let mut row_builder = SharedRow::get();
-                        let temp_storage = RowArena::new();
-                        let mut datums_local = datums.borrow_with(&row);
-                        // TODO(mcsherry): re-use `row` allocation.
-                        closure
-                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                            .map(|row| row.cloned())
-                            .map_err(DataflowErrorSer::from)
-                            .transpose()
-                    }
-                });
-
-                joined = updates;
+                type OkCB<T> = ConsolidatingColumnBuilder<Row, T, Diff>;
+                type ErrCB<C> = ConsolidatingContainerBuilder<C>;
+                let (updates, errs) = joined
+                    .into_vec()
+                    .flat_map_fallible::<OkCB<T>, ErrCB<_>, _, _, _, _>(name, {
+                        // Reuseable allocation for unpacking.
+                        let mut datums = DatumVec::new();
+                        move |row| {
+                            let mut row_builder = SharedRow::get();
+                            let temp_storage = RowArena::new();
+                            let mut datums_local = datums.borrow_with(&row);
+                            // TODO(mcsherry): re-use `row` allocation.
+                            closure
+                                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                                .map(|row| row.cloned())
+                                .map_err(DataflowErrorSer::from)
+                                .transpose()
+                        }
+                    });
                 errors.push(errs);
-            }
+                CollectionEdge::Columnar(updates)
+            } else {
+                // With identity finalization the raw stage output is the result.
+                // `mz_join_core` produces a `Vec` collection, so encode it here,
+                // non-consolidating to match that output. A single-input join's columnar
+                // source is already an edge and passes straight through.
+                match joined {
+                    CollectionEdge::Columnar(c) => CollectionEdge::Columnar(c),
+                    CollectionEdge::Vec(s) => CollectionEdge::Columnar(vec_to_columnar(s)),
+                }
+            };
 
             // Return joined results and all produced errors collected together.
-            CollectionBundle::from_collections(
-                joined,
+            CollectionBundle::from_edge(
+                ok_edge,
                 differential_dataflow::collection::concatenate(inner, errors),
             )
         } else {
