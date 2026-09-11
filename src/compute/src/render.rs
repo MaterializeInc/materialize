@@ -147,6 +147,7 @@ use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
 use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::vec::{BranchWhen, Filter};
 use timely::dataflow::operators::{Capability, Operator, Probe, probe};
@@ -170,6 +171,7 @@ use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
+use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
 pub(crate) mod columnar;
 pub mod context;
@@ -1215,22 +1217,28 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 // We should advance times in constant collections to start from `as_of`.
                 let as_of_frontier = self.as_of_frontier.clone();
                 let until = self.until.clone();
-                let ok_collection = rows
-                    .into_iter()
-                    .filter_map(move |(row, mut time, diff)| {
-                        time.advance_by(as_of_frontier.borrow());
-                        if !until.less_equal(&time) {
-                            Some((
-                                row.0,
-                                <T as Refines<mz_repr::Timestamp>>::to_inner(time),
-                                diff,
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .to_stream(self.scope)
-                    .as_collection();
+                // Advancing times to `as_of` can collapse distinct times onto one, so
+                // rows the planner left distinct can become duplicates. The
+                // `ConsolidatingColumnBuilder` folds those within the batch.
+                let ok_collection = CollectionEdge::Columnar(
+                    rows.into_iter()
+                        .filter_map(move |(row, mut time, diff)| {
+                            time.advance_by(as_of_frontier.borrow());
+                            if !until.less_equal(&time) {
+                                Some((
+                                    row.0,
+                                    <T as Refines<mz_repr::Timestamp>>::to_inner(time),
+                                    diff,
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .to_stream_with_builder::<_, ConsolidatingColumnBuilder<Row, T, Diff>>(
+                            self.scope,
+                        )
+                        .as_collection(),
+                );
 
                 let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
                 error_time.advance_by(self.as_of_frontier.borrow());
@@ -1246,7 +1254,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .to_stream(self.scope)
                     .as_collection();
 
-                CollectionBundle::from_collections(ok_collection, err_collection)
+                CollectionBundle::from_edge(ok_collection, err_collection)
             }
             Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
