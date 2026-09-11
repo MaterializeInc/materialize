@@ -147,7 +147,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
 
 ! SELECT * FROM alter_table_rename;
-regex:incompatible schema change on public\.alter_table_rename \(oid \d+\): table was renamed or moved upstream \(it is now public\.alter_table_renamed with oid
+regex:incompatible schema change on public\.alter_table_rename \(oid \d+\): table was renamed or moved upstream
 
 #
 # Alter table rename colum

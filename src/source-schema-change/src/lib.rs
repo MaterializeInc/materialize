@@ -21,17 +21,10 @@ use serde::{Deserialize, Serialize};
 /// source status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum SchemaChange {
-    #[error("table was dropped and recreated upstream (it now has oid {oid})")]
-    TableDropped { oid: u32 },
-    #[error(
-        "table was renamed or moved upstream (it is now {schema}.{name}{})",
-        oid_suffix(.oid)
-    )]
-    TableRenamed {
-        schema: String,
-        name: String,
-        oid: Option<u32>,
-    },
+    #[error("table was dropped and recreated upstream")]
+    TableDropped {},
+    #[error("table was renamed or moved upstream")]
+    TableRenamed {},
     #[error("column {} was dropped or renamed upstream", .column.quoted())]
     ColumnDropped { column: String },
     #[error(
@@ -50,10 +43,6 @@ pub enum SchemaChange {
     KeyAltered { key: KeyRef },
     #[error("{0}")]
     DescriptionFailed(String),
-}
-
-fn oid_suffix(oid: &Option<u32>) -> String {
-    oid.map_or_else(String::new, |oid| format!(" with oid {oid}"))
 }
 
 /// A PRIMARY KEY or UNIQUE constraint as recorded when the table was created.
