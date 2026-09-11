@@ -177,6 +177,15 @@ Diátaxis mode per section:
 * When revising existing documentation, identify mixed modes and separate them
   into the appropriate Diátaxis categories.
 
+## Writing release notes
+
+Release notes live in `content/releases/_index.md`, one section per version.
+
+In the `Guides` section, use one bullet per guide containing only a link to
+that guide. Do not summarize or explain what the guide covers; the guide's own
+page does that. Notes about docs-wide changes, such as a reorganization, may
+carry a short sentence of context.
+
 ## Draft documentation from PRDs or engineering designs
 
 When asked to draft documentation from a PRD or engineering specification, do
