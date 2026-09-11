@@ -18,7 +18,7 @@ from materialize.zippy.balancerd_actions import (
 from materialize.zippy.blob_store_actions import BlobStoreRestart, BlobStoreStart
 from materialize.zippy.crdb_actions import CockroachRestart, CockroachStart
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
-from materialize.zippy.framework import ActionOrFactory  # noqa
+from materialize.zippy.framework import ActionOrFactory
 from materialize.zippy.kafka_actions import (
     CreateTopicParameterized,
     Ingest,

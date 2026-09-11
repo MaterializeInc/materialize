@@ -9,7 +9,7 @@
 
 import re
 from dataclasses import dataclass, replace
-from enum import Enum
+from enum import Enum, StrEnum
 from importlib import resources
 from pathlib import Path
 from typing import cast
@@ -45,7 +45,7 @@ class ExplainFormat(Enum):
         return "txt"
 
 
-class ExplainStage(str, Enum):
+class ExplainStage(StrEnum):
     RAW_PLAN = "RAW PLAN"
     DECORRELATED_PLAN = "DECORRELATED PLAN"
     LOCAL_PLAN = "LOCALLY OPTIMIZED PLAN"
@@ -140,7 +140,7 @@ class ExplainOptionType(click.ParamType):
             raise ValueError(f"Bad explain option: {value}: {e!r}") from e
 
 
-class ItemType(str, Enum):
+class ItemType(StrEnum):
     CONNECTION = "connection"
     FUNCTION = "function"
     INDEX = "index"

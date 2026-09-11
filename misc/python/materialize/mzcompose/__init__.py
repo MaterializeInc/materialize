@@ -909,9 +909,7 @@ def _check_tcp(
         spawn.capture(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         ui.log_in_automation(
-            "wait-for-tcp ({}{}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                kind, host, port, ui.shell_quote(cmd), e, e.stdout, e.stderr
-            )
+            f"wait-for-tcp ({kind}{host}:{port}): error running {ui.shell_quote(cmd)}: {e}, stdout:\n{e.stdout}\nstderr:\n{e.stderr}"
         )
         raise
     return cmd

@@ -9,13 +9,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# check-python-version.sh — make sure Python 3.10 keeps working
+# check-python-version.sh — make sure the minimum supported Python keeps working
 
 set -euo pipefail
 
 cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
+
+# Keep in sync with the version check in `bin/pyactivate`.
+PYTHON_MIN_VERSION=3.13
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     if ! uv --version >/dev/null 2>/dev/null; then
@@ -24,19 +27,19 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         exit 1
     fi
 
-    py310_venv="$(mktemp -d)/venv-py310"
-    trap 'rm -rf "$py310_venv"' EXIT
+    py_min_venv="$(mktemp -d)/venv-py-min"
+    trap 'rm -rf "$py_min_venv"' EXIT
 
-    try uv venv --python 3.10 "$py310_venv"
-    try uv pip compile --python-version 3.10 ci/builder/requirements.txt
-    try uv pip install --python "$py310_venv/bin/python" --requirement ci/builder/requirements.txt
+    try uv venv --python "$PYTHON_MIN_VERSION" "$py_min_venv"
+    try uv pip compile --python-version "$PYTHON_MIN_VERSION" ci/builder/requirements.txt
+    try uv pip install --python "$py_min_venv/bin/python" --requirement ci/builder/requirements.txt
     # Wrap the compileall (the actual work) in `try`, not git_files, and keep it
     # out of a pipeline: `try` in a pipeline runs in a subshell and loses its
     # accounting. Guard against empty input too, otherwise compileall with no
     # file arguments compiles all of sys.path instead of the repo.
     py_files=$(git_files '*.py')
     if [[ -n "$py_files" ]]; then
-        try xargs "$py310_venv/bin/python" -m compileall -q <<< "$py_files"
+        try xargs "$py_min_venv/bin/python" -m compileall -q <<< "$py_files"
     fi
 fi
 

@@ -258,7 +258,7 @@ def main() -> int:
     ensure_cockroach()
     cargo_build()
 
-    launched: "subprocess.Popen[bytes] | None" = None
+    launched: subprocess.Popen[bytes] | None = None
     clusterd_pid: int | None = None
     try:
         if RUN_CLUSTERD:

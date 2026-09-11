@@ -48,7 +48,7 @@ from materialize.mzcompose.services.ssh_bastion_host import (
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.zippy.framework import Test, ci_additional_system_parameter_defaults
 from materialize.zippy.mz_actions import Mz0dtDeploy
-from materialize.zippy.scenarios import *  # noqa: F401 F403
+from materialize.zippy.scenarios import *  # noqa: F403
 
 
 def create_mzs(
