@@ -18,6 +18,10 @@ produce different bytes even from identical source. Locally this means the
 current-commit build does not reuse the developer's own `target/` cache; the
 first run compiles it from scratch into a parked target dir and later runs
 reuse that.
+
+A package whose dependency closure has no committed change between the ancestor
+and the current commit is not built at all: identical source at identical paths
+would only reproduce the identical-binary skip below at the cost of two builds.
 """
 
 import hashlib
@@ -41,6 +45,7 @@ from materialize.cargo_bench.targets import (
     bench_executables,
     bench_targets,
     cargo_build_args,
+    closure_dirs,
     package_manifests,
 )
 from materialize.mz_version import MzVersion
@@ -51,6 +56,10 @@ SERVICES = []
 BASELINE = "ancestor"
 
 REPORTS_ARTIFACT = "criterion-reports.tar.zst"
+
+# Repo-relative paths outside any crate directory that feed every build:
+# dependency versions, workspace profiles, and the rustflags cargo applies.
+BUILD_INPUTS = ("Cargo.lock", "Cargo.toml", ".cargo")
 
 
 @dataclass(frozen=True)
@@ -122,6 +131,47 @@ def load_targets(
     if packages:
         targets = [t for t in targets if t.package in packages]
     return targets, package_manifests(metadata)
+
+
+def unchanged_packages(ancestor: str, head: str, packages: list[str]) -> list[str]:
+    """Return the members of `packages` with no committed change in their dependency closure between `ancestor` and `head`.
+
+    The closure comes from `head`'s metadata. A dependency added or removed
+    since the ancestor changes the dependent's manifest, which is inside the
+    closure either way, so one side's closure suffices. Build scripts that
+    read files outside their crate directory are not covered.
+    """
+    # The resolve honours only the features cargo would enable by default,
+    # while a bench's `required-features` can pull in optional path
+    # dependencies, so the superset over all features is used.
+    metadata = json.loads(
+        spawn.capture(
+            ["cargo", "metadata", "--format-version=1", "--all-features"],
+            cwd=MZ_ROOT,
+        )
+    )
+    unchanged = []
+    for package in packages:
+        dirs = [str(d.relative_to(MZ_ROOT)) for d in closure_dirs(metadata, package)]
+        # Without `--no-renames` a file moved across the closure boundary
+        # would only be listed under its destination path.
+        changed = spawn.capture(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "--no-renames",
+                ancestor,
+                head,
+                "--",
+                *BUILD_INPUTS,
+                *dirs,
+            ],
+            cwd=MZ_ROOT,
+        )
+        if not changed.strip():
+            unchanged.append(package)
+    return unchanged
 
 
 def build_benches(
@@ -333,6 +383,7 @@ def render_report(
     ancestor_failures: list[TargetFailure],
     current_failures: list[TargetFailure],
     identical: list[BuiltBench],
+    unchanged: list[str],
 ) -> str:
     sections = []
     if ancestor is not None:
@@ -359,6 +410,11 @@ def render_report(
         )
     if report.warnings:
         sections.append("Warnings:\n" + "\n".join(f"* {w}" for w in report.warnings))
+    if unchanged:
+        sections.append(
+            "Bench packages with no change in their dependency closure since the ancestor (not built):\n"
+            + "\n".join(f"* `{p}`" for p in unchanged)
+        )
     if identical:
         sections.append(
             "Bench targets with identical binaries at ancestor and current (not run):\n"
@@ -410,7 +466,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print("--- No bench packages assigned to this shard")
         return
     print(f"--- Bench packages in this shard: {', '.join(shard_packages)}")
-    head_targets = [t for t in head_targets if t.package in shard_packages]
+
+    # Only the committed HEAD is measured here. Uncommitted local changes
+    # in MZ_ROOT are not part of the checkout built below.
+    head = git.rev_parse("HEAD")
+    ancestor: str | None = None
+    unchanged: list[str] = []
+    if not args.skip_ancestor:
+        ancestor = args.ancestor or resolve_ancestor()
+        assert ancestor is not None
+        print(f"--- Comparing against ancestor {ancestor}")
+        unchanged = unchanged_packages(ancestor, head, shard_packages)
+        if unchanged:
+            print(
+                f"--- Unchanged since the ancestor, not built: {', '.join(unchanged)}"
+            )
+    build_packages = [p for p in shard_packages if p not in unchanged]
 
     criterion_home = target_dir() / "criterion-compare"
     # Stale baselines from an earlier run would silently become the
@@ -466,18 +537,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if target.exists():
         shutil.rmtree(target)
 
-    ancestor: str | None = None
     ancestor_targets: list[BenchTarget] = []
     ancestor_built: list[BuiltBench] = []
     ancestor_build_failures: list[TargetFailure] = []
+    ancestor_failures: list[TargetFailure] = []
+    current_failures: list[TargetFailure] = []
+    identical: list[BuiltBench] = []
     # Tracks which parked target dir currently owns `target`, so the
     # `finally` below can park it back even if a build raises partway through.
     target_owner: str | None = None
     try:
-        if not args.skip_ancestor:
-            ancestor = args.ancestor or resolve_ancestor()
-            assert ancestor is not None
-            print(f"--- Comparing against ancestor {ancestor}")
+        if ancestor is not None and build_packages:
             spawn.runv(
                 ["git", "worktree", "add", "--detach", str(src), ancestor],
                 cwd=MZ_ROOT,
@@ -487,7 +557,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             target_owner = "ancestor"
             ancestor_env = dict(env, CARGO_TARGET_DIR=str(target))
             ancestor_targets, ancestor_manifests = load_targets(
-                src, shard_packages, ancestor_env
+                src, build_packages, ancestor_env
             )
             ancestor_built_raw, ancestor_build_failures = build_benches(
                 src, ancestor_targets, ancestor_manifests, ancestor_env
@@ -511,40 +581,35 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 for b in ancestor_built_raw
             ]
 
-        # Only the committed HEAD is measured here. Uncommitted local changes
-        # in MZ_ROOT are not part of the checkout built below.
-        head = spawn.capture(["git", "rev-parse", "HEAD"], cwd=MZ_ROOT).strip()
-        spawn.runv(["git", "worktree", "add", "--detach", str(src), head], cwd=MZ_ROOT)
-        if current_target.exists():
-            current_target.rename(target)
-        target_owner = "current"
-        current_env = dict(env, CARGO_TARGET_DIR=str(target))
-        # Enumerated from `src`, not MZ_ROOT, so the manifest paths this
-        # returns match the paths cargo reports for the build below, even
-        # though both are the same commit.
-        current_targets, current_manifests = load_targets(
-            src, shard_packages, current_env
-        )
-        head_built_raw, current_build_failures = build_benches(
-            src, current_targets, current_manifests, current_env
-        )
-        target.rename(current_target)
-        target_owner = None
-        head_built = [
-            BuiltBench(
-                package=b.package,
-                name=b.name,
-                executable=current_target / b.executable.relative_to(target),
-                manifest_dir=b.manifest_dir,
+        if build_packages:
+            spawn.runv(
+                ["git", "worktree", "add", "--detach", str(src), head], cwd=MZ_ROOT
             )
-            for b in head_built_raw
-        ]
+            if current_target.exists():
+                current_target.rename(target)
+            target_owner = "current"
+            current_env = dict(env, CARGO_TARGET_DIR=str(target))
+            # Enumerated from `src`, not MZ_ROOT, so the manifest paths this
+            # returns match the paths cargo reports for the build below, even
+            # though both are the same commit.
+            current_targets, current_manifests = load_targets(
+                src, build_packages, current_env
+            )
+            head_built_raw, current_build_failures = build_benches(
+                src, current_targets, current_manifests, current_env
+            )
+            target.rename(current_target)
+            target_owner = None
+            head_built = [
+                BuiltBench(
+                    package=b.package,
+                    name=b.name,
+                    executable=current_target / b.executable.relative_to(target),
+                    manifest_dir=b.manifest_dir,
+                )
+                for b in head_built_raw
+            ]
 
-        if args.skip_ancestor:
-            ancestor_run_failures, current_run_failures, identical = run_benches(
-                head_built, [], current_targets, [], env, criterion_home
-            )
-        else:
             ancestor_run_failures, current_run_failures, identical = run_benches(
                 head_built,
                 ancestor_built,
@@ -553,8 +618,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env,
                 criterion_home,
             )
-        ancestor_failures = ancestor_build_failures + ancestor_run_failures
-        current_failures = current_build_failures + current_run_failures
+            ancestor_failures = ancestor_build_failures + ancestor_run_failures
+            current_failures = current_build_failures + current_run_failures
     finally:
         if target_owner is not None and target.exists():
             target.rename(
@@ -574,6 +639,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ancestor_failures,
         current_failures,
         identical,
+        unchanged,
     )
     print(markdown)
 

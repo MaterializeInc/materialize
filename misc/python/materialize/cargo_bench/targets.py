@@ -54,6 +54,35 @@ class BuiltBench:
     manifest_dir: Path
 
 
+def closure_dirs(metadata: dict[str, Any], package: str) -> list[Path]:
+    """Return the manifest directories of workspace package `package` and of every path dependency in its transitive closure, sorted.
+
+    Needs a full `cargo metadata` document, one with a `resolve` section.
+    Dependencies of every kind count, since a bench target links the
+    package's dev-dependencies as well.
+    """
+    packages = {p["id"]: p for p in metadata["packages"]}
+    nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
+    roots = [i for i in metadata["workspace_members"] if packages[i]["name"] == package]
+    if not roots:
+        raise ValueError(f"{package} is not a workspace member")
+    seen: set[str] = set()
+    stack = list(roots)
+    while stack:
+        i = stack.pop()
+        if i in seen:
+            continue
+        seen.add(i)
+        stack.extend(d["pkg"] for d in nodes[i]["deps"])
+    return sorted(
+        {
+            Path(packages[i]["manifest_path"]).parent
+            for i in seen
+            if packages[i]["source"] is None
+        }
+    )
+
+
 def package_manifests(metadata: dict[str, Any]) -> dict[str, str]:
     """Map each workspace package's manifest path to its package name."""
     return {

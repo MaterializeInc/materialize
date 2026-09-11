@@ -18,6 +18,7 @@ from materialize.cargo_bench.targets import (
     bench_executables,
     bench_targets,
     cargo_build_args,
+    closure_dirs,
     package_manifests,
 )
 
@@ -185,3 +186,52 @@ def test_package_manifests() -> None:
         "/ws/src/ore/Cargo.toml": "mz-ore",
         "/ws/src/repr/Cargo.toml": "mz-repr",
     }
+
+
+def _resolve_package(id: str, name: str, manifest: str, source: str | None) -> dict:
+    return {"id": id, "name": name, "manifest_path": manifest, "source": source}
+
+
+def _node(id: str, deps: list[str]) -> dict:
+    return {"id": id, "deps": [{"name": d, "pkg": d} for d in deps]}
+
+
+# mz-a depends on mz-b (dev-dependency) and anyhow, mz-b depends on anyhow,
+# mz-c depends on mz-a and is not in mz-a's closure.
+RESOLVE_METADATA = {
+    "packages": [
+        _resolve_package("a", "mz-a", "/ws/src/a/Cargo.toml", None),
+        _resolve_package("b", "mz-b", "/ws/src/b/Cargo.toml", None),
+        _resolve_package("c", "mz-c", "/ws/src/c/Cargo.toml", None),
+        _resolve_package(
+            "anyhow", "anyhow", "/registry/anyhow/Cargo.toml", "registry+https://x"
+        ),
+    ],
+    "workspace_members": ["a", "b", "c"],
+    "resolve": {
+        "nodes": [
+            _node("a", ["b", "anyhow"]),
+            _node("b", ["anyhow"]),
+            _node("c", ["a"]),
+            _node("anyhow", []),
+        ]
+    },
+}
+
+
+def test_closure_dirs_transitive_path_crates_only() -> None:
+    assert closure_dirs(RESOLVE_METADATA, "mz-a") == [
+        Path("/ws/src/a"),
+        Path("/ws/src/b"),
+    ]
+    assert closure_dirs(RESOLVE_METADATA, "mz-b") == [Path("/ws/src/b")]
+    assert closure_dirs(RESOLVE_METADATA, "mz-c") == [
+        Path("/ws/src/a"),
+        Path("/ws/src/b"),
+        Path("/ws/src/c"),
+    ]
+
+
+def test_closure_dirs_rejects_unknown_package() -> None:
+    with pytest.raises(ValueError, match="mz-missing"):
+        closure_dirs(RESOLVE_METADATA, "mz-missing")
