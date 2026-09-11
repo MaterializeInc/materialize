@@ -65,6 +65,8 @@ use crate::columnar::batcher::{ColumnChunker, gallop};
 use crate::columnar::unload::UnloadChunk;
 use crate::columnar::{Column, at_serialized_capacity};
 
+pub mod metrics;
+
 /// Compute's leg of the process spill gate. See [`set_compute_spill_enabled`].
 static COMPUTE_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -441,9 +443,11 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     where
         T: Timestamp,
     {
+        let len_bytes = column.length_in_bytes();
+        metrics::record(metrics::Stage::Commit, column.borrow().len(), len_bytes);
         mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
         if let Some(pool) = spill_pool() {
-            if column.length_in_bytes() >= SPILL_MIN_BYTES {
+            if len_bytes >= SPILL_MIN_BYTES {
                 return Self::spill_body(column, &pool, depth);
             }
         }
@@ -731,6 +735,9 @@ where
                 break;
             }
         }
+        // The disjoint fast paths above move fronts without reading a row, so
+        // only this path counts as merge work.
+        metrics::record(metrics::Stage::Merge, positions[0] + positions[1], 0);
         let [col_a, col_b] = &mut cols;
         // Per input side: the loaded column and the merge's consumed position
         // within it, the side's pre-merge depth, its original spilled body
@@ -833,6 +840,11 @@ where
         done: bool,
         out: &mut VecDeque<Self>,
     ) {
+        metrics::record(
+            metrics::Stage::Advance,
+            input.iter().map(Self::records).sum(),
+            0,
+        );
         let Some(front) = input.pop_front() else {
             return;
         };
