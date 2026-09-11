@@ -282,7 +282,9 @@ where
                                             progress_stream: feedback_data,
                                             max_inflight_bytes: storage_dataflow_max_inflight_bytes,
                                             summary: (Default::default(), Subtime::least_summary()),
-                                            metrics: backpressure_metrics.clone(),
+                                            metrics: backpressure_metrics
+                                                .as_ref()
+                                                .map(|m| m.operator_metrics()),
                                         }),
                                         backpressure_metrics,
                                     )
