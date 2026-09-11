@@ -1,12 +1,6 @@
 .terraform.lock.hcl
 .terraform
-terraform.tfvars
-
-# Any state file, not just the two exact names: a state carries the database
-# password and the license key, so a suffixed copy must not be committable.
 terraform.tfstate
 terraform.tfstate.*
-
-# `setup` builds this into the root with `helm package`, so it is untracked in
-# every working tree that has run the test.
+terraform.tfvars
 materialize-operator-*.tgz
