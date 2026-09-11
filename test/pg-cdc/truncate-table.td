@@ -23,6 +23,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
 DROP PUBLICATION IF EXISTS mz_source;
+DROP PUBLICATION IF EXISTS mz_source_restart;
 
 CREATE SCHEMA public;
 
@@ -133,6 +134,11 @@ contains:table was truncated
   WHERE o.name = 'mv_minmax'
 true
 
+# The counts come from the replica's periodic introspection reports, so they lag
+# the dataflow and nothing in the catalog says by how much. Wait out a few
+# intervals rather than capture a baseline that is still climbing.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
 $ set-from-sql var=baseline_errors
 SELECT SUM(c.count)::text
   FROM mz_internal.mz_compute_error_counts_raw_unified c
@@ -172,6 +178,10 @@ SELECT mz_now()::text FROM t_barrier LIMIT 1
   JOIN mz_objects o ON f.object_id = o.id
   WHERE o.name = 'mv_minmax'
 true
+
+# The wait above says the view consumed the deletes, not that the replica has
+# reported the errors they caused. Same reporting lag as the baseline.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
 # Pre-fix the deletes reach the reduce as retractions of rows it never saw, so it
 # emits further errors and this count grows past the baseline.
