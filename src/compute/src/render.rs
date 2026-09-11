@@ -1432,8 +1432,6 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             .get(&self.config_set)
                             .try_into()
                             .expect("must fit");
-                        // Temporal bucketing is columnar throughout, so no round trip
-                        // here.
                         T::maybe_apply_temporal_bucketing(
                             os.inner,
                             self.as_of_frontier.clone(),

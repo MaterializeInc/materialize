@@ -47,11 +47,6 @@ pub trait TemporalBucketing<'scope, T: Timestamp>: Sized {
 }
 
 /// Implementation for streams in scopes where timestamps define a total order.
-///
-/// Columnar throughout. The chain's batcher already holds [`Column`] chunks, so
-/// the reveal path moves containers, and the input side addresses records by
-/// index through a time-ordered permutation rather than moving them. No owned
-/// record is materialized on either path.
 impl<'scope, T, D> TemporalBucketing<'scope, T> for Stream<'scope, T, Column<(D, T, mz_repr::Diff)>>
 where
     T: Timestamp + Default + ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice,

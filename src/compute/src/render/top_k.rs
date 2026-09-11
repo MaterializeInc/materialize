@@ -109,9 +109,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                  `mz_now()` has been const-folded and no temporal bucketing is set",
             );
         }
-        // Temporal bucketing is columnar throughout, so no round trip here. It fires
-        // only under `ENABLE_COMPUTE_TEMPORAL_BUCKETING` and the `TemporalBucketing`
-        // strategy.
+        // Temporal bucketing fires only under `ENABLE_COMPUTE_TEMPORAL_BUCKETING`
+        // and the `TemporalBucketing` strategy.
         let ok_input = if matches!(
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
