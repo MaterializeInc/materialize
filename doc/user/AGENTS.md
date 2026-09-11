@@ -205,12 +205,7 @@ output in the documentation and verify that it matches the emulator output.
 
 ## Deployments
 
-- Changes merged to `main` deploy immediately to `materialize.com/docs` through
-  `ci/deploy_website/website.sh`.
-- Pull requests publish previews through `ci/test/preview-docs.sh` at
-  `preview.materialize.com/materialize/$PR`.
-- Branches named `self-managed-docs/*` publish a versioned snapshot under
-  `/docs/self-managed/$VERSION` instead of the main site.
+Docs changes are deployed via CI/CD. Don't deploy manually.
 
 ## Reviewing Documentation Changes
 
@@ -222,9 +217,13 @@ and broken include references.
 
 ## Commits and Pull Requests
 
-Recent commits use a concise `<component>: <imperative summary>` format, often
-with the GitHub PR number, for example `docs: clarify source configuration
-(#12345)`. Keep commits focused. PRs should explain the user impact, identify
-affected pages or data files, link relevant issues, and include screenshots or
-preview details for visual changes. Coordinate substantial feature or API
-documentation with a technical writer and add release notes when required.
+### PR body
+Your PR body should be very concise, and provide a link to the pages 
+relevant for review. For instance
+
+--
+Adds a new hydration visibility guide
+- https://preview.materialize.com/materialize/38758/clusters/operational-guidelines/
+
+### Commits
+- Keep commits concise, with a concise `<component>: <imperative summary>` format
