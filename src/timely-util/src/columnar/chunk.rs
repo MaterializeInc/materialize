@@ -719,6 +719,29 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
+    /// Whether stored metadata proves this chunk can pass through advancement unchanged.
+    ///
+    /// The following chunk must start a later data group, or this must be the
+    /// final input at `done`. Otherwise the trailing group still needs consolidation.
+    fn advances_unchanged(
+        &self,
+        frontier: AntichainRef<T>,
+        next: Option<&Self>,
+        done: bool,
+    ) -> bool {
+        let Self::Spilled(body, _) = self else {
+            return false;
+        };
+        body.time_lower.iter().all(|time| frontier.less_equal(time))
+            && match next {
+                Some(next) if next.records() > 0 => {
+                    rr::<D>(self.data_span().1) < rr::<D>(next.data_span().0)
+                }
+                Some(_) => false,
+                None => done,
+            }
+    }
+
     /// Merge the front pair, optionally using decoded copies of those exact inputs.
     ///
     /// Pool handles in the input queues stay available for untouched survivors.
@@ -928,6 +951,12 @@ where
         done: bool,
         out: &mut VecDeque<Self>,
     ) {
+        while input
+            .front()
+            .is_some_and(|chunk| chunk.advances_unchanged(frontier, input.get(1), done))
+        {
+            out.push_back(input.pop_front().expect("front observed above"));
+        }
         metrics::record(
             metrics::Stage::Advance,
             input.iter().map(Self::records).sum(),
@@ -1975,6 +2004,84 @@ mod tests {
         assert!(input.is_empty());
         let advanced = records.iter().map(|&(d, t, r)| (d, t.max(50), r)).collect();
         assert_eq!(collect_chunks(out), consolidate(advanced));
+    }
+
+    #[mz_ore::test]
+    fn unchanged_advance_preserves_complete_spilled_groups() {
+        let pool = test_pool();
+        let first: Vec<Tuple> = (0..8).map(|key| ((key, 0), 10, 1)).collect();
+        let second: Vec<Tuple> = (8..16).map(|key| ((key, 0), 10, 1)).collect();
+        let original = TestChunk::spill_body(build_column(&first), &pool, 2);
+        let mut input = VecDeque::from([
+            original.clone(),
+            TestChunk::spill_body(build_column(&second), &pool, 2),
+        ]);
+        let mut output = VecDeque::new();
+        TestChunk::advance(
+            &mut input,
+            Antichain::from_elem(5).borrow(),
+            false,
+            &mut output,
+        );
+        let (ColumnChunk::Spilled(before, depth), ColumnChunk::Spilled(after, after_depth)) =
+            (&original, &output[0])
+        else {
+            panic!("the complete prefix must retain its spilled representation");
+        };
+        assert!(Rc::ptr_eq(before, after));
+        assert_eq!(depth, after_depth);
+        assert!(
+            !input.is_empty(),
+            "the unobserved trailing group must remain buffered"
+        );
+        assert_eq!(
+            collect_chunks(output.into_iter().chain(input)),
+            first.into_iter().chain(second).collect::<Vec<_>>()
+        );
+    }
+
+    #[mz_ore::test]
+    fn unchanged_advance_consolidates_shared_boundary_groups() {
+        let pool = test_pool();
+        let first = [((0, 0), 10, 1), ((0, 0), 11, 1)];
+        let second = [((0, 0), 11, -1)];
+        let mut input = VecDeque::from([TestChunk::spill_body(build_column(&first), &pool, 1)]);
+        let mut output = VecDeque::new();
+        let frontier = Antichain::from_elem(5);
+        TestChunk::advance(&mut input, frontier.borrow(), false, &mut output);
+        assert!(
+            output.is_empty(),
+            "a following chunk may continue the same group"
+        );
+        input.push_back(TestChunk::spill_body(build_column(&second), &pool, 1));
+        TestChunk::advance(&mut input, frontier.borrow(), true, &mut output);
+        assert!(input.is_empty());
+        assert_eq!(collect_chunks(output), vec![((0, 0), 10, 1)]);
+
+        // Both boundary chunks can still be spilled when presented in one call.
+        let mut input = VecDeque::from([
+            TestChunk::spill_body(build_column(&first), &pool, 1),
+            TestChunk::spill_body(build_column(&second), &pool, 1),
+        ]);
+        let mut output = VecDeque::new();
+        TestChunk::advance(&mut input, frontier.borrow(), true, &mut output);
+        assert_eq!(collect_chunks(output), vec![((0, 0), 10, 1)]);
+    }
+
+    #[mz_ore::test]
+    fn spilled_advance_rewrites_changed_timestamps() {
+        let pool = test_pool();
+        let rows = [((0, 0), 3, 1), ((0, 0), 4, 1)];
+        let mut input = VecDeque::from([TestChunk::spill_body(build_column(&rows), &pool, 1)]);
+        let mut output = VecDeque::new();
+        TestChunk::advance(
+            &mut input,
+            Antichain::from_elem(5).borrow(),
+            true,
+            &mut output,
+        );
+        assert!(input.is_empty());
+        assert_eq!(collect_chunks(output), vec![((0, 0), 5, 2)]);
     }
 
     /// Chunks the extract frontier does not split pass through whole from

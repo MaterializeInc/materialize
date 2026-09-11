@@ -350,6 +350,16 @@ where
         done: bool,
         out: &mut VecDeque<Self>,
     ) -> Poll<()> {
+        let mz_frontier = to_mz(frontier);
+        while input.front().is_some_and(|chunk| {
+            chunk.chunk.advances_unchanged(
+                mz_frontier.borrow(),
+                input.get(1).map(|next| &next.chunk),
+                done,
+            )
+        }) {
+            out.push_back(input.pop_front().expect("front observed above"));
+        }
         let read = if input
             .iter()
             .any(|c| matches!(c.chunk, ColumnChunk::Spilled(..)))
@@ -456,6 +466,83 @@ mod tests {
             chunk: ColumnChunk::spill_body(column, pool, 1),
             budget: budget.clone(),
         }
+    }
+
+    #[mz_ore::test]
+    fn unchanged_advance_does_not_read_cold_chunks() {
+        let pool = Pool::new().unwrap();
+        pool.set_spill_threads(0);
+        pool.set_budget(0);
+        let budget = ReadBudget::new(1 << 20);
+        let first = chunk(&[((1, vec![7; 128]), 10, 1)], &pool, &budget);
+        let second = chunk(&[((2, vec![7; 128]), 10, 1)], &pool, &budget);
+        let handle = match &first.chunk {
+            ColumnChunk::Spilled(body, _) => Arc::clone(&body.handle),
+            ColumnChunk::Resident(..) => panic!("expected spilled input"),
+        };
+        let mut io = TestChunk::pending_for(std::slice::from_ref(&first), &[]);
+        let mut input = VecDeque::from([first, second]);
+        let mut output = VecDeque::new();
+        let frontier = timely_next::progress::Antichain::from_elem(Time(5));
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        assert!(
+            TestChunk::poll_advance(
+                &mut io,
+                &mut cx,
+                &mut input,
+                frontier.borrow(),
+                true,
+                &mut output,
+            )
+            .is_ready()
+        );
+        assert!(input.is_empty());
+        assert_eq!(output.len(), 2);
+        let ColumnChunk::Spilled(body, _) = &output[0].chunk else {
+            panic!("unchanged body must retain its pool handle");
+        };
+        assert!(Arc::ptr_eq(&body.handle, &handle));
+        assert_eq!(pool.stats().async_reads, 0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[mz_ore::test]
+    #[ignore = "local unchanged-advancement performance comparison"]
+    fn unchanged_advance_microbench() {
+        let pool = Pool::new().unwrap();
+        pool.set_spill_threads(0);
+        pool.set_budget(0);
+        let budget = ReadBudget::new(8 << 20);
+        let updates: Vec<_> = (0..4096).map(|key| ((key, vec![7; 512]), 10, 1)).collect();
+        let original = chunk(&updates, &pool, &budget);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..256 {
+            let mut io = TestChunk::pending_for(std::slice::from_ref(&original), &[]);
+            let mut input = VecDeque::from([original.clone()]);
+            let mut output = VecDeque::new();
+            let frontier = timely_next::progress::Antichain::from_elem(Time(5));
+            runtime.block_on(futures_util::future::poll_fn(|cx| {
+                TestChunk::poll_advance(
+                    &mut io,
+                    cx,
+                    &mut input,
+                    frontier.borrow(),
+                    true,
+                    &mut output,
+                )
+            }));
+            assert_eq!(
+                output.iter().map(|c| c.chunk.records()).sum::<usize>(),
+                4096
+            );
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+        eprintln!(
+            "UNCHANGED_ADVANCE iterations=256 rows=4096 elapsed_us={} offloaded_reads={}",
+            start.elapsed().as_micros(),
+            pool.stats().async_reads,
+        );
     }
 
     #[mz_ore::test]
