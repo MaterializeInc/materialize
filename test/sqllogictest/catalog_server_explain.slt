@@ -5127,7 +5127,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (44 rows)
+        →Constant (45 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5472,7 +5472,7 @@ mz_catalog.mz_tables:
           Project: #3, #0, #4, #1, #5, #2, #6, #6, #6
           Map: "s1", null
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (30 rows)
+        →Constant (29 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5889,7 +5889,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1024 rows)
+            →Constant (1031 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -6028,6 +6028,82 @@ Source mz_internal.mz_catalog_raw
   project=(#2..=#4)
   filter=(("ReplicaSystemConfiguration" = (#0{data} ->> "kind")))
   map=((#0{data} -> "key"), parse_catalog_id((#1 -> "replica_id")), (#1 ->> "name"), ((#0{data} -> "value") ->> "value"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_source_references";
+----
+mz_internal.mz_source_references:
+  →With
+    cte l0 =
+      →Fused with Child Map/Filter/Project
+        Project: #1..=#5
+        Map: parse_catalog_id(((#0{data} -> "key") -> "source")), (#1{value} ->> "namespace"), (#1{value} ->> "name"), tots((text_to_double((((#0{data} -> "value") -> "updated_at") ->> "millis")) / 1000))
+          →Table Function jsonb_array_elements(((#0{data} -> "value") -> "references"))
+            →Read mz_internal.mz_catalog_raw
+    cte l1 =
+      →Fused with Child Map/Filter/Project
+        Filter: (jsonb_array_length((#0{value} -> "columns")) > 0)
+          →Read l0
+    cte l2 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Read l1
+    cte l3 =
+      →Non-incremental GroupAggregate
+        Aggregation: array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #2))
+        Key:
+          Project: #0
+        →Table Function jsonb_array_elements_text[with_ordinality]((#0{value} -> "columns"))
+          →Arranged l2
+    cte l4 =
+      →Union
+        →Unarranged Raw Stream
+          →Arranged l3
+        →Map/Filter/Project
+          Project: #0, #1
+          Map: null
+            →Consolidating Union
+              →Negate Diffs
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Arranged l3
+                      Key: (#0)
+              →Unarranged Raw Stream
+                →Arranged l2
+  →Return
+    →Union
+      →Differential Join %1[#0] » %0:l1[#0]
+        after %0:
+          Project: #2..=#6
+          Map: (#1 || {})
+        →Arrange (#0)
+          →Stream l1
+        →Arrange (#0)
+          →Union
+            →Stream l4
+            →Map/Filter/Project
+              Project: #0, #1
+              Map: null
+                →Consolidating Union
+                  →Negate Diffs
+                    →Fused with Child Map/Filter/Project
+                      Project: #0
+                        →Read l4
+                  →Unarranged Raw Stream
+                    →Arranged l2
+      →Fused with Child Map/Filter/Project
+        Project: #1..=#4, #6
+        Filter: ((#5) IS NULL OR (false = (#5 > 0)))
+        Map: jsonb_array_length((#0{value} -> "columns")), null
+          →Read l0
+
+Source mz_internal.mz_catalog_raw
+  filter=(("SourceReferences" = (#0{data} ->> "kind")))
 
 Target cluster: mz_catalog_server
 
@@ -8336,7 +8412,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (44 rows)
+  →Constant (45 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8356,7 +8432,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_tables";
 ----
 Explained Query (fast path):
-  →Constant (30 rows)
+  →Constant (29 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10284,7 +10360,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1024 rows)
+            →Constant (1031 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3

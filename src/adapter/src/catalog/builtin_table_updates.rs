@@ -19,11 +19,9 @@ use mz_catalog::builtin::{
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SOURCE_REFERENCES,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
 };
-use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table,
@@ -871,53 +869,5 @@ impl CatalogState {
             ]),
             diff,
         )
-    }
-
-    pub fn pack_source_references_update(
-        &self,
-        source_references: &SourceReferences,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let source_id = source_references.source_id.to_string();
-        let updated_at = &source_references.updated_at;
-        source_references
-            .references
-            .iter()
-            .map(|reference| {
-                let mut row = Row::default();
-                let mut packer = row.packer();
-                packer.extend([
-                    Datum::String(&source_id),
-                    reference
-                        .namespace
-                        .as_ref()
-                        .map(|s| Datum::String(s))
-                        .unwrap_or(Datum::Null),
-                    Datum::String(&reference.name),
-                    Datum::TimestampTz(
-                        mz_ore::now::to_datetime(*updated_at)
-                            .try_into()
-                            .expect("must fit"),
-                    ),
-                ]);
-                if reference.columns.len() > 0 {
-                    packer
-                        .try_push_array(
-                            &[ArrayDimension {
-                                lower_bound: 1,
-                                length: reference.columns.len(),
-                            }],
-                            reference.columns.iter().map(|col| Datum::String(col)),
-                        )
-                        .expect(
-                            "columns is 1 dimensional, and its length is used for the array length",
-                        );
-                } else {
-                    packer.push(Datum::Null);
-                }
-
-                BuiltinTableUpdate::row(&*MZ_SOURCE_REFERENCES, row, diff)
-            })
-            .collect()
     }
 }
