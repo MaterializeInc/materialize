@@ -291,6 +291,10 @@ impl CatalogState {
         cw: CompactionWindow,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let strategy = match cw {
+            CompactionWindow::PinAt(_) => "PIN AT",
+            _ => "FOR",
+        };
         let cw: u64 = cw.comparable_timestamp().into();
         let cw = Jsonb::from_serde_json(serde_json::Value::Number(serde_json::Number::from(cw)))
             .expect("must serialize");
@@ -298,8 +302,7 @@ impl CatalogState {
             &*MZ_HISTORY_RETENTION_STRATEGIES,
             Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                // FOR is the only strategy at the moment. We may introduce FROM or others later.
-                Datum::String("FOR"),
+                Datum::String(strategy),
                 cw.into_row().into_element(),
             ]),
             diff,
