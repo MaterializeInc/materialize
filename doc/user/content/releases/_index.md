@@ -34,6 +34,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - [Export data to Snowflake on AWS, using the Iceberg Sink to AWS S3 Tables](/export-data/iceberg-aws-snowflake/)
 - [Query History for Self-Managed](/self-managed-deployments/query-history/)
 - [ADBC (Arrow Database Connectivity)](/serve-results/adbc/)
+- [Understand the lifecycle of a source](/ingest-data/lifecycle-of-a-source/)
 
 ### Bug Fixes {#v26.41-bug-fixes}
 - Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
