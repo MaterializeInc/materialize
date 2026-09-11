@@ -31,7 +31,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Guides {#v26.41-guides}
 - **Reorganized documentation**: The docs are now grouped by what you are trying to do, with [Fundamentals](/fundamentals/), [Clusters](/clusters/), [Developer tools](/developer-tools/), and [Export data](/export-data/). Every moved page redirects from its previous URL.
-- [Consume from Snowflake on AWS S3 Tables](/export-data/iceberg-aws-snowflake/)
+- [Export data to Snowflake on AWS, using the Iceberg Sink to AWS S3 Tables](/export-data/iceberg-aws-snowflake/)
 - [Query History for Self-Managed](/self-managed-deployments/query-history/)
 - [ADBC (Arrow Database Connectivity)](/serve-results/adbc/)
 
