@@ -28,9 +28,8 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{
-    Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
-};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, UnchunkBuilder};
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -391,11 +390,11 @@ where
                 columnar_exchange::<Row, Row, T, Diff>,
             );
             let arranged = match ArrangementBatcher::from_config(&self.config_set) {
-                ArrangementBatcher::ColumnarPaged => keyed.mz_arrange_core::<
+                ArrangementBatcher::Chunked => keyed.mz_arrange_core::<
                     _,
-                    batcher::ColumnChunker<_>,
-                    Col2ValPagedBatcher<_, _, _, _>,
-                    RowRowColPagedBuilder<_, _>,
+                    ChunkChunker<(Row, Row), T, Diff>,
+                    AccountedChunkBatcher<(Row, Row), T, Diff>,
+                    UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
                     RowRowSpine<_, _>,
                 >(exchange, "JoinStage"),
                 ArrangementBatcher::Columnar => keyed.mz_arrange_core::<

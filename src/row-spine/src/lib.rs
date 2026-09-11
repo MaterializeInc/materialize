@@ -16,6 +16,7 @@
 pub use self::arc_batch::{ArcBatch, ArcBuilder};
 pub use self::dictionary::DatumContainer;
 pub use self::dictionary::DatumSeq;
+pub use self::dictionary::builders::RowRowColPagedState;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
     ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBuilder, ArcOrdValSpine, RowBatcher, RowBuilder,
@@ -191,6 +192,102 @@ mod tests {
     /// from outside the worker that maintains the trace. This holds because the
     /// backing containers bottom out in `Vec`s, lgalloc regions, and `CompactBytes`,
     /// all of which are thread-safe.
+    /// A chain of chunks seals with the chain's dictionary codecs installed,
+    /// so its batch compresses like one sealed from columns directly. A seal
+    /// that skips the install stores raw bytes and, per
+    /// `DatumContainer::promote_stats_to_codec`, drags every merge it joins
+    /// down with it.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts in row decoding are unsupported under miri
+    fn chunked_seal_installs_codecs() {
+        use std::sync::atomic::Ordering;
+
+        use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
+        use differential_dataflow::trace::{Builder, Description};
+        use mz_timely_util::columnar::Column;
+        use mz_timely_util::columnar::chunk::{ColumnChunk, UnchunkBuilder};
+        use timely::container::PushInto;
+        use timely::progress::{Antichain, Timestamp as _};
+
+        use crate::ArcBatch;
+
+        // Gate the dictionary path on. Safe for other tests: the flag only
+        // controls whether codecs are built, never decode results.
+        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+
+        // Low-cardinality rows, well under `STATS_THRESHOLD` (64Ki pushes), so
+        // a codec can only come from the seal-time install.
+        let time = Timestamp::minimum();
+        let updates: Vec<((Row, Row), Timestamp, i64)> = (0..2_000i64)
+            .map(|i| {
+                (
+                    (
+                        Row::pack_slice(&[Datum::Int64(i)]),
+                        Row::pack_slice(&[Datum::String("a repeated string value")]),
+                    ),
+                    time,
+                    1i64,
+                )
+            })
+            .collect();
+
+        // Cut the sorted run the way a merge batcher's chain is cut.
+        let columns = || -> Vec<Column<((Row, Row), Timestamp, i64)>> {
+            updates
+                .chunks(250)
+                .map(|part| {
+                    let mut column: Column<((Row, Row), Timestamp, i64)> = Default::default();
+                    for update in part {
+                        column.push_into(update);
+                    }
+                    column
+                })
+                .collect()
+        };
+        let description = || {
+            Description::new(
+                Antichain::from_elem(time),
+                Antichain::new(),
+                Antichain::from_elem(time),
+            )
+        };
+
+        type Paged = crate::RowRowColPagedBuilder<Timestamp, i64>;
+        type Chunked = UnchunkBuilder<Paged, (Row, Row), Timestamp, i64>;
+
+        let mut chain = columns();
+        let from_columns = <Paged as Builder>::seal(&mut chain, description());
+
+        let mut chain: Vec<ColumnChunk<(Row, Row), Timestamp, i64>> = columns()
+            .into_iter()
+            .map(ColumnChunk::from_column)
+            .collect();
+        let from_chunks = <Chunked as Builder>::seal(&mut chain, description());
+
+        assert!(
+            from_chunks.0.storage.keys.has_codec() && from_chunks.0.storage.vals.vals.has_codec(),
+            "the sealed batch carries the chain's codecs"
+        );
+
+        // Same updates and same cuts, so the chunked seal has to reach the
+        // encoded size the column seal does.
+        let heap = |c: &DatumContainer| {
+            let mut size = 0;
+            c.heap_size(|_, cap| size += cap);
+            size
+        };
+        let encoded = |b: &ArcBatch<OrdValBatch<RowRowLayout<((Row, Row), Timestamp, i64)>>>| {
+            heap(&b.0.storage.keys) + heap(&b.0.storage.vals.vals)
+        };
+
+        assert!(
+            encoded(&from_chunks) <= encoded(&from_columns),
+            "chunked seal should compress like the column seal: chunks={} columns={}",
+            encoded(&from_chunks),
+            encoded(&from_columns),
+        );
+    }
+
     #[mz_ore::test]
     fn batches_are_send_sync() {
         assert_send_sync::<OrdValBatch<RowRowLayout<((Row, Row), Timestamp, Diff)>>>();
@@ -906,6 +1003,7 @@ mod dictionary {
         use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
         use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
         use mz_timely_util::columnar::Column;
+        use mz_timely_util::columnar::chunk::ChainState;
         use mz_timely_util::columnation::ColumnationStack as TimelyStack;
         use timely::progress::Timestamp;
 
@@ -931,6 +1029,15 @@ mod dictionary {
                 return None;
             }
             let mut stats = ColumnsCodec::default();
+            observe_rows(&mut stats, rows);
+            Some(ColumnsCodec::new_from([&stats]))
+        }
+
+        /// Fold `rows` into `stats`, the accumulator a codec is built from.
+        fn observe_rows<'a, B>(stats: &mut ColumnsCodec, rows: impl IntoIterator<Item = &'a B>)
+        where
+            B: std::borrow::Borrow<RowRef> + ?Sized + 'a,
+        {
             for row in rows {
                 let row = row.borrow();
                 if !row.is_empty() {
@@ -940,7 +1047,6 @@ mod dictionary {
                     stats.observe(DatumSeq::borrow_as(row).bytes_iter());
                 }
             }
-            Some(ColumnsCodec::new_from([&stats]))
         }
 
         pub struct RowRowBuilder<
@@ -1231,7 +1337,14 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // See `RowRowBuilder::done`: a builder driven by `push` and `done`
+                // alone gets its codec from the statistics gathered during the
+                // pushes, since a codec-less batch poisons the merges it joins.
+                // Installing a codec here is a no-op once one is installed.
+                let mut inner = self.inner;
+                inner.result.keys.promote_stats_to_codec();
+                inner.result.vals.vals.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -1269,6 +1382,74 @@ mod dictionary {
                 }
 
                 builder.done(description)
+            }
+        }
+
+        /// The chain-wide state of [`RowRowColPagedBuilder`]: the statistics its
+        /// key and value codecs are built from, and the container sizes the
+        /// chain implies.
+        #[derive(Default)]
+        pub struct RowRowColPagedState {
+            keys: ColumnsCodec,
+            vals: ColumnsCodec,
+            counts: (usize, usize, usize),
+        }
+
+        impl<
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > ChainState for RowRowColPagedBuilder<T, R>
+        {
+            type State = RowRowColPagedState;
+
+            fn wants_bodies() -> bool {
+                DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed)
+            }
+
+            fn observe(state: &mut Self::State, input: &Self::Input) {
+                // `into_index_iter` yields the key and value columns' `Row`s as
+                // `&RowRef`, which `observe_rows` consumes directly.
+                observe_rows(
+                    &mut state.keys,
+                    input.borrow().into_index_iter().map(|((k, _), _, _)| k),
+                );
+                observe_rows(
+                    &mut state.vals,
+                    input.borrow().into_index_iter().map(|((_, v), _, _)| v),
+                );
+
+                use differential_dataflow::trace::implementations::BuilderInput;
+                let (keys, vals, upds) = <Self::Input as BuilderInput<
+                    DatumContainer,
+                    DatumContainer,
+                >>::key_val_upd_counts(
+                    std::slice::from_ref(input)
+                );
+                state.counts.0 += keys;
+                state.counts.1 += vals;
+                state.counts.2 += upds;
+            }
+
+            fn observe_records(state: &mut Self::State, records: usize) {
+                // Key and value counts need the bodies. Sizing the update
+                // containers alone is what a record count buys.
+                state.counts.2 += records;
+            }
+
+            fn from_state(state: Self::State) -> Self {
+                let mut builder =
+                    Self::with_capacity(state.counts.0, state.counts.1, state.counts.2);
+                if Self::wants_bodies() {
+                    // See `RowRowBuilder::seal`: install the codecs the chain's
+                    // statistics imply and drop the now-redundant per-container
+                    // stats gatherer.
+                    builder.inner.result.keys.codec = Some(ColumnsCodec::new_from([&state.keys]));
+                    builder.inner.result.keys.stats = None;
+                    builder.inner.result.vals.vals.codec =
+                        Some(ColumnsCodec::new_from([&state.vals]));
+                    builder.inner.result.vals.vals.stats = None;
+                }
+                builder
             }
         }
 
@@ -1512,6 +1693,13 @@ mod dictionary {
         /// / `new_from` (which reset the summary): unlike `seal` and the mid-formation
         /// install, `done` has no further rows to re-observe, so a reset summary would
         /// leave the eventual merge nothing to rebuild from.
+        /// Whether a codec is installed. A container without one stores raw
+        /// bytes and blocks compression in every merge it takes part in.
+        #[cfg(test)]
+        pub(crate) fn has_codec(&self) -> bool {
+            self.codec.is_some()
+        }
+
         pub(crate) fn promote_stats_to_codec(&mut self) {
             if self.codec.is_none() {
                 self.codec = self.stats.take();
