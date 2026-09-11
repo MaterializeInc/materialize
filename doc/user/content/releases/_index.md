@@ -35,6 +35,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - [Query History for Self-Managed](/self-managed-deployments/query-history/)
 - [ADBC (Arrow Database Connectivity)](/serve-results/adbc/)
 - [Understand the lifecycle of a source](/ingest-data/lifecycle-of-a-source/)
+- [Upgrade the major version of your PostgreSQL source](/ingest-data/postgres/major-version-upgrade/)
 
 ### Bug Fixes {#v26.41-bug-fixes}
 - Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
