@@ -935,6 +935,21 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
 
             let rec_ids: Vec<_> = recs.iter().map(|r| r.id).collect();
 
+            // A binding's `Variable` serves the `Get`s rendered before the rec
+            // loop binds the real value, which are exactly the values of
+            // `recs[0..=i]`. A binding no such value reads has no use for a
+            // `Variable`-backed bundle, and installing one would build a
+            // re-encode that repacks the whole collection once per iteration
+            // with nothing to consume it.
+            let mut variable_read = BTreeSet::new();
+            let mut read_so_far = BTreeSet::new();
+            for rec in recs.iter() {
+                read_so_far.extend(rec.value.depends());
+                if read_so_far.contains(&Id::Local(rec.id)) {
+                    variable_read.insert(rec.id);
+                }
+            }
+
             // Define variables for rec bindings.
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
@@ -947,13 +962,25 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (err_v, err_collection) =
                     Variable::new(self.scope, Product::new(Default::default(), inner));
 
-                self.insert_id(
-                    Id::Local(*id),
-                    CollectionBundle::from_collections(oks_collection, err_collection),
-                );
+                if variable_read.contains(id) {
+                    // The feedback `Variable` stays `Vec`, so each iteration crosses
+                    // the container boundary twice, encoded here for the readers and
+                    // decoded where the value is fed back. The encode is a stateless,
+                    // timestamp-agnostic pass-through, so it leaves the iterative
+                    // frontier and the fixpoint alone.
+                    self.insert_id(
+                        Id::Local(*id),
+                        CollectionBundle::from_edge(
+                            CollectionEdge::Columnar(vec_to_columnar(oks_collection)),
+                            err_collection,
+                        ),
+                    );
+                }
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
-            // Now render each of the rec bindings.
+            // The decoded value is kept so the extraction below reuses it rather than
+            // decoding the same stream twice.
+            let mut decoded_oks = BTreeMap::new();
             let mut rec_iter = recs.into_iter().peekable();
             while let Some(RecBind { id, value, limit }) = rec_iter.next() {
                 let last = rec_iter.peek().is_none();
@@ -963,6 +990,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
                 let oks = oks.into_vec();
+                decoded_oks.insert(id, oks.clone());
                 // Collapses what forward reads see. `err_v` below feeds reads rendered before this
                 // binding and is collapsed separately; without this, a `Get` in a later rec binding
                 // or in the body resolves to the bundle stored here and compounds level over level,
@@ -1022,12 +1050,16 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
             // Now extract each of the rec bindings into the outer scope.
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
-                let (oks, err) = bundle.collection.unwrap();
-                let oks = oks.into_vec();
+                let (_, err) = bundle.collection.unwrap();
+                let oks = decoded_oks
+                    .remove(&id)
+                    .expect("rec binding decoded while rendering above");
+                // `leave_dynamic` has already stripped the iteration coordinate, so
+                // this encode runs in the parent scope.
                 self.insert_id(
                     Id::Local(id),
-                    CollectionBundle::from_collections(
-                        oks.leave_dynamic(level + 1),
+                    CollectionBundle::from_edge(
+                        CollectionEdge::Columnar(vec_to_columnar(oks.leave_dynamic(level + 1))),
                         err.leave_dynamic(level + 1),
                     ),
                 );
