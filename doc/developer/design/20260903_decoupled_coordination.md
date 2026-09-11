@@ -135,6 +135,13 @@ Propagation to persist critical since handles must respect all valid read
 requirements. Those handles are the durable backstop, not a substitute for
 multi-client accounting.
 
+Readability is enforced where a read happens. A cluster refuses a read below a
+collection's since rather than serving it, and persist does the same for shard
+reads. Query-local dataflows keep their imports readable through the cluster's
+own accounting until they are removed. Reclaiming a client's protection therefore
+needs no fence propagated to compute: a reclaimed client's late read is either
+served correctly or refused, and it cannot acquire new protection.
+
 Recovery must establish actual readability and restore valid read requirements
 before further advancement is authorized. Reconstructed plans must use inputs
 readable at the protected timestamps, rather than assume equivalent access paths

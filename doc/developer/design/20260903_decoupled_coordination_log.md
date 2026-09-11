@@ -564,3 +564,22 @@ incarnation atomically with removing its requirements. Renewal is proposed every
 minute. A restarted observer waits a full observation window. Closed incarnations
 cannot be revived, and closure must fence late query execution before compaction
 passes the reclaimed protection. This is a proposal, not an agreed decision.
+
+### 2026-09-10: Client protection records and reclamation agreed with Aljoscha
+
+Two records: a client incarnation with a heartbeat, and a requirement keyed by
+incarnation and collection with a protected frontier. Clients aggregate locally,
+commit before use, and batch advances. Heartbeat every minute, bumped in the same
+transaction as requirement publication so there is one client write path. A
+reclaimer that observes an unchanged heartbeat for five minutes on its monotonic
+clock removes the incarnation and its requirements with a compare on the
+heartbeat. A restarted reclaimer waits a full window. Closure is permanent.
+
+Rejected from the proposal: copying shard identities or input bindings into client
+records, and a compute-side incarnation fence. Storage metadata stays the one
+owner of the id-to-shard mapping and remains unfinalized while any requirement
+references the collection. An index's inputs are derived at validation time.
+Readability is enforced where the read happens, so a reclaimed client's late read
+is served correctly or refused, and compute learns nothing about incarnations.
+
+Milestone 2 remains active. Next: build the query client in-process on this basis.
