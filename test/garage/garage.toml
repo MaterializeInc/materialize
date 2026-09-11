@@ -1,0 +1,51 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Single-node garage for compositions. Tuned like the minio image, for speed
+# over durability: fsync is off (the default), stored blocks are not compressed
+# (persist blobs arrive compressed already), and the periodic scrub is off, as
+# minio runs with MINIO_HEAL_DISABLE=on.
+#
+# The block knobs below matter because garage stores every object as a chain of
+# `block_size` files. Persist writes blobs from a few KiB up to its ~128MiB
+# batch target, so the defaults (1MiB blocks, and read concurrency sized as
+# backpressure for spinning disks) turn one large-blob get into dozens of file
+# opens contending for 16 slots.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "lmdb"
+replication_factor = 1
+compression_level = "none"
+disable_scrub = true
+
+# Upstream's recommendation for storing large files, against a 1MiB default.
+# NB: garage cannot change this on a store that already holds data, which is
+# fine here because compositions always start from an empty volume.
+block_size = "10M"
+# Default 16, a backpressure mechanism for HDD read speed. Compositions run on
+# local SSD, where the cap only serializes concurrent readers.
+block_max_concurrent_reads = 256
+# Default 3, with 10-30 recommended for NVMe.
+block_max_concurrent_writes_per_request = 30
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+# Only ever used within this container.
+rpc_secret = "8b1f4c2a9d6e3f70a5b2c4d8e1f6a3b9c7d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4"
+
+[s3_api]
+# The region must match the one in the blob URL, garage rejects requests
+# signed for any other.
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[admin]
+api_bind_addr = "[::]:3903"

@@ -10,6 +10,7 @@
 import queue
 import time
 from copy import deepcopy
+from textwrap import dedent
 
 import psycopg
 
@@ -1586,4 +1587,97 @@ class PeekIsolationUnderExpensivePeeks(Scenario):
             ],
             conn_pool_size=100,
             conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
+        )
+
+
+class BlobStoreReadsWrites(Scenario):
+    r"""Measures the persist round trips to the blob store behind a batch write
+    and a snapshot read, with what would otherwise hide the store switched off.
+
+    Each INSERT carries far more than `persist_inline_writes_single_max_bytes`,
+    so persist writes its batch to the blob store rather than inlining it into
+    consensus, and the measured latency includes that PUT. The blob cache is
+    disabled for the run, so every read of `blob_read` fetches its parts from
+    the store instead of from memory, where the default 128 MiB would hold the
+    whole table after the first read. The cache takes the larger of its static
+    limit and its per-thread scale, and compositions turn the scaling on, so
+    both are switched off.
+
+    Reads and writes go to separate tables so the read latency stays stationary
+    over the load phase instead of growing with the rows written. The read
+    aggregates a column rather than counting rows: a bare `count(*)` projects
+    away every column, and persist then answers it from part metadata without
+    fetching a single part.
+
+    Neither loop is blob-only: the write also runs its generating query on the
+    cluster and ships the rows through the coordinator, and the read decodes a
+    million rows. The `blob_get` and `blob_set` latencies the harness prints
+    from persist's metrics after the scenario separate the store's share from
+    Materialize's own work.
+
+    To compare blob stores rather than Materialize versions:
+
+        bin/mzcompose --find parallel-benchmark run default \
+            --scenario BlobStoreReadsWrites \
+            --blob-store garage --other-blob-store minio
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        mz = conn_infos["materialized"]
+        setup = dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET persist_blob_cache_mem_limit_bytes = 0
+            ALTER SYSTEM SET persist_blob_cache_scale_with_threads = false
+
+            > DROP TABLE IF EXISTS blob_read CASCADE
+            > DROP TABLE IF EXISTS blob_write CASCADE
+            > CREATE TABLE blob_read (a int, b text)
+            > CREATE TABLE blob_write (a int, b text)
+            """)
+        # Hex digests do not compress, so each row costs real bytes in the
+        # store. Ten batches rather than one so the table starts out as several
+        # parts, the way a table written over time looks.
+        setup += "".join(
+            "> INSERT INTO blob_read SELECT n, md5(n::text) FROM generate_series(1, 100000) AS n\n"
+            for _ in range(10)
+        )
+        setup += dedent("""
+            > SELECT count(*) FROM blob_read
+            1000000
+            """)
+        self.init(
+            [
+                TdPhase(setup),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        OpenLoop(
+                            action=ReuseConnQuery(
+                                "INSERT INTO blob_write SELECT n, md5(n::text) FROM generate_series(1, 100000) AS n",
+                                mz,
+                                strict_serializable=False,
+                            ),
+                            dist=Periodic(per_second=1),
+                        ),
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "SELECT sum(a) FROM blob_read",
+                                mz,
+                                strict_serializable=False,
+                            ),
+                        ),
+                    ],
+                ),
+                # Nothing resets the services between scenarios when the
+                # benchmark runs against an existing environment, so undo what
+                # this one changed.
+                TdPhase("""
+                    > DROP TABLE IF EXISTS blob_read CASCADE
+                    > DROP TABLE IF EXISTS blob_write CASCADE
+
+                    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    ALTER SYSTEM RESET persist_blob_cache_mem_limit_bytes
+                    ALTER SYSTEM RESET persist_blob_cache_scale_with_threads
+                    """),
+            ],
         )

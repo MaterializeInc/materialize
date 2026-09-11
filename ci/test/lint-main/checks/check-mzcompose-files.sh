@@ -22,6 +22,7 @@ check_all_files_referenced_in_ci() {
     COMPOSITIONS=$(find . -name mzcompose.py \
         -not -wholename "./misc/python/materialize/cli/mzcompose.py" `# Only glue code, no workflows` \
         -not -wholename "./misc/monitoring/mzcompose.py" `# Only run manually` \
+        -not -wholename "./test/blob-store-benchmark/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
@@ -45,6 +46,7 @@ check_default_workflow_references_others() {
     while IFS= read -r file; do
         MZCOMPOSE_TEST_FILES+=("$file")
     done < <(find ./test -name "mzcompose.py" \
+        -not -wholename "./test/blob-store-benchmark/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/ssh-connection/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/scalability/mzcompose.py" `# Other workflows are for manual usage` \
