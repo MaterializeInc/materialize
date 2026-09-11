@@ -199,6 +199,16 @@ impl Coordinator {
                 otel_ctx.attach_as_parent();
                 self.retire_execution(reason, data);
             }
+            Message::RetireComputeSink { sink_id, reason } => {
+                // Nothing waits on the retirement: the task has already
+                // delivered everything but the terminal message, which
+                // `retire_compute_sinks` sends once the `mz_subscriptions`
+                // retraction is durable.
+                let retire_notify = self
+                    .retire_compute_sinks(btreemap! { sink_id => reason })
+                    .await;
+                drop(retire_notify);
+            }
             Message::ExecuteSingleStatementTransaction {
                 ctx,
                 otel_ctx,
@@ -707,35 +717,16 @@ impl Coordinator {
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
-                    self.active_compute_sinks.get_mut(&sink_id)
+                    self.active_compute_sinks.get(&sink_id)
                 {
-                    let finished = active_subscribe.process_response(response);
-                    // Read the backlog into a `Copy` local so the mutable borrow
-                    // of `active_subscribe` (and the accounting lock) ends before
-                    // we call `self.retire_compute_sinks`. The producer runs on
-                    // this loop, so it cannot block on a slow client. Instead we
-                    // bound the backlog here and retire the subscribe once it
-                    // exceeds the budget.
-                    //
-                    // The backlog excludes the message the client is currently
-                    // draining, so a client working through a single large batch
-                    // (e.g. the initial snapshot) is never retired for it.
-                    let buffered_bytes = active_subscribe
-                        .backlog_accounting
-                        .lock()
-                        .expect("subscribe backlog accounting poisoned")
-                        .backlog_size();
-                    let max_buffered_bytes = active_subscribe.max_buffered_bytes;
-
-                    let reason = if finished {
+                    // The producer runs on this loop, so it cannot block on a
+                    // slow client. Instead we bound the backlog here and retire
+                    // the subscribe once it exceeds the budget.
+                    let emitter = &active_subscribe.emitter;
+                    let reason = if emitter.process_response(response) {
                         Some(ActiveComputeSinkRetireReason::Finished)
-                    } else if buffered_bytes > max_buffered_bytes {
-                        Some(ActiveComputeSinkRetireReason::BufferExceeded {
-                            buffered_bytes,
-                            max_buffered_bytes,
-                        })
                     } else {
-                        None
+                        emitter.backlog_exceeded()
                     };
                     if let Some(reason) = reason {
                         let retire_notify = self

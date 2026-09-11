@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::SUBSCRIBE_MAX_BUFFERED_BYTES;
@@ -15,41 +15,48 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
 use mz_repr::Timestamp;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
+use mz_sql::plan::{self, QueryWhen, SubscribeFrom, SubscribeOutput};
 use mz_sql::session::metadata::SessionMetadata;
-use std::collections::BTreeSet;
+use mz_storage_types::controller::StorageError;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use timely::progress::Antichain;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{
     ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner, SubscribeBacklogAccounting,
+    SubscribeEmitter, SubscribeExecution, SubscribeFormatter,
 };
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::peek::PeekResponseUnary;
+use crate::coord::persist_tail::{
+    AttachFn, PersistTailBatcher, PersistTailStream, persist_tail_source,
+};
 use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
     Coordinator, ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
-    SubscribeExplain, SubscribeFinish, SubscribeLinearizeTimestamp, SubscribeOptimizeMir,
-    SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
+    SubscribeExplain, SubscribeFinish, SubscribeImplementation, SubscribeLinearizeTimestamp,
+    SubscribeOptimizeMir, SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
-use crate::session::{Session, TransactionOps};
+use crate::session::{RowBatchStream, Session, TransactionOps};
 use crate::{
-    AdapterNotice, ExecuteContext, ExecuteContextGuard, ReadHolds, TimelineContext, optimize,
+    AdapterNotice, CollectionIdBundle, ExecuteContext, ExecuteContextGuard, ReadHolds,
+    TimelineContext, optimize,
 };
 
 impl Staged for SubscribeStage {
@@ -397,10 +404,26 @@ impl Coordinator {
 
         // Timestamp selection. The linearized read timestamp was already
         // obtained off the coordinator loop in the preceding stage.
-        let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
+        // An EXPLAIN describes the dataflow the subscribe would run as.
+        let persist_tail = match explain_ctx {
+            ExplainContext::None => {
+                persist_tail_source(self.catalog(), &*self.controller.storage_collections, &plan)
+            }
+            _ => None,
+        };
+        let bundle = match persist_tail {
+            // A persist tail reads only the collection itself, so the timestamp
+            // and the read holds are chosen for it rather than for the index
+            // the dataflow would have read.
+            Some(source) => CollectionIdBundle {
+                storage_ids: BTreeSet::from([source.from_id]),
+                compute_ids: BTreeMap::new(),
+            },
+            None => global_mir_plan.id_bundle(optimizer.cluster_id()),
+        };
         let (determination, read_holds) = self.determine_timestamp(
             ctx.session(),
-            bundle,
+            &bundle,
             when,
             optimizer.cluster_id(),
             &timeline,
@@ -423,6 +446,25 @@ impl Coordinator {
         }
 
         self.store_transaction_read_holds(ctx.session().conn_id().clone(), read_holds);
+
+        if let Some(source) = persist_tail {
+            // No dataflow gets built, so there is nothing to lower to LIR.
+            let stage = SubscribeStage::Finish(SubscribeFinish {
+                validity,
+                cluster_id: optimizer.cluster_id(),
+                plan,
+                dependency_ids,
+                replica_id,
+                implementation: SubscribeImplementation::PersistTail {
+                    from_id: source.from_id,
+                    sink_id: optimizer.sink_id(),
+                    as_of,
+                    arity: source.arity,
+                },
+                df_meta: Default::default(),
+            });
+            return Ok(StageResult::Immediate(Box::new(stage)));
+        }
 
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
@@ -455,11 +497,13 @@ impl Coordinator {
                                     explain_ctx,
                                 })
                             } else {
+                                let (df_desc, df_meta) = global_lir_plan.unapply();
                                 SubscribeStage::Finish(SubscribeFinish {
                                     validity,
                                     cluster_id,
                                     plan,
-                                    global_lir_plan,
+                                    implementation: SubscribeImplementation::Dataflow(df_desc),
+                                    df_meta,
                                     dependency_ids,
                                     replica_id,
                                 })
@@ -499,12 +543,12 @@ impl Coordinator {
             validity: _,
             cluster_id,
             plan,
-            global_lir_plan,
+            implementation,
+            df_meta,
             dependency_ids,
             replica_id,
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        let (df_desc, df_meta) = global_lir_plan.unapply();
         emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
         let conn_id = ctx.session.conn_id().clone();
         let session_uuid = ctx.session().uuid();
@@ -512,19 +556,40 @@ impl Coordinator {
             .txn_read_holds
             .remove(&conn_id)
             .expect("must have previously installed read holds");
-        let (resp, write_notify) = self
-            .implement_subscribe(
+        let (resp, write_notify) = match implementation {
+            SubscribeImplementation::Dataflow(df_desc) => {
+                self.implement_subscribe(
+                    ctx.extra_mut(),
+                    df_desc,
+                    dependency_ids,
+                    cluster_id,
+                    replica_id,
+                    conn_id,
+                    session_uuid,
+                    txn_read_holds,
+                    plan,
+                )
+                .await?
+            }
+            SubscribeImplementation::PersistTail {
+                from_id,
+                sink_id,
+                as_of,
+                arity,
+            } => self.implement_persist_subscribe(
                 ctx.extra_mut(),
-                df_desc,
+                from_id,
+                sink_id,
+                as_of,
+                arity,
                 dependency_ids,
                 cluster_id,
-                replica_id,
                 conn_id,
                 session_uuid,
                 txn_read_holds,
                 plan,
-            )
-            .await?;
+            )?,
+        };
         // Wait for the `mz_subscriptions` bookkeeping write off the coordinator
         // loop before returning the `SUBSCRIBE` response to the subscribing
         // session.
@@ -563,29 +628,34 @@ impl Coordinator {
                 conn_id: conn_id.clone(),
                 session_uuid,
             },
-            channel: tx,
-            backlog_accounting: Arc::clone(&backlog_accounting),
-            max_buffered_bytes,
-            emit_progress: plan.emit_progress,
-            as_of: df_desc
-                .as_of
-                .as_ref()
-                .and_then(|t| t.as_option())
-                .copied()
-                .expect("set to Some in an earlier stage"),
-            arity: df_desc
-                .sink_exports
-                .values()
-                .into_element()
-                .from_desc
-                .arity(),
+            emitter: SubscribeEmitter {
+                channel: tx,
+                backlog_accounting: Arc::clone(&backlog_accounting),
+                max_buffered_bytes,
+                formatter: SubscribeFormatter {
+                    emit_progress: plan.emit_progress,
+                    as_of: df_desc
+                        .as_of
+                        .as_ref()
+                        .and_then(|t| t.as_option())
+                        .copied()
+                        .expect("set to Some in an earlier stage"),
+                    arity: df_desc
+                        .sink_exports
+                        .values()
+                        .into_element()
+                        .from_desc
+                        .arity(),
+                    output: plan.output,
+                },
+            },
+            execution: SubscribeExecution::Dataflow,
             cluster_id,
             depends_on: dependency_ids,
             start_time: self.now(),
-            output: plan.output,
             internal: false,
         };
-        active_subscribe.initialize();
+        active_subscribe.emitter.initialize();
 
         // Register bookkeeping for the new SUBSCRIBE and ship its dataflow. The
         // `mz_subscriptions` write is deferred to a group commit (see
@@ -620,7 +690,7 @@ impl Coordinator {
         // shared accounting. FIFO delivery keeps the queue aligned with the
         // channel, so popping the oldest footprint matches the message just
         // drained. This keeps the accounting equal to the currently buffered
-        // depth, which the coordinator watches to bound this subscribe.
+        // depth, which the producer watches to bound this subscribe.
         let rx = UnboundedReceiverStream::new(rx).map(move |response| {
             backlog_accounting
                 .lock()
@@ -628,19 +698,135 @@ impl Coordinator {
                 .pop();
             response
         });
+        let resp = Self::subscribing_response(Box::new(rx), ctx_extra, cluster_id, plan.copy_to);
+        Ok((resp, write_notify))
+    }
+
+    /// Serves a `SUBSCRIBE` on a storage collection by tailing its persist
+    /// shard from this process, see [`crate::coord::persist_tail`].
+    ///
+    /// The subscribe is registered under `sink_id` like a dataflow-backed one,
+    /// so cancellation, dependency drops, and `mz_subscriptions` work the same.
+    /// `read_holds` are released once the collection is being read.
+    #[instrument]
+    pub(crate) fn implement_persist_subscribe(
+        &mut self,
+        ctx_extra: &mut ExecuteContextGuard,
+        from_id: GlobalId,
+        sink_id: GlobalId,
+        as_of: Timestamp,
+        arity: usize,
+        dependency_ids: BTreeSet<GlobalId>,
+        cluster_id: ComputeInstanceId,
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+        read_holds: ReadHolds,
+        plan: plan::SubscribePlan,
+    ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
+        let system_config = self.catalog().system_config();
+        let max_buffered_bytes = SUBSCRIBE_MAX_BUFFERED_BYTES.get(system_config.dyncfgs());
+        let max_result_size = usize::cast_from(system_config.max_result_size());
+
+        let formatter = SubscribeFormatter {
+            emit_progress: plan.emit_progress,
+            as_of,
+            arity,
+            output: plan.output.clone(),
+        };
+        // The coordinator reaches the client through this channel only for
+        // the terminal message; the rows flow through the stream below.
+        let (control_tx, control_rx) = mpsc::unbounded_channel::<PeekResponseUnary>();
+        let emitter = SubscribeEmitter {
+            channel: control_tx,
+            backlog_accounting: Arc::new(Mutex::new(SubscribeBacklogAccounting::default())),
+            max_buffered_bytes,
+            formatter: formatter.clone(),
+        };
+
+        let storage_collections = Arc::clone(&self.controller.storage_collections);
+        let attach: AttachFn = Arc::new(move |as_of, with_snapshot| {
+            storage_collections.subscribe(from_id, as_of, with_snapshot, max_buffered_bytes)
+        });
+        // Open the first read now, off the coordinator loop, rather than on the
+        // client's first fetch: the read holds are released once the
+        // collection is being read, and a client that never fetches must not
+        // hold back compaction.
+        let (attached_tx, attached_rx) = oneshot::channel();
+        let first_read = attach(as_of, plan.with_snapshot);
+        mz_ore::task::spawn(|| format!("persist-tail-attach-{sink_id}"), async move {
+            let attached = first_read.await;
+            drop(read_holds);
+            let _ = attached_tx.send(attached);
+        });
+        let attached = async move {
+            attached_rx
+                .await
+                .unwrap_or_else(|_| Err(StorageError::ReadBeforeSince(from_id)))
+        }
+        .boxed();
+
+        // Only diff output leaves a timestamp's rows independent of one
+        // another. The envelopes group a timestamp by key, and an order by
+        // sorts it, so both need the whole timestamp before any of it.
+        let chunk_snapshot = matches!(plan.output, SubscribeOutput::Diffs);
+        let batcher = PersistTailBatcher::new(
+            as_of,
+            plan.up_to,
+            plan.with_snapshot,
+            plan.output.row_order().to_vec(),
+            max_result_size,
+            chunk_snapshot,
+        );
+        let stream = PersistTailStream::new(
+            sink_id,
+            attached,
+            attach,
+            batcher,
+            formatter,
+            control_rx,
+            self.internal_cmd_tx.clone(),
+        );
+        tracing::debug!(%sink_id, %from_id, %as_of, "subscribe served by persist tail");
+
+        let active_subscribe = ActiveSubscribe {
+            owner: ActiveSubscribeOwner::Session {
+                conn_id,
+                session_uuid,
+            },
+            emitter,
+            execution: SubscribeExecution::PersistTail,
+            cluster_id,
+            depends_on: dependency_ids,
+            start_time: self.now(),
+            internal: false,
+        };
+        let write_notify =
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
+
+        let resp =
+            Self::subscribing_response(Box::new(stream), ctx_extra, cluster_id, plan.copy_to);
+        Ok((resp, write_notify))
+    }
+
+    /// The response handing the client the row stream of a subscribe.
+    fn subscribing_response(
+        rx: RowBatchStream,
+        ctx_extra: &mut ExecuteContextGuard,
+        cluster_id: ComputeInstanceId,
+        copy_to: Option<mz_sql::plan::CopyFormat>,
+    ) -> ExecuteResponse {
         let resp = ExecuteResponse::Subscribing {
-            rx: Box::new(rx),
+            rx,
             ctx_extra: std::mem::take(ctx_extra),
             instance_id: cluster_id,
         };
-        let resp = match plan.copy_to {
+        match copy_to {
             None => resp,
             Some(format) => ExecuteResponse::CopyTo {
                 format,
                 resp: Box::new(resp),
             },
-        };
-        Ok((resp, write_notify))
+        }
     }
 
     #[instrument]

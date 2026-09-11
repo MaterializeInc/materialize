@@ -832,10 +832,9 @@ impl Coordinator {
                 Some(entry) => entry,
             };
 
-            by_cluster
-                .entry(sink.cluster_id())
-                .or_default()
-                .push(sink_id);
+            if let Some(cluster_id) = sink.compute_collection_cluster() {
+                by_cluster.entry(cluster_id).or_default().push(sink_id);
+            }
             by_id.insert(sink_id, (sink, write_notify));
         }
         for (cluster_id, ids) in by_cluster {

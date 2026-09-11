@@ -26,7 +26,10 @@ use tokio::sync::mpsc;
 use tracing::Span;
 
 use crate::PeekResponseUnary;
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner};
+use crate::active_compute_sink::{
+    ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner, SubscribeEmitter, SubscribeExecution,
+    SubscribeFormatter,
+};
 use crate::catalog::Catalog;
 use crate::command::WriteAttemptKind;
 use crate::coord::Coordinator;
@@ -104,27 +107,32 @@ impl Coordinator {
 
         let active_subscribe = ActiveSubscribe {
             owner,
-            channel: tx,
-            backlog_accounting: std::sync::Arc::new(std::sync::Mutex::new(
-                crate::active_compute_sink::SubscribeBacklogAccounting::default(),
-            )),
-            // This internal subscribe is drained by the coordinator for OCC
-            // read-then-write, not by a slow external client, so the slow-client
-            // backlog budget must not apply. A large read-then-write read set
-            // (e.g. an UPDATE that rewrites every row of a big table)
-            // legitimately exceeds the budget, so bounding it here would
-            // spuriously retire the statement with `SubscribeFellBehind`.
-            max_buffered_bytes: usize::MAX,
-            emit_progress: true, // We need progress updates for OCC
-            as_of,
-            arity,
+            emitter: SubscribeEmitter {
+                channel: tx,
+                backlog_accounting: std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::active_compute_sink::SubscribeBacklogAccounting::default(),
+                )),
+                // This internal subscribe is drained by the coordinator for OCC
+                // read-then-write, not by a slow external client, so the slow-client
+                // backlog budget must not apply. A large read-then-write read set
+                // (e.g. an UPDATE that rewrites every row of a big table)
+                // legitimately exceeds the budget, so bounding it here would
+                // spuriously retire the statement with `SubscribeFellBehind`.
+                max_buffered_bytes: usize::MAX,
+                formatter: SubscribeFormatter {
+                    emit_progress: true, // We need progress updates for OCC
+                    as_of,
+                    arity,
+                    output: SubscribeOutput::Diffs,
+                },
+            },
+            execution: SubscribeExecution::Dataflow,
             cluster_id,
             depends_on,
             start_time,
-            output: SubscribeOutput::Diffs,
             internal: true, // no mz_subscriptions row and no active-subscribes metric
         };
-        active_subscribe.initialize();
+        active_subscribe.emitter.initialize();
 
         // Ship the dataflow before registering the sink, so a failure has
         // nothing to unwind.
