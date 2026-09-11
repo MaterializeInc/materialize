@@ -24,35 +24,36 @@ COMPLETE 0
 statement ok
 CREATE ROLE policy_creator;
 
-statement ok
-SET ROLE policy_creator;
-
-statement error
+simple conn=policy_creator,user=policy_creator
 CREATE QUERY POLICY delegated (RULES (r (action='reject', metric='query_plan_includes', value='persist_read')));
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'policy_creator' role needs CREATEQUERYPOLICY privileges on SYSTEM
 
-statement ok
-RESET ROLE;
-
-statement ok
+simple conn=mz_system,user=mz_system
 GRANT CREATEQUERYPOLICY ON SYSTEM TO policy_creator;
+----
+COMPLETE 0
 
-statement ok
-SET ROLE policy_creator;
-
-statement ok
+simple conn=policy_creator,user=policy_creator
 CREATE QUERY POLICY delegated (RULES (r (action='reject', metric='query_plan_includes', value='persist_read')));
+----
+COMPLETE 0
 
-statement ok
+simple conn=policy_creator,user=policy_creator
 ALTER QUERY POLICY delegated SET (MODE = 'enforce');
+----
+COMPLETE 0
 
-statement ok
+simple conn=policy_creator,user=policy_creator
 DROP QUERY POLICY delegated;
+----
+COMPLETE 0
 
-statement ok
-RESET ROLE;
-
-statement ok
+simple conn=mz_system,user=mz_system
 REVOKE CREATEQUERYPOLICY ON SYSTEM FROM policy_creator;
+----
+COMPLETE 0
 
 statement ok
 DROP ROLE policy_creator;
@@ -125,7 +126,7 @@ statement error query rejected: this query would build a temporary dataflow
 INSERT INTO indexed SELECT a, sum(b)::int FROM indexed GROUP BY a;
 
 statement error query rejected: this query would build a temporary dataflow
-UPDATE indexed SET b = b + (SELECT sum(b)::int FROM indexed);
+UPDATE indexed SET b = b + 1 WHERE b < (SELECT avg(b) FROM indexed);
 
 statement error query rejected: this query would build a temporary dataflow
 DELETE FROM indexed WHERE b < (SELECT avg(b) FROM indexed);
@@ -195,8 +196,10 @@ INSERT INTO indexed SELECT a, sum(b)::int FROM indexed GROUP BY a;
 statement ok
 CREATE ROLE guarded;
 
-statement ok
+simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER quickstart TO guarded;
+----
+COMPLETE 0
 
 statement ok
 GRANT SELECT ON indexed, unindexed TO guarded;
@@ -207,23 +210,30 @@ GRANT USAGE ON QUERY POLICY no_persist TO guarded;
 statement ok
 ALTER ROLE guarded SET query_policy = no_persist;
 
-statement ok
-SET ROLE guarded;
-
-query error query rejected: this query would build a temporary dataflow
+simple conn=guarded,user=guarded
 SELECT a, sum(b) FROM indexed GROUP BY a;
+----
+db error: ERROR: query rejected: this query would build a temporary dataflow
+DETAIL: Query policy "no_dataflows" rule "fast_only" applies to this query on cluster "quickstart".
+HINT: Run EXPLAIN to inspect the query plan. Create an index that serves the query on this cluster, or use a cluster and role whose query policies permit this plan.
 
-query error query rejected: this query would read from object storage
+simple conn=guarded,user=guarded
 SELECT * FROM unindexed LIMIT 10;
+----
+db error: ERROR: query rejected: this query would read from object storage
+DETAIL: Query policy "no_persist" rule "memory_only" applies to this query on cluster "quickstart".
+HINT: Run EXPLAIN to inspect the query plan. Create an index that serves the query on this cluster, or use a cluster and role whose query policies permit this plan.
 
-statement error
+simple conn=guarded,user=guarded
 SET query_policy = '';
+----
+db error: ERROR: unrecognized configuration parameter "query_policy"
 
-statement error
+simple conn=guarded,user=guarded
 ALTER ROLE guarded RESET query_policy;
-
-statement ok
-RESET ROLE;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'guarded' role needs CREATEROLE privileges on SYSTEM
 
 # A referenced policy cannot silently disappear.
 statement error
