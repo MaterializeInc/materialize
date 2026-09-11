@@ -278,9 +278,9 @@
   type: string
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`""`'
   autodescription: PriorityClass to use for environmentd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all.
-  description: PriorityClass to use for environmentd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all.
+  description: ""
   section: ""
   column: 3
   linenumber: 312
@@ -854,7 +854,7 @@
   type: string
   notationtype: ""
   autodefault: ""
-  default: '`"v26.39.0"`'
+  default: '`"v26.41.0"`'
   autodescription: The tag/version of the operator image to be used
   description: ""
   section: ""
