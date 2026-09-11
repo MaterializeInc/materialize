@@ -49,7 +49,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
-use crate::render::columnar::{CollectionEdge, vec_to_columnar};
+use crate::render::columnar::{CollectionEdge, columnar_to_vec, flat_map_datums, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -125,11 +125,11 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 .get(&self.config_set)
                 .try_into()
                 .expect("must fit");
-            CollectionEdge::Columnar(vec_to_columnar(T::maybe_apply_temporal_bucketing(
-                ok_input.into_vec().inner,
+            vec_to_columnar(T::maybe_apply_temporal_bucketing(
+                columnar_to_vec(ok_input).inner,
                 self.as_of_frontier.clone(),
                 summary,
-            )))
+            ))
         } else {
             ok_input
         };
@@ -158,21 +158,37 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // the expression might still return a negative limit and
                     // thus needs to be checked.
                     let expr = expr.clone();
-                    let mut datum_vec = mz_repr::DatumVec::new();
-                    // A literal, non-negative limit skips this branch, so the decode and the
-                    // per-row evaluation only run for column or otherwise fallible limits.
-                    let errors = ok_input.clone().into_vec().flat_map(move |row| {
-                        let temp_storage = mz_repr::RowArena::new();
-                        let datums = datum_vec.borrow_with(&row);
-                        match expr.eval(&datums[..], &temp_storage) {
-                            Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
-                                Some(EvalError::NegLimit.into())
+                    // A literal, non-negative limit skips this branch, so the evaluation
+                    // only runs for column or otherwise fallible limits. It reads datums
+                    // off the borrowed column, so no owned `Row` is built, and it emits
+                    // errors only.
+                    let (_, errors) = flat_map_datums::<
+                        _,
+                        CapacityContainerBuilder<Vec<(Row, T, Diff)>>,
+                        _,
+                    >(ok_input.clone(), usize::MAX, {
+                        let mut datum_vec = mz_repr::DatumVec::new();
+                        move |row_datums, time, diff, _ok_session, err_session| {
+                            let temp_storage = mz_repr::RowArena::new();
+                            // `eval` unifies the lifetimes of the expression, the
+                            // datums, and the arena. Copying the datums into a local
+                            // vec lets that lifetime shrink to this call.
+                            let mut datums = datum_vec.borrow();
+                            datums.extend(row_datums.iter());
+                            match expr.eval(&datums[..], &temp_storage) {
+                                Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                                    err_session.give((EvalError::NegLimit.into(), time, diff));
+                                    1
+                                }
+                                Ok(_) => 0,
+                                Err(e) => {
+                                    err_session.give((e.into(), time, diff));
+                                    1
+                                }
                             }
-                            Ok(_) => None,
-                            Err(e) => Some(e.into()),
                         }
                     });
-                    err_collection = err_collection.concat(errors);
+                    err_collection = err_collection.concat(errors.as_collection());
                 }
             }
 
@@ -608,10 +624,10 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 /// `key` receives the borrowed datums of an input row and the owned row. The value is the
 /// full input row, because every TopK stage carries it through to its output.
 ///
-/// The output is a `VecCollection`, since the TopK stages are `Vec`-based, so the columnar
-/// arm still decodes a `Row` per record. That saves the separate `ColumnarToVec` operator
-/// and its intermediate container, not the decode itself, which needs a columnar batcher to
-/// push borrowed rows into.
+/// The output is a `VecCollection`, since the TopK stages are `Vec`-based, so a `Row` is
+/// decoded per record. That saves the separate `ColumnarToVec` operator and its
+/// intermediate container, not the decode itself, which needs a columnar batcher to push
+/// borrowed rows into. The key is formed from the borrowed datums.
 fn map_topk_key<'s, T, L>(
     edge: CollectionEdge<'s, T>,
     name: &str,
@@ -621,49 +637,33 @@ where
     T: crate::render::RenderTimestamp,
     L: FnMut(&[Datum], &Row) -> Row + 'static,
 {
-    match edge {
-        CollectionEdge::Vec(oks) => {
-            let mut datum_vec = mz_repr::DatumVec::new();
-            oks.map(move |row| {
-                let key_row = {
-                    let datums = datum_vec.borrow_with(&row);
-                    key(&datums, &row)
-                };
-                (key_row, row)
-            })
-        }
-        CollectionEdge::Columnar(oks) => {
-            let mut builder = OperatorBuilder::new(name.to_string(), oks.inner.scope());
-            let (output, stream) = builder.new_output();
-            let mut output =
-                OutputBuilder::<_, CapacityContainerBuilder<Vec<((Row, Row), T, Diff)>>>::from(
-                    output,
-                );
-            let mut input = builder.new_input(oks.inner, Pipeline);
-            builder.build(move |_capabilities| {
-                let mut datum_vec = mz_repr::DatumVec::new();
-                move |_frontiers| {
-                    let mut output = output.activate();
-                    input.for_each(|time, data| {
-                        let mut session = output.session_with_builder(&time);
-                        for (row, t, d) in data.borrow().into_index_iter() {
-                            let value_row: Row = Columnar::into_owned(row);
-                            let key_row = {
-                                let datums = datum_vec.borrow_with(&value_row);
-                                key(&datums, &value_row)
-                            };
-                            session.give((
-                                (key_row, value_row),
-                                Columnar::into_owned(t),
-                                Columnar::into_owned(d),
-                            ));
-                        }
-                    });
+    let mut builder = OperatorBuilder::new(name.to_string(), edge.inner.scope());
+    let (output, stream) = builder.new_output();
+    let mut output =
+        OutputBuilder::<_, CapacityContainerBuilder<Vec<((Row, Row), T, Diff)>>>::from(output);
+    let mut input = builder.new_input(edge.inner, Pipeline);
+    builder.build(move |_capabilities| {
+        let mut datum_vec = mz_repr::DatumVec::new();
+        move |_frontiers| {
+            let mut output = output.activate();
+            input.for_each(|time, data| {
+                let mut session = output.session_with_builder(&time);
+                for (row, t, d) in data.borrow().into_index_iter() {
+                    let value_row: Row = Columnar::into_owned(row);
+                    let key_row = {
+                        let datums = datum_vec.borrow_with(&value_row);
+                        key(&datums, &value_row)
+                    };
+                    session.give((
+                        (key_row, value_row),
+                        Columnar::into_owned(t),
+                        Columnar::into_owned(d),
+                    ));
                 }
             });
-            stream.as_collection()
         }
-    }
+    });
+    stream.as_collection()
 }
 
 /// Drops the hash-key pairing from a consolidated `(hash_key, row)` TopK result.
@@ -674,7 +674,7 @@ where
 ///
 /// TODO: TopK renders its stages over `Vec` containers, so this encode sits at the very
 /// end of the plan. Pushing columnar containers down through `build_topk` and the
-/// monotonic path would remove it.
+/// monotonic path would remove it, leaving a projection that drops the hash.
 fn topk_result_to_columnar<'s, T>(
     collection: VecCollection<'s, T, (Row, Row), Diff>,
 ) -> CollectionEdge<'s, T>
@@ -693,7 +693,7 @@ where
                 });
             }
         });
-    CollectionEdge::Columnar(stream.as_collection())
+    stream.as_collection()
 }
 
 /// Build a stage of a topk reduction. Maintains the _retractions_ of the output instead of emitted
@@ -1256,7 +1256,7 @@ mod tests {
     use timely::dataflow::operators::capture::{Event, Extract};
 
     use super::*;
-    use crate::render::columnar::vec_to_columnar;
+    use crate::render::columnar::{columnar_to_vec, vec_to_columnar};
 
     type KeyedUpdate = ((Row, Row), Timestamp, Diff);
     type Captured = std::sync::mpsc::Receiver<Event<Timestamp, Vec<KeyedUpdate>>>;
@@ -1309,52 +1309,43 @@ mod tests {
         ]
     }
 
-    /// Runs `map_topk_key` over both edge arms with the hash-and-group key `build_topk`
-    /// forms, returning each arm's sorted `(key, value)` updates.
-    fn run_both_arms(input: Vec<(Row, u64, Diff)>) -> (Vec<KeyedUpdate>, Vec<KeyedUpdate>) {
-        let (vec, col) = timely::execute_directly(move |worker| {
+    /// Runs `map_topk_key` with the hash-and-group key `build_topk` forms, returning the
+    /// sorted `(key, value)` updates.
+    fn run_columnar(input: Vec<(Row, u64, Diff)>) -> Vec<KeyedUpdate> {
+        let captured = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut handle, collection) = scope.new_collection();
-                let mut captures = Vec::new();
-                for edge in [
-                    CollectionEdge::Vec(collection.clone()),
-                    CollectionEdge::Columnar(vec_to_columnar(collection)),
-                ] {
-                    let pairer = Pairer::new(1);
-                    let group_key = [0usize];
-                    let keyed = map_topk_key(edge, "test", move |datums, row| {
+                let pairer = Pairer::new(1);
+                let group_key = [0usize];
+                let keyed =
+                    map_topk_key(vec_to_columnar(collection), "test", move |datums, row| {
                         let hash = row.hashed();
                         let iterator = group_key.iter().map(|i| datums[*i]);
                         pairer.merge(std::iter::once(Datum::from(hash)), iterator)
                     });
-                    captures.push(keyed.inner.capture());
-                }
-                let col = captures.pop().unwrap();
-                let vec = captures.pop().unwrap();
+                let captured = keyed.inner.capture();
                 for (row, time, diff) in input {
                     handle.update_at(row, Timestamp::from(time), diff);
                 }
                 handle.advance_to(Timestamp::from(3_u64));
                 handle.flush();
-                (vec, col)
+                captured
             })
         });
-        (extract_sorted(vec), extract_sorted(col))
+        extract_sorted(captured)
     }
 
-    /// Agreeing contents do not rule out a silent `ColumnarToVec` on the ok path. That the
-    /// arm never decodes holds by inspection, not by this test.
+    /// The key closure is infallible, so there is no fallible-key path here.
     #[mz_ore::test]
-    fn map_topk_key_arms_agree() {
-        let (vec_updates, col_updates) = run_both_arms(test_input());
-        assert!(!vec_updates.is_empty());
-        assert_eq!(vec_updates, col_updates);
-        // Retractions reach the operator, so the columnar arm decoded a negative
-        // diff via `Columnar::into_owned`.
-        assert!(vec_updates.iter().any(|(_, _, d)| *d < Diff::ZERO));
+    fn map_topk_key_forms_key() {
+        let updates = run_columnar(test_input());
+        assert!(!updates.is_empty());
+        // Retractions reach the operator, so a negative diff was decoded via
+        // `Columnar::into_owned`.
+        assert!(updates.iter().any(|(_, _, d)| *d < Diff::ZERO));
         // The value is the full input row. The key is `(hash, group_column)`, so
         // the group component mirrors column 0 of the value row.
-        for ((key, value), _t, _d) in &vec_updates {
+        for ((key, value), _t, _d) in &updates {
             let key_datums: Vec<_> = key.iter().collect();
             let value_datums: Vec<_> = value.iter().collect();
             assert_eq!(key_datums.len(), 2);
@@ -1390,21 +1381,19 @@ mod tests {
             .collect();
         expected.sort();
 
-        let (is_columnar, captured) = timely::execute_directly(move |worker| {
+        let captured = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut handle, collection) = scope.new_collection();
                 let edge = topk_result_to_columnar(collection);
-                let is_columnar = matches!(edge, CollectionEdge::Columnar(_));
-                let captured = edge.into_vec().inner.capture();
+                let captured = columnar_to_vec(edge).inner.capture();
                 for (kv, time, diff) in rows {
                     handle.update_at(kv, Timestamp::from(time), diff);
                 }
                 handle.advance_to(Timestamp::from(3u64));
                 handle.flush();
-                (is_columnar, captured)
+                captured
             })
         });
-        assert!(is_columnar, "the TopK output must be a columnar edge");
 
         let mut got: Vec<(Row, Timestamp, Diff)> = captured
             .extract()
