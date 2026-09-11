@@ -20,6 +20,31 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.41.0
+*Released to Materialize Cloud: 2026-09-10* <br>
+*Released to Materialize Self-Managed: 2026-09-11* <br>
+
+### Improvements {#v26.41-improvements}
+- **Improved Clusters Page on console**: The Clusters Page now shows you per-replica usage, including CPU, memory, disk, and heap usage. Use the filters on the page to quickly identify unhealthy clusters. We've also sped up the page; page-loads which previously took ~600ms now take 25-50ms on environments with 2,000 objects.
+- **MySQL snapshot parallelism enabled by default**: In v26.39, we launched [parallelized snapshots](/ingest-data/mysql/snapshot-parallelism/) for [MySQL sources](/ingest-data/mysql/) on tables which have a `CHAR` or `VARCHAR` primary key using the `utf8mb4` character set with the `utf8mb4_bin` collation. In our tests, we saw snapshot speedups of up to 80%. This behavior is now enabled by default.
+- **Pre-flight reference checks in `mz-deploy`**: `mz-deploy apply`, `apply tables`, and their `--dry-run` forms now check every `CREATE TABLE ... FROM SOURCE` reference against what the source can actually expose before creating anything, and report the mismatches grouped by source with close-name suggestions instead of failing partway through the batch with a raw server error.
+
+### Guides {#v26.41-guides}
+- **Reorganized documentation**: The docs are now grouped by what you are trying to do, with [Fundamentals](/fundamentals/) for concepts and architecture patterns, [Clusters](/clusters/) for sizing and operational guidance, [Developer tools](/developer-tools/) for the Console, CLI, dbt, Terraform, MCP servers, `mz-deploy`, and the emulator, and [Export data](/export-data/) for sinks. Every moved page redirects from its previous URL, so your existing links and bookmarks should still work.
+- **[Consume from Snowflake on AWS S3 Tables](/export-data/iceberg-aws-snowflake/)**: A new guide for querying the Iceberg tables a sink writes to [Amazon S3 Tables](/export-data/iceberg-aws/) from Snowflake, with the IAM role, catalog integration, and catalog-linked database Snowflake needs. It also covers why the sink must use `MODE APPEND`, since Snowflake cannot read the equality delete files `MODE UPSERT` writes, how to reconstruct current state from the resulting changelog, and the end-to-end latency, query cost, and region placement to plan for.
+- **[Query History for Self-Managed](/self-managed-deployments/query-history/)**: A new guide to the statement logging behind the Console's [Query History](/developer-tools/console/monitoring/) view in self-managed deployments, which the operator chart enables by default from v26.40.0 on. It covers configuring the sample rate and target data rate through either the Helm chart or system parameters, the superuser or `mz_monitor` access a user needs to see the view, and the `environmentd` CPU and storage costs each parameter governs.
+- **[ADBC (Arrow Database Connectivity)](/serve-results/adbc/)**: A new guide to pulling results into Apache Arrow with the community ADBC PostgreSQL driver, which needs no Materialize-specific driver. It covers connecting, fetching results as Arrow tables, handing those tables to Arrow-native tools such as DuckDB, pandas, and Polars without a file or object-store hop, and how Materialize types map to Arrow types.
+
+### Bug Fixes {#v26.41-bug-fixes}
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
+- Fixed `EXPLAIN TIMESTAMP AS DOT` aborting `environmentd`, which let any role that can run SQL take an environment down with a single statement; the statement now returns an unsupported-format error.
+- Fixed `environmentd` entering a crash loop that restarting could not clear, after an `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` was followed by dropping the old definition's dependencies.
+- Fixed a coordinator panic during `ALTER TABLE ... ADD COLUMN` when the schema change committed but its response was lost, so the retry now recognizes the evolution as already applied instead of reporting a mismatch.
+- Fixed Iceberg sinks panicking during Parquet writes when the sink's schema no longer matched that of an existing table, which could recur on every sink restart or zero-downtime upgrade; the sink now reports the mismatch instead.
+- Fixed MCP clients built on the official SDK failing the handshake, because Materialize answered `notifications/initialized` with `200` rather than the `202` the Streamable HTTP transport requires for a message that carries no reply.
+- `ALTER CLUSTER ... WITH (WAIT FOR ...)` now rolls back when its timeout is processed while the target replicas are still unhydrated, matching `WAIT UNTIL READY`'s safe default instead of forcing a cut-over that can cause downtime; request the previous behavior explicitly with `WAIT UNTIL READY (..., ON TIMEOUT = 'COMMIT')`.
+- Fixed the Console showing the previous region's clusters and Object Explorer contents after a region switch, until a full page refresh.
+
 ## v26.40.2
 *Released to Materialize Cloud: 2026-09-07* <br>
 *Released to Materialize Self-Managed: 2026-09-08* <br>
