@@ -23,8 +23,11 @@ spec:
           claimName: minio-pv-claim
       containers:
       - name: minio
-        # Pulls the default Minio image from Docker Hub
-        image: minio/minio:latest
+        # Pulled from quay.io because MinIO deleted the Docker Hub repository,
+        # which 404s. Pinned to the last AGPL community release rather than
+        # tracking a tag: the same repository also carries MinIO's commercial
+        # `.hotfix.<sha>` builds, which carry different licence terms.
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
         args:
         - server
         - /storage
