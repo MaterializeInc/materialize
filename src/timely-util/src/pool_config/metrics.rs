@@ -30,6 +30,7 @@ use mz_ore::metrics::{ComputedUIntGauge, MakeCollectorOpts, MetricsRegistry};
 pub fn register(registry: &MetricsRegistry) {
     static REGISTERED: OnceLock<()> = OnceLock::new();
     REGISTERED.get_or_init(|| {
+        crate::columnar::chunk::metrics::register(registry);
         // Every name and help string is a literal at the `metric!` call so the
         // metrics-catalog scanner (`bin/gen-metrics-catalog`), which reads the
         // source rather than the expanded macro, can index them.
