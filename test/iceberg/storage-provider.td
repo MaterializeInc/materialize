@@ -31,7 +31,7 @@ ALTER SYSTEM SET enable_default_connection_validation = false
 > SHOW CREATE CONNECTION sp_default
 name create_sql
 ---------------------------------
-materialize.public.sp_default "CREATE CONNECTION materialize.public.sp_default TO ICEBERG CATALOG (CATALOG TYPE = 'rest', CREDENTIAL = SECRET materialize.public.sp_cred, URL = 'https://example.invalid/api/catalog', WAREHOUSE = 'wh');"
+materialize.public.sp_default "CREATE CONNECTION materialize.public.sp_default\nTO ICEBERG CATALOG\n    (\n        CREDENTIAL = SECRET materialize.public.sp_cred,\n        CATALOG TYPE = 'REST',\n        URL = 'https://example.invalid/api/catalog',\n        WAREHOUSE = 'wh'\n    );"
 
 # Each accepted value round-trips through the catalog.
 > CREATE CONNECTION sp_s3 TO ICEBERG CATALOG (
