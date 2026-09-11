@@ -12,6 +12,8 @@
 //! separately from final compaction. After ingestion, the benchmark policy requests
 //! one non-empty batch per source. The drain waits for that shape, released read
 //! admission, and pool counters that remain quiet for 20 ms.
+//! `MZ_BENCH_IDLE_MS` gives maintenance time between completed input bursts while
+//! continuing to schedule the worker. It applies to the coordinated-input mode.
 //! This exercises pool eviction and compression, not forced device contention.
 
 use std::cell::RefCell;
@@ -172,6 +174,8 @@ fn run(config: Config) -> Measurement {
     let timeout =
         Duration::from_secs(u64::try_from(parameter("MZ_BENCH_TIMEOUT_S", 1200)).unwrap());
     let workers = parameter("MZ_BENCH_WORKERS", 1);
+    let idle = Duration::from_millis(u64::try_from(parameter("MZ_BENCH_IDLE_MS", 0)).unwrap());
+    assert!(idle.is_zero() || parameter("MZ_BENCH_INDEPENDENT", 0) == 0);
     assert!(workers > 0 && config.sources > 0 && config.burst > 0);
     assert!(config.rounds > 0 && config.rows > 0);
     let mut timely_config = timely::Config::process(workers);
@@ -286,6 +290,12 @@ fn run(config: Config) -> Measurement {
                         if usize::try_from(round + 1).unwrap() % config.burst == 0 {
                             worker.step();
                             while probes.iter().any(|probe| probe.less_than(&(round + 1))) {
+                                worker.step();
+                                std::thread::yield_now();
+                                check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
+                            }
+                            let idle_start = Instant::now();
+                            while idle_start.elapsed() < idle {
                                 worker.step();
                                 std::thread::yield_now();
                                 check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
@@ -457,9 +467,10 @@ fn operator_microbench() {
                     }
                 }
                 eprintln!(
-                    "OPERATOR trace_batches={} workers={} sample={sample} async={asynchronous} burst={burst} sources={} rows={} pool={} direct={} ms={} hydrated_ms={} batches={} inserts={} bytes={} reads={}",
+                    "OPERATOR trace_batches={} workers={} idle_ms={} sample={sample} async={asynchronous} burst={burst} sources={} rows={} pool={} direct={} ms={} hydrated_ms={} batches={} inserts={} bytes={} reads={}",
                     m.trace_batches,
                     parameter("MZ_BENCH_WORKERS", 1),
+                    parameter("MZ_BENCH_IDLE_MS", 0),
                     config.sources,
                     config.rounds * config.rows,
                     config.pool_bytes,
