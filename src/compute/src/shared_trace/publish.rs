@@ -23,10 +23,9 @@ use crate::shared_trace::handle::SharedTraceHandle;
 /// Why a publication point refused an `as_of`.
 ///
 /// Read off the point rather than off a handle, so a failure path registers no hold on its way to a
-/// panic, and so the caller reports the point that actually refused rather than a sibling.
+/// panic, and so the caller reports the point that actually refused rather than a sibling. The
+/// refusing `since` is already in [`Published::handle_at`]'s `Err`, so it is not repeated here.
 pub(crate) struct Diagnostics<T> {
-    /// The published `since`, the meet of the writer's own compaction frontier and every hold.
-    pub(crate) since: Antichain<T>,
     /// The frontier the importing runtime has applied.
     ///
     /// A refusal with this AT the refusing `since` means that runtime had already applied the
@@ -125,7 +124,6 @@ where
     /// Why this point would refuse an `as_of`. See [`Diagnostics`].
     pub(crate) fn diagnostics(&self) -> Diagnostics<Tr::Time> {
         Diagnostics {
-            since: self.shared.since(),
             standing_hold: self.standing_hold(),
         }
     }

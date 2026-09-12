@@ -1038,7 +1038,7 @@ fn live_import_does_not_pin_merging() {
             );
             drop(arranged.trace);
         });
-        // Drop the minting handle, as `crate::render::import_shared_index` does: the import owns
+        // Drop the minting handle, as `crate::render::import_published_index` does: the import owns
         // its own clone, and a live mint would pin the floor at its own registration coverage and
         // mask what this test is about.
         drop(handle);

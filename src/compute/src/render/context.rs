@@ -54,6 +54,7 @@ use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::{CollectionEdge, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
+use crate::shared_trace::{SharedErrsEnter, SharedOksEnter};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
@@ -233,6 +234,17 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
         Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>,
         Arranged<'scope, ErrEnter<mz_repr::Timestamp, T>>,
     ),
+    /// A maintenance-runtime arrangement imported into the interactive runtime through the
+    /// shared-trace primitive. Backed by `SharedTraceHandle`, so it is a real arrangement the plan
+    /// can `Get`, not a re-derived collection. Only the interactive runtime produces this.
+    ///
+    /// The `GlobalId` mirrors [`Self::Trace`]'s: it names the imported index, so an export of this
+    /// same arrangement can alias it instead of arranging again.
+    SharedTrace(
+        GlobalId,
+        Arranged<'scope, SharedOksEnter<T>>,
+        Arranged<'scope, SharedErrsEnter<T>>,
+    ),
 }
 
 impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
@@ -315,6 +327,18 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                 let errs = errs.concat(mfp_errs.as_collection());
                 (oks, errs)
             }
+            ArrangementFlavor::SharedTrace(_, oks, errs) => {
+                let (oks, mfp_errs) = CollectionBundle::<T>::flat_map_core_fallible::<_, DCB, _>(
+                    oks.clone(),
+                    key,
+                    max_demand,
+                    logic,
+                    REFUEL,
+                );
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
+                let errs = errs.concat(mfp_errs.as_collection());
+                (oks, errs)
+            }
         }
     }
 
@@ -361,6 +385,17 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
+            ArrangementFlavor::SharedTrace(_, oks, errs) => {
+                let oks = CollectionBundle::<T>::flat_map_core_ok::<_, DCB, _>(
+                    oks.clone(),
+                    key,
+                    max_demand,
+                    logic,
+                    REFUEL,
+                );
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
+                (oks, errs)
+            }
         }
     }
 }
@@ -370,6 +405,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         match self {
             ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
             ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
+            ArrangementFlavor::SharedTrace(_gid, oks, _errs) => oks.stream.scope(),
         }
     }
 
@@ -381,6 +417,11 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                 errs.clone().enter_region(region),
             ),
             ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
+                *gid,
+                oks.clone().enter_region(region),
+                errs.clone().enter_region(region),
+            ),
+            ArrangementFlavor::SharedTrace(gid, oks, errs) => ArrangementFlavor::SharedTrace(
                 *gid,
                 oks.clone().enter_region(region),
                 errs.clone().enter_region(region),
@@ -397,6 +438,11 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                 errs.clone().leave_region(outer),
             ),
             ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
+                *gid,
+                oks.clone().leave_region(outer),
+                errs.clone().leave_region(outer),
+            ),
+            ArrangementFlavor::SharedTrace(gid, oks, errs) => ArrangementFlavor::SharedTrace(
                 *gid,
                 oks.clone().leave_region(outer),
                 errs.clone().leave_region(outer),
@@ -523,8 +569,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// reads is the consumer's choice, and a delta join reads both within one operator, so a
     /// binding's definition cannot know which form to collapse.
     ///
-    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
-    /// this dataflow cannot rewrite in place. Their errors arrive bounded by the exporting
+    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace` and
+    /// `ArrangementFlavor::SharedTrace`) alone, whose error traces this dataflow cannot rewrite in
+    /// place. Their errors arrive bounded by the exporting
     /// dataflow's last level of sharing rather than collapsed to one, since nothing collapses at an
     /// export. A global read more than once within one dataflow is not collapsed either, because
     /// only local bindings reach this.
@@ -540,7 +587,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     let name = format!("Distinct errors[{key:?}]");
                     ArrangementFlavor::Local(oks, distinct_arranged_errs(errs, &name))
                 }
-                flavor @ ArrangementFlavor::Trace(..) => flavor,
+                flavor @ (ArrangementFlavor::Trace(..) | ArrangementFlavor::SharedTrace(..)) => {
+                    flavor
+                }
             };
             self.arranged.insert(key, flavor);
         }

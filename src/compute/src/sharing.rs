@@ -309,6 +309,17 @@ impl ArrangementSharingRegistry {
         }
     }
 
+    /// The `oks` seal frontier published for `id` on `worker_index`, if published.
+    pub(crate) fn published_upper(
+        &self,
+        id: &GlobalId,
+        worker_index: usize,
+    ) -> Option<Antichain<Timestamp>> {
+        let inner = self.lock();
+        let slot = inner.map.get(id)?.get(worker_index)?.as_ref()?;
+        Some(slot.oks.upper())
+    }
+
     /// Mints reader handles for `id` on `worker_index`, if published.
     pub(crate) fn handles(
         &self,
