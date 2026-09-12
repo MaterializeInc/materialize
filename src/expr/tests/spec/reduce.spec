@@ -703,3 +703,138 @@ types (integer?, integer?, integer?)
 (#0 = #1)
 ((#0 + 1) < 2147483647)
 ((#0 + 1) < #2)
+
+# Complementary-pair collapse: `p OR NOT(p)` --> true and `p AND NOT(p)` -->
+# false, but only when `p` is non-nullable and infallible.
+
+# Non-nullable, infallible `p`: collapses.
+reduce
+types (boolean)
+(#0 OR not(#0))
+----
+true
+
+reduce
+types (boolean)
+(#0 AND not(#0))
+----
+false
+
+# Extra operands do not block the collapse: the forced zero dominates them.
+reduce
+types (boolean, boolean)
+or(#0, not(#0), #1)
+----
+true
+
+reduce
+types (boolean, boolean)
+and(#0, not(#0), #1)
+----
+false
+
+# The dominance holds even when the extra operand is nullable or fallible: the
+# forced zero short-circuits past both.
+reduce
+types (boolean, boolean?)
+or(#0, not(#0), #1)
+----
+true
+
+reduce
+types (boolean, text)
+or(#0, not(#0), cast_string_to_bool(#1))
+----
+true
+
+# Nullable `p`: `NULL OR NOT(NULL)` is NULL, not true, so no collapse.
+reduce
+types (boolean?)
+(#0 OR not(#0))
+----
+(#0 OR NOT(#0))
+
+reduce
+types (boolean?)
+(#0 AND not(#0))
+----
+(#0 AND NOT(#0))
+
+# Fallible `p`: if `p` errors, both `p` and `NOT(p)` error, so the call errors
+# rather than evaluating to its zero. No collapse even though `p` is
+# non-nullable.
+reduce
+types (text)
+(cast_string_to_bool(#0) OR not(cast_string_to_bool(#0)))
+----
+(NOT(text_to_boolean(#0)) OR text_to_boolean(#0))
+
+# The negation is matched in the canonical form `reduce` leaves it in, so a
+# comparison pair collapses too: `reduce` rewrites `NOT(#0 = 5)` to `#0 != 5`.
+reduce
+types (integer)
+or((#0 = 5::integer), not((#0 = 5::integer)))
+----
+true
+
+reduce
+types (integer)
+and((#0 = 5::integer), not((#0 = 5::integer)))
+----
+false
+
+# Ordered comparisons flip too, but only in the argument order they were
+# written in: `reduce` canonically orders the arguments of `=` and `!=` only.
+reduce
+types (integer, integer)
+or((#0 < #1), not((#0 < #1)))
+----
+true
+
+reduce
+types (integer, integer)
+or((#0 < #1), (#1 <= #0))
+----
+((#0 < #1) OR (#1 <= #0))
+
+# Nullable comparison: no collapse.
+reduce
+types (integer?)
+or((#0 = 5::integer), not((#0 = 5::integer)))
+----
+((#0 = 5) OR (#0 != 5))
+
+# Fallible comparison: no collapse.
+reduce
+types (integer)
+or((div_int32(1::integer, #0) = 1::integer), not((div_int32(1::integer, #0) = 1::integer)))
+----
+((1 = (1 / #0)) OR (1 != (1 / #0)))
+
+# De Morgan's law spreads the negation of a nested AND/OR over its children, so
+# the complement is a negated child per child rather than a single operand.
+reduce
+types (boolean, boolean)
+or((#0 AND #1), not((#0 AND #1)))
+----
+true
+
+reduce
+types (boolean, boolean)
+and((#0 OR #1), not((#0 OR #1)))
+----
+false
+
+# Nullable children: no collapse.
+reduce
+types (boolean?, boolean?)
+or((#0 AND #1), not((#0 AND #1)))
+----
+(NOT(#0) OR NOT(#1) OR (#0 AND #1))
+
+# Only part of the spread negation is present, which is not a tautology.
+reduce
+types (boolean, boolean)
+or((#0 AND #1), not(#0))
+----
+(NOT(#0) OR (#0 AND #1))
