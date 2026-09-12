@@ -21,6 +21,7 @@
 //! introspection.
 
 use columnar::{Borrow, Columnar, Container, Index, Len, Push};
+use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
@@ -35,6 +36,8 @@ use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{Operator, OutputBuilder};
 use timely::dataflow::{Scope, Stream, StreamVec};
+use timely::order::Product;
+use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ECB, Session};
@@ -174,6 +177,101 @@ where
             Column::Typed(negated)
         }
     }
+}
+
+/// The timestamp of a scope that carries iteration coordinates.
+pub type RecTimestamp = Product<mz_repr::Timestamp, PointStamp<u64>>;
+
+/// Truncates every time in `column` to `level - 1` iteration coordinates.
+///
+/// A `Typed` input hands its row and diff columns over untouched, because truncation only
+/// rewrites times. A serialized input keeps all three columns in one buffer, so its rows
+/// and diffs are copied in bulk rather than per record.
+fn truncate_times(
+    column: Column<(Row, RecTimestamp, Diff)>,
+    level: usize,
+) -> Column<(Row, RecTimestamp, Diff)> {
+    /// Collects the truncation of every time in `times` into a fresh column.
+    fn truncated<'a, C>(times: &'a C, level: usize) -> <RecTimestamp as Columnar>::Container
+    where
+        C: Len + Index<Ref = columnar::Ref<'a, RecTimestamp>> + 'a,
+    {
+        let mut truncated = <RecTimestamp as Columnar>::Container::default();
+        for index in 0..times.len() {
+            let mut time = RecTimestamp::into_owned(times.get(index));
+            let mut coordinates = std::mem::take(&mut time.inner).into_inner();
+            coordinates.truncate(level - 1);
+            time.inner = PointStamp::new(coordinates);
+            truncated.push(&time);
+        }
+        truncated
+    }
+
+    match column {
+        Column::Typed((rows, times, diffs)) => {
+            let times = truncated(&times.borrow(), level);
+            Column::Typed((rows, times, diffs))
+        }
+        column => {
+            let view = column.borrow();
+            let len = view.len();
+            let mut out = <(Row, RecTimestamp, Diff) as Columnar>::Container::default();
+            let (rows, times, diffs) = &mut out;
+            rows.extend_from_self(view.0, 0..len);
+            *times = truncated(&view.1, level);
+            diffs.extend_from_self(view.2, 0..len);
+            Column::Typed(out)
+        }
+    }
+}
+
+/// Leaves a dynamically created scope that has `level` iteration coordinates.
+///
+/// The columnar counterpart of differential's `leave_dynamic`, which it offers only for
+/// `Vec` collections. Keeping the recursive binding's result on the edge is what lets the
+/// feedback loop run without a decode and a re-encode per iteration.
+pub fn columnar_leave_dynamic<'scope>(
+    collection: ColumnarCollection<'scope, RecTimestamp, Row, Diff>,
+    level: usize,
+) -> ColumnarCollection<'scope, RecTimestamp, Row, Diff> {
+    let scope = collection.inner.scope();
+    let mut builder = OperatorBuilder::new("LeaveDynamic".to_string(), scope);
+    let (output, stream) = builder.new_output();
+    let mut output =
+        OutputBuilder::<_, CapacityContainerBuilder<Column<(Row, RecTimestamp, Diff)>>>::from(
+            output,
+        );
+    // The connection summary tells the scope that this operator drops all but `level - 1`
+    // coordinates, so a downstream frontier is not held back by the iteration it leaves.
+    let summary = Product {
+        outer: Default::default(),
+        inner: PointStampSummary {
+            retain: Some(level - 1),
+            actions: Vec::new(),
+        },
+    };
+    let mut input = builder.new_input_connection(
+        collection.inner,
+        Pipeline,
+        [(0, Antichain::from_elem(summary))],
+    );
+
+    builder.build(move |_capability| {
+        move |_frontier| {
+            let mut output = output.activate();
+            input.for_each(|cap, data| {
+                let mut time = cap.time().clone();
+                let mut coordinates = std::mem::take(&mut time.inner).into_inner();
+                coordinates.truncate(level - 1);
+                time.inner = PointStamp::new(coordinates);
+                let cap = cap.delayed(&time, 0);
+                let mut truncated = truncate_times(std::mem::take(data), level);
+                output.session(&cap).give_container(&mut truncated);
+            });
+        }
+    });
+
+    stream.as_collection()
 }
 
 /// Negates the diff of every record in a [`ColumnarCollection`].
