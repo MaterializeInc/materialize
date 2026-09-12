@@ -236,7 +236,7 @@ Amortizing appends across shards is what makes `X_min` well below 250 ms afforda
 
 ### Configuration and rollout
 
-* `X_max` is the existing `TIMESTAMP INTERVAL` source option and `default_timestamp_interval`, with unchanged meaning. Only an explicit `TIMESTAMP INTERVAL` is clamped to `[min_timestamp_interval, max_timestamp_interval]`, both one second by default. `default_timestamp_interval` is applied unclamped to sources that omit the option and to the coordinator keepalive.
+* `X_max` is the existing `TIMESTAMP INTERVAL` source option and `default_timestamp_interval`. Its meaning narrows under the flag: it bounds the explicit probe cadence, but frontiers no longer lie on its grid, they lie on the `X_min` grid, so a test that asserts `write_frontier % interval = 1` holds only with the flag off. Only an explicit `TIMESTAMP INTERVAL` is clamped to `[min_timestamp_interval, max_timestamp_interval]`, both one second by default. `default_timestamp_interval` is applied unclamped to sources that omit the option and to the coordinator keepalive.
 * `X_min` is a new dyncfg `storage_min_binding_interval`, defaulting to 250 ms. Setting it to `X_max` reproduces today's cadence.
 * Event-driven minting, the lead, and the demand-driven keepalive are behind a feature flag that defaults off in production and on in CI, wired through `system_parameter_default` so that sqllogictest, testdrive, and platform checks exercise the new path.
 * The lead `H` and the rejected-proposal count are new per-source statistics and need a source statistics field and a catalog relation change.
