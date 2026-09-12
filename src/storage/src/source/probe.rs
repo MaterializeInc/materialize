@@ -9,11 +9,25 @@
 
 //! Support for sending frontier probes to upstream systems.
 
+use std::convert::Infallible;
 use std::time::Duration;
 
+use differential_dataflow::Hashable;
+use futures::StreamExt;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_repr::Timestamp;
+use mz_repr::{GlobalId, Timestamp};
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use timely::Container;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
+use timely::dataflow::{Stream, StreamVec};
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::trace;
+
+use crate::source::types::Probe;
 
 /// A ticker to drive source upstream probing.
 ///
@@ -108,5 +122,153 @@ impl<G: Fn() -> Duration> Ticker<G> {
 
     fn round_to_interval(&self, ms: EpochMillis) -> EpochMillis {
         ms - (ms % self.interval)
+    }
+}
+
+/// Floors `ts` to the largest multiple of `grid` that is not greater than it.
+///
+/// A zero grid leaves `ts` unchanged.
+pub(super) fn floor_to_grid(ts: Timestamp, grid: Duration) -> Timestamp {
+    let grid_ms = u64::try_from(grid.as_millis()).unwrap_or(u64::MAX);
+    if grid_ms == 0 {
+        return ts;
+    }
+    let ms = u64::from(ts);
+    Timestamp::from(ms - (ms % grid_ms))
+}
+
+/// Forwards only the frontier of `stream`, dropping every record.
+pub(super) fn progress_only<'scope, T, C>(
+    stream: &Stream<'scope, T, C>,
+) -> StreamVec<'scope, T, Infallible>
+where
+    T: TimelyTimestamp,
+    C: Container + Clone + 'static,
+{
+    let mut builder = OperatorBuilderRc::new("progress_only".into(), stream.scope());
+    let (_output, progress) = builder.new_output::<Vec<Infallible>>();
+    let mut input = builder.new_input(stream.clone(), Pipeline);
+
+    builder.build(move |caps| {
+        let mut cap_set =
+            CapabilitySet::from_elem(caps.into_iter().next().expect("one capability per output"));
+        move |frontiers| {
+            // Records must be consumed for the input frontier to advance.
+            input.for_each(|_cap, _data| {});
+            cap_set.downgrade(frontiers[0].frontier().iter());
+        }
+    });
+
+    progress
+}
+
+/// Emits a probe whenever the frontier of `progress` advances, at most once per `min_interval`.
+///
+/// Runs on one worker chosen by `source_id`. Never emits the minimum frontier, so the first
+/// binding of a source stays the snapshot binding, and never emits an empty frontier, which the
+/// remap operator treats as source shutdown.
+pub(super) fn arrival_probes<'scope, T: TimelyTimestamp>(
+    source_id: GlobalId,
+    progress: StreamVec<'scope, T, Infallible>,
+    min_interval: Duration,
+    now_fn: NowFn,
+) -> StreamVec<'scope, T, Probe<T>> {
+    let scope = progress.scope();
+
+    let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
+    let is_active_worker = active_worker == scope.index();
+
+    let mut op = AsyncOperatorBuilder::new("arrival_probes".into(), scope);
+    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+    let mut input = op.new_input_for(progress, Pipeline, &output);
+
+    op.build(|caps| async move {
+        if !is_active_worker {
+            return;
+        }
+
+        let [cap] = caps.try_into().expect("one capability per output");
+
+        let min_ms = u64::try_from(min_interval.as_millis()).unwrap_or(u64::MAX);
+        let minimum_frontier = Antichain::from_elem(T::minimum());
+        let mut frontier = minimum_frontier.clone();
+        let mut last_emit: Option<EpochMillis> = None;
+        let mut pending = false;
+
+        loop {
+            // The sleep is only armed while a frontier advance waits for the rate limit to
+            // expire, so the `Duration::MAX` fallback is never slept on.
+            let wait = match (pending, last_emit) {
+                (true, Some(last)) => {
+                    Duration::from_millis(last.saturating_add(min_ms).saturating_sub(now_fn()))
+                }
+                _ => Duration::MAX,
+            };
+
+            tokio::select! {
+                event = input.next() => match event {
+                    Some(AsyncEvent::Progress(new_frontier)) => {
+                        if new_frontier == frontier
+                            || new_frontier == minimum_frontier
+                            || new_frontier.is_empty()
+                        {
+                            continue;
+                        }
+                        frontier = new_frontier;
+
+                        let now = now_fn();
+                        if last_emit.is_none_or(|last| now >= last.saturating_add(min_ms)) {
+                            trace!(
+                                "arrival_probes({source_id}) probing at {now}: \
+                                frontier advanced"
+                            );
+                            output.give(&cap, Probe {
+                                probe_ts: now.into(),
+                                upstream_frontier: frontier.clone(),
+                            });
+                            last_emit = Some(now);
+                            pending = false;
+                        } else {
+                            pending = true;
+                        }
+                    }
+                    Some(AsyncEvent::Data(..)) => unreachable!("progress-only stream"),
+                    None => return,
+                },
+                _ = tokio::time::sleep(wait), if pending => {
+                    let now = now_fn();
+                    trace!(
+                        "arrival_probes({source_id}) probing at {now}: rate limit expired"
+                    );
+                    output.give(&cap, Probe {
+                        probe_ts: now.into(),
+                        upstream_frontier: frontier.clone(),
+                    });
+                    last_emit = Some(now);
+                    pending = false;
+                }
+            }
+        }
+    });
+
+    output_stream
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use mz_repr::Timestamp;
+
+    use super::floor_to_grid;
+
+    #[mz_ore::test]
+    fn floor_to_grid_rounds_down_to_multiples() {
+        let grid = Duration::from_millis(250);
+        let ts = Timestamp::from;
+        assert_eq!(floor_to_grid(ts(1000), grid), ts(1000));
+        assert_eq!(floor_to_grid(ts(1249), grid), ts(1000));
+        assert_eq!(floor_to_grid(ts(1250), grid), ts(1250));
+        assert_eq!(floor_to_grid(ts(7), Duration::ZERO), ts(7));
     }
 }

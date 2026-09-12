@@ -40,6 +40,9 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs::{
+    STORAGE_BINDING_LEAD, STORAGE_EVENT_DRIVEN_BINDINGS, STORAGE_MIN_BINDING_INTERVAL,
+};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
@@ -55,7 +58,7 @@ use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{CapabilitySet, InspectCore, Leave};
+use timely::dataflow::operators::{CapabilitySet, Concat, Concatenate, InspectCore, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -67,6 +70,7 @@ use tracing::trace;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::StorageMetrics;
 use crate::metrics::source::SourceMetrics;
+use crate::source::probe;
 use crate::source::reclock::ReclockOperator;
 use crate::source::types::{Probe, SourceMessage, SourceOutput, SourceRender, StackedCollection};
 use crate::statistics::SourceStatistics;
@@ -381,6 +385,22 @@ where
         });
     }
 
+    // Event-driven bindings add a second probe source, driven by the frontier of the data the
+    // source has already produced rather than by a poll of the upstream system.
+    let probe_stream = if STORAGE_EVENT_DRIVEN_BINDINGS.get(config.config.config_set()) {
+        let min_interval = STORAGE_MIN_BINDING_INTERVAL.get(config.config.config_set());
+        let progress_streams: Vec<_> = export_collections
+            .values()
+            .map(|collection| probe::progress_only(&collection.inner))
+            .collect();
+        let progress = scope.concatenate(progress_streams);
+        let arrival =
+            probe::arrival_probes(source_id, progress, min_interval, config.now_fn.clone());
+        probe_stream.concat(arrival)
+    } else {
+        probe_stream
+    };
+
     // Broadcasting does more work than necessary, which would be to exchange the probes to the
     // worker that will be the one minting the bindings but we'd have to thread this information
     // through and couple the two functions enough that it's not worth the optimization (I think).
@@ -441,10 +461,12 @@ where
         persist_clients,
         statistics: _,
         shared_remap_upper,
-        config: _,
+        config: storage_config,
         remap_collection_id,
         busy_signal: _,
     } = config;
+
+    let config_set = Arc::clone(storage_config.config_set());
 
     let read_only_rx = storage_state.read_only_rx.clone();
     let error_handler = storage_state.error_handler("remap_operator", id);
@@ -504,16 +526,26 @@ where
         let cap = cap_set.delayed(cap_set.first().unwrap());
         remap_output.give_container(&cap, &mut initial_batch.updates);
         drop(cap);
+        let mut remap_upper = initial_batch.upper.clone();
         cap_set.downgrade(initial_batch.upper);
 
-        let mut prev_probe_ts: Option<mz_repr::Timestamp> = None;
+        let mut prev_probe: Option<Probe<FromTime>> = None;
 
         while !cap_set.is_empty() {
+            // Both the wake condition and the binding timestamp depend on the flag, so it is read
+            // once per iteration to keep the two coherent across a flip.
+            let event_driven = STORAGE_EVENT_DRIVEN_BINDINGS.get(&config_set);
+
             // We only mint bindings after a successful probe.
             let new_probe = probed_upper
-                .wait_for(|new_probe| match (prev_probe_ts, new_probe) {
+                .wait_for(|new_probe| match (&prev_probe, new_probe) {
                     (None, Some(_)) => true,
-                    (Some(prev_ts), Some(new)) => prev_ts < new.probe_ts,
+                    (Some(prev), Some(new)) => {
+                        // Under event-driven minting probes arrive from two producers, so a probe
+                        // with an unchanged timestamp but an advanced frontier is new information.
+                        prev.probe_ts < new.probe_ts
+                            || (event_driven && prev.upstream_frontier != new.upstream_frontier)
+                    }
                     _ => false,
                 })
                 .await
@@ -526,9 +558,32 @@ where
                 });
 
             let probe = new_probe.expect("known to be Some");
-            prev_probe_ts = Some(probe.probe_ts);
+            prev_probe = Some(probe.clone());
 
-            let binding_ts = probe.probe_ts;
+            // The empty frontier signals source shutdown, which mints its final binding at the
+            // probe timestamp regardless of the grid.
+            let binding_ts = if event_driven && !probe.upstream_frontier.is_empty() {
+                let lead = STORAGE_BINDING_LEAD.get(&config_set);
+                let grid = STORAGE_MIN_BINDING_INTERVAL.get(&config_set);
+                let lead_ms = u64::try_from(lead.as_millis()).unwrap_or(u64::MAX);
+                let led =
+                    mz_repr::Timestamp::from(u64::from(probe.probe_ts).saturating_add(lead_ms));
+                let binding_ts = probe::floor_to_grid(led, grid);
+                // A proposal inside the grid cell of the current upper would be rejected by
+                // `mint` without a diagnostic. Skipping it here keeps bindings on the grid and
+                // bounds the compare-and-append rate.
+                if !remap_upper.less_equal(&binding_ts) {
+                    trace!(
+                        "timely-{worker_id} remap({id}) skipping proposal at {binding_ts}: \
+                        remap upper {} is beyond it",
+                        remap_upper.pretty()
+                    );
+                    continue;
+                }
+                binding_ts
+            } else {
+                probe.probe_ts
+            };
             let cur_source_upper = probe.upstream_frontier;
 
             let new_into_upper = Antichain::from_elem(binding_ts.step_forward());
@@ -549,6 +604,7 @@ where
 
             let cap = cap_set.delayed(cap_set.first().unwrap());
             remap_output.give_container(&cap, &mut remap_trace_batch.updates);
+            remap_upper.clone_from(&remap_trace_batch.upper);
             cap_set.downgrade(remap_trace_batch.upper);
         }
     });
