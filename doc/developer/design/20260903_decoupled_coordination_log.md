@@ -772,3 +772,13 @@ A pending MV replacement's creation frontier is independent of the target's shar
 output progress. Runtime installation respects that distinction. Restarting with
 the target still suspended remains a separate investigation: bootstrap still
 applies the shared output's recovery constraint to the pending replacement.
+
+### 2026-09-12: Adapter-driven table time agreed with Aljoscha
+
+Aljoscha relayed the designer's decision: transaction-WAL ticking stays with
+adapters. Assume a live adapter for table-time progress. The single-adapter
+milestone 2 demonstration explicitly accepts paused table-fed dataflows and shows
+source-fed dataflows and compaction continuing. This resolves the extraction
+question without adding another WAL writer. Use “lifecycle components” or “the
+process running the controller bundle,” not “lifecycle process” or “lifecycle
+service.” Next: resume the remaining in-process prerequisites and bundle extraction.
