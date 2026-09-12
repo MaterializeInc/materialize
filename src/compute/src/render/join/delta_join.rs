@@ -892,35 +892,42 @@ where
     // The closure reads datums and builds a fresh row, so the input row is only
     // ever borrowed. Reading it from the column directly keeps this path from
     // materializing an owned `Row` per record.
-    let (oks, errs) = flat_map_datums::<_, CB<Vec<(Row, T, Diff)>>, _>(edge, usize::MAX, {
-        let mut datum_vec = DatumVec::new();
-        move |row_datums, time, diff, ok_session, err_session| {
-            let mut row_builder = SharedRow::get();
-            let temp_storage = RowArena::new();
-            // `JoinClosure::apply` unifies the lifetimes of `&self`, the datums,
-            // and the arena. Copying the datums into a local vec lets that
-            // lifetime shrink to this call. The copy moves datum references, not
-            // row data.
-            let mut datums = datum_vec.borrow();
-            datums.extend(row_datums.iter());
-            // `cloned` detaches the result from `temp_storage` and the shared row
-            // builder, both of which drop at the end of this call.
-            match initial_closure
-                .apply(&mut datums, &temp_storage, &mut row_builder)
-                .map(|row| row.cloned())
-                .transpose()
-            {
-                Some(Ok(row)) => {
-                    ok_session.give((row, time, diff));
-                    1
-                }
-                None => 0,
-                Some(Err(e)) => {
-                    err_session.give((DataflowErrorSer::from(e), time, diff));
-                    1
+    let (oks, errs) = flat_map_datums::<_, CB<Vec<(Row, T, Diff)>>, _>(
+        edge,
+        // The same name the arranged counterpart renders under, so a delta path reads the
+        // same in introspection whichever way its first relation is seeded.
+        "UpdateStream",
+        usize::MAX,
+        {
+            let mut datum_vec = DatumVec::new();
+            move |row_datums, time, diff, ok_session, err_session| {
+                let mut row_builder = SharedRow::get();
+                let temp_storage = RowArena::new();
+                // `JoinClosure::apply` unifies the lifetimes of `&self`, the datums,
+                // and the arena. Copying the datums into a local vec lets that
+                // lifetime shrink to this call. The copy moves datum references, not
+                // row data.
+                let mut datums = datum_vec.borrow();
+                datums.extend(row_datums.iter());
+                // `cloned` detaches the result from `temp_storage` and the shared row
+                // builder, both of which drop at the end of this call.
+                match initial_closure
+                    .apply(&mut datums, &temp_storage, &mut row_builder)
+                    .map(|row| row.cloned())
+                    .transpose()
+                {
+                    Some(Ok(row)) => {
+                        ok_session.give((row, time, diff));
+                        1
+                    }
+                    None => 0,
+                    Some(Err(e)) => {
+                        err_session.give((DataflowErrorSer::from(e), time, diff));
+                        1
+                    }
                 }
             }
-        }
-    });
+        },
+    );
     (oks.as_collection(), errs.as_collection())
 }

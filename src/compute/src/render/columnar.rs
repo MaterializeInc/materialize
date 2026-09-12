@@ -63,14 +63,16 @@ where
 /// Applies `logic` to each record in `edge`, exposing the record as a borrowed
 /// [`DatumVecBorrow`] and giving it ok and err output sessions.
 ///
-/// `max_demand` bounds the number of columns decoded per row. Pass `usize::MAX`
-/// to decode all columns.
+/// `name` is the rendered operator's name, so a caller that replaces a named operator
+/// keeps that name in introspection. `max_demand` bounds the number of columns decoded
+/// per row. Pass `usize::MAX` to decode all columns.
 ///
 /// This is the canonical entry point for "decoding consumers" (operators that
 /// read [`mz_repr::Datum`]s from each row anyway). It iterates the columnar
 /// batch directly without going through an owned [`Row`].
 pub fn flat_map_datums<'scope, T, DCB, L>(
     edge: CollectionEdge<'scope, T>,
+    name: &str,
     max_demand: usize,
     mut logic: L,
 ) -> (
@@ -90,7 +92,7 @@ where
         + 'static,
 {
     let scope = edge.inner.scope();
-    let mut builder = OperatorBuilder::new("CollectionFlatMap".to_string(), scope);
+    let mut builder = OperatorBuilder::new(name.to_string(), scope);
     let (ok_output, ok_stream) = builder.new_output();
     let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
     let (err_output, err_stream) = builder.new_output();
@@ -448,6 +450,7 @@ mod tests {
                 let (mut input, collection) = scope.new_collection();
                 let (oks, _errs) = flat_map_datums::<_, RowBuilder, _>(
                     vec_to_columnar(collection),
+                    "test",
                     1,
                     |datums, t, d, ok_session, _err_session| {
                         ok_session.give((Row::pack(datums.iter()), t, d));
