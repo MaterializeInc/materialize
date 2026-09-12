@@ -21,6 +21,8 @@
 //! is already established, the previous connection is canceled.
 
 mod metrics;
+#[cfg(test)]
+mod tests;
 
 use std::convert::Infallible;
 use std::fmt::Debug;
@@ -38,7 +40,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{Instrument, debug, info, trace, warn};
+use tracing::{Instrument, info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
@@ -252,7 +254,7 @@ struct Connection<Out, In> {
     /// Message receiver connected to the receive task.
     msg_rx: mpsc::UnboundedReceiver<In>,
     /// Receiver for errors encountered by connection tasks.
-    error_rx: watch::Receiver<String>,
+    error_rx: ErrorRx,
 
     /// Handles to connection tasks.
     _tasks: [AbortOnDropHandle<()>; 2],
@@ -296,9 +298,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
         let (out_tx, out_rx) = mpsc::unbounded_channel();
         let (in_tx, in_rx) = mpsc::unbounded_channel();
-        // Initialize the error channel with a default error to return if none of the tasks
-        // produced an error.
-        let (error_tx, error_rx) = watch::channel("connection closed".into());
+        let (error_tx, error_rx) = error_channel();
 
         let span = tracing::Span::current();
         let send_task = mz_ore::task::spawn(
@@ -323,7 +323,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
     async fn send(&mut self, msg: Out) -> anyhow::Result<()> {
         match self.msg_tx.send(msg) {
             Ok(()) => Ok(()),
-            Err(_) => bail!(self.collect_error().await),
+            Err(_) => bail!(self.error_rx.collect().await),
         }
     }
 
@@ -336,26 +336,15 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         // `mpcs::Receiver::recv` is documented to be cancel safe.
         match self.msg_rx.recv().await {
             Some(msg) => Ok(msg),
-            None => bail!(self.collect_error().await),
+            None => bail!(self.error_rx.collect().await),
         }
-    }
-
-    /// Return a connection error.
-    async fn collect_error(&mut self) -> String {
-        // Wait for the first error to be reported, or for all connection tasks to shut down.
-        let _ = self.error_rx.changed().await;
-        // Mark the current value as unseen, so the next `collect_error` call can return
-        // immediately.
-        self.error_rx.mark_changed();
-
-        self.error_rx.borrow().clone()
     }
 
     /// Run a connection's send task.
     async fn run_send_task<W: AsyncWrite + Unpin>(
         mut writer: W,
         mut msg_rx: mpsc::UnboundedReceiver<Out>,
-        error_tx: watch::Sender<String>,
+        error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
         loop {
@@ -376,8 +365,8 @@ impl<Out: Message, In: Message> Connection<Out, In> {
             };
 
             if let Err(error) = write_message(&mut writer, msg.as_ref()).await {
-                debug!("ctp: send error: {error}");
-                let _ = error_tx.send(error.to_string());
+                warn!("ctp: send error: {error}");
+                error_tx.report(format!("send error: {error}"));
                 break;
             };
 
@@ -391,7 +380,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
     async fn run_recv_task<R: AsyncRead + Unpin>(
         mut reader: R,
         msg_tx: mpsc::UnboundedSender<In>,
-        error_tx: watch::Sender<String>,
+        error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
         loop {
@@ -405,12 +394,62 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                     }
                 }
                 Err(error) => {
-                    debug!("ctp: recv error: {error}");
-                    let _ = error_tx.send(error.to_string());
+                    warn!("ctp: recv error: {error}");
+                    error_tx.report(format!("recv error: {error}"));
                     break;
                 }
             };
         }
+    }
+}
+
+/// Error reported when a connection was closed without either task reporting an error.
+const CONNECTION_CLOSED: &str = "connection closed";
+
+/// Create a channel for reporting errors encountered by a connection's tasks.
+fn error_channel() -> (ErrorTx, ErrorRx) {
+    let (tx, rx) = watch::channel(None);
+    (ErrorTx(tx), ErrorRx(rx))
+}
+
+/// The sending half of a connection's error channel.
+#[derive(Clone, Debug)]
+struct ErrorTx(watch::Sender<Option<String>>);
+
+impl ErrorTx {
+    /// Report an error, unless an error was reported before.
+    fn report(&self, error: String) {
+        // The first error wins. A broken connection usually makes both tasks fail in sequence,
+        // with the first failure causing the second, so the first error is the one that explains
+        // what happened. For example, when the send task hits its idle deadline it drops its write
+        // half, whereupon the peer closes the connection and the recv task observes an EOF.
+        let _ = self.0.send_if_modified(|slot| match slot {
+            Some(_) => false,
+            None => {
+                *slot = Some(error);
+                true
+            }
+        });
+    }
+}
+
+/// The receiving half of a connection's error channel.
+#[derive(Debug)]
+struct ErrorRx(watch::Receiver<Option<String>>);
+
+impl ErrorRx {
+    /// Return the first error reported on this channel.
+    ///
+    /// If all [`ErrorTx`]s are dropped without an error being reported, returns
+    /// [`CONNECTION_CLOSED`]. Repeated calls return the same error.
+    async fn collect(&mut self) -> String {
+        // Wait for the first error to be reported, or for all connection tasks to shut down.
+        let _ = self.0.changed().await;
+        // Mark the current value as unseen, so the next `collect` call can return immediately.
+        self.0.mark_changed();
+
+        let error = self.0.borrow().clone();
+        error.unwrap_or_else(|| CONNECTION_CLOSED.into())
     }
 }
 

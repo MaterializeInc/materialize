@@ -2502,7 +2502,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         time.sleep(10)
         envd = c.invoke("logs", "materialized", capture=True)
         print(envd.stdout)
-        assert "replica task failed: timed out" in envd.stdout
+        assert "replica task failed: recv error: timed out" in envd.stdout
 
 
 class Metrics:
