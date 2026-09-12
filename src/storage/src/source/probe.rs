@@ -18,6 +18,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Pipeline;
@@ -152,12 +153,14 @@ pub(super) fn ceil_to_grid(ts: Timestamp, grid: Duration) -> Timestamp {
 
 /// Emits a probe whenever the frontier of `progress` advances, at most once per `min_interval`.
 ///
-/// Runs on one worker chosen by `source_id`. Never emits the minimum frontier, so the first
-/// binding of a source stays the snapshot binding, and never emits an empty frontier, which the
+/// Runs on one worker chosen by `source_id`. Only emits frontiers at or beyond the most advanced
+/// one seen on `explicit`, the source's own probe stream, so the first binding of a source stays
+/// the snapshot binding minted from an explicit probe. Never emits an empty frontier, which the
 /// remap operator treats as source shutdown.
 pub(super) fn arrival_probes<'scope, T: TimelyTimestamp>(
     source_id: GlobalId,
     progress: StreamVec<'scope, T, Infallible>,
+    explicit: StreamVec<'scope, T, Probe<T>>,
     min_interval: Duration,
     now_fn: NowFn,
 ) -> StreamVec<'scope, T, Probe<T>> {
@@ -169,6 +172,7 @@ pub(super) fn arrival_probes<'scope, T: TimelyTimestamp>(
     let mut op = AsyncOperatorBuilder::new("arrival_probes".into(), scope);
     let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
     let mut input = op.new_input_for(progress, Pipeline, &output);
+    let mut explicit_input = op.new_input_for(explicit, Pipeline, &output);
 
     op.build(|caps| async move {
         if !is_active_worker {
@@ -182,6 +186,9 @@ pub(super) fn arrival_probes<'scope, T: TimelyTimestamp>(
         let mut frontier = minimum_frontier.clone();
         let mut last_emit: Option<EpochMillis> = None;
         let mut pending = false;
+        // The most advanced frontier an explicit probe has reported so far.
+        let mut probed: Option<Antichain<T>> = None;
+        let mut explicit_open = true;
 
         loop {
             // The sleep is only armed while a frontier advance waits for the rate limit to
@@ -203,6 +210,17 @@ pub(super) fn arrival_probes<'scope, T: TimelyTimestamp>(
                             continue;
                         }
                         frontier = new_frontier;
+                        // A proposal behind the last explicit probe would be rejected by
+                        // `mint`, and before the first explicit probe it would become the
+                        // snapshot binding with only part of the snapshot in it. Only
+                        // frontiers at or beyond the probed one are proposed.
+                        let eligible = probed
+                            .as_ref()
+                            .is_some_and(|probed| PartialOrder::less_equal(probed, &frontier));
+                        if !eligible {
+                            pending = false;
+                            continue;
+                        }
 
                         let now = now_fn();
                         if last_emit.is_none_or(|last| now >= last.saturating_add(min_ms)) {
@@ -224,6 +242,20 @@ pub(super) fn arrival_probes<'scope, T: TimelyTimestamp>(
                     // constructible event and carries no information.
                     Some(AsyncEvent::Data(..)) => (),
                     None => return,
+                },
+                event = explicit_input.next(), if explicit_open => match event {
+                    Some(AsyncEvent::Data(_, probes)) => {
+                        for probe in probes {
+                            let advanced = probed.as_ref().is_none_or(|probed| {
+                                PartialOrder::less_equal(probed, &probe.upstream_frontier)
+                            });
+                            if advanced {
+                                probed = Some(probe.upstream_frontier);
+                            }
+                        }
+                    }
+                    Some(AsyncEvent::Progress(_)) => (),
+                    None => explicit_open = false,
                 },
                 _ = tokio::time::sleep(wait), if pending => {
                     let now = now_fn();

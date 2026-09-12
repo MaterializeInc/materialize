@@ -418,8 +418,13 @@ where
     let probe_stream = if event_driven {
         let min_interval = STORAGE_MIN_BINDING_INTERVAL.get(config.config.config_set());
         let progress = scope.concatenate(progress_streams);
-        let arrival =
-            probe::arrival_probes(source_id, progress, min_interval, config.now_fn.clone());
+        let arrival = probe::arrival_probes(
+            source_id,
+            progress,
+            probe_stream.clone(),
+            min_interval,
+            config.now_fn.clone(),
+        );
         probe_stream.concat(arrival)
     } else {
         probe_stream
