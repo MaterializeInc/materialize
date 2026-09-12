@@ -572,7 +572,13 @@ def get_variable_system_parameters(
             ["", "0", "1", "1000", "2071", "1000000"],
         ),
         VariableSystemParameter(
+            "storage_binding_lead", "0ms", ["0ms", "250ms", "500ms"]
+        ),
+        VariableSystemParameter(
             "storage_event_driven_bindings", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "storage_min_binding_interval", "250ms", ["100ms", "250ms", "1s"]
         ),
         VariableSystemParameter(
             "storage_source_decode_fuel",
