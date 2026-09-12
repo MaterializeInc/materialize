@@ -24,8 +24,9 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    ChannelBinding, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, GS2Header, Pgbuf,
-    SASLClientFinalResponse, SASLInitialResponse, input_err, parse_frame_len,
+    ChannelBinding, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, GS2Header,
+    MAX_PREAUTH_FRAME_SIZE, Pgbuf, SASLClientFinalResponse, SASLInitialResponse, input_err,
+    parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio::time::{self, Duration};
@@ -145,6 +146,17 @@ where
         codec.text_settings = text_settings;
     }
 
+    /// Raises the frame ceiling now that the client has authenticated.
+    ///
+    /// Until this is called the connection is held to
+    /// [`MAX_PREAUTH_FRAME_SIZE`], which fits any credential but not a query.
+    /// Must not be called before authentication succeeds: it is what stops an
+    /// unauthenticated peer from having a buffer sized against a large declared
+    /// frame length.
+    pub fn allow_post_auth_frames(&mut self) {
+        self.inner.get_mut().codec_mut().max_frame_len = mz_ore::netio::MAX_FRAME_SIZE;
+    }
+
     /// Waits for the connection to be closed.
     ///
     /// Returns a "connection closed" error when the connection is closed. If
@@ -210,13 +222,23 @@ pub struct Codec {
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
     /// The session's text encoding settings when `encode_state` was installed.
     text_settings: mz_pgrepr::TextEncodeSettings,
+    /// Largest frame the client may declare, raised once it authenticates.
+    ///
+    /// One `Codec` serves a connection for its whole life, but the frames it
+    /// should accept change partway through: before authentication only a
+    /// credential is legitimate, while afterwards a single `Bind` parameter can
+    /// carry bulk data. A ceiling wide enough for the second is far too wide for
+    /// the first, so the bound starts tight and
+    /// [`FramedConn::allow_post_auth_frames`] widens it.
+    max_frame_len: usize,
 }
 
 impl Codec {
-    /// Creates a new `Codec`.
+    /// Creates a new `Codec` for a client that has not yet authenticated.
     pub fn new() -> Codec {
         Codec {
             decode_state: DecodeState::Head,
+            max_frame_len: MAX_PREAUTH_FRAME_SIZE,
             encode_state: vec![],
             text_settings: mz_pgrepr::TextEncodeSettings::STABLE,
         }
@@ -502,7 +524,7 @@ impl Decoder for Codec {
                         return Ok(None);
                     }
                     let msg_type = src[0];
-                    let frame_len = parse_frame_len(&src[1..])?;
+                    let frame_len = parse_frame_len(&src[1..], self.max_frame_len)?;
                     src.advance(5);
                     src.reserve(frame_len);
                     self.decode_state = DecodeState::Data(msg_type, frame_len);

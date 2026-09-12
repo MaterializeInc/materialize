@@ -54,10 +54,12 @@
 //!
 //! Note that allocation amplification is *not* in scope. The only speculative
 //! `reserve` is on the declared frame length, which `parse_frame_len` caps at
-//! `MAX_FRAME_SIZE` (64 MiB), far under the runner's `-rss_limit_mb`. The
-//! count-driven loops push one element per successful cursor read, so they are
-//! bounded by the bytes actually present. No oracle here can catch an
-//! over-allocation, so don't read one into the target.
+//! the ceiling the `Codec` carries. A fresh `Codec` is pre-authentication, so
+//! that ceiling is `MAX_PREAUTH_FRAME_SIZE` (16 KiB) here, far under the
+//! runner's `-rss_limit_mb`. The count-driven loops push one element per
+//! successful cursor read, so they are bounded by the bytes actually present.
+//! No oracle here can catch an over-allocation, so don't read one into the
+//! target.
 
 #![no_main]
 
@@ -334,7 +336,8 @@ fn push_frame(u: &mut Unstructured, out: &mut Vec<u8>) -> arbitrary::Result<()> 
     let honest = (body.len() as u32) + 4;
     let declared = if u.int_in_range(0u8..=7)? == 0 {
         // Overstate by a bounded amount. `parse_frame_len` rejects anything over
-        // MAX_FRAME_SIZE (64 MiB), so keep the claim well under that.
+        // the codec's ceiling, so keep the claim small enough that the decoder
+        // parks awaiting a body rather than being rejected at the header.
         honest.saturating_add(u.int_in_range(1u32..=4096)?)
     } else {
         honest
