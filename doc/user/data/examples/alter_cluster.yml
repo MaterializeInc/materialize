@@ -26,10 +26,14 @@
 
         For valid size values, see [Available sizes](#available-sizes).
 
-        {{< warning >}}
-        Changing the size of a cluster may incur downtime. For more information,
-        see [Resizing considerations](#resizing).
-        {{< /warning >}}
+        {{< note >}}
+        By default, changing the size of a cluster is graceful and incurs no
+        downtime. Materialize provisions replicas at the new size, waits for
+        them to hydrate, and only then retires the old ones. You do not need to
+        specify any `WITH` option to get this behavior. For more information,
+        see [Resizing](#resizing), and, for system clusters such as
+        `mz_catalog_server`, [System clusters](#system-clusters).
+        {{< /note >}}
 
         Not available for `ALTER CLUSTER ... RESET` since there is no default
         `SIZE` value.
