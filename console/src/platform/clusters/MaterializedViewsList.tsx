@@ -25,7 +25,7 @@ import React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
-import { Replica } from "~/api/materialize/cluster/clusterList";
+import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import {
   MaterializedView,
   MaterializedViewsResponse,
@@ -51,8 +51,12 @@ import {
   SampleCodeBoxWrapper,
 } from "~/layouts/listPageComponents";
 import docUrls from "~/mz-doc-urls.json";
-import { useBuildMaterializedViewPath } from "~/platform/routeHelpers";
+import {
+  absoluteClusterPath,
+  useBuildMaterializedViewPath,
+} from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
+import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { assert } from "~/util";
@@ -205,6 +209,7 @@ const MaterializedViewListInner = ({
           replicas={cluster?.replicas ?? []}
           memoryUsageMap={memoryUsageById}
           lagMap={lagMap}
+          cluster={cluster}
         />
       </React.Suspense>
     </AppErrorBoundary>
@@ -216,13 +221,23 @@ interface MaterializedViewTableProps {
   replicas: Replica[];
   memoryUsageMap: ArrangmentsMemoryUsageMap | undefined;
   lagMap?: LagMap;
+  cluster: Cluster | undefined;
 }
 
 const MaterializedViewTable = (props: MaterializedViewTableProps) => {
   const navigate = useNavigate();
   const flags = useFlags();
   const materializedViewPath = useBuildMaterializedViewPath();
-  const dataflowVisualizerEnabled = flags["visualization-features"];
+  const regionSlug = useRegionSlug();
+  const { cluster } = props;
+  // The visualizer link needs the owning cluster, which resolves
+  // asynchronously, so the flag alone doesn't decide whether the column
+  // exists. Header and body both gate on this one value, or they disagree
+  // on the column count while the cluster is still in flight.
+  const dataflowsPath =
+    flags["visualization-features"] && cluster
+      ? `${absoluteClusterPath(regionSlug, cluster)}/dataflows`
+      : undefined;
 
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -238,7 +253,7 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
             <Th>Name</Th>
             <Th>Memory Utilization</Th>
             <Th>Freshness</Th>
-            {dataflowVisualizerEnabled && <Th></Th>}
+            {dataflowsPath && <Th></Th>}
           </Tr>
         </Thead>
         <Tbody>
@@ -279,17 +294,17 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
                   )}
                 </Td>
                 <Td>{formattedLag}</Td>
-                {dataflowVisualizerEnabled && (
+                {dataflowsPath && (
                   <Td width="16">
                     <OverflowMenu
                       items={[
                         {
-                          visible: dataflowVisualizerEnabled,
+                          visible: true,
                           render: () => (
                             <MenuItem
                               key="dataflow-visualizer"
                               as={Link}
-                              to={`${materializedViewPath(v)}/dataflow-visualizer`}
+                              to={`${dataflowsPath}?export=${v.id}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                               }}
