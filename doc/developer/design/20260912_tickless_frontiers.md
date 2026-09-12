@@ -110,17 +110,20 @@ The first trigger is an advance of the source's own data frontier, the frontier 
 The second is the idle timer, which fires `X_max` after the previous binding and performs an explicit probe of the upstream system exactly as today.
 Both triggers produce a proposal `(frontier, probe_ts)`, and the remap operator must wake on a changed frontier even when the timestamp is unchanged, because two arrivals inside one grid cell carry the same timestamp and today's wake condition compares timestamps only.
 
-The binding timestamp is `floor_grid(now_ms + H)`, where `floor_grid` rounds down to the `X_min` grid.
-A proposal whose floored timestamp is not at or beyond the current remap upper is skipped without minting, and the operator waits for the next probe.
-Taking the maximum with the previous binding instead would mint off the grid at arrival rate whenever arrivals are faster than the grid, which defeats the rate bound, and the pending arrival probe fires in the next grid cell anyway.
+The binding timestamp is `floor_grid(probe_ts + H)`, where `floor_grid` rounds down to the `X_min` grid and `probe_ts` is the wall clock at which the proposal was made, already on the `X_max` grid for explicit probes.
+A proposal whose floored timestamp is not at or beyond the current remap upper is deferred to the start of the next grid cell rather than dropped, so the explicit `X_max` probe is never lost to an arrival probe that used the same cell.
+Taking the maximum with the previous binding instead would mint off the grid at arrival rate whenever arrivals are faster than the grid, which defeats the rate bound.
 The target upper is derived from the final timestamp, because `mint` asserts that the upper is beyond the binding timestamp.
+Deferred proposals and proposals that `mint` rejects because their frontier is behind the recorded one each carry a per-source counter, because under arrival-driven minting both are normal and a stuck source would otherwise be indistinguishable from a healthy one.
 Flooring to a shared grid keeps independent sources on the same timestamps, so a join of several sources sees one input frontier step per grid point rather than one per source ([database-issues#8885] describes the cost of misalignment).
 
 The existing `ReclockOperator::mint` contract already enforces what the triggers need.
 It only writes a binding if the proposed frontier is not behind the previously bound frontier and the target upper strictly advances (`src/storage/src/source/reclock.rs`), and it resyncs on a compare-and-append mismatch.
 An arrival-driven proposal whose ingested frontier is still behind the most recently probed upstream frontier is rejected by the first condition, so arrival-driven minting only takes effect once ingestion has caught up with the last probe.
 This gives a hybrid: while ingestion keeps up, bindings track the ingested frontier at `X_min` granularity, and at least every `X_max` an explicit probe re-establishes the reclock-to-latest-upper property that a broken or lagging upstream connection stalls the source rather than silently advancing it.
-A rejected proposal is silent today and must carry a counter, because under arrival-driven minting a rejection is the normal case while ingestion catches up and a stuck source would otherwise be indistinguishable from a healthy one.
+The flip side is that arrival-driven minting is inert for as long as ingestion trails the last probed upstream frontier, because every arrival proposal is behind it.
+A Kafka consumer under load is by construction behind the high watermark, and a PostgreSQL source on a filtered publication or on a host with other write-active databases trails the WAL tip, so in exactly the busy cases where freshness matters most the source falls back to the `X_max` cadence.
+This is the main open risk of the design and the prototype did not measure it. See Open questions.
 
 The proposal must be a complete antichain in the source's time domain, which the data frontier is by construction.
 For Kafka the data frontier covers every consumed partition plus the range element for partitions not yet discovered (`src/storage/src/source/kafka.rs`), so it is comparable with the probed frontier.
@@ -233,7 +236,7 @@ Amortizing appends across shards is what makes `X_min` well below 250 ms afforda
 
 ### Configuration and rollout
 
-* `X_max` is the existing `TIMESTAMP INTERVAL` source option and `default_timestamp_interval`, with unchanged meaning. It is clamped to `[min_timestamp_interval, max_timestamp_interval]`, both one second by default, so raising it is an operator action.
+* `X_max` is the existing `TIMESTAMP INTERVAL` source option and `default_timestamp_interval`, with unchanged meaning. Only an explicit `TIMESTAMP INTERVAL` is clamped to `[min_timestamp_interval, max_timestamp_interval]`, both one second by default. `default_timestamp_interval` is applied unclamped to sources that omit the option and to the coordinator keepalive.
 * `X_min` is a new dyncfg `storage_min_binding_interval`, defaulting to 250 ms. Setting it to `X_max` reproduces today's cadence.
 * Event-driven minting, the lead, and the demand-driven keepalive are behind a feature flag that defaults off in production and on in CI, wired through `system_parameter_default` so that sqllogictest, testdrive, and platform checks exercise the new path.
 * The lead `H` and the rejected-proposal count are new per-source statistics and need a source statistics field and a catalog relation change.
@@ -253,17 +256,18 @@ It runs a local PostgreSQL source at 20 inserts per second against a local `envi
 Staleness is wall clock at read completion minus the row's upstream commit time, so it includes the read's own latency, and the keepalive is emulated by lowering `default_timestamp_interval` after source creation.
 The lead is a fixed value rather than a measurement.
 
-| Mode | Staleness p50 ms | Staleness p95 ms | Read p50 ms | Read p95 ms | Bindings/s |
-|---|---|---|---|---|---|
-| Baseline, 1 s keepalive | 1035 | 1063 | 950 | 954 | 1.03 |
-| Baseline, 250 ms keepalive | 1151 | 1256 | 18 | 751 | 1.03 |
-| Event-driven, lead 0, 250 ms keepalive | 299 | 504 | 22 | 254 | 3.92 |
-| Event-driven, lead 400 ms, 250 ms keepalive | 581 | 727 | 18 | 22 | 4.06 |
+| Mode | Staleness p50 ms | Staleness p95 ms | Read p50 ms | Read p95 ms | Bindings/s | Reads |
+|---|---|---|---|---|---|---|
+| Baseline, 1 s keepalive | 1035 | 1063 | 950 | 954 | 1.03 | 31 |
+| Baseline, 250 ms keepalive | 1151 | 1256 | 18 | 751 | 1.03 | 121 |
+| Event-driven, lead 0, 250 ms keepalive | 299 | 504 | 22 | 254 | 3.92 | 210 |
+| Event-driven, lead 400 ms, 250 ms keepalive | 581 | 727 | 18 | 22 | 4.06 | 437 |
 
-Table 3: One 30 second run per mode, single machine, 20 inserts per second.
+Table 3: One 30 second run per mode, single machine, 20 inserts per second. The reader polls as fast as it is answered, so slow modes have few samples and the baseline p95 rests on 31 reads.
 
 Four things follow from the numbers.
-The binding rate lands on the grid as designed, four per second against one, and the log shows no rejected proposals, no panics, and no persist errors.
+The binding rate lands on the grid as designed, four per second against one, and the log shows no panics and no persist errors, only shard finalization warnings from the harness dropping and recreating the source between modes.
+The deferred and rejected proposal counters did not exist in this run, so the frequency of either path is unmeasured.
 Event-driven bindings without a lead cut median staleness from about one second to 300 ms, which is the pipeline latency plus a fraction of the grid, and the read tail of 254 ms is the wait for the next binding that the lead section predicts.
 The lead removes that tail, 254 ms to 22 ms at p95, and pays for it in staleness, 299 ms to 581 ms at the median, so the lead is a read latency instrument and not a freshness instrument, and the sum of read latency and staleness is about the same in both event-driven modes.
 The baseline with a one second keepalive shows a 950 ms median read latency, which is the since rounding effect the Binding lead section describes: the source since is floored to the second, the oracle read timestamp lags by up to a second, and every read is pushed to the since and waits for the next keepalive.
@@ -322,6 +326,7 @@ It is complementary and is the natural next design once the budget formula above
 ## Open questions
 
 * How should the wall-clock lag metric account for the lead? Uppers ahead of wall clock read as zero lag. Each writer can announce its lead through source statistics so the controller subtracts it, or the metric can be anchored on the mint wall clock rather than the binding timestamp. Deferred until the prototype shows how large `H` is in practice.
+* How often does arrival-driven minting go inert because ingestion trails the probed upstream frontier? The prototype measured one unfiltered PostgreSQL table, where the two coincide. A Kafka source under load and a PostgreSQL source on a filtered publication are the two shapes to measure next, with the rejected-proposal counter as the instrument.
 * Should the lead default to zero? The prototype shows the lead trading staleness for read tail latency one for one. If freshness is the goal, a zero lead with the read tail bounded by `X_min` may be the better default, with the lead reserved for environments that care about read latency.
 * Can `X_min` adapt to observed consensus latency at the controller level, so that a struggling consensus store widens binding intervals across all sources instead of relying on operator tuning?
 * Should the demand-driven keepalive distinguish reads that touch no table, which only need the oracle advanced and not a txns shard append?
