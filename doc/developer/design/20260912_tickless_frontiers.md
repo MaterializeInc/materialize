@@ -111,7 +111,7 @@ The second is the idle timer, which fires `X_max` after the previous binding and
 Both triggers produce a proposal `(frontier, probe_ts)`, and the remap operator must wake on a changed frontier even when the timestamp is unchanged, because two arrivals inside one grid cell carry the same timestamp and today's wake condition compares timestamps only.
 
 The binding timestamp is `floor_grid(probe_ts + H)`, where `floor_grid` rounds down to the `X_min` grid and `probe_ts` is the wall clock at which the proposal was made, already on the `X_max` grid for explicit probes.
-A proposal whose floored timestamp is not at or beyond the current remap upper is deferred to the start of the next grid cell rather than dropped, so the explicit `X_max` probe is never lost to an arrival probe that used the same cell.
+A proposal whose floored timestamp is not at or beyond the current remap upper is deferred to the start of the next grid cell rather than dropped, and a probe arriving in the meantime replaces the held one only if its frontier is at least as advanced, so the explicit `X_max` probe is not lost to an arrival probe that used the same cell.
 Taking the maximum with the previous binding instead would mint off the grid at arrival rate whenever arrivals are faster than the grid, which defeats the rate bound.
 The target upper is derived from the final timestamp, because `mint` asserts that the upper is beyond the binding timestamp.
 Deferred proposals and proposals that `mint` rejects because their frontier is behind the recorded one each carry a per-source counter, because under arrival-driven minting both are normal and a stuck source would otherwise be indistinguishable from a healthy one.
