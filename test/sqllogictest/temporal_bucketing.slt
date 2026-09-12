@@ -278,12 +278,12 @@ Target cluster: quickstart
 EOF
 
 # -----------------------------------------------------------------------------
-# Runtime tests. With `enable_compute_temporal_bucketing` on, the
-# bucketed dataflow edges are re-encoded to the columnar representation instead
-# of re-wrapping `Vec`. These tests turn the flag on and assert the bucketed
-# dataflows still produce the correct logical results, and that a consolidating
-# `Union` concatenating a bucketed input with a `Direct` input yields the right
-# output, which reaches `concat_many` as a columnar edge like the other leg.
+# Runtime tests. These turn `enable_compute_temporal_bucketing` on and assert
+# that the bucketed dataflows still produce the correct logical results. There
+# is one fixture per site that applies bucketing, because each site hands the
+# bucketer a differently shaped stream: the keyed `(key, val)` stream in
+# `render_reduce`, the TopK input, a consolidating `Union` whose legs carry
+# different strategies, and an arrangement built by `ensure_collections`.
 # -----------------------------------------------------------------------------
 
 simple conn=mz_system,user=mz_system
@@ -309,8 +309,9 @@ CREATE TABLE rt_other (k INT NOT NULL)
 statement ok
 INSERT INTO rt_other VALUES (2), (99)
 
-# Bucketed Reduce: temporal filter above a GROUP BY. Hits the arrangement
-# re-encode in `context.rs`.
+# Bucketed Reduce: temporal filter above a GROUP BY. `render_reduce` buckets the
+# keyed `(key, val)` stream itself, so this reaches `reduce.rs` rather than
+# either arrangement site.
 statement ok
 CREATE MATERIALIZED VIEW rt_reduce AS
 SELECT k, count(*)
@@ -325,8 +326,8 @@ SELECT * FROM rt_reduce
 2  1
 3  1
 
-# Bucketed TopK: temporal filter under ORDER BY ... LIMIT. Hits the re-encode
-# in `top_k.rs`.
+# Bucketed TopK: temporal filter under ORDER BY ... LIMIT. Buckets the TopK
+# input in `top_k.rs`.
 statement ok
 CREATE MATERIALIZED VIEW rt_topk AS
 SELECT k
@@ -344,8 +345,8 @@ SELECT * FROM rt_topk
 
 # Mixed Union: `EXCEPT ALL` of a temporal-filtered leg (bucketed) against a
 # plain relation (Direct) lowers to a consolidating `Union` with per-input
-# strategies `[TemporalBucketing, Direct]`. Both legs reach
-# `concat_many` as columnar edges.
+# strategies `[TemporalBucketing, Direct]`, so `concat_many` sees one bucketed
+# leg and one that skipped the bucketer.
 query T multiline
 EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 CREATE MATERIALIZED VIEW rt_union AS
@@ -386,4 +387,48 @@ SELECT * FROM rt_union
 ----
 1
 1
+3
+
+# Bucketed arrangement: an index on a temporal-filtered view. `ensure_collections`
+# buckets in the loop that builds the requested arrangements, and hands the result
+# to `arrange_collection`, whose passthrough then serves as the bundle's collection
+# for every later consumer. The plan is pinned because the site is only reached
+# while the `ArrangeBy` carries `strategy=TemporalBucketing`.
+statement ok
+CREATE VIEW rt_indexed AS
+SELECT k FROM rt_events WHERE event_time + INTERVAL '45 day' > mz_now()
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE DEFAULT INDEX ON rt_indexed
+----
+materialize.public.rt_indexed_primary_idx:
+  ArrangeBy
+    strategy=TemporalBucketing
+    raw=true
+    arrangements[0]={ key=[#0{k}], permutation=id, thinning=() }
+    Get::PassArrangements materialize.public.rt_indexed
+      raw=true
+
+materialize.public.rt_indexed:
+  Get::Collection materialize.public.rt_events
+    raw=true
+
+Source materialize.public.rt_events
+  project=(#0)
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+CREATE DEFAULT INDEX ON rt_indexed
+
+query I rowsort
+SELECT k FROM rt_indexed
+----
+1
+1
+2
 3
