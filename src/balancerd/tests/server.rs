@@ -17,6 +17,7 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::BytesMut;
 use chrono::Utc;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
@@ -34,13 +35,17 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::id_gen::{conn_id_org_uuid, org_id_conn_bits};
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::netio::MAX_FRAME_SIZE;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{assert_contains, assert_err, assert_ok, task};
+use mz_pgwire_common::{FrontendStartupMessage, MAX_STARTUP_FRAME_SIZE, REJECT_ENCRYPTION};
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -407,4 +412,140 @@ async fn test_balancer() {
             .await
             .unwrap();
     }
+}
+
+/// Starts a balancerd whose pgwire listener is reachable but whose upstream is
+/// not. These tests never get far enough to be forwarded anywhere.
+async fn start_balancer() -> SocketAddr {
+    let unreachable = "127.0.0.1:1".to_string();
+    let (_reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
+    let balancer_cfg = BalancerConfig::new(
+        &BUILD_INFO,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        CancellationResolver::Static(unreachable.clone()),
+        BalancerResolver::Static(unreachable.clone()),
+        unreachable.clone(),
+        // No certificate. These connections are rejected or parked before TLS
+        // would have come into it.
+        None,
+        false,
+        MetricsRegistry::new(),
+        Box::pin(reload_rx),
+        None,
+        None,
+        Duration::ZERO,
+        None,
+        None,
+        None,
+        TracingHandle::disabled(),
+        vec![],
+    );
+    let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
+    let pgwire_addr = balancer_server.pgwire.0.local_addr();
+    task::spawn(|| "balancer", async {
+        balancer_server.serve().await.unwrap();
+    });
+    pgwire_addr
+}
+
+/// Opens a pgwire connection, writes a startup frame-length header declaring
+/// `frame_len` bytes, and sends nothing further.
+async fn startup_header_only(addr: SocketAddr, frame_len: u32) -> TcpStream {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream.write_all(&frame_len.to_be_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+    stream
+}
+
+/// Whether balancerd closed the connection rather than waiting for a body.
+async fn was_closed(stream: &mut TcpStream) -> bool {
+    let mut byte = [0u8; 1];
+    match tokio::time::timeout(Duration::from_secs(10), stream.read(&mut byte)).await {
+        // Still waiting on us, so the frame was accepted.
+        Err(_elapsed) => false,
+        Ok(Ok(0)) => true,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionReset => true,
+        Ok(Ok(n)) => panic!("balancerd sent {n} bytes instead of closing or waiting: {byte:?}"),
+        Ok(Err(e)) => panic!("unexpected error reading from balancerd: {e}"),
+    }
+}
+
+/// A startup frame larger than the startup budget is refused on the raw socket,
+/// before TLS and before any login, so a client cannot make balancerd size a
+/// buffer by declaring a length it never sends.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_pgwire_oversized_startup_frame_is_rejected() {
+    let pgwire_addr = start_balancer().await;
+    let budget = u32::try_from(MAX_STARTUP_FRAME_SIZE).expect("fits in a frame-length field");
+    let protocol_max = u32::try_from(MAX_FRAME_SIZE).expect("fits in a frame-length field");
+
+    for declared in [budget + 1, protocol_max] {
+        let mut stream = startup_header_only(pgwire_addr, declared).await;
+        assert!(
+            was_closed(&mut stream).await,
+            "balancerd accepted a {declared} byte startup frame and waited for the body",
+        );
+    }
+
+    // The boundary itself is still served, so the rejection is the budget doing
+    // its job rather than balancerd refusing everything.
+    let mut stream = startup_header_only(pgwire_addr, budget).await;
+    assert!(
+        !was_closed(&mut stream).await,
+        "balancerd rejected a startup frame at the budget",
+    );
+}
+
+/// Connections that declare a frame within budget and then go silent are still
+/// held open indefinitely, with no handshake deadline and no ceiling on how many
+/// one peer may hold. Bounding the frame caps what one such connection costs,
+/// not how many of them exist.
+///
+/// TODO(CLO-272): assert a bound here once the pre-startup limit lands.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_pgwire_startup_preauth_connections_are_held() {
+    let pgwire_addr = start_balancer().await;
+
+    const HELD_CONNS: usize = 16;
+    let mut held = Vec::new();
+    for _ in 0..HELD_CONNS {
+        held.push(startup_header_only(pgwire_addr, 1 << 10).await);
+    }
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let still_held = futures::future::join_all(held.iter_mut().map(|stream| async move {
+        let mut byte = [0u8; 1];
+        tokio::time::timeout(Duration::from_millis(100), stream.read(&mut byte)).await
+    }))
+    .await;
+    for (i, outcome) in still_held.into_iter().enumerate() {
+        assert!(
+            outcome.is_err(),
+            "balancerd released unauthenticated connection {i} instead of holding it: {outcome:?}",
+        );
+    }
+
+    // The listener is still accepting and still answering past the flood, so no
+    // accept-time limit applies and this is a memory concern rather than a
+    // wedged listener.
+    //
+    // This also rules out the only way the assertions above could pass without
+    // reproducing anything: the listening socket is bound in
+    // `BalancerService::new`, before `serve` runs its accept loop, so connections
+    // that were merely sitting in the accept backlog would also read as "held".
+    // A startup message answered here proves the accept loop is draining.
+    let mut probe = TcpStream::connect(pgwire_addr).await.unwrap();
+    let mut ssl_request = BytesMut::new();
+    FrontendStartupMessage::SslRequest
+        .encode(&mut ssl_request)
+        .unwrap();
+    probe.write_all(&ssl_request).await.unwrap();
+    let mut reply = [0u8; 1];
+    probe.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply, [REJECT_ENCRYPTION]);
 }

@@ -34,6 +34,44 @@ pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 
+/// Maximum size of a startup frame accepted directly from a client.
+///
+/// Matches PostgreSQL's `MAX_STARTUP_PACKET_LENGTH`, so any client that can
+/// complete a PostgreSQL handshake can complete this one. A startup frame
+/// carries only the protocol version and the connection parameters, of which
+/// `options` is the only one a client can make large.
+pub const MAX_STARTUP_FRAME_SIZE: usize = 10_000;
+
+/// Startup budget allowed on top of [`MAX_STARTUP_FRAME_SIZE`] for parameters a
+/// balancer appends while forwarding.
+///
+/// A balancer adds [`CONN_UUID_KEY`] and [`MZ_FORWARDED_FOR_KEY`] to the
+/// parameters before forwarding startup, so a frame that just fits the client
+/// budget arrives downstream larger than the client sent it. Without this
+/// allowance such a connection is accepted by the balancer and then rejected
+/// behind it, which surfaces as a proxy error with no obvious cause.
+///
+/// The two parameters cost at most 119 bytes: an 18-byte key with a 36-byte
+/// UUID, a 16-byte key with an address of up to 45 bytes, and a NUL after each
+/// of the four strings.
+///
+/// [`CONN_UUID_KEY`]: crate::CONN_UUID_KEY
+/// [`MZ_FORWARDED_FOR_KEY`]: crate::MZ_FORWARDED_FOR_KEY
+pub const FORWARDED_STARTUP_PARAM_ALLOWANCE: usize = 128;
+
+/// Maximum size of a startup frame accepted from a client that may be behind a
+/// balancer.
+pub const MAX_FORWARDED_STARTUP_FRAME_SIZE: usize =
+    MAX_STARTUP_FRAME_SIZE + FORWARDED_STARTUP_PARAM_ALLOWANCE;
+
+/// Maximum frame size accepted from a client that has not yet authenticated.
+///
+/// The only frames a client legitimately sends before authenticating are
+/// credentials: a password, or one leg of a SASL exchange. This sits far above
+/// any of those while leaving room for a bearer token, which can run to several
+/// kilobytes.
+pub const MAX_PREAUTH_FRAME_SIZE: usize = u64_to_usize(16 * bytesize::KIB);
+
 #[derive(Debug)]
 pub enum CodecError {
     StringNoTerminator,
@@ -92,7 +130,19 @@ impl<B: BufMut> Pgbuf for B {
     }
 }
 
-pub async fn decode_startup<A>(mut conn: A) -> Result<Option<FrontendStartupMessage>, io::Error>
+/// Reads and decodes one startup message from the client.
+///
+/// `max_frame_len` bounds the frame the client may declare, including its own
+/// four-byte length field. It is checked before any buffer is sized from it, so
+/// an unauthenticated peer cannot make the server commit memory by declaring a
+/// large frame it never sends. Callers on a plaintext, pre-authentication
+/// socket should pass [`MAX_STARTUP_FRAME_SIZE`], or
+/// [`MAX_FORWARDED_STARTUP_FRAME_SIZE`] if a balancer may have appended
+/// parameters in transit.
+pub async fn decode_startup<A>(
+    mut conn: A,
+    max_frame_len: usize,
+) -> Result<Option<FrontendStartupMessage>, io::Error>
 where
     A: AsyncRead + Unpin,
 {
@@ -108,7 +158,7 @@ where
         // surface the unexpected EOF.
         _ => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "early eof")),
     };
-    let frame_len = parse_frame_len(&frame_len)?;
+    let frame_len = parse_frame_len(&frame_len, max_frame_len)?;
 
     let mut buf = BytesMut::new();
     buf.resize(frame_len, b'0');
@@ -223,9 +273,22 @@ pub enum DecodeState {
     Data(u8, usize),
 }
 
-pub fn parse_frame_len(src: &[u8]) -> Result<usize, io::Error> {
+/// Parses a frame length header, rejecting frames larger than `max_frame_len`.
+///
+/// The ceiling is the caller's rather than a single global one, because the
+/// paths that parse frame lengths have requirements that differ by orders of
+/// magnitude: a startup frame is well under 10 KB, a pre-authentication
+/// credential exchange needs a few kilobytes, and only post-authentication
+/// query traffic needs room for bulk data. Stating it per call site keeps a
+/// buffer from ever being sized against a bound that belongs to a different
+/// path.
+///
+/// `max_frame_len` counts the frame including its own four-byte length field,
+/// matching the number the client declares. [`netio::MAX_FRAME_SIZE`] is the
+/// protocol ceiling; callers pass that or less.
+pub fn parse_frame_len(src: &[u8], max_frame_len: usize) -> Result<usize, io::Error> {
     let n = usize::cast_from(NetworkEndian::read_u32(src));
-    if n > netio::MAX_FRAME_SIZE {
+    if n > max_frame_len {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             netio::FrameTooBig,
@@ -345,4 +408,208 @@ impl<'a> Cursor<'a> {
 /// protocol.
 pub fn input_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, source.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use std::time::Duration;
+
+    use crate::conn::{CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY};
+    use crate::message::VERSION_3;
+    use tokio::io::ReadBuf;
+
+    use super::*;
+
+    /// The buffer the server offered the client to fill.
+    ///
+    /// The server can only hand out a slice it has already sized, so an offer is
+    /// evidence that the declared length was trusted before the body arrived,
+    /// and its absence is evidence that the frame was rejected first.
+    #[derive(Debug)]
+    struct Offer {
+        len: usize,
+    }
+
+    /// A client that writes a fixed prefix and then goes silent forever.
+    ///
+    /// Going silent means returning `Poll::Pending` without registering a waker,
+    /// so nothing can ever resume the read. Any stall is therefore a property of
+    /// the protocol handling, not a scheduling artifact.
+    struct SilentClient {
+        prefix: Vec<u8>,
+        sent: usize,
+        offer: Option<Offer>,
+    }
+
+    impl AsyncRead for SilentClient {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let unsent = self.prefix.len() - self.sent;
+            if unsent > 0 {
+                let n = std::cmp::min(unsent, buf.remaining());
+                let start = self.sent;
+                buf.put_slice(&self.prefix[start..start + n]);
+                self.sent += n;
+                return Poll::Ready(Ok(()));
+            }
+            self.offer = Some(Offer {
+                len: buf.remaining(),
+            });
+            Poll::Pending
+        }
+    }
+
+    struct Attempt {
+        offer: Option<Offer>,
+        /// `None` if `decode_startup` was still waiting an hour on.
+        result: Option<Result<Option<FrontendStartupMessage>, io::Error>>,
+    }
+
+    /// Feeds `frame` to `decode_startup` under `max_frame_len`, then goes silent
+    /// and lets an hour of (virtual) time pass.
+    async fn attempt(frame: &[u8], max_frame_len: usize) -> Attempt {
+        let mut client = SilentClient {
+            prefix: frame.to_vec(),
+            sent: 0,
+            offer: None,
+        };
+        // The runtime has nothing to run once the client goes silent, so the
+        // paused clock jumps straight to the deadline and the hour is free.
+        let result = tokio::time::timeout(
+            Duration::from_secs(60 * 60),
+            decode_startup(&mut client, max_frame_len),
+        )
+        .await;
+        Attempt {
+            offer: client.offer,
+            result: result.ok(),
+        }
+    }
+
+    /// Startup parameters whose encoded frame is exactly `frame_len` bytes.
+    fn params_sized_to(frame_len: usize) -> BTreeMap<String, String> {
+        // Length, version, the key and its NUL, the value's NUL, terminator.
+        let overhead = 4 + 4 + "options".len() + 1 + 1 + 1;
+        BTreeMap::from([("options".to_string(), "x".repeat(frame_len - overhead))])
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_startup_frame_over_budget_is_rejected_before_allocating() {
+        for declared in [MAX_STARTUP_FRAME_SIZE + 1, 1 << 20, netio::MAX_FRAME_SIZE] {
+            let header = u32::try_from(declared)
+                .expect("fits in a frame-length field")
+                .to_be_bytes();
+            let attempt = attempt(&header, MAX_STARTUP_FRAME_SIZE).await;
+
+            let err = attempt
+                .result
+                .expect("decode_startup stalled instead of rejecting the frame")
+                .expect_err("oversized startup frame was accepted");
+            assert_eq!(
+                err.kind(),
+                io::ErrorKind::InvalidData,
+                "declared {declared}"
+            );
+            assert_eq!(
+                attempt.offer.as_ref().map(|offer| offer.len),
+                None,
+                "declared {declared}: a buffer was sized before the frame was rejected",
+            );
+        }
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_startup_frame_within_budget_is_accepted() {
+        let params = params_sized_to(MAX_STARTUP_FRAME_SIZE);
+        let mut frame = BytesMut::new();
+        FrontendStartupMessage::Startup {
+            version: VERSION_3,
+            params: params.clone(),
+        }
+        .encode(&mut frame)
+        .expect("encodes");
+        assert_eq!(frame.len(), MAX_STARTUP_FRAME_SIZE);
+
+        let message = attempt(&frame, MAX_STARTUP_FRAME_SIZE)
+            .await
+            .result
+            .expect("decode_startup stalled on a complete frame")
+            .expect("a startup frame at the budget was rejected");
+        match message {
+            Some(FrontendStartupMessage::Startup {
+                version,
+                params: decoded,
+            }) => {
+                assert_eq!(version, VERSION_3);
+                assert_eq!(decoded, params);
+            }
+            other => panic!("expected a startup message, got {other:?}"),
+        }
+    }
+
+    /// A balancer appends two parameters while forwarding, so a frame that just
+    /// fits the client budget grows in transit. The downstream bound has to
+    /// cover the difference, or the connection is accepted by the balancer and
+    /// rejected behind it.
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_forwarded_startup_params_fit_the_allowance() {
+        // Widest values the two parameters can carry: a hyphenated UUID, and an
+        // IPv4-mapped IPv6 address in its longest textual form.
+        const WIDEST_UUID: &str = "00000000-0000-0000-0000-000000000000";
+        const WIDEST_ADDR: &str = "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255";
+
+        let mut params = params_sized_to(MAX_STARTUP_FRAME_SIZE);
+        params.insert(CONN_UUID_KEY.to_string(), WIDEST_UUID.to_string());
+        params.insert(MZ_FORWARDED_FOR_KEY.to_string(), WIDEST_ADDR.to_string());
+
+        let mut forwarded = BytesMut::new();
+        FrontendStartupMessage::Startup {
+            version: VERSION_3,
+            params,
+        }
+        .encode(&mut forwarded)
+        .expect("encodes");
+
+        assert!(
+            forwarded.len() <= MAX_FORWARDED_STARTUP_FRAME_SIZE,
+            "FORWARDED_STARTUP_PARAM_ALLOWANCE is too small: {} bytes forwarded              against a {MAX_FORWARDED_STARTUP_FRAME_SIZE} byte bound",
+            forwarded.len(),
+        );
+        assert!(
+            attempt(&forwarded, MAX_FORWARDED_STARTUP_FRAME_SIZE)
+                .await
+                .result
+                .expect("decode_startup stalled on a complete frame")
+                .is_ok(),
+        );
+    }
+
+    /// The startup path still has no deadline, so a client that declares a frame
+    /// within budget and then stops sending holds the connection, and whatever
+    /// was sized for it, indefinitely. Bounding the frame caps what one such
+    /// connection costs, not how many of them one peer may hold.
+    ///
+    /// TODO(CLO-272): assert a deadline here once the pre-startup limit lands.
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_startup_body_wait_has_no_deadline() {
+        let header = u32::try_from(MAX_STARTUP_FRAME_SIZE)
+            .expect("fits in a frame-length field")
+            .to_be_bytes();
+        let attempt = attempt(&header, MAX_STARTUP_FRAME_SIZE).await;
+
+        assert!(
+            attempt.result.is_none(),
+            "an hour on, decode_startup is still waiting for a body that never arrives",
+        );
+        assert_eq!(
+            attempt.offer.as_ref().map(|offer| offer.len),
+            Some(MAX_STARTUP_FRAME_SIZE - 4),
+            "the wait is now bounded by the startup budget rather than MAX_FRAME_SIZE",
+        );
+    }
 }

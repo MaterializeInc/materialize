@@ -613,6 +613,11 @@ where
         }
     }
 
+    // Authentication succeeded, so the connection may now carry query traffic,
+    // whose frames are far larger than any credential. Everything the client
+    // sent up to here was held to the tighter pre-authentication ceiling.
+    conn.allow_post_auth_frames();
+
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in adapter_client.session().vars().notify_set() {
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
