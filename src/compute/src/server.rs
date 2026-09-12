@@ -10,7 +10,7 @@
 //! An interactive dataflow server.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -24,7 +24,7 @@ use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
-use mz_compute_client::service::ComputeClient;
+use mz_compute_client::service::{ComputeClient, RoleClient};
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
@@ -196,7 +196,7 @@ pub async fn serve(
 
     let client_builder = move || {
         let client = ClusterClient::new(Arc::clone(&timely_container));
-        let client: Box<dyn ComputeClient> = Box::new(client);
+        let client: Box<dyn ComputeClient> = Box::new(RoleClient::new(client));
         client
     };
 
@@ -221,6 +221,10 @@ struct CommandReceiver {
     nonce: Option<Uuid>,
     /// A stash to enable peeking the next command, used in `try_recv`.
     stashed_command: Option<ComputeCommand>,
+    /// Query commands preceding the next lifecycle command, in sequencer order.
+    /// These remain queued only until a compute state exists. Lifecycle initialization
+    /// services them against the old state until reconciliation can apply atomically.
+    deferred_queries: VecDeque<(Option<ComputeCommand>, Uuid)>,
 }
 
 impl CommandReceiver {
@@ -230,19 +234,29 @@ impl CommandReceiver {
             worker_id,
             nonce: None,
             stashed_command: None,
+            deferred_queries: VecDeque::new(),
         }
     }
 
     /// Receive the next pending command, if any.
     ///
-    /// If the next command has a different nonce, this method instead returns an `Err`
-    /// containing the new nonce.
+    /// Query commands are deferred without changing the lifecycle nonce. If the next lifecycle
+    /// command has a different nonce, this returns an `Err` containing the new nonce.
     fn try_recv(&mut self) -> Result<Option<ComputeCommand>, NonceChange> {
         if let Some(command) = self.stashed_command.take() {
             return Ok(Some(command));
         }
-        let Some((command, nonce)) = self.inner.try_recv() else {
-            return Ok(None);
+        let (command, nonce) = loop {
+            match self.inner.try_recv() {
+                Some((command, command_channel::Origin::Query(nonce))) => {
+                    self.deferred_queries.push_back((command, nonce));
+                }
+                Some((Some(command), command_channel::Origin::Lifecycle(nonce))) => {
+                    break (command, nonce);
+                }
+                Some((None, command_channel::Origin::Lifecycle(_))) => unreachable!(),
+                None => return Ok(None),
+            }
         };
 
         trace!(worker = self.worker_id, %nonce, ?command, "received command");
@@ -257,13 +271,19 @@ impl CommandReceiver {
     }
 }
 
-/// Endpoint used by workers to send sending compute responses.
-///
-/// Tags responses with the current nonce, allowing receivers to filter out responses intended for
-/// previous client connections.
+/// Ordered worker-to-transport routing metadata and responses.
+#[derive(Debug)]
+pub(crate) enum ResponseEvent {
+    Response(ComputeResponse, Uuid),
+    Lifecycle(Uuid),
+    QueryOpen(Uuid),
+    QueryRetired(Uuid),
+}
+
+/// Tags responses with their owning connection nonce.
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
-    inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
+    inner: mpsc::UnboundedSender<ResponseEvent>,
     /// The ID of the Timely worker.
     worker_id: usize,
     /// The nonce identifying the current cluster protocol incarnation.
@@ -272,10 +292,7 @@ pub(crate) struct ResponseSender {
 
 impl ResponseSender {
     /// `pub(crate)` rather than private so the peek tests can build the sender a worker holds.
-    pub(crate) fn new(
-        inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
-        worker_id: usize,
-    ) -> Self {
+    pub(crate) fn new(inner: mpsc::UnboundedSender<ResponseEvent>, worker_id: usize) -> Self {
         Self {
             inner,
             worker_id,
@@ -286,16 +303,29 @@ impl ResponseSender {
     /// Set the cluster protocol nonce.
     pub(crate) fn set_nonce(&mut self, nonce: Uuid) {
         self.nonce = Some(nonce);
+        let _ = self.inner.send(ResponseEvent::Lifecycle(nonce));
     }
 
     /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
         let nonce = self.nonce.expect("nonce must be initialized");
 
+        self.send_query(nonce, response)
+    }
+
+    /// Sends to an explicit connection without changing the lifecycle response nonce.
+    pub fn send_query(
+        &self,
+        nonce: Uuid,
+        response: ComputeResponse,
+    ) -> Result<(), SendError<ComputeResponse>> {
         trace!(worker = self.worker_id, %nonce, ?response, "sending response");
         self.inner
-            .send((response, nonce))
-            .map_err(|SendError((resp, _))| SendError(resp))
+            .send(ResponseEvent::Response(response, nonce))
+            .map_err(|SendError(event)| match event {
+                ResponseEvent::Response(response, _) => SendError(response),
+                _ => unreachable!(),
+            })
     }
 }
 
@@ -452,6 +482,7 @@ impl<'w> Worker<'w> {
     /// Handles commands for a client connection, returns when the nonce changes.
     fn run_client(&mut self) -> Result<Infallible, NonceChange> {
         self.reconcile()?;
+        self.handle_deferred_queries();
 
         // The last time we did periodic maintenance.
         let mut last_maintenance = Instant::now();
@@ -506,14 +537,44 @@ impl<'w> Worker<'w> {
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
             }
+            if let Some(state) = &mut self.compute_state {
+                state.poll_query_commands(self.timely_worker, &mut self.response_tx);
+            }
         }
     }
 
     fn handle_pending_commands(&mut self) -> Result<(), NonceChange> {
-        while let Some(cmd) = self.command_rx.try_recv()? {
-            self.handle_command(cmd);
+        loop {
+            let command = self.command_rx.try_recv();
+            // Query commands preceding a lifecycle reconnect must execute before reconciliation.
+            self.handle_deferred_queries();
+            match command? {
+                Some(cmd) => self.handle_command(cmd),
+                None => break,
+            }
         }
         Ok(())
+    }
+
+    fn handle_deferred_queries(&mut self) {
+        let Some(state) = self.compute_state.as_mut() else {
+            return;
+        };
+        for (command, nonce) in self.command_rx.deferred_queries.drain(..) {
+            // Routing events and responses share one FIFO. Opening precedes QueryReady,
+            // and retirement follows the handler's cleanup, even without a local peer.
+            if matches!(command, Some(ComputeCommand::HelloQuery { .. })) {
+                let _ = self.response_tx.inner.send(ResponseEvent::QueryOpen(nonce));
+            }
+            let disconnect = command.is_none();
+            state.handle_query_command(self.timely_worker, command, nonce, &mut self.response_tx);
+            if disconnect {
+                let _ = self
+                    .response_tx
+                    .inner
+                    .send(ResponseEvent::QueryRetired(nonce));
+            }
+        }
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
@@ -551,12 +612,26 @@ impl<'w> Worker<'w> {
     /// worker while doing so.
     fn recv_command(&mut self) -> Result<ComputeCommand, NonceChange> {
         loop {
-            if let Some(cmd) = self.command_rx.try_recv()? {
+            let command = self.command_rx.try_recv();
+            self.handle_deferred_queries();
+            if let Some(state) = &mut self.compute_state {
+                state.poll_query_commands(self.timely_worker, &mut self.response_tx);
+            }
+            if let Some(cmd) = command? {
                 return Ok(cmd);
             }
 
+            // Initialization may never finish. Keep query admission, results and cleanup
+            // moving without applying any of the partially received lifecycle state.
+            let timeout = self.compute_state.as_ref().map(|state| {
+                if state.peeks_awaiting_turn() {
+                    Duration::ZERO
+                } else {
+                    state.server_maintenance_interval
+                }
+            });
             let start = Instant::now();
-            self.timely_worker.step_or_park(None);
+            self.timely_worker.step_or_park(timeout);
             self.metrics
                 .timely_step_duration_seconds
                 .observe(start.elapsed().as_secs_f64());
@@ -864,6 +939,42 @@ impl<'w> Worker<'w> {
     }
 }
 
+/// Only globally live connections can accumulate responses while their local endpoint
+/// catches up. Retirement and data arrive on the same FIFO, so no tombstones are needed.
+#[derive(Default)]
+struct ResponseRouting {
+    queries: BTreeSet<Uuid>,
+    lifecycle: Option<Uuid>,
+    stashed: BTreeMap<Uuid, Vec<ComputeResponse>>,
+}
+
+impl ResponseRouting {
+    fn observe(&mut self, event: ResponseEvent) -> Option<(ComputeResponse, Uuid)> {
+        match event {
+            ResponseEvent::QueryOpen(nonce) => {
+                self.queries.insert(nonce);
+            }
+            ResponseEvent::QueryRetired(nonce) => {
+                self.queries.remove(&nonce);
+                self.stashed.remove(&nonce);
+            }
+            ResponseEvent::Lifecycle(nonce) => {
+                if let Some(old) = self.lifecycle.replace(nonce) {
+                    if old != nonce {
+                        self.stashed.remove(&old);
+                    }
+                }
+            }
+            ResponseEvent::Response(response, nonce) => {
+                if self.queries.contains(&nonce) || self.lifecycle == Some(nonce) {
+                    return Some((response, nonce));
+                }
+            }
+        }
+        None
+    }
+}
+
 /// Spawn a task to bridge between [`ClusterClient`] and [`Worker`] channels.
 ///
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
@@ -875,70 +986,409 @@ fn spawn_channel_adapter(
         mpsc::UnboundedSender<ComputeResponse>,
     )>,
     command_tx: command_channel::Sender,
-    mut response_rx: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
+    mut response_rx: mpsc::UnboundedReceiver<ResponseEvent>,
     worker_id: usize,
 ) {
     mz_ore::task::spawn(
         || format!("compute-channel-adapter-{worker_id}"),
         async move {
-            // To make workers aware of the individual client connections, we tag forwarded
-            // commands with the client nonce. Additionally, we use the nonce to filter out
-            // responses with a different nonce, which are intended for different client
-            // connections.
-            //
-            // It's possible that we receive responses with nonces from the past but also from the
-            // future: Worker 0 might have received a new nonce before us and broadcasted it to our
-            // Timely cluster. When we receive a response with a future nonce, we need to wait with
-            // forwarding it until we have received the same nonce from a client connection.
-            //
-            // Nonces are not ordered so we don't know whether a response nonce is from the past or
-            // the future. We thus assume that every response with an unknown nonce might be from
-            // the future and stash them all. Every time we reconnect, we immediately send all
-            // stashed responses with a matching nonce. Every time we receive a new response with a
-            // nonce that matches our current one, we can discard the entire response stash as we
-            // know that all stashed responses must be from the past.
-            let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
-
-            while let Some((nonce, mut command_rx, response_tx)) = client_rx.recv().await {
-                // Send stashed responses for this client.
-                if let Some(resps) = stashed_responses.remove(&nonce) {
-                    for resp in resps {
-                        let _ = response_tx.send(resp);
+            // Each peer reader owns its receiver. Dropping a peer cancels just that reader
+            // and closes just that peer's response channel, including at lifecycle replacement.
+            let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+            let mut peers = BTreeMap::new();
+            let mut lifecycle = None;
+            let mut routing = ResponseRouting::default();
+            loop {
+                tokio::select! {
+                    Some((nonce, mut commands, responses)) = client_rx.recv() => {
+                        if peers.contains_key(&nonce) {
+                            continue;
+                        }
+                        let events = event_tx.clone();
+                        let task = mz_ore::task::spawn(|| "compute-peer-reader", async move {
+                            while let Some(command) = commands.recv().await {
+                                if events.send((nonce, Some(command))).is_err() { return; }
+                            }
+                            let _ = events.send((nonce, None));
+                        }).abort_on_drop();
+                        peers.insert(nonce, (None, responses, task));
                     }
-                }
-
-                // Wait for a new response while forwarding received commands.
-                let mut serve_rx_channels = async || loop {
-                    tokio::select! {
-                        msg = command_rx.recv() => match msg {
-                            Some(cmd) => command_tx.send((cmd, nonce)),
-                            None => return Err(()),
-                        },
-                        msg = response_rx.recv() => {
-                            return Ok(msg.expect("worker connected"));
+                    Some((nonce, command)) = event_rx.recv() => {
+                        let Some((role, _, _)) = peers.get_mut(&nonce) else { continue; };
+                        if role.is_none() {
+                            let Some(first) = &command else {
+                                peers.remove(&nonce);
+                                routing.stashed.remove(&nonce);
+                                continue;
+                            };
+                            let query = matches!(first, ComputeCommand::HelloQuery { .. });
+                            *role = Some(query);
+                            if !query {
+                                if let Some(old) = lifecycle.replace(nonce) {
+                                    peers.remove(&old);
+                                    routing.stashed.remove(&old);
+                                }
+                            }
+                            if let Some(responses) = routing.stashed.remove(&nonce) {
+                                for response in responses {
+                                    let _ = peers[&nonce].1.send(response);
+                                }
+                            }
+                        }
+                        let query = peers[&nonce].0.expect("classified");
+                        if command.is_none() {
+                            peers.remove(&nonce);
+                            if query && worker_id == 0 {
+                                command_tx.send((None, command_channel::Origin::Query(nonce)));
+                            }
+                        } else {
+                            let origin = if query { command_channel::Origin::Query(nonce) }
+                                else { command_channel::Origin::Lifecycle(nonce) };
+                            command_tx.send((command, origin));
                         }
                     }
-                };
-
-                // Serve this connection until we see any of the channels disconnect.
-                loop {
-                    let Ok((resp, resp_nonce)) = serve_rx_channels().await else {
-                        break;
-                    };
-
-                    if resp_nonce == nonce {
-                        // Response for the current connection; forward it.
-                        stashed_responses.clear();
-                        if response_tx.send(resp).is_err() {
-                            break;
+                    Some(event) = response_rx.recv() => {
+                        if let ResponseEvent::QueryRetired(nonce) = &event {
+                            peers.remove(nonce);
                         }
-                    } else {
-                        // Response for a past or future connection; stash it.
-                        let stash = stashed_responses.entry(resp_nonce).or_default();
-                        stash.push(resp);
+                        let Some((response, nonce)) = routing.observe(event) else { continue; };
+                        if let Some((Some(_), responses, _)) = peers.get(&nonce) {
+                            let _ = responses.send(response);
+                        } else {
+                            routing.stashed.entry(nonce).or_default().push(response);
+                        }
                     }
                 }
             }
         },
     );
+}
+
+#[cfg(test)]
+mod query_wire_tests {
+    use super::*;
+    use command_channel::Origin;
+
+    #[mz_ore::test]
+    fn routing_retirement_without_local_endpoint_is_bounded() {
+        let mut routing = ResponseRouting::default();
+        for _ in 0..100 {
+            let nonce = Uuid::new_v4();
+            assert!(
+                routing
+                    .observe(ResponseEvent::Response(ComputeResponse::QueryReady, nonce))
+                    .is_none()
+            );
+            routing.observe(ResponseEvent::QueryOpen(nonce));
+            let (response, id) = routing
+                .observe(ResponseEvent::Response(ComputeResponse::QueryReady, nonce))
+                .unwrap();
+            routing.stashed.entry(id).or_default().push(response);
+            routing.observe(ResponseEvent::QueryRetired(nonce));
+            assert!(routing.queries.is_empty());
+            assert!(routing.stashed.is_empty());
+            // A late local endpoint cannot make subsequent responses globally live.
+            assert!(
+                routing
+                    .observe(ResponseEvent::Response(ComputeResponse::QueryReady, nonce))
+                    .is_none()
+            );
+            routing.observe(ResponseEvent::Lifecycle(nonce));
+            routing
+                .stashed
+                .entry(nonce)
+                .or_default()
+                .push(ComputeResponse::QueryReady);
+            routing.observe(ResponseEvent::Lifecycle(Uuid::new_v4()));
+            assert!(routing.stashed.is_empty());
+        }
+    }
+
+    #[mz_ore::test]
+    fn unfinished_lifecycle_initialization_services_queries() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _guard = runtime.enter();
+        let handle = runtime.handle().clone();
+        timely::execute_directly(move |timely_worker| {
+            let registry = MetricsRegistry::new();
+            let metrics =
+                ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Solo).for_worker(0);
+            let context = ComputeInstanceContext {
+                scratch_directory: None,
+                worker_core_affinity: false,
+                connection_context: mz_storage_types::connections::ConnectionContext::for_tests(
+                    Arc::new(mz_secrets::InMemorySecretsController::new()),
+                ),
+            };
+            let persist_clients = Arc::new(PersistClientCache::new_no_metrics());
+            let tracing_handle = Arc::new(TracingHandle::disabled());
+            let peek_permits = Arc::new(PeekPermits::new(1));
+            let state = ComputeState::new(
+                Arc::clone(&persist_clients),
+                TxnsContext::default(),
+                metrics.clone(),
+                Arc::clone(&tracing_handle),
+                context.clone(),
+                registry.clone(),
+                1,
+                Arc::clone(&peek_permits),
+                None,
+            );
+            let (commands, command_rx) = command_channel::render(timely_worker);
+            let (responses, mut response_rx) = mpsc::unbounded_channel();
+            let mut worker = Worker {
+                timely_worker,
+                command_rx: CommandReceiver::new(command_rx, 0),
+                response_tx: ResponseSender::new(responses, 0),
+                compute_state: Some(state),
+                metrics,
+                persist_clients,
+                txns_ctx: TxnsContext::default(),
+                tracing_handle,
+                context,
+                metrics_registry: registry,
+                workers_per_process: 1,
+                peek_permits,
+                storage_log_reader: None,
+            };
+            let state = worker.compute_state.take();
+            let early_query = Uuid::new_v4();
+            worker.command_rx.deferred_queries.extend([
+                (
+                    Some(ComputeCommand::HelloQuery { nonce: early_query }),
+                    early_query,
+                ),
+                (None, early_query),
+            ]);
+            worker.handle_deferred_queries();
+            assert_eq!(worker.command_rx.deferred_queries.len(), 2);
+            worker.compute_state = state;
+            let lifecycle = Uuid::new_v4();
+            worker.command_rx.nonce = Some(lifecycle);
+            worker.set_nonce(lifecycle);
+            let replacement = Uuid::new_v4();
+            let task = mz_ore::task::RuntimeExt::spawn_named(
+                &handle,
+                || "query-reconnect-test",
+                async move {
+                    let query = Uuid::new_v4();
+                    commands.send((
+                        Some(ComputeCommand::UpdateConfiguration(Default::default())),
+                        Origin::Lifecycle(lifecycle),
+                    ));
+                    commands.send((
+                        Some(ComputeCommand::HelloQuery { nonce: query }),
+                        Origin::Query(query),
+                    ));
+                    let result = tokio::time::timeout(Duration::from_secs(10), async {
+                        while !matches!(
+                            response_rx.recv().await,
+                            Some(ResponseEvent::Response(ComputeResponse::QueryReady, n))
+                                if n == query
+                        ) {}
+                        commands.send((None, Origin::Query(query)));
+                        while !matches!(
+                            response_rx.recv().await,
+                            Some(ResponseEvent::QueryRetired(n)) if n == query
+                        ) {}
+                    })
+                    .await;
+                    // End the wait without ever completing the pending initialization.
+                    commands.send((
+                        Some(ComputeCommand::InitializationComplete),
+                        Origin::Lifecycle(replacement),
+                    ));
+                    result.unwrap();
+                },
+            );
+            assert!(matches!(worker.reconcile(), Err(NonceChange(n)) if n == replacement));
+            handle.block_on(task);
+            worker.timely_worker.drop_dataflow(0);
+        });
+    }
+
+    #[mz_ore::test]
+    fn query_origin_does_not_change_lifecycle_nonce() {
+        timely::execute_directly(|worker| {
+            let (tx, rx) = command_channel::render(worker);
+            let mut receiver = CommandReceiver::new(rx, 0);
+            let query = Uuid::new_v4();
+            let lifecycle = Uuid::new_v4();
+            tx.send((
+                Some(ComputeCommand::HelloQuery { nonce: query }),
+                Origin::Query(query),
+            ));
+            tx.send((
+                Some(ComputeCommand::InitializationComplete),
+                Origin::Lifecycle(lifecycle),
+            ));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match receiver.try_recv() {
+                    Err(NonceChange(nonce)) => {
+                        assert_eq!(nonce, lifecycle);
+                        break;
+                    }
+                    Ok(None) => {
+                        assert!(Instant::now() < deadline, "sequencer stalled");
+                        worker.step();
+                    }
+                    Ok(Some(_)) => panic!("expected initial lifecycle nonce change"),
+                }
+            }
+            assert_eq!(receiver.deferred_queries.len(), 1);
+            assert!(matches!(
+                receiver.deferred_queries.pop_front(),
+                Some((Some(ComputeCommand::HelloQuery { .. }), nonce)) if nonce == query
+            ));
+            assert!(matches!(
+                receiver.try_recv(),
+                Ok(Some(ComputeCommand::InitializationComplete))
+            ));
+            assert_eq!(receiver.nonce, Some(lifecycle));
+            worker.drop_dataflow(0);
+        });
+    }
+
+    #[mz_ore::test]
+    fn multiplexes_queries_without_replacing_lifecycle() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _guard = runtime.enter();
+        let handle = runtime.handle().clone();
+        timely::execute_directly(move |worker| {
+            let (command_tx, command_rx) = command_channel::render(worker);
+            let (clients, client_rx) = mpsc::unbounded_channel();
+            let (responses, response_rx) = mpsc::unbounded_channel();
+            spawn_channel_adapter(client_rx, command_tx, response_rx, 0);
+            let connect = |nonce| {
+                let (tx, rx) = mpsc::unbounded_channel();
+                let (responses, received) = mpsc::unbounded_channel();
+                clients.send((nonce, rx, responses)).unwrap();
+                (tx, received)
+            };
+            let mut next = || {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if let Some(command) = command_rx.try_recv() {
+                        break command;
+                    }
+                    assert!(Instant::now() < deadline, "sequencer stalled");
+                    worker.step_or_park(Some(Duration::from_millis(10)));
+                }
+            };
+            let lifecycle = Uuid::new_v4();
+            let (life_tx, mut life_rx) = connect(lifecycle);
+            life_tx
+                .send(ComputeCommand::InitializationComplete)
+                .unwrap();
+            assert!(matches!(
+                next(),
+                (Some(ComputeCommand::InitializationComplete), Origin::Lifecycle(n))
+                    if n == lifecycle
+            ));
+            let q1 = Uuid::new_v4();
+            let q2 = Uuid::new_v4();
+            let (q1_tx, mut q1_rx) = connect(q1);
+            q1_tx
+                .send(ComputeCommand::HelloQuery { nonce: q1 })
+                .unwrap();
+            assert!(matches!(
+                next(),
+                (Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == q1
+            ));
+            let (q2_tx, mut q2_rx) = connect(q2);
+            q2_tx
+                .send(ComputeCommand::HelloQuery { nonce: q2 })
+                .unwrap();
+            assert!(matches!(
+                next(),
+                (Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == q2
+            ));
+            let mut sender = ResponseSender::new(responses, 0);
+            sender.set_nonce(lifecycle);
+            sender.inner.send(ResponseEvent::QueryOpen(q1)).unwrap();
+            sender.inner.send(ResponseEvent::QueryOpen(q2)).unwrap();
+            sender.send_query(q1, ComputeResponse::QueryReady).unwrap();
+            sender.send_query(q2, ComputeResponse::QueryReady).unwrap();
+            sender.send(ComputeResponse::QueryReady).unwrap();
+            handle.block_on(async {
+                for rx in [&mut life_rx, &mut q1_rx, &mut q2_rx] {
+                    assert_eq!(
+                        tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                            .await
+                            .unwrap(),
+                        Some(ComputeResponse::QueryReady)
+                    );
+                }
+            });
+            let replacement = Uuid::new_v4();
+            // Responses can overtake this process's local handshake. The lifecycle
+            // response acts as a FIFO barrier proving the query responses are stashed.
+            let delayed = Uuid::new_v4();
+            sender
+                .inner
+                .send(ResponseEvent::QueryOpen(delayed))
+                .unwrap();
+            let expected = [
+                ComputeResponse::QueryReady,
+                ComputeResponse::QueryDataflowResponse {
+                    request_id: Uuid::new_v4(),
+                    error: None,
+                },
+            ];
+            for response in &expected {
+                sender.send_query(delayed, response.clone()).unwrap();
+            }
+            sender.send(ComputeResponse::QueryReady).unwrap();
+            handle.block_on(async {
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(10), life_rx.recv())
+                        .await
+                        .unwrap(),
+                    Some(ComputeResponse::QueryReady),
+                );
+            });
+            let (delayed_tx, mut delayed_rx) = connect(delayed);
+            delayed_tx
+                .send(ComputeCommand::HelloQuery { nonce: delayed })
+                .unwrap();
+            assert!(matches!(
+                next(),
+                (Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == delayed
+            ));
+            handle.block_on(async {
+                for response in expected {
+                    assert_eq!(
+                        tokio::time::timeout(Duration::from_secs(10), delayed_rx.recv())
+                            .await
+                            .unwrap(),
+                        Some(response),
+                    );
+                }
+            });
+            let (new_tx, _new_rx) = connect(replacement);
+            new_tx.send(ComputeCommand::InitializationComplete).unwrap();
+            assert!(matches!(
+                next(),
+                (Some(ComputeCommand::InitializationComplete), Origin::Lifecycle(n))
+                    if n == replacement
+            ));
+            assert!(life_rx.is_closed());
+            assert!(!q1_rx.is_closed());
+            assert!(!q2_rx.is_closed());
+            drop(q1_tx);
+            assert!(matches!(next(), (None, Origin::Query(n)) if n == q1));
+            q2_tx
+                .send(ComputeCommand::CancelPeek {
+                    uuid: Uuid::new_v4(),
+                })
+                .unwrap();
+            assert!(matches!(
+                next(),
+                (Some(ComputeCommand::CancelPeek { .. }), Origin::Query(n)) if n == q2
+            ));
+            // The permanent sequencer retains its capability by contract.
+            worker.drop_dataflow(0);
+        });
+    }
 }

@@ -100,7 +100,6 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
 use timely::order::PartialOrder;
@@ -272,8 +271,8 @@ pub struct StorageState {
     pub metrics: StorageMetrics,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
-    /// Descriptions of each installed ingestion.
-    pub ingestions: BTreeMap<GlobalId, IngestionDescription<CollectionMetadata>>,
+    /// Commands for each installed ingestion, retained for reconciliation and restart.
+    pub ingestions: BTreeMap<GlobalId, RunIngestionCommand>,
     /// Descriptions of each installed export.
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
     /// Descriptions of oneshot ingestions that are currently running.
@@ -578,7 +577,7 @@ impl<'w> Worker<'w> {
                 );
 
                 let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
-                if let Some(ingestion_description) = maybe_ingestion {
+                if let Some(ingestion) = maybe_ingestion {
                     // Yank the token of the previously existing source dataflow.Note that this
                     // token also includes any source exports/subsources.
                     let maybe_token = self.storage_state.source_tokens.remove(&id);
@@ -601,14 +600,14 @@ impl<'w> Worker<'w> {
                     // putting undue pressure on worker 0 we can pick the
                     // designated worker for a source/sink based on `id.hash()`.
                     if self.timely_worker.index() == 0 {
-                        for (id, _) in ingestion_description.source_exports.iter() {
+                        for (id, _) in ingestion.description.source_exports.iter() {
                             self.storage_state
                                 .aggregated_statistics
                                 .advance_global_epoch(*id);
                         }
                         self.storage_state
                             .async_worker
-                            .update_ingestion_frontiers(id, ingestion_description);
+                            .update_ingestion_frontiers(ingestion);
                     }
 
                     // Continue with other commands.
@@ -647,7 +646,7 @@ impl<'w> Worker<'w> {
                     .storage_state
                     .ingestions
                     .values()
-                    .any(|v| v.source_exports.contains_key(&id))
+                    .any(|v| v.description.source_exports.contains_key(&id))
                 {
                     // Our current approach to dropping a source results in a race between shard
                     // finalization (which happens in the controller) and dataflow shutdown (which
@@ -1031,7 +1030,7 @@ impl<'w> Worker<'w> {
         let mut expected_objects = BTreeSet::new();
 
         let mut drop_commands = BTreeSet::new();
-        let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
+        let mut running_ingestions = self.storage_state.ingestions.clone();
         let mut running_exports_descriptions = self.storage_state.exports.clone();
 
         let mut create_oneshot_ingestions: BTreeSet<Uuid> = BTreeSet::new();
@@ -1059,14 +1058,14 @@ impl<'w> Worker<'w> {
                     info!(%worker_id, ?ingestion, "reconcile: received RunIngestion command");
 
                     // Ensure that ingestions are forward-rolling alter compatible.
-                    let prev = running_ingestion_descriptions
-                        .insert(ingestion.id, ingestion.description.clone());
+                    let prev = running_ingestions.insert(ingestion.id, ingestion.as_ref().clone());
 
                     if let Some(prev_ingest) = prev {
                         // If the new ingestion is not exactly equal to the currently running
                         // ingestion, we must either track that we need to synthesize an update
                         // command to change the ingestion, or panic.
                         prev_ingest
+                            .description
                             .alter_compatible(ingestion.id, &ingestion.description)
                             .expect("only alter compatible ingestions permitted");
                     }
@@ -1166,10 +1165,10 @@ impl<'w> Worker<'w> {
                         // We keep only:
                         // - The most recent version of the ingestion, which
                         //   is why these commands are run in reverse.
-                        // - Ingestions whose descriptions are not exactly
+                        // - Ingestions whose commands are not exactly
                         //   those that are currently running.
-                        should_keep = most_recent_defintion
-                            && running_ingestion != Some(&ingestion.description)
+                        should_keep =
+                            most_recent_defintion && running_ingestion != Some(ingestion.as_ref())
                     }
                 }
                 StorageCommand::RunSink(export) => {
@@ -1242,7 +1241,7 @@ impl<'w> Worker<'w> {
             .storage_state
             .ingestions
             .values()
-            .map(|i| i.collection_ids())
+            .map(|i| i.description.collection_ids())
             .flatten()
             .chain(self.storage_state.exports.keys().copied())
             // Objects are considered stale if we did not see them re-created.
@@ -1353,14 +1352,11 @@ impl StorageState {
                 }
             }
             StorageCommand::RunIngestion(ingestion) => {
-                let RunIngestionCommand { id, description } = *ingestion;
-
-                // Remember the ingestion description to facilitate possible
-                // reconciliation later.
-                self.ingestions.insert(id, description.clone());
+                self.ingestions
+                    .insert(ingestion.id, ingestion.as_ref().clone());
 
                 // Initialize shared frontier reporting.
-                for id in description.collection_ids() {
+                for id in ingestion.description.collection_ids() {
                     self.reported_frontiers
                         .entry(id)
                         .or_insert_with(|| Antichain::from_elem(mz_repr::Timestamp::minimum()));
@@ -1377,8 +1373,7 @@ impl StorageState {
                 // ingestion in the local storage state. This is something we might have
                 // interest in fixing in the future, e.g. materialize#19907
                 if self.timely_worker_index == 0 {
-                    self.async_worker
-                        .update_ingestion_frontiers(id, description);
+                    self.async_worker.update_ingestion_frontiers(*ingestion);
                 }
             }
             StorageCommand::RunOneshotIngestion(oneshot) => {

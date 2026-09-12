@@ -21,6 +21,7 @@ use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_transform::notice::OptimizerNoticeApi;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -32,7 +33,6 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{AdapterNotice, ExecuteContext, catalog};
@@ -452,7 +452,6 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
-        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         let on_entry = self.catalog().get_entry_by_global_id(&on);
         let owner_id = *on_entry.owner_id();
@@ -480,7 +479,7 @@ impl Coordinator {
         // We keep `raw_df_meta` live so that on success we can emit its raw
         // notices to the user session (rendered against the user's
         // session-aware humanizer).
-        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
         let on_desc = on_entry
             .relation_desc()
             .expect("can only create indexes on items with a valid description");
@@ -495,46 +494,14 @@ impl Coordinator {
                 global_id,
                 None,
                 global_mir_plan.df_desc().clone(),
-                df_desc.clone(),
-                df_meta.clone(),
+                df_desc,
+                df_meta,
                 optimizer_features,
             )
             .await;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
-
-                    // TODO: Maybe in the future, pass the read holds
-                    // `ship_new_dataflow` takes on to compute, to hold on to them
-                    // and downgrade when possible?
-                    coord
-                        .ship_new_dataflow(
-                            &id_bundle,
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                        )
-                        .await;
-                    // No `allow_writes` here because indexes do not modify external state.
-
-                    coord.update_compute_read_policy(
-                        cluster_id,
-                        item_id,
-                        compaction_window.unwrap_or_default().into(),
-                    );
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {
@@ -543,6 +510,13 @@ impl Coordinator {
                 // catalog transaction has succeeded. If the transaction had
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
+                // Optimizer-only dependencies are not covered by SQL plan validity.
+                raw_df_meta.optimizer_notices.retain(|notice| {
+                    notice
+                        .dependencies()
+                        .iter()
+                        .all(|id| self.catalog().try_get_entry_by_global_id(id).is_some())
+                });
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
                 Ok(StageResult::Response(ExecuteResponse::CreatedIndex))
             }

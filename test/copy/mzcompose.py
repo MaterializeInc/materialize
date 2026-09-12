@@ -18,7 +18,6 @@ import json
 import random
 import string
 import threading
-import time
 from decimal import Decimal
 from io import BytesIO, StringIO
 from textwrap import dedent
@@ -440,23 +439,22 @@ def workflow_test_github_9627(c: Composition):
             JOIN mz_tables t ON t.id = f.object_id
             WHERE t.name = 't'
             """
+        # Keep interpolated SQL on one testdrive command line.
+        query = " ".join(query.split())
 
-        # Because `mz_frontiers` isn't a linearizable relation it's possible that
-        # we need to wait a bit for the object's frontier to show up.
-        result = c.sql_query(query)
-        tries = 1
-        while not result and tries < 3:
-            time.sleep(1)
-            result = c.sql_query(query)
-            tries += 1
+        # Introspection is asynchronous. Client protection is also released in
+        # batches, so test eventual advancement rather than a fixed sleep.
+        c.testdrive(dedent(f"""
+            > SELECT count(*) FROM ({query}) f;
+            1
+            """))
+        before = int(c.sql_query(query)[0][0])
+        c.testdrive(dedent(f"""
+            $ set-sql-timeout duration=120s
 
-        before = int(result[0][0])
-        time.sleep(3)
-
-        result = c.sql_query(query)
-        after = int(result[0][0])
-
-        assert before < after, f"read frontier is stuck, {before} >= {after}"
+            > SELECT read_frontier > {before} FROM ({query}) f;
+            true
+            """))
 
 
 def workflow_test_ss_193(c: Composition):

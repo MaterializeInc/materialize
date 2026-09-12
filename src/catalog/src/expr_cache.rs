@@ -33,7 +33,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 #[derive(
@@ -324,6 +324,24 @@ impl ExpressionCache {
         Ok((local_expressions, global_expressions))
     }
 
+    fn get_global(&self, id: GlobalId) -> Option<GlobalExpressions> {
+        let key = CacheKey {
+            build_version: self.build_version.to_string(),
+            id,
+            expr_type: ExpressionType::Global,
+        };
+        let expressions = self.durable_cache.get_local(&key)?;
+        match bincode::deserialize(expressions) {
+            Ok(expressions) => Some(expressions),
+            Err(err) => {
+                soft_panic_or_log!(
+                    "unable to deserialize global expressions: ({key:?}, {expressions:?}): {err:?}"
+                );
+                None
+            }
+        }
+    }
+
     /// Durably removes all entries given by `invalidate_ids` and inserts `new_local_expressions`
     /// and `new_global_expressions` into current build version.
     ///
@@ -405,6 +423,10 @@ impl ExpressionCache {
 
 /// Operations to perform on the cache.
 enum CacheOperation {
+    GetGlobal {
+        id: GlobalId,
+        tx: oneshot::Sender<Option<GlobalExpressions>>,
+    },
     /// See [`ExpressionCache::update`].
     Update {
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
@@ -436,6 +458,9 @@ impl ExpressionCacheHandle {
         spawn(|| "expression-cache-task", async move {
             while let Some(op) = rx.recv().await {
                 match op {
+                    CacheOperation::GetGlobal { id, tx } => {
+                        let _ = tx.send(cache.get_global(id));
+                    }
                     CacheOperation::Update {
                         new_local_expressions,
                         new_global_expressions,
@@ -455,6 +480,16 @@ impl ExpressionCacheHandle {
         });
 
         (Self { tx }, local_expressions, global_expressions)
+    }
+
+    /// Returns best-effort local cache contents for the current build version, or `None`
+    /// if absent or the cache task shuts down. Reads follow prior updates on this handle
+    /// without synchronizing with other cache owners. Callers must validate the item version,
+    /// optimizer features, and dependencies against their catalog/compute snapshot.
+    pub async fn get_global(&self, id: GlobalId) -> Option<GlobalExpressions> {
+        let (tx, rx) = oneshot::channel();
+        self.tx.send(CacheOperation::GetGlobal { id, tx }).ok()?;
+        rx.await.ok().flatten()
     }
 
     pub fn update(
@@ -527,6 +562,7 @@ mod tests {
                 spawn(&first_build_version, &current_items, remove_prior_versions).await;
             assert_eq!(local_exprs, BTreeMap::new(), "new cache should be empty");
             assert_eq!(global_exprs, BTreeMap::new(), "new cache should be empty");
+            assert_eq!(cache.get_global(GlobalId::User(next_id)).await, None);
 
             // Insert some expressions into the cache.
             let mut local_exps = BTreeMap::new();
@@ -536,13 +572,13 @@ mod tests {
                 let local_exp = gen_local_expressions();
                 let global_exp = gen_global_expressions();
 
-                cache
-                    .update(
-                        vec![(id, local_exp.clone())],
-                        vec![(id, global_exp.clone())],
-                        BTreeSet::new(),
-                    )
-                    .await;
+                // The read must observe the update even without awaiting its completion.
+                drop(cache.update(
+                    vec![(id, local_exp.clone())],
+                    vec![(id, global_exp.clone())],
+                    BTreeSet::new(),
+                ));
+                assert_eq!(cache.get_global(id).await, Some(global_exp.clone()));
 
                 current_items.insert(id, RelationVersion::root());
                 current_items.extend(
@@ -706,8 +742,11 @@ mod tests {
 
         {
             // Re-open the cache at the first build version.
-            let (_cache, local_entries, global_entries) =
+            let (cache, local_entries, global_entries) =
                 spawn(&first_build_version, &current_items, remove_prior_versions).await;
+            for id in new_gen_global_exps.keys() {
+                assert_eq!(cache.get_global(*id).await, None);
+            }
             assert_eq!(
                 local_entries, local_exps,
                 "Previous build version local expressions should still exist"
@@ -721,7 +760,7 @@ mod tests {
         {
             // Open the cache at a new build version and clear previous build versions.
             remove_prior_versions = true;
-            let (_cache, local_entries, global_entries) =
+            let (cache, local_entries, global_entries) =
                 spawn(&second_build_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries, new_gen_local_exps,
@@ -731,6 +770,10 @@ mod tests {
                 global_entries, new_gen_global_exps,
                 "new build version global expressions should be persisted"
             );
+            let (&id, expressions) = new_gen_global_exps.first_key_value().expect("not empty");
+            assert_eq!(cache.get_global(id).await, Some(expressions.clone()));
+            drop(cache.update(Vec::new(), Vec::new(), BTreeSet::from([id])));
+            assert_eq!(cache.get_global(id).await, None);
         }
 
         {

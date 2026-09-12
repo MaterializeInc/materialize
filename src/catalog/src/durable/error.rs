@@ -71,6 +71,9 @@ pub enum DurableCatalogError {
     /// A dry-run transaction reached a commit path.
     #[error("cannot commit a dry-run catalog transaction")]
     DryRunTransaction,
+    /// The proposed transaction violates durable read protection.
+    #[error("invalid read protection: {0}")]
+    InvalidReadProtection(String),
     /// Unable to serialize/deserialize Protobuf message.
     #[error("proto: {0}")]
     Proto(TryFromProtoError),
@@ -86,13 +89,17 @@ pub enum DurableCatalogError {
     /// The durable catalog contains updates that this process has not applied.
     ///
     /// NOTE: `update_count` counts raw durable updates when produced by the write-conflict
-    /// classification (commit and advance paths) but memory updates when produced by
+    /// classification (commit path) but memory updates when produced by
     /// `ensure_not_out_of_sync`. It is diagnostic only, do not compare across producers.
     #[error("durable catalog advanced to {upper} with {update_count} unapplied updates")]
     CatalogOutOfSync {
         update_count: usize,
         upper: Timestamp,
     },
+    /// An observed durable change invalidates components constructed during bootstrap.
+    /// Replaying memory updates cannot recover this runtime. It must halt and rebuild.
+    #[error("durable catalog {field} changed after bootstrap, restart required")]
+    RestartRequired { field: &'static str },
     /// An internal programming error.
     #[error("Internal catalog error: {0}")]
     Internal(String),
@@ -125,11 +132,9 @@ impl From<TryFromProtoError> for DurableCatalogError {
 /// The order of this enum indicates the most information to the least information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, thiserror::Error)]
 pub enum FenceError {
-    /// This instance was fenced by another instance with a higher deployment generation. This
-    /// necessarily means that the other instance also had a higher epoch. The instance that fenced
-    /// us believes that they are from a later generation than us.
+    /// This instance was fenced by a higher deployment generation.
     #[error(
-        "current catalog deployment generation {current_generation} fenced by new catalog epoch {fence_generation}"
+        "current catalog deployment generation {current_generation} fenced by new catalog deployment generation {fence_generation}"
     )]
     DeployGeneration {
         current_generation: u64,

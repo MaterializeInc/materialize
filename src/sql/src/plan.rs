@@ -1965,6 +1965,8 @@ pub struct View {
 pub struct MaterializedView {
     /// Parse-able SQL that is stored durably and defines this materialized view.
     pub create_sql: String,
+    /// Query name references, including those eliminated by planning, rather than all statement references.
+    pub query_ids: ResolvedIds,
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub expr: HirRelationExpr,
     /// All of the catalog objects that are referenced by this materialized view, according to the `expr`.

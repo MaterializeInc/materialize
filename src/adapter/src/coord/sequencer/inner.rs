@@ -15,23 +15,21 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use differential_dataflow::lattice::Lattice;
 use futures::future::{BoxFuture, FutureExt};
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use maplit::btreemap;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
     ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE,
     READ_THEN_WRITE_MAX_DEPENDENCIES,
 };
+use mz_catalog::durable::objects::MaintainedReadRequirement;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
-use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
 use mz_expr::{
     CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -71,7 +69,6 @@ use mz_sql::plan::{
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
-use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
@@ -93,7 +90,6 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::AwsPrivatelinkConnection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -110,9 +106,7 @@ use crate::catalog::{
     self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
 };
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
-};
+use crate::coord::appends::{DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder};
 use crate::coord::read_then_write::{DependencyPolicy, validate_read_then_write_dependencies};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
@@ -130,8 +124,8 @@ use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus,
     WriteLocks, WriteOp,
 };
-use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
-use crate::{CollectionIdBundle, PeekResponseUnary, ReadHolds};
+use crate::util::{ClientTransmitter, viewable_variables};
+use crate::{PeekResponseUnary, ReadHolds};
 
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
@@ -1185,7 +1179,7 @@ impl Coordinator {
         let ops = vec![catalog::Op::CreateItem {
             id: item_id,
             name: name.clone(),
-            item: CatalogItem::Sink(catalog_sink.clone()),
+            item: CatalogItem::Sink(catalog_sink),
             owner_id: *ctx.session().current_role_id(),
         }];
 
@@ -1209,13 +1203,6 @@ impl Coordinator {
                 return;
             }
         };
-
-        self.create_storage_export(global_id, &catalog_sink)
-            .await
-            .unwrap_or_terminate("cannot fail to create exports");
-
-        self.initialize_storage_read_policies([item_id].into(), CompactionWindow::Default)
-            .await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
@@ -2285,11 +2272,10 @@ impl Coordinator {
                         ops,
                         state: _,
                         side_effects,
-                        revision,
+                        transient_revision,
                         snapshot: _,
                     } => {
-                        // Make sure our catalog hasn't changed.
-                        if *revision != self.catalog().transient_revision() {
+                        if *transient_revision != self.catalog().transient_revision() {
                             return Err(AdapterError::DDLTransactionRace);
                         }
                         // Commit all of our queued ops.
@@ -3450,12 +3436,28 @@ impl Coordinator {
             storage_ids: BTreeSet::from_iter([plan.sink.from]),
             compute_ids: BTreeMap::new(),
         };
-        let read_hold = self.acquire_read_holds(&id_bundle);
+        let mut read_hold = match self.acquire_query_read_holds(&id_bundle).await {
+            Ok(holds) => holds,
+            Err(error) => {
+                ctx.retire(Err(error));
+                return;
+            }
+        };
+        let mut threshold = read_hold.least_valid_read();
+        if self.catalog().state().catalog_read_protection_enabled() {
+            let metadata = self.catalog().state().storage_metadata();
+            let Some(bound) = metadata.compaction_bounds.get(&plan.sink.from) else {
+                ctx.retire(Err(AdapterError::UnreadableSinkCollection));
+                return;
+            };
+            threshold.join_assign(bound);
+        }
 
-        let Some(read_ts) = read_hold.least_valid_read().into_option() else {
+        let Some(read_ts) = threshold.into_option() else {
             ctx.retire(Err(AdapterError::UnreadableSinkCollection));
             return;
         };
+        read_hold.downgrade(read_ts);
 
         let otel_ctx = OpenTelemetryContext::obtain();
         let from_item_id = self.catalog().resolve_item_id(&plan.sink.from);
@@ -3561,6 +3563,23 @@ impl Coordinator {
             &*as_of,
             &**write_frontier
         );
+        let mut ops = Vec::new();
+        if self.catalog().state().catalog_read_protection_enabled() {
+            let requirement = &self.catalog().state().maintained_read_requirements()[&global_id];
+            let mut frontier: Antichain<_> = requirement.frontier.into_iter().collect();
+            // Kafka reports this frontier only after committing its progress shard.
+            // Retain the predecessor so no pending output timestamp is skipped.
+            let predecessor = write_frontier.iter().map(|t| t.saturating_sub(1)).collect();
+            frontier.join_assign(&predecessor);
+            ops.push(catalog::Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: global_id,
+                    inputs: requirement.inputs.clone(),
+                    frontier: frontier.as_option().copied(),
+                }],
+                bounds: vec![],
+            });
+        }
 
         // Parse the `create_sql` so we can update it to the new sink definition.
         //
@@ -3626,11 +3645,11 @@ impl Coordinator {
             commit_interval: sink_plan.commit_interval,
         };
 
-        let ops = vec![catalog::Op::UpdateItem {
+        ops.push(catalog::Op::UpdateItem {
             id: item_id,
             name: entry.name().clone(),
             to_item: CatalogItem::Sink(new_sink),
-        }];
+        });
 
         match self
             .catalog_transact(Some(ctx.ctx().session_mut()), ops)
@@ -3642,37 +3661,6 @@ impl Coordinator {
                 return;
             }
         }
-
-        let storage_sink_desc = StorageSinkDesc {
-            from: sink_plan.from,
-            from_desc: from_entry
-                .relation_desc()
-                .expect("sinks can only be built on items with descs")
-                .into_owned(),
-            connection: sink_plan
-                .connection
-                .clone()
-                .into_inline_connection(self.catalog().state()),
-            envelope: sink_plan.envelope,
-            as_of,
-            with_snapshot,
-            version: sink_plan.version,
-            from_storage_metadata: (),
-            to_storage_metadata: (),
-            commit_interval: sink_plan.commit_interval,
-        };
-
-        self.controller
-            .storage
-            .alter_export(
-                global_id,
-                ExportDescription {
-                    sink: storage_sink_desc,
-                    instance_id: in_cluster,
-                },
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to alter source desc");
 
         ctx.retire(Ok(ExecuteResponse::AlteredObject(ObjectType::Sink)));
     }
@@ -5146,71 +5134,5 @@ impl Coordinator {
             notice_ids,
             Some(global_id),
         )
-    }
-
-    /// Sets `df_desc`'s as-of from a read hold on `id_bundle`, ships the dataflow, and drops the
-    /// hold once compute has taken its own (compute puts in its own read holds during
-    /// `create_dataflow`, so it is safe to release this one right after shipping).
-    ///
-    /// The read hold across shipping keeps the since of `id_bundle` from advancing underneath the
-    /// as-of just picked.
-    async fn ship_new_dataflow(
-        &mut self,
-        id_bundle: &CollectionIdBundle,
-        mut df_desc: DataflowDescription<LirRelationExpr>,
-        instance: ComputeInstanceId,
-        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
-    ) {
-        let read_holds = self.acquire_read_holds(id_bundle);
-        let since = read_holds.least_valid_read();
-        df_desc.set_as_of(since);
-
-        self.ship_dataflow_and_notice_builtin_table_updates(
-            df_desc,
-            instance,
-            notice_builtin_updates_fut,
-            None,
-        )
-        .await;
-
-        drop(read_holds);
-    }
-
-    /// Persist already-rendered optimizer notices for a newly created
-    /// non-transient dataflow.
-    ///
-    /// This:
-    /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
-    /// - stores the rendered metainfo on the catalog object via
-    ///   `set_dataflow_metainfo`,
-    /// - and returns a future that resolves once the builtin-table append
-    ///   has been observed, or `None` if nothing was appended.
-    fn persist_dataflow_metainfo(
-        &mut self,
-        df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
-        export_id: GlobalId,
-    ) -> Option<BuiltinTableAppendNotify> {
-        // Attend to optimization notice builtin tables and save the metainfo in the catalog's
-        // in-memory state.
-        if self.catalog().state().system_config().enable_mz_notices()
-            && !df_meta.optimizer_notices.is_empty()
-        {
-            let mut builtin_table_updates = Vec::with_capacity(df_meta.optimizer_notices.len());
-            self.catalog().state().pack_optimizer_notices(
-                &mut builtin_table_updates,
-                df_meta.optimizer_notices.iter(),
-                Diff::ONE,
-            );
-
-            // Save the metainfo.
-            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
-
-            Some(self.builtin_table_update().execute(builtin_table_updates))
-        } else {
-            // Save the metainfo.
-            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
-
-            None
-        }
     }
 }

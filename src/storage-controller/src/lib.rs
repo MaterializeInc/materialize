@@ -44,7 +44,6 @@ use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::critical::Opaque;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
@@ -54,13 +53,12 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
 use mz_storage_client::client::{
     AppendOnlyUpdate, RunIngestionCommand, RunOneshotIngestion, RunSinkCommand, Status,
-    StatusUpdate, StorageCommand, StorageResponse, TableData,
+    StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
-    IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
-    WallclockLagHistogramPeriod,
+    IntrospectionType, MonotonicAppender, Response, StorageController, StorageMetadata, StorageTxn,
+    StorageWriteOp, WallclockLag, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -89,7 +87,6 @@ use mz_storage_types::sources::{
 use mz_storage_types::{AlterCompatible, StorageDiff, dyncfgs};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
-use mz_txn_wal::txns::TxnsHandle;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch};
@@ -102,7 +99,6 @@ use tracing::{debug, info, warn};
 mod collection_mgmt;
 mod history;
 mod instance;
-mod persist_handles;
 mod rtr;
 mod statistics;
 
@@ -157,8 +153,6 @@ pub struct Controller {
     /// messages from the replica.
     dropped_objects: BTreeMap<GlobalId, BTreeSet<ReplicaId>>,
 
-    /// Write handle for table shards.
-    pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker,
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<Timestamp>,
     txns_metrics: Arc<TxnMetrics>,
@@ -1429,6 +1423,7 @@ impl StorageController for Controller {
 
     async fn alter_table_desc(
         &mut self,
+        storage_metadata: &StorageMetadata,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
@@ -1451,6 +1446,7 @@ impl StorageController for Controller {
             // Let StorageCollections know!
             storage_collections
                 .alter_table_desc(
+                    storage_metadata,
                     existing_collection,
                     new_collection,
                     new_desc.clone(),
@@ -1484,62 +1480,6 @@ impl StorageController for Controller {
         self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
 
         Ok(())
-    }
-
-    async fn register_table_collections(
-        &mut self,
-        register_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> Result<(), StorageError> {
-        let mut tables = self.table_registrations(ids)?;
-
-        // A read-only deployment only writes its migrated builtin tables.
-        if self.read_only {
-            tables.retain(|table| self.migrated_storage_collections.contains(&table.id));
-        }
-        if tables.is_empty() {
-            return Ok(());
-        }
-
-        match self
-            .persist_table_worker
-            .register(register_ts, tables)
-            .await
-        {
-            Ok(res) => res,
-            Err(_recv) => Err(StorageError::ShuttingDown("persist_table_worker")),
-        }
-    }
-
-    fn table_registrations(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Result<Vec<TableRegistration>, StorageError> {
-        // The storage data source decides which table catalog items use txn-wal.
-        let mut tables = Vec::with_capacity(ids.len());
-        for id in ids {
-            let collection = self.collection(id)?;
-            if matches!(collection.data_source, DataSource::Table) {
-                let metadata = &collection.collection_metadata;
-                tables.push(TableRegistration {
-                    id,
-                    data_shard: metadata.data_shard,
-                    relation_desc: metadata.relation_desc.clone(),
-                });
-            }
-        }
-        Ok(tables)
-    }
-
-    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError> {
-        let mut tables = Vec::with_capacity(ids.len());
-        for id in ids {
-            let collection = self.collection(id)?;
-            if matches!(collection.data_source, DataSource::Table) {
-                tables.push(id);
-            }
-        }
-        Ok(tables)
     }
 
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError> {
@@ -2149,44 +2089,6 @@ impl StorageController for Controller {
             .drop_collections_unvalidated(storage_metadata, sinks_to_drop);
     }
 
-    #[instrument(level = "debug")]
-    fn append_table(
-        &mut self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
-        if self.read_only {
-            // While in read only mode, ONLY collections that have been migrated
-            // and need to be re-hydrated in read only mode can be written to.
-            if !commands
-                .iter()
-                .all(|(id, _)| id.is_system() && self.migrated_storage_collections.contains(id))
-            {
-                return Err(StorageError::ReadOnly);
-            }
-        }
-
-        // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
-        for (id, updates) in commands.iter() {
-            if !updates.is_empty() {
-                if !write_ts.less_than(&advance_to) {
-                    return Err(StorageError::UpdateBeyondUpper(*id));
-                }
-            }
-        }
-
-        Ok(self
-            .persist_table_worker
-            .append(write_ts, advance_to, commands))
-    }
-
-    fn table_write_handle(&self) -> Arc<dyn mz_storage_client::controller::TableWriteHandle> {
-        Arc::new(persist_handles::TableWriteWorkerHandle(
-            self.persist_table_worker.clone(),
-        ))
-    }
-
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
         self.collection_manager.monotonic_appender(id)
     }
@@ -2670,7 +2572,6 @@ impl StorageController for Controller {
             read_only,
             collections,
             dropped_objects,
-            persist_table_worker: _,
             txns_read: _,
             txns_metrics: _,
             stashed_responses,
@@ -2815,36 +2716,6 @@ where
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
 
-        let persist_table_worker = if read_only {
-            let txns_write = txns_client
-                .open_writer(
-                    txns_id,
-                    Arc::new(TxnsCodecRow::desc()),
-                    Arc::new(UnitSchema),
-                    Diagnostics {
-                        shard_name: "txns".to_owned(),
-                        handle_purpose: "follow txns upper".to_owned(),
-                    },
-                )
-                .await
-                .expect("txns schema shouldn't change");
-            persist_handles::PersistTableWriteWorker::new_read_only_mode(
-                txns_write,
-                txns_client.clone(),
-            )
-        } else {
-            let mut txns = TxnsHandle::open(
-                Timestamp::MIN,
-                txns_client.clone(),
-                txns_client.dyncfgs().clone(),
-                Arc::clone(&txns_metrics),
-                txns_id,
-                Opaque::encode(&PersistEpoch::default()),
-            )
-            .await;
-            txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns, txns_client.clone())
-        };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
@@ -2871,7 +2742,6 @@ where
             build_info,
             collections: BTreeMap::default(),
             dropped_objects: Default::default(),
-            persist_table_worker,
             txns_read,
             txns_metrics,
             stashed_responses: vec![],
@@ -3480,6 +3350,9 @@ where
         };
 
         let storage_instance_id = description.instance_id;
+        let remap_compaction_bound = self
+            .storage_collections
+            .compaction_bound(description.remap_collection_id)?;
         // Fetch the client for this ingestion's instance.
         let instance = self
             .instances
@@ -3489,7 +3362,11 @@ where
                 ingestion_id: id,
             })?;
 
-        let augmented_ingestion = Box::new(RunIngestionCommand { id, description });
+        let augmented_ingestion = Box::new(RunIngestionCommand {
+            id,
+            description,
+            remap_compaction_bound,
+        });
         instance.send(StorageCommand::RunIngestion(augmented_ingestion));
 
         Ok(())
@@ -3512,7 +3389,14 @@ where
         // reading it; otherwise assume we may have to replay from the beginning.
         let export_state = self.storage_collections.collection_frontiers(id)?;
         let mut as_of = description.sink.as_of.clone();
-        as_of.join_assign(&export_state.implied_capability);
+        // Policy permission alone does not prove recovery can skip history.
+        // The descriptor carries the recovery frontier, while actual readability
+        // also accounts for leases opened against a stale read-only snapshot.
+        as_of.join_assign(&export_state.read_capabilities);
+        let input_state = self
+            .storage_collections
+            .collection_frontiers(description.sink.from)?;
+        as_of.join_assign(&input_state.read_capabilities);
         let with_snapshot = description.sink.with_snapshot
             && !PartialOrder::less_than(&as_of, &export_state.write_frontier);
 
@@ -4141,4 +4025,287 @@ fn swap_updates(
         update.extend(replace_with.iter().map(|time| (*time, -1)));
     }
     update
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
+    use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
+    use mz_storage_client::storage_collections::StorageCollectionsImpl;
+    use mz_storage_types::connections::{KafkaConnection, Tunnel};
+    use mz_storage_types::sinks::{
+        KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
+        KafkaSinkFormatType, SinkEnvelope,
+    };
+
+    use super::*;
+
+    struct TestTxn(ShardId);
+
+    #[async_trait]
+    impl StorageTxn for TestTxn {
+        fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
+            BTreeMap::new()
+        }
+        fn insert_collection_metadata(
+            &mut self,
+            _: BTreeMap<GlobalId, ShardId>,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        fn delete_collection_metadata(
+            &mut self,
+            _: BTreeSet<GlobalId>,
+        ) -> Vec<(GlobalId, ShardId)> {
+            unimplemented!()
+        }
+        fn get_unfinalized_shards(&self) -> BTreeSet<ShardId> {
+            BTreeSet::new()
+        }
+        fn insert_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        fn remove_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) {
+            unimplemented!()
+        }
+        fn get_txn_wal_shard(&self) -> Option<ShardId> {
+            Some(self.0)
+        }
+        fn write_txn_wal_shard(&mut self, _: ShardId) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+    }
+
+    fn frontier(ts: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(ts.into())
+    }
+
+    async fn export_test_controller() -> (Controller, Arc<StorageCollectionsImpl>, PersistClient) {
+        let registry = MetricsRegistry::new();
+        let location = PersistLocation {
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
+        };
+        let mut config = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        config.critical_downgrade_interval = Duration::ZERO;
+        let cache = Arc::new(PersistClientCache::new(config, &registry, |_, _| {
+            PubSubClientConnection::noop()
+        }));
+        let persist = cache.open(location.clone()).await.unwrap();
+        // No replica connects and the sink has no secrets, so this reader performs no file I/O.
+        let secrets_reader = SecretsReaderCliArgs {
+            secrets_reader: SecretsControllerKind::LocalFile,
+            secrets_reader_local_file_dir: Some("/dev/null".into()),
+            secrets_reader_kubernetes_context: None,
+            secrets_reader_aws_prefix: None,
+            secrets_reader_name_prefix: None,
+        }
+        .load()
+        .await
+        .unwrap();
+        let context = ConnectionContext::for_tests(secrets_reader);
+        let txns_metrics = Arc::new(TxnMetrics::new(&registry));
+        let txn = TestTxn(ShardId::new());
+        let collections = Arc::new(
+            StorageCollectionsImpl::new(
+                location.clone(),
+                Arc::clone(&cache),
+                &registry,
+                SYSTEM_TIME.clone(),
+                Arc::clone(&txns_metrics),
+                std::num::NonZeroI64::new(1).unwrap(),
+                false,
+                true,
+                context.clone(),
+                &txn,
+            )
+            .await,
+        );
+        let controller = Controller::new(
+            &DUMMY_BUILD_INFO,
+            location,
+            cache,
+            SYSTEM_TIME.clone(),
+            WallclockLagFn::new(SYSTEM_TIME.clone()),
+            txns_metrics,
+            false,
+            &registry,
+            ControllerMetrics::new(&registry),
+            context,
+            &txn,
+            Arc::<StorageCollectionsImpl>::clone(&collections),
+        )
+        .await;
+        (controller, collections, persist)
+    }
+
+    fn export_description(from: GlobalId) -> ExportDescription {
+        ExportDescription {
+            sink: StorageSinkDesc {
+                from,
+                from_desc: RelationDesc::empty(),
+                connection: StorageSinkConnection::Kafka(KafkaSinkConnection {
+                    connection_id: mz_repr::CatalogItemId::System(1),
+                    connection: KafkaConnection {
+                        brokers: Default::default(),
+                        default_tunnel: Tunnel::Direct,
+                        progress_topic: Default::default(),
+                        progress_topic_options: Default::default(),
+                        options: Default::default(),
+                        tls: Default::default(),
+                        sasl: Default::default(),
+                    },
+                    format: KafkaSinkFormat {
+                        key_format: None,
+                        value_format: KafkaSinkFormatType::Text,
+                    },
+                    relation_key_indices: None,
+                    key_desc_and_indices: None,
+                    headers_index: None,
+                    value_desc: RelationDesc::empty(),
+                    partition_by: Default::default(),
+                    topic: Default::default(),
+                    topic_options: Default::default(),
+                    compression_type: KafkaSinkCompressionType::None,
+                    progress_group_id: KafkaIdStyle::Legacy,
+                    transactional_id: KafkaIdStyle::Legacy,
+                    topic_metadata_refresh_interval: Default::default(),
+                }),
+                with_snapshot: true,
+                version: 0,
+                envelope: SinkEnvelope::Upsert,
+                as_of: frontier(5),
+                from_storage_metadata: (),
+                to_storage_metadata: (),
+                commit_interval: Default::default(),
+            },
+            instance_id: StorageInstanceId::system(1).unwrap(),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn run_export_uses_held_readability() {
+        let (mut controller, collections, persist) = export_test_controller().await;
+        let input = GlobalId::User(1);
+        let sink = GlobalId::User(2);
+        let description = export_description(input);
+        let instance = description.instance_id;
+        let data_source = DataSource::Sink { desc: description };
+        let metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([(input, ShardId::new()), (sink, ShardId::new())]),
+            compaction_bounds: BTreeMap::from([(input, frontier(5)), (sink, frontier(5))]),
+            ..Default::default()
+        };
+        let mut sink_collection = CollectionDescription::for_other(RelationDesc::empty(), None);
+        sink_collection.data_source = data_source.clone();
+        collections
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                vec![
+                    (
+                        input,
+                        CollectionDescription::for_other(RelationDesc::empty(), Some(frontier(5))),
+                    ),
+                    (sink, sink_collection),
+                ],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        let [read_hold, self_hold] = collections
+            .acquire_read_holds(vec![input, sink])
+            .unwrap()
+            .try_into()
+            .expect("two holds");
+        collections
+            .apply_compaction_bounds(BTreeMap::from([
+                (input, frontier(20)),
+                (sink, frontier(20)),
+            ]))
+            .unwrap();
+        collections.set_read_policies(vec![
+            (input, ReadPolicy::ValidFrom(frontier(20))),
+            (sink, ReadPolicy::ValidFrom(frontier(20))),
+        ]);
+        for id in [input, sink] {
+            let state = collections.collection_frontiers(id).unwrap();
+            assert_eq!(state.implied_capability, frontier(20));
+            assert_eq!(state.read_capabilities, frontier(5));
+            assert_eq!(
+                collections.compaction_bound(id).unwrap(),
+                Some(frontier(20))
+            );
+        }
+        controller.create_instance(instance, None);
+        controller.collections.insert(
+            sink,
+            CollectionState::new(
+                data_source,
+                collections.collection_metadata(sink).unwrap(),
+                CollectionStateExtra::Export(ExportState::new(
+                    instance,
+                    read_hold,
+                    self_hold,
+                    frontier(0),
+                    ReadPolicy::step_back(),
+                )),
+                controller.metrics.wallclock_lag_metrics(sink, None),
+            ),
+        );
+        let mut writer = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                metadata.collection_metadata[&sink],
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        for (upper, since, snapshot) in [(0, 5, true), (5, 5, true), (6, 5, false), (21, 20, false)]
+        {
+            if writer.upper() != &frontier(upper) {
+                writer
+                    .compare_and_append(
+                        Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                        writer.upper().clone(),
+                        frontier(upper),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            controller.update_write_frontier(sink, &frontier(upper));
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let state = collections.collection_frontiers(sink).unwrap();
+                    if state.write_frontier == frontier(upper)
+                        && state.read_capabilities == frontier(since)
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            controller.run_export(sink).unwrap();
+            let command = controller.instances[&instance]
+                .get_export_description(&sink)
+                .unwrap();
+            assert_eq!(command.as_of, frontier(since), "upper={upper}");
+            assert_eq!(command.with_snapshot, snapshot);
+            assert_eq!(
+                command.from_storage_metadata,
+                collections.collection_metadata(input).unwrap()
+            );
+            assert_eq!(
+                command.to_storage_metadata,
+                collections.collection_metadata(sink).unwrap()
+            );
+        }
+    }
 }

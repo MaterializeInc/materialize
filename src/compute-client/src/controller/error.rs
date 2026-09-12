@@ -119,6 +119,9 @@ pub enum DataflowCreationError {
     /// One of the imported collections has a read frontier greater than the dataflow `as_of`.
     #[error("dataflow has an as_of not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
+    /// An index's initial since exceeds its committed compaction permission.
+    #[error("dataflow as_of exceeds the compaction bound of index: {0}")]
+    CompactionBoundViolation(GlobalId),
     /// We skip dataflow creation for empty `as_of`s, which would be a problem for a SUBSCRIBE,
     /// because an initial response is expected.
     #[error("subscribe dataflow has an empty as_of")]
@@ -194,6 +197,17 @@ impl From<CollectionMissing> for CollectionUpdateError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
     }
+}
+
+/// Errors arising during committed compaction bound application.
+#[derive(Error, Debug)]
+pub enum CompactionBoundError {
+    /// Bounds must be installed before exposing a readable collection.
+    #[error("live collection has no compaction bound: {0}")]
+    UngovernedCollection(GlobalId),
+    /// Write-only exports have no readable compute trace to govern.
+    #[error("collection is write-only: {0}")]
+    WriteOnlyCollection(GlobalId),
 }
 
 /// Errors arising during collection read policy assignment.

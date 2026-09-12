@@ -18,6 +18,9 @@ use crate::action;
 use crate::action::{ControlFlow, Run, State};
 use crate::parser::{BuiltinCommand, LineReader, parse};
 use anyhow::{Context, anyhow, bail};
+use mz_adapter::catalog::{Catalog, DebugAwsContext};
+use mz_adapter::session::Session;
+use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_postgres_util::{query_one, sql};
@@ -77,9 +80,9 @@ pub fn skip_consistency_checks(
 /// dumps of it, so it costs far more than a query and scales with the size of
 /// the catalog, not with how long a single query may take. It bounds a hang,
 /// so it sits far above what a healthy check costs on a loaded agent.
-async fn with_deadline<F>(state: &State, check: F) -> Result<(), anyhow::Error>
+async fn with_deadline<F, T>(state: &State, check: F) -> Result<T, anyhow::Error>
 where
-    F: Future<Output = Result<(), anyhow::Error>>,
+    F: Future<Output = Result<T, anyhow::Error>>,
 {
     let deadline = state.consistency_check_timeout;
     match tokio::time::timeout(deadline, check).await {
@@ -183,8 +186,53 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
     }
 }
 
-/// Checks that the in-memory catalog matches what we have persisted on disk.
+/// Checks the full in-memory catalog against independently reconstructed durable state.
 async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
+    if state.materialize.catalog_config.is_none() {
+        return Ok(());
+    }
+    let response = reqwest::get(format!(
+        "http://{}/api/catalog/check?durable=true",
+        state.materialize.internal_http_addr,
+    ))
+    .await
+    .context("GET catalog check")?
+    .error_for_status()?;
+    let result: serde_json::Value = response.json().await?;
+    if result.get("durable") == Some(&serde_json::Value::Bool(true)) {
+        return match result.get("inconsistencies") {
+            Some(serde_json::Value::String(message)) if message.is_empty() => Ok(()),
+            _ => bail!("catalog inconsistencies: {result}"),
+        };
+    }
+    match result {
+        serde_json::Value::String(message) if message.is_empty() => {
+            // Old servers ignore the opt-in parameter. Their invariant check alone
+            // cannot certify agreement with durable state.
+            Retry::default()
+                .max_duration(state.consistency_check_timeout)
+                .retry_async(|_| check_legacy_catalog_state(state))
+                .await
+        }
+        other => bail!("catalog inconsistencies: {other}"),
+    }
+}
+
+async fn catalog_memory_dump(state: &State) -> Result<String, anyhow::Error> {
+    reqwest::get(format!(
+        "http://{}/api/catalog/dump",
+        state.materialize.internal_http_addr,
+    ))
+    .await
+    .context("GET catalog dump")?
+    .error_for_status()?
+    .text()
+    .await
+    .context("read catalog dump")
+}
+
+/// Checks that the in-memory catalog matches what we have persisted on disk.
+async fn check_legacy_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     #[derive(Debug, Deserialize)]
     struct StorageMetadata {
         unfinalized_shards: Option<BTreeSet<String>>,
@@ -196,77 +244,62 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         storage_metadata: Option<StorageMetadata>,
     }
 
-    // The comparison below needs the on-disk catalog, which `with_catalog_copy`
-    // can only open when a catalog config was supplied
-    // (`--validate-catalog-store`). Without one it returns `None` and the
-    // check is skipped, so do not fetch and parse the dump (100+ MB) for
-    // nothing.
-    if state.materialize.catalog_config.is_none() {
-        return Ok(());
-    }
-
-    // Dump the in-memory catalog state of the Materialize environment that we're
-    // connected to.
-    let memory_catalog = reqwest::get(&format!(
-        "http://{}/api/catalog/dump",
-        state.materialize.internal_http_addr,
-    ))
-    .await
-    .context("GET catalog")?
-    .text()
-    .await
-    .context("deserialize catalog")?;
+    let memory_catalog = catalog_memory_dump(state).await?;
+    let (persist_client, storage) = state
+        .open_catalog_copy()
+        .await?
+        .context("catalog validation requires durable storage")?;
 
     // Pull out the system parameter defaults from the in-memory catalog, as we
     // need to load the disk catalog with the same defaults.
-    let dump: CatalogDump = serde_json::from_str(&memory_catalog).context("decoding catalog")?;
+    let dump: CatalogDump = match serde_json::from_str(&memory_catalog) {
+        Ok(dump) => dump,
+        Err(error) => {
+            storage.expire().await;
+            return Err(error).context("decoding catalog");
+        }
+    };
 
     let Some(system_parameter_defaults) = dump.system_parameter_defaults else {
-        // TODO(parkmycar, def-): Ideally this could be an error, but a lot of test suites fail. We
-        // should explicitly disable consistency check in these test suites.
-        tracing::warn!(
-            "Missing system_parameter_defaults in memory catalog state, skipping consistency check"
-        );
-        return Ok(());
+        storage.expire().await;
+        bail!("missing system_parameter_defaults in memory catalog state");
     };
 
     let unfinalized_shards = dump
         .storage_metadata
         .and_then(|storage_metadata| storage_metadata.unfinalized_shards);
 
-    // Load the on-disk catalog and dump its state.
+    let catalog = Catalog::open_debug_catalog_inner(
+        persist_client,
+        storage,
+        SYSTEM_TIME.clone(),
+        Some(state.materialize.environment_id.clone()),
+        state.build_info,
+        system_parameter_defaults,
+        &state.materialize.bootstrap_args,
+        // The expression cache can be taxing on the CPU and is unnecessary for consistency checks.
+        Some(false),
+        Some(DebugAwsContext {
+            aws_account_id: state.materialize.aws_account_id.clone(),
+            aws_external_id_prefix: state.materialize.aws_external_id_prefix.clone(),
+            aws_connection_role_arn: state.materialize.aws_connection_role_arn.clone(),
+        }),
+    )
+    .await
+    .context("failed to reconstruct on-disk catalog state")?;
+    let disk_catalog = catalog
+        .for_session(&Session::dummy())
+        .state()
+        // Shard finalization is asynchronous and is not part of this comparison.
+        .dump(unfinalized_shards)
+        .expect("state must be dumpable");
+    catalog.expire().await;
 
-    // Make sure the version is parseable.
-    let _: semver::Version = state.build_info.version.parse().expect("invalid version");
-
-    let maybe_disk_catalog = state
-        .with_catalog_copy(
-            system_parameter_defaults,
-            state.build_info,
-            &state.materialize.bootstrap_args,
-            // The expression cache can be taxing on the CPU and is unnecessary for consistency checks.
-            Some(false),
-            |catalog| catalog.state().clone(),
-        )
-        .await
-        .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
-        .map(|catalog| {
-            catalog
-                // The set of unfinalized shards in the catalog are updated asynchronously by
-                // background processes. As a result, the value may legitimately change after
-                // fetching the memory catalog but before fetching the disk catalog, causing the
-                // comparison to fail. This is a gross hack that always sets the disk catalog's
-                // unfinalized shards equal to the memory catalog's unfinalized shards to ignore
-                // false negatives. Unfortunately, we also end up ignoring true negatives.
-                .dump(unfinalized_shards)
-                .expect("state must be dumpable")
-        });
-    let Some(disk_catalog) = maybe_disk_catalog else {
-        // TODO(parkmycar, def-): Ideally this could be an error, but a lot of test suites fail. We
-        // should explicitly disable consistency check in these test suites.
-        tracing::warn!("No Catalog state on disk, skipping consistency check");
-        return Ok(());
-    };
+    // Only the compatibility path needs a quiet window. Bracket the entire
+    // readonly open and reconstruction, since it may sync during initialization.
+    if catalog_memory_dump(state).await? != memory_catalog {
+        bail!("catalog changed during legacy reconstruction, retrying");
+    }
 
     if disk_catalog != memory_catalog {
         // The state objects here are around 100k lines pretty printed, so find the

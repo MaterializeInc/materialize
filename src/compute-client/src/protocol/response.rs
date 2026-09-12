@@ -32,6 +32,16 @@ use uuid::Uuid;
 /// [`ComputeCommand`]: super::command::ComputeCommand
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse {
+    /// All partitions have opened this query connection after lifecycle initialization.
+    QueryReady,
+    /// Query dataflow admission result. Any partition's error wins aggregation.
+    /// Each worker emits exactly one response per creation request.
+    QueryDataflowResponse {
+        /// The acknowledged creation request.
+        request_id: Uuid,
+        /// Admission failure, or None when admission succeeded.
+        error: Option<String>,
+    },
     /// `Frontiers` announces the advancement of the various frontiers of the specified compute
     /// collection.
     ///
@@ -146,7 +156,8 @@ pub enum ComputeResponse {
 /// A response reporting advancement of frontiers of a compute collection.
 ///
 /// All contained frontier fields are optional. `None` values imply that the respective frontier
-/// has not advanced and the previously reported value is still current.
+/// has not advanced and the previously reported value is still current. Until the first `Some`
+/// value, that frontier is unknown.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FrontiersResponse {
     /// The collection's new write frontier, if any.
@@ -177,6 +188,14 @@ pub struct FrontiersResponse {
     ///  * In a multi-replica cluster, slower replicas observe and report the write frontier of the
     ///    fastest replica, by witnessing advancements of the target persist shard's `upper`.
     pub output_frontier: Option<Antichain<Timestamp>>,
+    /// The readable trace's since, joining its ok and error logical compaction frontiers
+    /// with the collection's installation `as_of`.
+    ///
+    /// Times at or beyond this frontier are readable, subject to write progress. This is an
+    /// observation, not a read hold. Empty means there is no readable trace, including for sinks
+    /// and retired indexes. Write completion alone does not make a trace unreadable.
+    /// Across partitions this is the join, and remains unknown until every partition reports.
+    pub read_frontier: Option<Antichain<Timestamp>>,
 }
 
 impl FrontiersResponse {
@@ -185,6 +204,7 @@ impl FrontiersResponse {
         self.write_frontier.is_some()
             || self.input_frontier.is_some()
             || self.output_frontier.is_some()
+            || self.read_frontier.is_some()
     }
 }
 
@@ -403,6 +423,6 @@ mod tests {
     /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
     #[mz_ore::test]
     fn test_compute_response_size() {
-        assert_eq!(std::mem::size_of::<ComputeResponse>(), 112);
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 144);
     }
 }

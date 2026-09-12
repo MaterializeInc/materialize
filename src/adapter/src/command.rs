@@ -84,12 +84,15 @@ pub struct CopyFromStdinWriter {
 #[derive(Debug)]
 pub struct CatalogSnapshot {
     pub catalog: Arc<Catalog>,
+    /// A certified durable prefix, when explicitly requested.
+    pub durable_upper: Option<Result<mz_repr::Timestamp, AdapterError>>,
 }
 
 #[derive(Debug)]
 pub enum Command {
     CatalogSnapshot {
         tx: oneshot::Sender<CatalogSnapshot>,
+        include_durable_upper: bool,
     },
 
     Startup {
@@ -254,6 +257,16 @@ pub enum Command {
         >,
     },
 
+    /// Establishes durable coverage on a query client's local acquisition miss.
+    AcquireClientReadProtection {
+        incarnation: u64,
+        bundle: CollectionIdBundle,
+        read_ts: Option<mz_repr::Timestamp>,
+        tx: oneshot::Sender<
+            Result<(ReadHolds, timely::progress::Antichain<mz_repr::Timestamp>), AdapterError>,
+        >,
+    },
+
     GetOracle {
         timeline: Timeline,
         tx: oneshot::Sender<
@@ -369,9 +382,8 @@ pub enum Command {
         tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
-    /// Unregister and retire a pending peek that was registered but then
-    /// failed to issue, ending its statement-logging execution with the given
-    /// reason.
+    /// Unregister and retire frontend-owned execution, including completed
+    /// query-client peeks and peeks that failed to issue.
     ///
     /// Registration handed ownership of end-of-execution logging to the
     /// coordinator, so the frontend must not log the end itself. If a
@@ -493,6 +505,7 @@ impl Command {
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
             | Command::GetComputeInstanceClient { .. }
+            | Command::AcquireClientReadProtection { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
             | Command::GetTransactionReadHoldsBundle { .. }
@@ -538,6 +551,7 @@ impl Command {
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
             | Command::GetComputeInstanceClient { .. }
+            | Command::AcquireClientReadProtection { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
             | Command::GetTransactionReadHoldsBundle { .. }
@@ -590,6 +604,7 @@ pub struct StartupResponse {
     pub catalog: Arc<Catalog>,
     pub storage_collections:
         Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>,
+    pub(crate) query_client: Option<Arc<crate::query_client::QueryClient>>,
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
@@ -632,7 +647,7 @@ impl Transmittable for StartupResponse {
     }
 }
 
-/// The response to [`SessionClient::dump_catalog`](crate::SessionClient::dump_catalog).
+/// A JSON-encoded catalog snapshot.
 #[derive(Debug, Clone)]
 pub struct CatalogDump(String);
 

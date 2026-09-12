@@ -32,14 +32,15 @@ pub use crate::durable::metrics::Metrics;
 pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
 pub use crate::durable::objects::{
-    BurstState, Cluster, ClusterConfig, ClusterReplica, ClusterSystemConfiguration, ClusterVariant,
-    ClusterVariantManaged, Comment, Database, DefaultPrivilege, IntrospectionSourceIndex, Item,
-    NetworkPolicy, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
-    ReplicaConfig, ReplicaLocation, ReplicaSystemConfiguration, Role, RoleAuth, Schema,
-    SourceReference, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
-    SystemObjectDescription, SystemObjectMapping, UnfinalizedShard, managed_cluster_replica_name,
+    BurstState, ClientIncarnation, ClientReadRequirement, Cluster, ClusterConfig, ClusterReplica,
+    ClusterSystemConfiguration, ClusterVariant, ClusterVariantManaged, Comment, Database,
+    DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReconfigurationState,
+    ReconfigurationStatus, ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
+    ReplicaSystemConfiguration, Role, RoleAuth, Schema, SourceReference, SourceReferences,
+    StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
+    UnfinalizedShard, managed_cluster_replica_name,
 };
-pub use crate::durable::persist::shard_id;
+pub use crate::durable::persist::{CatalogSnapshotReader, shard_id};
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 use crate::durable::transaction::TransactionBatch;
 pub use crate::durable::transaction::{DryRunTransaction, Transaction};
@@ -125,12 +126,30 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// catalog, if it has not been initialized, and perform any migrations
     /// needed.
     ///
+    /// Unprotected catalogs increment the process epoch and reclaim ephemeral items.
+    /// In protected catalogs, same-generation opens preserve owners, including those left by a
+    /// crashed process. Promotion fences the outgoing generation before reclaiming
+    /// its ephemeral items. If another writer advances the cleanup snapshot, open
+    /// returns `CatalogOutOfSync` after promotion without reclaiming items. An
+    /// interrupted promotion can likewise leave items behind. Reopening in the now
+    /// active generation does not reclaim them.
+    ///
     /// `initial_ts` is used as the initial timestamp for new environments.
     async fn open(
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+
+    /// Joins an initialized, current-version catalog in the supplied generation.
+    /// Requires `catalog_read_protection_enabled != 0`.
+    /// Does not initialize, migrate, promote, reclaim sessions, or bootstrap adapter.
+    async fn join(self: Box<Self>) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+
+    /// Joins the active durable generation, ignoring the builder's pending generation.
+    /// Promotion racing admission or a later write returns a generation fence.
+    /// Rebuild and join again to discover the newly active generation.
+    async fn join_active(self: Box<Self>) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog for manual editing of the underlying data. This is helpful for
     /// fixing a corrupt catalog.
@@ -139,15 +158,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Reports if the catalog state has been initialized.
     async fn is_initialized(&mut self) -> Result<bool, CatalogError>;
 
-    /// Returns the epoch of the current durable catalog state. The epoch acts as
-    /// a fencing token to prevent split brain issues across two
-    /// [`DurableCatalogState`]s. When a new [`DurableCatalogState`] opens the
-    /// catalog, it will increment the epoch by one (or initialize it to some
-    /// value if there's no existing epoch) and store the value in memory. It's
-    /// guaranteed that no two [`DurableCatalogState`]s will return the same value
-    /// for their epoch.
-    ///
-    /// NB: We may remove this in later iterations of Pv2.
+    /// Returns the process epoch, which fences writers in unprotected catalogs.
     async fn epoch(&mut self) -> Result<Epoch, CatalogError>;
 
     /// Get the most recent deployment generation written to the catalog. Not necessarily the
@@ -196,15 +207,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
 /// A read only API for the durable catalog state.
 #[async_trait]
 pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
-    /// Returns the epoch of the current durable catalog state. The epoch acts as
-    /// a fencing token to prevent split brain issues across two
-    /// [`DurableCatalogState`]s. When a new [`DurableCatalogState`] opens the
-    /// catalog, it will increment the epoch by one (or initialize it to some
-    /// value if there's no existing epoch) and store the value in memory. It's
-    /// guaranteed that no two [`DurableCatalogState`]s will return the same value
-    /// for their epoch.
-    ///
-    /// NB: We may remove this in later iterations of Pv2.
+    /// Returns the process epoch. Protected catalogs fence by deployment generation only.
     fn epoch(&self) -> Epoch;
 
     /// Returns the metrics for this catalog state.
@@ -250,13 +253,17 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
 
     /// Get a snapshot of the catalog.
+    ///
+    /// Validates fencing and the runtime identity bound by
+    /// [`DurableCatalogState::mark_bootstrap_complete`] before returning it.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
 
     /// Listen and return all updates that are currently in the catalog.
     ///
     /// IMPORTANT: This excludes updates to storage usage.
     ///
-    /// Returns an error if this instance has been fenced out.
+    /// Returns fencing or bootstrap-bound `RestartRequired` errors before yielding
+    /// memory updates. See [`DurableCatalogState::mark_bootstrap_complete`].
     async fn sync_to_current_updates(
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
@@ -268,7 +275,8 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     ///
     /// IMPORTANT: This excludes updates to storage usage.
     ///
-    /// Returns an error if this instance has been fenced out.
+    /// Returns fencing or bootstrap-bound `RestartRequired` errors before yielding
+    /// memory updates. See [`DurableCatalogState::mark_bootstrap_complete`].
     async fn sync_updates(
         &mut self,
         target_upper: Timestamp,
@@ -276,12 +284,23 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
 
     /// Checks for unapplied catalog content before `target_upper` without consuming it.
     ///
-    /// Returns an error if this instance has been fenced out.
+    /// Fencing and bootstrap-bound `RestartRequired` errors take precedence over
+    /// `CatalogOutOfSync`. See [`DurableCatalogState::mark_bootstrap_complete`].
     async fn ensure_not_out_of_sync(&mut self, target_upper: Timestamp)
     -> Result<(), CatalogError>;
 
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
+}
+
+/// Owned durable input for independent catalog reconstruction, with no persist handles.
+#[derive(Debug)]
+pub struct CatalogSnapshot {
+    pub snapshot: Snapshot,
+    pub updates: Vec<memory::objects::StateUpdate>,
+    pub upper: Timestamp,
+    pub deployment_generation: u64,
+    pub is_bootstrap_complete: bool,
 }
 
 /// A read-write API for the durable catalog state.
@@ -295,6 +314,14 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     fn is_savepoint(&self) -> bool;
 
     /// Marks the bootstrap process as complete.
+    ///
+    /// Captures the consumed read-protection mode and transaction WAL identity used
+    /// to construct this runtime. Call after reconstruction and before serving,
+    /// including when joining an existing writer. Repeated calls do not rebind it.
+    /// Subsequent consumption, snapshots, transactions, and upper advancement return
+    /// `RestartRequired` on an observed effective change to either value. The caller
+    /// must halt and rebuild, not refresh and retry. Fencing takes precedence.
+    /// Unmarked bootstrap and diagnostic readers may consume these changes freely.
     async fn mark_bootstrap_complete(&mut self);
 
     /// Creates a transaction only if no durable catalog content is pending.
@@ -310,13 +337,15 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         snapshot: Snapshot,
     ) -> Result<DryRunTransaction, CatalogError>;
 
-    /// Commits a durable catalog state transaction. The transaction will be committed at
-    /// `commit_ts`.
+    /// Commits a durable catalog state transaction at or after `commit_ts` and the
+    /// current catalog upper.
     ///
     /// Returns what the upper was directly after the transaction committed.
     ///
-    /// Panics if `commit_ts` is not greater than or equal to the most recent upper seen by this
-    /// process.
+    /// Empty concurrent progress is retried. Concurrent content returns
+    /// `CatalogOutOfSync` without replaying the batch, so callers must refresh and
+    /// revalidate their decisions. Generation fencing is propagated unchanged.
+    /// Panics if the batch's snapshot upper differs from this handle's cached upper.
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
@@ -325,15 +354,16 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Advances the catalog upper to at least `new_upper`.
     ///
-    /// A durable attempt observes fencing and reports concurrent non-fencing content as
-    /// [`DurableCatalogError::CatalogOutOfSync`]. A no-op only validates a fence already observed
-    /// by this handle.
+    /// A durable attempt observes fencing and retries concurrent content while retaining
+    /// projection updates. Bootstrap-bound changes require restart rather than retry.
+    /// A no-op only validates fencing and runtime identity already observed by this handle.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     ///
-    /// Allocation rebases over empty upper progress. Fresh IDs do not require a catalog
-    /// staleness check.
+    /// Retries content conflicts by allocating from a fresh durable snapshot. Pending
+    /// projection updates remain available through `sync_updates` and
+    /// `sync_to_current_updates`. Generation fencing is not retried.
     async fn allocate_id(
         &mut self,
         id_type: &str,
@@ -510,6 +540,21 @@ pub async fn persist_backed_catalog_state(
     )
     .await?;
     Ok(Box::new(state))
+}
+
+/// Acquires a secondary writer in the active durable generation for prewarming.
+/// No pending deployment generation is accepted. A racing promotion returns a fence,
+/// which the caller can handle by acquiring again. Does not bootstrap adapter.
+pub async fn persist_backed_catalog_join_active(
+    persist_client: PersistClient,
+    organization_id: Uuid,
+    version: semver::Version,
+    metrics: Arc<Metrics>,
+) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+    persist_backed_catalog_state(persist_client, organization_id, version, None, metrics)
+        .await?
+        .join_active()
+        .await
 }
 
 pub fn test_bootstrap_args() -> BootstrapArgs {

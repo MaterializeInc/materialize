@@ -104,6 +104,11 @@ where
 
         for command in self.commands.drain(..) {
             match command {
+                ComputeCommand::HelloQuery { .. }
+                | ComputeCommand::SetQueryMaxResultSize { .. }
+                | ComputeCommand::CreateQueryDataflow { .. } => {
+                    unreachable!("query commands do not belong to lifecycle history")
+                }
                 hello @ ComputeCommand::Hello { .. } => {
                     assert_none!(hello_command);
                     hello_command = Some(hello);

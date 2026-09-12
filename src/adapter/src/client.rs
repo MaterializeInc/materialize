@@ -301,6 +301,7 @@ impl Client {
             session_defaults,
             catalog,
             storage_collections,
+            query_client,
             transient_id_gen,
             optimizer_metrics,
             persist_client,
@@ -316,6 +317,7 @@ impl Client {
             CoordinatorClient::Session(self.clone()),
             &catalog,
             storage_collections,
+            query_client,
             transient_id_gen,
             optimizer_metrics,
             persist_client,
@@ -588,13 +590,16 @@ Issue a SQL query to get started. Need help?
 
     /// Returns a snapshot of the catalog.
     ///
-    /// Does a Coordinator round-trip. Session-bound callers should
-    /// prefer [`SessionClient::catalog_snapshot`], which serves from the
-    /// session's snapshot cache.
+    /// Does a Coordinator round-trip. Session-bound callers that only need
+    /// planning-visible state should prefer [`SessionClient::catalog_snapshot`],
+    /// which serves from the session's snapshot cache.
     pub async fn catalog_snapshot_expensive(&self) -> Arc<Catalog> {
         let (tx, rx) = oneshot::channel();
-        self.send(Command::CatalogSnapshot { tx });
-        let CatalogSnapshot { catalog } = rx.await.expect("coordinator unexpectedly gone");
+        self.send(Command::CatalogSnapshot {
+            tx,
+            include_durable_upper: false,
+        });
+        let CatalogSnapshot { catalog, .. } = rx.await.expect("coordinator unexpectedly gone");
         catalog
     }
 
@@ -1095,7 +1100,7 @@ impl SessionClient {
     }
 
     /// Fetches the catalog, served from the session-side snapshot cache when
-    /// the catalog is unchanged since the cached snapshot was taken. See
+    /// planning-visible state is unchanged since the cached snapshot was taken. See
     /// [`PeekClient::catalog_snapshot`].
     #[instrument(level = "debug")]
     pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
@@ -1118,27 +1123,60 @@ impl SessionClient {
             .enable_extended_protocol_implicit_transaction()
     }
 
-    /// Dumps the catalog to a JSON string.
-    ///
-    /// No authorization is performed, so access to this function must be limited to internal
-    /// servers or superusers.
+    /// Dumps the catalog to JSON. Access must be limited to internal servers or superusers.
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
-        let catalog = self.catalog_snapshot("dump_catalog").await;
-        catalog.dump().map_err(AdapterError::from)
+        let snapshot = self
+            .send_without_session(|tx| Command::CatalogSnapshot {
+                tx,
+                include_durable_upper: false,
+            })
+            .await;
+        Ok(snapshot.catalog.dump()?)
     }
 
-    /// Checks the catalog for internal consistency, returning a JSON object describing the
-    /// inconsistencies, if there are any.
-    ///
-    /// No authorization is performed, so access to this function must be limited to internal
-    /// servers or superusers.
-    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
-        let catalog = self.catalog_snapshot("check_catalog").await;
-        catalog.check_consistency()
+    /// Checks internal invariants, optionally reconstructing the durable catalog independently.
+    /// Access must be limited to internal servers or superusers.
+    pub async fn check_catalog(&mut self, durable: bool) -> Result<(), serde_json::Value> {
+        if !durable {
+            let snapshot = self
+                .send_without_session(|tx| Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper: false,
+                })
+                .await;
+            return snapshot.catalog.check_consistency();
+        }
+        let result = async {
+            let initial = self
+                .send_without_session(|tx| Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper: false,
+                })
+                .await;
+            let reader = initial.catalog.open_diagnostic_reader().await?;
+            // Capture uncached state after acquiring the continuous durable reader.
+            let snapshot = self
+                .send_without_session(|tx| Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper: true,
+                })
+                .await;
+            let upper = match snapshot.durable_upper.expect("requested durable prefix") {
+                Ok(upper) => upper,
+                Err(error) => {
+                    reader.expire().await;
+                    return Err(error);
+                }
+            };
+            let input = reader.into_snapshot_at(upper).await?;
+            snapshot.catalog.check_durable_consistency(input).await
+        }
+        .await;
+        result.map_err(|error: AdapterError| serde_json::json!(error.to_string()))
     }
 
-    /// Checks the coordinator for internal consistency, returning a JSON object describing the
-    /// inconsistencies, if there are any. This is a superset of checks that check_catalog performs,
+    /// Checks coordinator and in-memory catalog invariants, without durable reconstruction.
+    /// Returns a JSON object describing any inconsistencies.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
@@ -1358,6 +1396,7 @@ impl SessionClient {
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. }
                 | Command::GetComputeInstanceClient { .. }
+                | Command::AcquireClientReadProtection { .. }
                 | Command::GetOracle { .. }
                 | Command::DetermineRealTimeRecentTimestamp { .. }
                 | Command::GetTransactionReadHoldsBundle { .. }

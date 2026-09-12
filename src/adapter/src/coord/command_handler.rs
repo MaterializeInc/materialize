@@ -353,9 +353,18 @@ impl Coordinator {
                     drop(retire_notify);
                 }
 
-                Command::CatalogSnapshot { tx } => {
+                Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper,
+                } => {
+                    let durable_upper = if include_durable_upper {
+                        Some(self.catalog().current_upper_if_in_sync().await)
+                    } else {
+                        None
+                    };
                     let _ = tx.send(CatalogSnapshot {
                         catalog: self.owned_catalog(),
+                        durable_upper,
                     });
                 }
 
@@ -369,6 +378,18 @@ impl Coordinator {
 
                 Command::GetComputeInstanceClient { instance_id, tx } => {
                     let _ = tx.send(self.controller.compute.instance_client(instance_id));
+                }
+
+                Command::AcquireClientReadProtection {
+                    incarnation,
+                    bundle,
+                    read_ts,
+                    tx,
+                } => {
+                    let result = self
+                        .acquire_client_read_protection(incarnation, bundle, |_| Ok(read_ts))
+                        .await;
+                    let _ = tx.send(result);
                 }
 
                 Command::GetOracle { timeline, tx } => {
@@ -942,6 +963,7 @@ impl Coordinator {
                     session_defaults,
                     catalog,
                     storage_collections: Arc::clone(&self.controller.storage_collections),
+                    query_client: self.query_client.clone(),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
@@ -1411,7 +1433,7 @@ impl Coordinator {
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
                         let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
+                        let transient_revision = self.catalog().transient_revision();
 
                         // Initialize our transaction with a set of empty ops, or return an error
                         // if we can't run a DDL transaction
@@ -1419,7 +1441,7 @@ impl Coordinator {
                         if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
                             ops: vec![],
                             state,
-                            revision,
+                            transient_revision,
                             side_effects: vec![],
                             snapshot: None,
                         }) {
@@ -1665,12 +1687,7 @@ impl Coordinator {
                 }
 
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(
-                        &cmvs,
-                        &resolved_ids,
-                        ctx.session_mut(),
-                        true,
-                    )
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, ctx.session_mut(), true)
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -1712,12 +1729,7 @@ impl Coordinator {
             }) => {
                 let mut cmvs = *box_cmvs;
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(
-                        &cmvs,
-                        &resolved_ids,
-                        ctx.session_mut(),
-                        false,
-                    )
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, ctx.session_mut(), false)
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -1875,7 +1887,6 @@ impl Coordinator {
     async fn resolve_mz_now_for_create_materialized_view(
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
-        resolved_ids: &ResolvedIds,
         session: &Session,
         acquire_read_holds: bool,
     ) -> Result<Option<Timestamp>, AdapterError> {
@@ -1886,9 +1897,13 @@ impl Coordinator {
         {
             let catalog = self.catalog().for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
-            let ids = self
+            let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &cmvs.query);
+            let mut ids = self
                 .index_oracle(cluster)
                 .sufficient_collections(resolved_ids.collections().copied());
+            let logical_inputs =
+                self.materialized_view_logical_inputs(resolved_ids.collections().copied())?;
+            ids.extend(&logical_inputs);
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1899,7 +1914,7 @@ impl Coordinator {
             // It's important that we acquire read holds _before_ we determine the least valid read.
             // Otherwise, we're not guaranteed that the since frontier doesn't
             // advance forward from underneath us.
-            let read_holds = self.acquire_read_holds(&ids);
+            let read_holds = self.acquire_query_read_holds(&ids).await?;
 
             // Does `mz_now()` occur?
             let mz_now_ts = if cmvs
@@ -1938,7 +1953,12 @@ impl Coordinator {
                 // after its creation might see input changes that happened after the CRATE MATERIALIZED
                 // VIEW statement returned.
                 let oracle_timestamp = timestamp;
-                let least_valid_read = read_holds.least_valid_read();
+                let least_valid_read =
+                    read_holds
+                        .least_valid_read()
+                        .join(&self.materialized_view_input_permission(
+                            logical_inputs.storage_ids.iter().copied(),
+                        )?);
                 timestamp.advance_by(least_valid_read.borrow());
 
                 if oracle_timestamp != timestamp {

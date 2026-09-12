@@ -53,6 +53,20 @@ pub trait Orchestrator: fmt::Debug + Send + Sync {
 /// An orchestrator restricted to a single namespace.
 #[async_trait]
 pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
+    /// Derives the addresses for a service's processes, in process order.
+    ///
+    /// Callers supply the immutable service identity, desired catalog scale, and
+    /// the same port configuration used for lifecycle provisioning. The result
+    /// matches `ensure_service(id, config)?.addresses(&port.name)` for that
+    /// scale and port, without provisioning, mutating service state, or making
+    /// lifecycle RPCs. Addresses do not imply that the service exists or is ready.
+    fn service_addresses(
+        &self,
+        id: &str,
+        scale: NonZero<u16>,
+        port: &ServicePort,
+    ) -> Result<Vec<String>, anyhow::Error>;
+
     /// Ensures that a service with the given configuration is running.
     ///
     /// If a service with the same ID already exists, its configuration is

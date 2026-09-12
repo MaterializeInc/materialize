@@ -319,13 +319,15 @@ impl ShouldTerminateGracefully for DurableCatalogError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
             DurableCatalogError::Fence(err) => err.should_terminate_gracefully(),
-            DurableCatalogError::CatalogOutOfSync { .. } => true,
+            DurableCatalogError::CatalogOutOfSync { .. }
+            | DurableCatalogError::RestartRequired { .. } => true,
             DurableCatalogError::IncompatibleDataVersion { .. }
             | DurableCatalogError::IncompatiblePersistVersion { .. }
             | DurableCatalogError::Proto(_)
             | DurableCatalogError::Uninitialized
             | DurableCatalogError::NotWritable(_)
             | DurableCatalogError::DryRunTransaction
+            | DurableCatalogError::InvalidReadProtection(_)
             | DurableCatalogError::DuplicateKey
             | DurableCatalogError::UniquenessViolation
             | DurableCatalogError::Storage(_)
@@ -377,6 +379,7 @@ impl ShouldTerminateGracefully for DataflowCreationError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
             DataflowCreationError::SinceViolation(_)
+            | DataflowCreationError::CompactionBoundViolation(_)
             | DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
             | DataflowCreationError::ReplicaMissing(_)

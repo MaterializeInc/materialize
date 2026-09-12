@@ -58,7 +58,7 @@ use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
+use crate::client::{AppendOnlyUpdate, StatusUpdate};
 use crate::statistics::WebhookStatistics;
 
 #[derive(
@@ -213,6 +213,23 @@ pub struct StorageMetadata {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collection_metadata: BTreeMap<GlobalId, ShardId>,
     pub unfinalized_shards: BTreeSet<ShardId>,
+    /// IDs with no SQL object but a live client requirement. Derived from catalog
+    /// membership and client requirements, not separately persisted.
+    pub retained_collections: BTreeSet<GlobalId>,
+    /// Committed permission to compact each collection through this frontier.
+    /// In protected environments, writable registration requires a bound for every
+    /// live and retained ID before opening persist handles. Callers supply complete
+    /// committed metadata, including all aliases of each shard. The meet of their bounds authorizes critical since
+    /// advancement, independently of local dependency and execution accounting.
+    /// Bounds are applied monotonically. A lagging publication cannot restore data
+    /// already compacted, so execution must separately acquire a readable persist lease.
+    /// This contract supports fresh protected environments and same-version recovery,
+    /// not conversion of environments compacted under local-controller authority.
+    /// Unprotected environments may omit bounds and retain local-read-capability
+    /// compaction with envd epoch fencing. The environment mode is selected when
+    /// constructing StorageCollections, never inferred from missing bounds.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub compaction_bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
 }
 
 impl StorageMetadata {
@@ -235,7 +252,8 @@ impl StorageMetadata {
 pub trait StorageTxn {
     /// Retrieve all of the visible storage metadata.
     ///
-    /// The value of this map should be treated as opaque.
+    /// The value of this map should be treated as opaque. Mappings can outlive
+    /// their catalog collections, so their presence does not establish liveness.
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId>;
 
     /// Add new storage metadata for a collection.
@@ -249,8 +267,9 @@ pub trait StorageTxn {
 
     /// Remove the metadata associated with the identified collections.
     ///
-    /// Subsequent calls to [`StorageTxn::get_collection_metadata`] must not
-    /// include these keys.
+    /// Client-referenced mappings may be preserved. Return only actually removed
+    /// mappings, which subsequent calls to [`StorageTxn::get_collection_metadata`]
+    /// must not include.
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)>;
 
     /// Retrieve the durable set of shards recorded as unfinalized.
@@ -301,43 +320,6 @@ impl StorageWriteOp {
             Self::Delete { .. } => false,
         }
     }
-}
-
-/// Metadata required to register a table with the txns shard.
-#[derive(Debug, Clone)]
-pub struct TableRegistration {
-    pub id: GlobalId,
-    pub data_shard: ShardId,
-    pub relation_desc: RelationDesc,
-}
-
-/// Queues txns-shard operations on the storage table worker.
-///
-/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
-/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
-/// restores its bookkeeping and the caller must retry at a fresh timestamp.
-pub trait TableWriteHandle: Debug + Send + Sync {
-    /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
-    fn append(
-        &self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
-
-    /// Registers `tables` at `register_ts`.
-    fn register(
-        &self,
-        register_ts: Timestamp,
-        tables: Vec<TableRegistration>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
-
-    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
-    fn forget(
-        &self,
-        forget_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
 }
 
 #[async_trait(?Send)]
@@ -508,8 +490,8 @@ pub trait StorageController: Debug {
     /// collections are a table (i.e. all materialized views, sources, etc).
     ///
     /// This sets up storage but does not register tables in the txns shard. Runtime registration
-    /// must go through the adapter's group committer. Bootstrap uses
-    /// [`Self::register_table_collections`].
+    /// must go through the adapter's group committer. Bootstrap registers tables through
+    /// the adapter's table writer.
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -572,32 +554,12 @@ pub trait StorageController: Debug {
     /// Runtime registration must go through the adapter's group committer.
     async fn alter_table_desc(
         &mut self,
+        storage_metadata: &StorageMetadata,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
     ) -> Result<(), StorageError>;
-
-    /// Registers the `DataSource::Table` collections among `ids` during bootstrap.
-    ///
-    /// Runtime registration must go through the adapter's group committer. In read-only mode, only
-    /// migrated tables are registered.
-    async fn register_table_collections(
-        &mut self,
-        register_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> Result<(), StorageError>;
-
-    /// Returns registration metadata for the `DataSource::Table` collections among `ids`.
-    ///
-    /// Other data sources are ignored.
-    fn table_registrations(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Result<Vec<TableRegistration>, StorageError>;
-
-    /// Returns the `DataSource::Table` IDs among `ids`.
-    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError>;
@@ -686,20 +648,6 @@ pub trait StorageController: Debug {
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
-
-    /// Appends to tables during bootstrap.
-    ///
-    /// Runtime writes must go through the adapter's group committer. The returned receiver resolves
-    /// when the atomic write completes.
-    fn append_table(
-        &mut self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
-
-    /// Returns the process-lifetime storage mechanism used by the adapter's group committer.
-    fn table_write_handle(&self) -> Arc<dyn TableWriteHandle>;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].

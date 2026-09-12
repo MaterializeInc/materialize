@@ -81,6 +81,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
+use differential_dataflow::lattice::Lattice;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_ore::collections::CollectionExt;
@@ -98,12 +99,24 @@ use tracing::{info, warn};
 /// Assigns the selected as-of to the provided dataflow descriptions and returns a set of
 /// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
 /// with the compute controller.
+///
+/// With `catalog_read_protection` enabled, reconstructed indexes start at their least readable
+/// frontier, regardless of whether they have a published compaction bound. Durable index read
+/// requirements can be admitted independently of selection, so soft preferences must not skip
+/// readable history. Published bounds still govern compaction through the controller.
+///
+/// `pending_replacements` supplies creation frontiers for exports that do not yet own output
+/// writes. Protected replacements retain that history independently of their target's progress.
+/// Unprotected replacements may recover later as their input holds advance with the target.
 pub fn run(
     dataflows: &mut [DataflowDescription<LirRelationExpr, ()>],
     read_policies: &BTreeMap<GlobalId, ReadPolicy>,
+    committed_index_bounds: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+    pending_replacements: &BTreeMap<GlobalId, Antichain<Timestamp>>,
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
+    catalog_read_protection: bool,
 ) -> BTreeMap<GlobalId, ReadHold> {
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
@@ -137,7 +150,11 @@ pub fn run(
 
     // Apply hard constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
-    ctx.apply_downstream_storage_constraints();
+    ctx.apply_downstream_storage_constraints(pending_replacements, catalog_read_protection);
+    ctx.apply_committed_index_bounds(committed_index_bounds);
+    if catalog_read_protection {
+        ctx.apply_index_readability_constraints();
+    }
 
     // At this point all collections have as-of bounds that reflect what is required for
     // correctness. The current state isn't very usable though. In particular, most of the upper
@@ -472,7 +489,12 @@ impl<'a> Context<'a> {
     ///
     /// Failing to apply this constraint to a collection is an error. The storage collection it
     /// exports to may have times visible to readers skipped in its output, violating correctness.
-    fn apply_downstream_storage_constraints(&self) {
+    /// Pending replacements do not own these writes and instead preserve their creation frontier.
+    fn apply_downstream_storage_constraints(
+        &self,
+        pending_replacements: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        catalog_read_protection: bool,
+    ) {
         // Apply direct constraints from storage exports.
         for id in self.collections.keys() {
             let Ok(frontiers) = self.storage_collections.collection_frontiers(*id) else {
@@ -481,22 +503,80 @@ impl<'a> Context<'a> {
 
             let collection_empty =
                 PartialOrder::less_equal(&frontiers.write_frontier, &frontiers.read_capabilities);
-            let upper = if collection_empty {
+            let output_upper = if collection_empty {
                 frontiers.read_capabilities
             } else {
                 step_back_frontier(&frontiers.write_frontier)
+            };
+            let (upper, reason) = if let Some(initial_as_of) = pending_replacements.get(id) {
+                // Protected pending requirements retain creation history. Without that
+                // durable promise, input holds can advance with the target's progress.
+                let upper = if catalog_read_protection {
+                    initial_as_of.clone()
+                } else {
+                    initial_as_of.join(&output_upper)
+                };
+                (upper, format!("pending replacement {id} creation frontier"))
+            } else {
+                (output_upper, format!("storage export {id} write frontier"))
             };
 
             let constraint = Constraint {
                 type_: ConstraintType::Hard,
                 bound_type: BoundType::Upper,
                 frontier: &upper,
-                reason: &format!("storage export {id} write frontier"),
+                reason: &reason,
             };
             self.apply_constraint(*id, constraint);
         }
 
         // Propagate constraints upstream, restoring `AsOfBounds` invariant (2).
+        self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
+    fn apply_committed_index_bounds(&self, bounds: &BTreeMap<GlobalId, Antichain<Timestamp>>) {
+        for (id, collection) in &self.collections {
+            if !collection.is_index {
+                continue;
+            }
+            let Some(bound) = bounds.get(id) else {
+                continue;
+            };
+            // A saved permission below actual readability cannot be recovered. Replacement
+            // installs at the readable lower bound, never at a later soft preference, and
+            // seeds local governance there until durable publication catches up.
+            let lower = collection.bounds.borrow().lower.clone();
+            let upper = bound.join(&lower);
+            self.apply_constraint(
+                *id,
+                Constraint {
+                    type_: ConstraintType::Hard,
+                    bound_type: BoundType::Upper,
+                    frontier: &upper,
+                    reason: "committed index compaction bound",
+                },
+            );
+        }
+        self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
+    /// Keep all protected indexes at their propagated readable lower bound.
+    fn apply_index_readability_constraints(&self) {
+        for (id, collection) in &self.collections {
+            if !collection.is_index {
+                continue;
+            }
+            let lower = collection.bounds.borrow().lower.clone();
+            self.apply_constraint(
+                *id,
+                Constraint {
+                    type_: ConstraintType::Hard,
+                    bound_type: BoundType::Upper,
+                    frontier: &lower,
+                    reason: "catalog-protected index readability",
+                },
+            );
+        }
         self.propagate_bounds_upstream(BoundType::Upper);
     }
 
@@ -928,6 +1008,13 @@ mod tests {
             unimplemented!()
         }
 
+        fn take_read_protection_frontiers(
+            &self,
+            _additional_ids: &BTreeSet<GlobalId>,
+        ) -> BTreeMap<GlobalId, (CollectionFrontiers, Antichain<Timestamp>)> {
+            unimplemented!()
+        }
+
         fn check_exists(&self, _id: GlobalId) -> Result<(), StorageError> {
             unimplemented!()
         }
@@ -995,6 +1082,7 @@ mod tests {
             _ids_to_add: BTreeSet<GlobalId>,
             _ids_to_drop: BTreeSet<GlobalId>,
             _ids_to_register: BTreeMap<GlobalId, ShardId>,
+            _live_collection_ids: &BTreeSet<GlobalId>,
         ) -> Result<(), StorageError> {
             unimplemented!()
         }
@@ -1011,6 +1099,7 @@ mod tests {
 
         async fn alter_table_desc(
             &self,
+            _storage_metadata: &StorageMetadata,
             _existing_collection: GlobalId,
             _new_collection: GlobalId,
             _new_desc: RelationDesc,
@@ -1029,6 +1118,23 @@ mod tests {
 
         fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy)>) {
             unimplemented!()
+        }
+
+        fn apply_compaction_bounds(
+            &self,
+            _bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+
+        fn compaction_bound(
+            &self,
+            id: GlobalId,
+        ) -> Result<Option<Antichain<Timestamp>>, StorageError> {
+            self.0
+                .contains_key(&id)
+                .then_some(None)
+                .ok_or(StorageError::IdentifierMissing(id))
         }
 
         fn acquire_read_holds(
@@ -1156,7 +1262,10 @@ mod tests {
             dataflows: [ $( $export_id:literal <- $inputs:expr => $as_of:expr, )* ],
             current_time: $current_time:literal,
             $( read_policies: { $( $policy_id:literal: $policy:expr, )* }, )?
+            $( committed_bounds: { $( $bound_id:literal: $bound:expr, )* }, )?
+            $( pending_replacements: { $( $replacement_id:literal: $initial:expr, )* }, )?
             $( read_only: $read_only:expr, )?
+            $( catalog_read_protection: $catalog_read_protection:expr, )?
         }) => {
             #[mz_ore::test]
             fn $name() {
@@ -1185,12 +1294,23 @@ mod tests {
                 let read_only = false;
                 $( let read_only = $read_only; )?
 
+                #[allow(unused_variables)]
+                let catalog_read_protection = false;
+                $( let catalog_read_protection = $catalog_read_protection; )?
+
                 super::run(
                     &mut dataflows,
                     &read_policies,
+                    &BTreeMap::from([
+                        $($( ($bound_id.parse().unwrap(), ts_to_frontier($bound)), )*)?
+                    ]),
+                    &BTreeMap::from([
+                        $($( ($replacement_id.parse().unwrap(), ts_to_frontier($initial)), )*)?
+                    ]),
                     &storage_frontiers,
                     $current_time.into(),
                     read_only,
+                    catalog_read_protection,
                 );
 
                 let actual_as_ofs: Vec<_> = dataflows
@@ -1203,6 +1323,110 @@ mod tests {
             }
         };
     }
+
+    testcase!(pending_replacement_creation_frontier, {
+        storage: {
+            "s1": (40, 100),
+            "s2": (10, 100),
+            "u2": (10, 20),
+            "u3": (10, 20),
+        },
+        dataflows: [
+            "u1" <- ["s1"] => 50,
+            "u2" <- ["u1"] => 50,
+            "u3" <- ["s2"] => 19,
+        ],
+        current_time: 90,
+        pending_replacements: { "u2": 50, },
+    });
+
+    testcase!(protected_pending_replacement_retains_creation, {
+        storage: {
+            "s1": (40, 100),
+            "u2": (10, 100),
+        },
+        dataflows: [
+            "u1" <- ["s1"] => 40,
+            "u2" <- ["u1"] => 50,
+        ],
+        current_time: 90,
+        pending_replacements: { "u2": 50, },
+        read_only: true,
+        catalog_read_protection: true,
+    });
+
+    testcase!(unprotected_pending_replacement_advances_with_target, {
+        storage: {
+            "s1": (60, 100),
+            "u1": (10, 100),
+        },
+        dataflows: [ "u1" <- ["s1"] => 99, ],
+        current_time: 90,
+        pending_replacements: { "u1": 50, },
+    });
+
+    // Publication does not enumerate durable index read requirements. Even an unpublished
+    // index must retain readable history rather than select the soft preference at 90.
+    testcase!(protected_index_readability, {
+        storage: { "s1": (10, 100), },
+        dataflows: [
+            "u1" <- ["s1"] => 10,
+            "u2" <- ["s1"] => 10,
+            "u3" <- ["s1"] => 10,
+        ],
+        current_time: 90,
+        committed_bounds: { "u2": 30, "u3": 5, },
+        catalog_read_protection: true,
+    });
+
+    // Reverse ID order requires fixed-point lower propagation. The downstream storage
+    // export retains its hard cutoff rather than being pinned like an index.
+    testcase!(protected_index_chain, {
+        storage: {
+            "s1": (10, 100),
+            "s2": (20, 100),
+            "u4": (20, 26),
+        },
+        dataflows: [
+            "u1" <- ["u2"] => 20,
+            "u2" <- ["u3", "s2"] => 20,
+            "u3" <- ["s1"] => 10,
+            "u4" <- ["u1"] => 25,
+        ],
+        current_time: 90,
+        committed_bounds: { "u1": 30, },
+        read_only: true,
+        catalog_read_protection: true,
+    });
+
+    testcase!(committed_index_caps, {
+        storage: { "s1": (10, 100), },
+        dataflows: [
+            "u1" <- ["s1"] => 30,
+            "u2" <- ["u1"] => 30,
+            "u3" <- ["s1"] => 90,
+        ],
+        current_time: 90,
+        committed_bounds: { "u2": 30, },
+    });
+
+    testcase!(committed_index_replacement, {
+        storage: { "s1": (20, 100), },
+        dataflows: [
+            "u1" <- ["s1"] => 20,
+            "u2" <- ["u1"] => 20,
+        ],
+        current_time: 90,
+        committed_bounds: { "u2": 10, },
+    });
+
+    testcase!(committed_index_dropped_input, {
+        storage: { "s1": (SEALED, SEALED), },
+        dataflows: [ "u1" <- ["s1"] => SEALED, ],
+        current_time: 90,
+        committed_bounds: { "u1": 10, },
+        read_only: true,
+    });
 
     testcase!(upstream_storage_constraints, {
         storage: {

@@ -196,7 +196,7 @@ impl ReadHolds {
     ///
     /// In contrast to [`ReadHolds::merge`], this method expects the collection
     /// IDs in `self` and `other` to be distinct and panics otherwise.
-    fn extend(&mut self, other: Self) {
+    pub(super) fn extend(&mut self, other: Self) {
         for (id, other_hold) in other.storage_holds {
             let prev = self.storage_holds.insert(id, other_hold);
             assert!(prev.is_none(), "duplicate storage read hold: {id}");
@@ -209,31 +209,6 @@ impl ReadHolds {
 }
 
 impl crate::coord::Coordinator {
-    /// Initialize the storage read policies.
-    ///
-    /// This should be called only after a storage collection is created, and
-    /// ideally very soon afterwards. The collection is otherwise initialized
-    /// with a read policy that allows no compaction.
-    pub(crate) async fn initialize_storage_read_policies(
-        &mut self,
-        ids: BTreeSet<CatalogItemId>,
-        compaction_window: CompactionWindow,
-    ) {
-        let gids = ids
-            .into_iter()
-            .map(|item_id| self.catalog().get_entry(&item_id).global_ids())
-            .flatten()
-            .collect();
-        self.initialize_read_policies(
-            &CollectionIdBundle {
-                storage_ids: gids,
-                compute_ids: BTreeMap::new(),
-            },
-            compaction_window,
-        )
-        .await;
-    }
-
     /// Initialize the compute read policies.
     ///
     /// This should be called only after a compute collection is created, and
@@ -268,11 +243,21 @@ impl crate::coord::Coordinator {
         id_bundle: &CollectionIdBundle,
         compaction_window: CompactionWindow,
     ) {
-        // Install read holds in the Coordinator's timeline state.
+        // Lifecycle policy installation must not wait for query connections or
+        // durable client publication. Protected windows are acquired after the
+        // installation batch, when readable query replicas can be observed.
+        let query_owned = self.query_client.is_some();
         for (timeline_context, id_bundle) in
             self.catalog().partition_ids_by_timeline_context(id_bundle)
         {
             if let TimelineContext::TimelineDependent(timeline) = timeline_context {
+                if query_owned {
+                    self.ensure_timeline_state(&timeline)
+                        .await
+                        .pending_read_holds
+                        .extend(&id_bundle);
+                    continue;
+                }
                 let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
                 let read_ts = oracle.read_ts().await;
 
@@ -357,6 +342,28 @@ impl crate::coord::Coordinator {
         base_policy: ReadPolicy,
     ) {
         self.update_compute_read_policies(vec![(compute_instance, item_id, base_policy)])
+    }
+
+    /// Acquires request-scoped protection at the earliest readable time.
+    /// All request holds use the query client's issuer when one is installed.
+    pub(crate) async fn acquire_query_read_holds(
+        &mut self,
+        id_bundle: &CollectionIdBundle,
+    ) -> Result<ReadHolds, crate::AdapterError> {
+        if let Some(client) = &self.query_client {
+            let incarnation = client.protection.incarnation();
+            let (holds, _) = self
+                .acquire_client_read_protection(incarnation, id_bundle.clone(), |_| Ok(None))
+                .await?;
+            Ok(holds)
+        } else if self.catalog().state().catalog_read_protection_enabled() && !id_bundle.is_empty()
+        {
+            Err(crate::AdapterError::Internal(
+                "durable query read protection is not initialized".into(),
+            ))
+        } else {
+            Ok(self.acquire_read_holds(id_bundle))
+        }
     }
 
     /// Attempt to acquire read holds on the indicated collections at the

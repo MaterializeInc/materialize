@@ -146,6 +146,17 @@ name               type   cluster   comment
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+# Neither a no-op create nor a catalog-only alteration may reinstall the export.
+> CREATE SINK IF NOT EXISTS snk2
+  IN CLUSTER snk2_cluster
+  FROM src_materialized_tbl
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk2-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> ALTER SINK snk2 RENAME TO snk2_renamed
+> ALTER SINK snk2_renamed RENAME TO snk2
+
 > CREATE CLUSTER snk3_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk3
   IN CLUSTER snk3_cluster

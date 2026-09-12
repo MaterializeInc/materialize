@@ -315,6 +315,18 @@ metrics:
   - collection
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
+- name: mz_catalog_committed_update_bytes
+  help: Packed SourceData row bytes in acknowledged catalog compare-and-appends, including retractions and bootstrap writes. Excludes timestamps, diffs, Persist encoding, compression, and network framing. Not blob or network bytes.
+  labels:
+  - kind
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_committed_updates
+  help: Number of catalog row updates in acknowledged compare-and-appends, including retractions and bootstrap writes.
+  labels:
+  - kind
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_info_metrics_reconcile_seconds_bucket
   help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
   labels:

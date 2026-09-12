@@ -267,8 +267,8 @@ impl Coordinator {
         )))
     }
 
-    fn sequence_introspection_subscribe_timestamp_optimize_lir(
-        &self,
+    async fn sequence_introspection_subscribe_timestamp_optimize_lir(
+        &mut self,
         stage: IntrospectionSubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
         let IntrospectionSubscribeTimestampOptimizeLir {
@@ -281,7 +281,7 @@ impl Coordinator {
 
         // Timestamp selection.
         let id_bundle = global_mir_plan.id_bundle(cluster_id);
-        let read_holds = self.acquire_read_holds(&id_bundle);
+        let read_holds = self.acquire_query_read_holds(&id_bundle).await?;
         let as_of = read_holds.least_valid_read();
 
         let global_mir_plan = global_mir_plan.resolve(as_of);
@@ -558,7 +558,9 @@ impl Staged for IntrospectionSubscribeStage {
         match self {
             Self::OptimizeMir(stage) => coord.sequence_introspection_subscribe_optimize_mir(stage),
             Self::TimestampOptimizeLir(stage) => {
-                coord.sequence_introspection_subscribe_timestamp_optimize_lir(stage)
+                // Protection publication applies catalog implications, which can schedule
+                // introspection stages. Box this edge to keep the future's size finite.
+                Box::pin(coord.sequence_introspection_subscribe_timestamp_optimize_lir(stage)).await
             }
             Self::Finish(stage) => coord.sequence_introspection_subscribe_finish(stage).await,
         }

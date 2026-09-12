@@ -74,6 +74,10 @@ pub enum CollectionType {
     ReplicaSystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
+    CollectionCompactionBound,
+    MaintainedReadRequirement,
+    ClientIncarnation,
+    ClientReadRequirement,
     StorageCollectionMetadata,
     UnfinalizedShard,
     TxnWalShard,
@@ -292,6 +296,38 @@ collection_impl!({
 });
 
 collection_impl!({
+    name: CollectionCompactionBoundCollection,
+    key: proto::CollectionCompactionBoundKey,
+    value: proto::CollectionCompactionBoundValue,
+    collection_type: CollectionType::CollectionCompactionBound,
+    trace_field: collection_compaction_bounds,
+    update: StateUpdateKind::CollectionCompactionBound,
+});
+collection_impl!({
+    name: MaintainedReadRequirementCollection,
+    key: proto::MaintainedReadRequirementKey,
+    value: proto::MaintainedReadRequirementValue,
+    collection_type: CollectionType::MaintainedReadRequirement,
+    trace_field: maintained_read_requirements,
+    update: StateUpdateKind::MaintainedReadRequirement,
+});
+collection_impl!({
+    name: ClientIncarnationCollection,
+    key: proto::ClientIncarnationKey,
+    value: proto::ClientIncarnationValue,
+    collection_type: CollectionType::ClientIncarnation,
+    trace_field: client_incarnations,
+    update: StateUpdateKind::ClientIncarnation,
+});
+collection_impl!({
+    name: ClientReadRequirementCollection,
+    key: proto::ClientReadRequirementKey,
+    value: proto::ClientReadRequirementValue,
+    collection_type: CollectionType::ClientReadRequirement,
+    trace_field: client_read_requirements,
+    update: StateUpdateKind::ClientReadRequirement,
+});
+collection_impl!({
     name: StorageCollectionMetadataCollection,
     key: proto::StorageCollectionMetadataKey,
     value: proto::StorageCollectionMetadataValue,
@@ -367,12 +403,43 @@ pub struct Trace {
     pub cluster_system_configurations: CollectionTrace<ClusterSystemConfigurationCollection>,
     pub replica_system_configurations: CollectionTrace<ReplicaSystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
+    pub collection_compaction_bounds: CollectionTrace<CollectionCompactionBoundCollection>,
+    pub maintained_read_requirements: CollectionTrace<MaintainedReadRequirementCollection>,
+    pub client_incarnations: CollectionTrace<ClientIncarnationCollection>,
+    pub client_read_requirements: CollectionTrace<ClientReadRequirementCollection>,
     pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
     pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
     pub txn_wal_shard: CollectionTrace<TxnWalShardCollection>,
 }
 
 impl Trace {
+    /// Advisory mutation refusal from durable activity, not a lease or a fence.
+    /// Catalog timestamps may be advanced by compaction, so this intentionally
+    /// errs toward refusing an edit when activity cannot be ruled out.
+    pub(crate) fn live_mutation_reason(&self, now: Timestamp, upper: Timestamp) -> Option<String> {
+        const RECENT_MILLIS: u64 = 5 * 60 * 1_000;
+        let cutoff = u64::from(now).saturating_sub(RECENT_MILLIS);
+        // Heartbeats are counters, not wall-clock leases. Their catalog timestamps
+        // need not track wall time. An unreclaimed incarnation is conservatively
+        // live until explicitly overridden, even after a crashed writer stops.
+        if let Some(((key, value), ts, _)) = self
+            .client_incarnations
+            .values
+            .iter()
+            .filter(|(_, _, diff)| *diff > Diff::ZERO)
+            .max_by_key(|(_, ts, _)| *ts)
+        {
+            return Some(format!(
+                "client incarnation {} has registered heartbeat {} (catalog timestamp {ts})",
+                key.id, value.heartbeat
+            ));
+        }
+        let publication = u64::from(upper).checked_sub(1)?;
+        (publication >= cutoff).then(|| {
+            format!("catalog publication at {publication} is within the last five minutes")
+        })
+    }
+
     pub(crate) fn new() -> Trace {
         Trace {
             audit_log: CollectionTrace::new(),
@@ -396,6 +463,10 @@ impl Trace {
             cluster_system_configurations: CollectionTrace::new(),
             replica_system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),
+            collection_compaction_bounds: CollectionTrace::new(),
+            maintained_read_requirements: CollectionTrace::new(),
+            client_incarnations: CollectionTrace::new(),
+            client_read_requirements: CollectionTrace::new(),
             storage_collection_metadata: CollectionTrace::new(),
             unfinalized_shards: CollectionTrace::new(),
             txn_wal_shard: CollectionTrace::new(),
@@ -425,6 +496,10 @@ impl Trace {
             cluster_system_configurations,
             replica_system_configurations,
             system_privileges,
+            collection_compaction_bounds,
+            maintained_read_requirements,
+            client_incarnations,
+            client_read_requirements,
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
@@ -450,6 +525,10 @@ impl Trace {
         cluster_system_configurations.sort();
         replica_system_configurations.sort();
         system_privileges.sort();
+        collection_compaction_bounds.sort();
+        maintained_read_requirements.sort();
+        client_incarnations.sort();
+        client_read_requirements.sort();
         storage_collection_metadata.sort();
         unfinalized_shards.sort();
         txn_wal_shard.sort();
@@ -460,24 +539,83 @@ pub struct DebugCatalogState(pub(crate) UnopenedPersistCatalogState);
 
 impl DebugCatalogState {
     /// Manually update value of `key` in collection `T` to `value`.
+    ///
+    /// Uses cooperative compare-and-set without an exclusive open or automatic promotion.
+    /// Unless `force` is set, refuses with a reason when client heartbeats or recent
+    /// publication indicate a live environment at the CAS snapshot boundary.
+    /// `force` overrides only advisory liveness safety, not fencing or promotion.
+    /// Live writers apply foreign changes or halt and rebuild if they cannot.
     pub async fn edit<T: Collection>(
         &mut self,
         key: T::Key,
         value: T::Value,
+        force: bool,
     ) -> Result<Option<T::Value>, CatalogError>
     where
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug + Clone,
     {
-        self.0.debug_edit::<T>(key, value).await
+        self.0.debug_edit::<T>(key, value, force).await
     }
 
     /// Manually delete `key` from collection `T`.
-    pub async fn delete<T: Collection>(&mut self, key: T::Key) -> Result<(), CatalogError>
+    ///
+    /// Uses the same cooperative compare-and-set and advisory liveness safety as
+    /// [`Self::edit`]. `force` bypasses the liveness check without fencing writers
+    /// or promoting. Live writers apply foreign changes or halt and rebuild if
+    /// they cannot.
+    pub async fn delete<T: Collection>(
+        &mut self,
+        key: T::Key,
+        force: bool,
+    ) -> Result<(), CatalogError>
     where
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug,
     {
-        self.0.debug_delete::<T>(key).await
+        self.0.debug_delete::<T>(key, force).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn live_mutation_window() {
+        let mut trace = Trace::new();
+        let now = Timestamp::new(1_000_000);
+        let cutoff = Timestamp::new(700_000);
+        // The upper is exclusive. Publication exactly five minutes ago is recent.
+        assert!(trace.live_mutation_reason(now, cutoff).is_none());
+        assert!(
+            trace
+                .live_mutation_reason(now, Timestamp::new(700_001))
+                .is_some()
+        );
+        assert!(
+            trace
+                .live_mutation_reason(now, Timestamp::new(1_000_002))
+                .is_some()
+        );
+
+        // A heartbeat counter is not a wall-clock lease. An unreclaimed client
+        // remains conservative evidence of activity even at an old timestamp.
+        trace.client_incarnations.values.push((
+            (
+                proto::ClientIncarnationKey { id: 1 },
+                proto::ClientIncarnationValue {
+                    heartbeat: u64::MAX,
+                },
+            ),
+            Timestamp::new(699_999),
+            Diff::ONE,
+        ));
+        assert!(trace.live_mutation_reason(now, cutoff).is_some());
+        trace.client_incarnations.values[0].1 = cutoff;
+        let reason = trace
+            .live_mutation_reason(now, Timestamp::new(700_001))
+            .expect("registered client should prevent an unforced mutation");
+        assert!(reason.contains("heartbeat"), "{reason}");
     }
 }

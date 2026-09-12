@@ -856,6 +856,10 @@ Snapshot {
         },
     },
     storage_collection_metadata: {},
+    collection_compaction_bounds: {},
+    maintained_read_requirements: {},
+    client_incarnations: {},
+    client_read_requirements: {},
     unfinalized_shards: {},
     txn_wal_shard: {},
 }

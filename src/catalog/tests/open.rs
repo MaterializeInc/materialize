@@ -82,6 +82,7 @@ impl StableSnapshot<'_> {
 impl Debug for StableSnapshot<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Snapshot {
+            read_protection_index: _,
             databases,
             schemas,
             roles,
@@ -103,6 +104,10 @@ impl Debug for StableSnapshot<'_> {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
+            client_incarnations,
+            client_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
         } = self.0;
@@ -140,6 +145,10 @@ impl Debug for StableSnapshot<'_> {
             .field("default_privileges", default_privileges)
             .field("system_privileges", system_privileges)
             .field("storage_collection_metadata", storage_collection_metadata)
+            .field("collection_compaction_bounds", collection_compaction_bounds)
+            .field("maintained_read_requirements", maintained_read_requirements)
+            .field("client_incarnations", client_incarnations)
+            .field("client_read_requirements", client_read_requirements)
             .field("unfinalized_shards", unfinalized_shards)
             .field("txn_wal_shard", txn_wal_shard)
             .finish()
@@ -525,20 +534,16 @@ fn insert_view(
 async fn test_persist_open_reclaims_ephemeral_items() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_open_reclaims_ephemeral_items(state_builder).await;
+    test_open_reclaims_ephemeral_items(state_builder.clone(), false).await;
+    test_open_reclaims_ephemeral_items(state_builder.with_organization_id(Uuid::new_v4()), true)
+        .await;
 }
 
-/// Temporary items are durable, tagged with the UUID of the session that
-/// created them, so a process that dies without running its session-close
-/// cleanup leaves them behind. Opening the catalog with write intent fences out
-/// every previous owner, which means every session that could own one is dead,
-/// so that open reclaims them. This is the only thing standing between a
-/// `kill -9` and a permanently leaked catalog item.
-///
-/// A read-only open must not reclaim anything: during a zero-downtime deploy the
-/// follower reads the leader's catalog while the leader's sessions are still
-/// live and still own their temporary items.
-async fn test_open_reclaims_ephemeral_items(state_builder: TestCatalogStateBuilder) {
+/// Protected same-generation opens preserve owners. Exclusive opens reclaim them.
+async fn test_open_reclaims_ephemeral_items(
+    state_builder: TestCatalogStateBuilder,
+    protected: bool,
+) {
     let state_builder = state_builder.with_default_deploy_generation();
     let owner_session = Uuid::from_u128(1);
     let ephemeral_id = CatalogItemId::User(200);
@@ -546,7 +551,7 @@ async fn test_open_reclaims_ephemeral_items(state_builder: TestCatalogStateBuild
 
     // A session creates a temporary item, next to a normal one, and the process
     // then dies without closing the session.
-    {
+    let initial_snapshot = {
         let mut state = state_builder
             .clone()
             .unwrap_build()
@@ -560,6 +565,10 @@ async fn test_open_reclaims_ephemeral_items(state_builder: TestCatalogStateBuild
             .expect("unable to sync");
 
         let mut txn = state.transaction().await.unwrap();
+        if protected {
+            txn.set_config("catalog_read_protection_enabled".into(), Some(1))
+                .unwrap();
+        }
         insert_view(&mut txn, normal_id, SchemaId::User(1), "keep", None);
         // Temporary items are parented to a sentinel schema id shared by
         // every session.
@@ -577,7 +586,8 @@ async fn test_open_reclaims_ephemeral_items(state_builder: TestCatalogStateBuild
         let snapshot = state.snapshot().await.unwrap();
         assert!(item_ids(&snapshot).contains(&ephemeral_id));
         Box::new(state).expire().await;
-    }
+        snapshot
+    };
 
     // A read-only open leaves it alone. Checked before the writable open below,
     // which is what removes it.
@@ -597,9 +607,37 @@ async fn test_open_reclaims_ephemeral_items(state_builder: TestCatalogStateBuild
         Box::new(read_only_state).expire().await;
     }
 
-    // Opening with write intent reclaims it, and only it.
+    if protected {
+        for active in [false, true] {
+            let openable = state_builder
+                .clone()
+                .with_deploy_generation(if active { 99 } else { 0 })
+                .unwrap_build()
+                .await;
+            let mut state = if active {
+                openable.join_active().await.unwrap()
+            } else {
+                openable.join().await.unwrap()
+            };
+            assert_eq!(state.snapshot().await.unwrap(), initial_snapshot);
+            assert_eq!(state.get_deployment_generation().await.unwrap(), 0);
+            state.expire().await;
+        }
+        let mut same_generation = state_builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        assert!(item_ids(&same_generation.snapshot().await.unwrap()).contains(&ephemeral_id));
+        same_generation.expire().await;
+    }
+
+    // Promotion reclaims only the outgoing ephemeral item.
     {
         let mut state = state_builder
+            .with_deploy_generation(if protected { 1 } else { 0 })
             .unwrap_build()
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
@@ -907,7 +945,7 @@ async fn test_persist_unopened_deploy_generation_fencing() {
             .unwrap()
     );
 
-    // Open catalog, which will bump the epoch AND deploy generation.
+    // Open catalog, which will promote the deploy generation.
     let _state = state_builder
         .clone()
         .with_deploy_generation(deploy_generation + 1)
@@ -967,13 +1005,13 @@ async fn test_persist_unopened_deploy_generation_fencing() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_opened_epoch_fencing() {
+async fn test_persist_same_generation_coexistence() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_opened_epoch_fencing(state_builder).await;
+    test_same_generation_coexistence(state_builder).await;
 }
 
-async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
+async fn test_same_generation_coexistence(state_builder: TestCatalogStateBuilder) {
     // Initialize catalog.
     let state_builder = state_builder.with_default_deploy_generation();
     let mut state = state_builder
@@ -984,7 +1022,14 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap();
 
-    // Open catalog, which will bump the epoch.
+    state.sync_to_current_updates().await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+        .unwrap();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+
+    // Open another catalog in the same generation.
     let _state = state_builder
         .clone()
         .unwrap_build()
@@ -993,24 +1038,51 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap();
 
-    // Opened catalog should be fenced now with an epoch fence.
-    let err = state.snapshot().await.unwrap_err();
-    assert!(
-        matches!(
-            err,
-            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
-        ),
-        "unexpected err: {err:?}"
-    );
-
-    let err = state.transaction().await.unwrap_err();
-    assert!(
-        matches!(
-            err,
-            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
-        ),
-        "unexpected err: {err:?}"
-    );
+    state.snapshot().await.unwrap();
+    state.sync_to_current_updates().await.unwrap();
+    state.transaction().await.unwrap();
+    let joined = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .unwrap();
+    let pending = state_builder
+        .clone()
+        .with_deploy_generation(1)
+        .unwrap_build()
+        .await;
+    assert!(matches!(
+        pending.join().await.unwrap_err(),
+        CatalogError::Durable(DurableCatalogError::NotWritable(_))
+    ));
+    let stale_join = state_builder
+        .clone()
+        .with_deploy_generation(99)
+        .unwrap_build()
+        .await;
+    let promoted = state_builder
+        .with_deploy_generation(1)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    for mut old in [state, joined, _state] {
+        assert!(matches!(
+            old.snapshot().await.unwrap_err(),
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ));
+        old.expire().await;
+    }
+    // Discovery uses active state at admission, not the build-time snapshot.
+    let mut joined = stale_join.join_active().await.unwrap();
+    assert_eq!(joined.get_deployment_generation().await.unwrap(), 1);
+    joined.expire().await;
+    promoted.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1032,7 +1104,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .await
         .unwrap();
 
-    // Open catalog, which will bump the epoch AND deploy generation.
+    // Open catalog, which will promote the deploy generation.
     let _state = state_builder
         .clone()
         .with_deploy_generation(deploy_generation + 1)
@@ -1042,7 +1114,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .await
         .unwrap();
 
-    // Opened catalog should be fenced now with an epoch fence.
+    // Opened catalog should be fenced now by the deployment generation.
     let err = state.snapshot().await.unwrap_err();
     assert!(
         matches!(
@@ -1260,4 +1332,264 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_join_requires_initialized_current_version() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    assert!(matches!(
+        builder
+            .clone()
+            .unwrap_build()
+            .await
+            .join()
+            .await
+            .unwrap_err(),
+        CatalogError::Durable(DurableCatalogError::Uninitialized)
+    ));
+    assert!(
+        !builder
+            .clone()
+            .unwrap_build()
+            .await
+            .is_initialized()
+            .await
+            .unwrap()
+    );
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    state.sync_to_current_updates().await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    txn.set_config(USER_VERSION_KEY.into(), Some(CATALOG_VERSION - 1))
+        .unwrap();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let upper = state.current_upper().await;
+    assert!(matches!(
+        builder
+            .clone()
+            .unwrap_build()
+            .await
+            .join()
+            .await
+            .unwrap_err(),
+        CatalogError::Durable(DurableCatalogError::NotWritable(_))
+    ));
+    assert_eq!(state.current_upper().await, upper);
+    assert_eq!(
+        StableSnapshot(&state.snapshot().await.unwrap())
+            .user_version()
+            .unwrap()
+            .value,
+        CATALOG_VERSION - 1
+    );
+    state.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_admin_admission_and_unprotected_join_refusal() {
+    for protection in [None, Some(0), Some(1), Some(2)] {
+        let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+            .with_default_deploy_generation();
+        let mut state = builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        state.sync_to_current_updates().await.unwrap();
+        let mut txn = state.transaction().await.unwrap();
+        txn.set_config("catalog_read_protection_enabled".into(), protection)
+            .unwrap();
+        insert_view(
+            &mut txn,
+            CatalogItemId::User(200),
+            SchemaId::User(0),
+            "admin_must_preserve",
+            Some(Uuid::new_v4()),
+        );
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.unwrap();
+        let snapshot = state.snapshot().await.unwrap();
+        let epoch = state.epoch();
+
+        if protection.unwrap_or(0) == 0 {
+            let upper = state.current_upper().await;
+            for active in [false, true] {
+                let openable = builder.clone().unwrap_build().await;
+                let result = if active {
+                    openable.join_active().await
+                } else {
+                    openable.join().await
+                };
+                assert!(matches!(
+                    result.unwrap_err(),
+                    CatalogError::Durable(DurableCatalogError::NotWritable(_))
+                ));
+                assert_eq!(state.current_upper().await, upper);
+            }
+        }
+
+        // A pending deployment must not promote while performing administration.
+        let mut admin = builder
+            .clone()
+            .with_deploy_generation(99)
+            .unwrap_build()
+            .await
+            .open_debug()
+            .await
+            .unwrap();
+        assert_eq!(state.snapshot().await.unwrap(), snapshot);
+        let key = proto::ConfigKey {
+            key: "admin_test".into(),
+        };
+        let value = proto::ConfigValue { value: 1 };
+        admin
+            .edit::<mz_catalog::durable::debug::ConfigCollection>(key.clone(), value.clone(), true)
+            .await
+            .unwrap();
+        let mut expected = snapshot;
+        expected.configs.insert(key, value);
+        assert_eq!(state.snapshot().await.unwrap(), expected);
+        assert_eq!(state.get_deployment_generation().await.unwrap(), 0);
+        assert_eq!(state.epoch(), epoch);
+        drop(admin);
+        state.expire().await;
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_concurrent_protected_opens_and_allocators() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    state.sync_to_current_updates().await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+        .unwrap();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    state.expire().await;
+    let first = builder.clone().unwrap_build().await;
+    let second = builder.clone().unwrap_build().await;
+    let args = test_bootstrap_args();
+    let (first, second) = tokio::join!(
+        first.open(SYSTEM_TIME().into(), &args),
+        second.open(SYSTEM_TIME().into(), &args)
+    );
+    let mut first = first.unwrap();
+    let mut second = second.unwrap();
+    first.sync_to_current_updates().await.unwrap();
+    second.sync_to_current_updates().await.unwrap();
+    let mut observer = builder.unwrap_build().await.join().await.unwrap();
+    observer.sync_to_current_updates().await.unwrap();
+    let mut txn = first.transaction().await.unwrap();
+    insert_view(
+        &mut txn,
+        CatalogItemId::User(200),
+        SchemaId::User(1),
+        "retained",
+        None,
+    );
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let expected = observer.sync_to_current_updates().await.unwrap();
+    assert!(!expected.is_empty());
+    let mut ids = HashSet::new();
+    for _ in 0..20 {
+        let (left, right) = tokio::join!(first.allocate_user_id(ts), second.allocate_user_id(ts));
+        assert!(ids.insert(left.unwrap()));
+        assert!(ids.insert(right.unwrap()));
+    }
+    assert_eq!(second.sync_to_current_updates().await.unwrap(), expected);
+    // Advance over content without consuming projection updates.
+    first.sync_to_current_updates().await.unwrap();
+    let mut txn = first.transaction().await.unwrap();
+    insert_view(
+        &mut txn,
+        CatalogItemId::User(201),
+        SchemaId::User(1),
+        "advance_retained",
+        None,
+    );
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let expected = observer.sync_to_current_updates().await.unwrap();
+    second
+        .advance_upper(ts.step_forward().step_forward())
+        .await
+        .unwrap();
+    assert_eq!(second.sync_to_current_updates().await.unwrap(), expected);
+    first.expire().await;
+    second.expire().await;
+    observer.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_opened_epoch_fencing() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_opened_epoch_fencing(state_builder).await;
+}
+
+async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
+    // Initialize catalog.
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    // Open catalog, which will bump the epoch.
+    let _state = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    // Opened catalog should be fenced now with an epoch fence.
+    let err = state.snapshot().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    let err = state.transaction().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
 }

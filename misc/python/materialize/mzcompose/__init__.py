@@ -181,6 +181,9 @@ def get_minimal_system_parameters(
     if version < MzVersion.parse_mz("v26.41.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
 
+    if version >= MzVersion.parse_mz("v26.41.0-dev"):
+        config["enable_catalog_read_protection"] = "true"
+
     return config
 
 
@@ -688,6 +691,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "memory_limiter_usage_bias",
     "memory_limiter_burst_factor",
     "catalog_info_metrics_reconcile_interval",
+    # Zero pauses publication, so vary this only in targeted consistency checks.
+    "catalog_read_protection_publish_interval",
     "compute_server_maintenance_interval",
     "compute_dataflow_max_inflight_bytes_cc",
     "compute_flat_map_fuel",

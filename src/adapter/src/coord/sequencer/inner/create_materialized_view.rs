@@ -10,8 +10,7 @@
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
-use maplit::btreeset;
-use mz_adapter_types::compaction::CompactionWindow;
+use mz_catalog::durable::objects::MaintainedReadRequirement;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
@@ -21,7 +20,9 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{
+    CatalogItemId, Datum, GlobalId, RelationVersion, Row, Timestamp, VersionedRelationDesc,
+};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -29,7 +30,7 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::controller::CollectionDescription;
+use mz_transform::notice::OptimizerNoticeApi;
 use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
@@ -50,7 +51,6 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::util::ResultExt;
 use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider, catalog};
 
 impl Staged for CreateMaterializedViewStage {
@@ -98,6 +98,59 @@ impl Staged for CreateMaterializedViewStage {
 }
 
 impl Coordinator {
+    /// Returns the committed input permission for MV admission, not a read hold.
+    pub(crate) fn materialized_view_input_permission(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> Result<Antichain<Timestamp>, AdapterError> {
+        let mut permission = Antichain::from_elem(Timestamp::MIN);
+        if self.catalog().state().catalog_read_protection_enabled() {
+            for id in ids {
+                let bound = self
+                    .catalog()
+                    .state()
+                    .storage_metadata()
+                    .compaction_bounds
+                    .get(&id)
+                    .ok_or_else(|| {
+                        AdapterError::internal(
+                            "create materialized view",
+                            format!("logical input {id} has no committed compaction bound"),
+                        )
+                    })?;
+                permission.join_assign(bound);
+            }
+        }
+        Ok(permission)
+    }
+
+    /// Discovers storage inputs required to reconstruct an MV from its definition.
+    pub(crate) fn materialized_view_logical_inputs(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> Result<CollectionIdBundle, AdapterError> {
+        let inputs = self.catalog().state().logical_collection_inputs(
+            ids.into_iter()
+                .filter(|id| self.catalog().get_entry_by_global_id(id).is_relation()),
+        );
+        let log_names: Vec<_> = inputs
+            .iter()
+            .map(|id| self.catalog().get_entry_by_global_id(id))
+            .filter(|entry| matches!(entry.item(), CatalogItem::Log(_)))
+            .map(|entry| entry.name().item.clone())
+            .collect();
+        if !log_names.is_empty() {
+            return Err(AdapterError::InvalidLogDependency {
+                object_type: "materialized view".into(),
+                log_names,
+            });
+        }
+        Ok(CollectionIdBundle {
+            storage_ids: inputs,
+            compute_ids: BTreeMap::new(),
+        })
+    }
+
     #[instrument]
     pub(crate) async fn sequence_create_materialized_view(
         &mut self,
@@ -329,6 +382,7 @@ impl Coordinator {
             materialized_view:
                 plan::MaterializedView {
                     expr,
+                    query_ids,
                     cluster_id,
                     target_replica,
                     refresh_schedule,
@@ -396,7 +450,7 @@ impl Coordinator {
                 // index), otherwise we might be missing some read holds.
                 let ids = self
                     .index_oracle(*cluster_id)
-                    .sufficient_collections(resolved_ids.collections().copied());
+                    .sufficient_collections(query_ids.collections().copied());
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \
@@ -574,6 +628,7 @@ impl Coordinator {
                     materialized_view:
                         plan::MaterializedView {
                             mut create_sql,
+                            query_ids,
                             expr: raw_expr,
                             column_names,
                             dependencies,
@@ -615,22 +670,38 @@ impl Coordinator {
 
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+        let logical_inputs = self.materialized_view_logical_inputs(
+            query_ids
+                .collections()
+                .copied()
+                .chain(raw_expr.depends_on()),
+        )?;
 
-        let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(ctx.session().conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
             // stages will already have acquired ReadHolds, we can re-use those.
 
-            txn_reads
+            txn_reads.clone()
         } else {
             // No one has acquired holds, make sure we can determine an as_of
-            // and render our dataflow below.
-            read_holds_owned = self.acquire_read_holds(&id_bundle);
-            &read_holds_owned
+            // and commit a readable creation frontier.
+            self.acquire_query_read_holds(&id_bundle).await?
         };
 
-        let (dataflow_as_of, storage_as_of, until) =
-            self.select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)?;
+        // Reuse purification's holds, whose timestamps may already be named by
+        // REFRESH AT. Planning can introduce reads absent from name resolution.
+        let mut additional_inputs = id_bundle.clone();
+        additional_inputs.extend(&logical_inputs);
+        let additional_read_holds = self
+            .acquire_query_read_holds(&additional_inputs.difference(&read_holds.id_bundle()))
+            .await?;
+        let (dataflow_as_of, storage_as_of, until) = self.select_timestamps(
+            id_bundle,
+            refresh_schedule.as_ref(),
+            &read_holds,
+            &additional_read_holds,
+            &logical_inputs,
+        )?;
 
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -667,7 +738,7 @@ impl Coordinator {
 
         let local_mir_for_cache = local_mir_plan.expr();
 
-        let ops = vec![
+        let mut ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
                     .into_iter()
@@ -684,6 +755,7 @@ impl Coordinator {
                     desc,
                     collections,
                     resolved_ids,
+                    query_ids,
                     dependencies,
                     replacement_target,
                     cluster_id,
@@ -699,6 +771,16 @@ impl Coordinator {
                 owner_id: *ctx.session().current_role_id(),
             },
         ];
+        if self.catalog().state().catalog_read_protection_enabled() {
+            ops.push(catalog::Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: global_id,
+                    inputs: logical_inputs.storage_ids,
+                    frontier: dataflow_as_of.as_option().copied(),
+                }],
+                bounds: vec![],
+            });
+        }
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -718,8 +800,7 @@ impl Coordinator {
         // here, so that if the catalog transaction below fails the user
         // isn't shown confusing notices about an item that wasn't actually
         // created.
-        let output_desc = global_lir_plan.desc().clone();
-        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
             let full_name = self.catalog().resolve_full_name(&name, None);
@@ -755,70 +836,7 @@ impl Coordinator {
             .await;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
-
-                    df_desc.set_as_of(dataflow_as_of.clone());
-                    df_desc.set_initial_as_of(initial_as_of);
-                    df_desc.until = until;
-
-                    let storage_metadata = coord.catalog.state().storage_metadata();
-
-                    let mut collection_desc =
-                        CollectionDescription::for_other(output_desc, Some(storage_as_of));
-                    let mut allow_writes = true;
-
-                    // If this MV is intended to replace another one, we need to start it in
-                    // read-only mode, targeting the shard of the replacement target.
-                    if let Some(target_id) = replacement_target {
-                        let target_gid = coord.catalog.get_entry(&target_id).latest_global_id();
-                        collection_desc.primary = Some(target_gid);
-                        allow_writes = false;
-                    }
-
-                    // Announce the creation of the materialized view source.
-                    coord
-                        .controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(global_id, collection_desc)],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to append");
-
-                    coord
-                        .initialize_storage_read_policies(
-                            btreeset![item_id],
-                            compaction_window.unwrap_or(CompactionWindow::Default),
-                        )
-                        .await;
-
-                    coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                            target_replica,
-                        )
-                        .await;
-
-                    if allow_writes {
-                        coord.allow_writes(cluster_id, global_id);
-                    }
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {
@@ -827,6 +845,12 @@ impl Coordinator {
                 // catalog transaction has succeeded. If the transaction had
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
+                // A cache rejection may reflect an optimizer-only dependency dropped in this batch.
+                raw_df_meta.optimizer_notices.retain(|notice| {
+                    notice.dependencies().iter().all(|id| {
+                        self.catalog().try_get_entry_by_global_id(id).is_some()
+                    })
+                });
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -855,6 +879,8 @@ impl Coordinator {
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
         read_holds: &ReadHolds,
+        additional_read_holds: &ReadHolds,
+        logical_inputs: &CollectionIdBundle,
     ) -> Result<
         (
             Antichain<mz_repr::Timestamp>,
@@ -864,13 +890,23 @@ impl Coordinator {
         AdapterError,
     > {
         assert!(
-            id_bundle.difference(&read_holds.id_bundle()).is_empty(),
+            id_bundle
+                .difference(&read_holds.id_bundle())
+                .difference(&additional_read_holds.id_bundle())
+                .is_empty(),
             "we must have read holds for all involved collections"
         );
 
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
-        let least_valid_read = read_holds.least_valid_read();
+        let mut least_valid_read = read_holds
+            .least_valid_read()
+            .join(&additional_read_holds.least_valid_read());
+        // Physical compaction may lag permission. Admission cannot rely on
+        // that extra history, even for inputs eliminated by optimization.
+        least_valid_read.join_assign(
+            &self.materialized_view_input_permission(logical_inputs.storage_ids.iter().copied())?,
+        );
         let mut dataflow_as_of = least_valid_read.clone();
         let mut storage_as_of = least_valid_read.clone();
 
@@ -884,6 +920,16 @@ impl Coordinator {
         // the first refresh time. Also note that simply moving the `dataflow_as_of` forward to the
         // first refresh time would prevent warmup before the first refresh.
         if let Some(refresh_schedule) = &refresh_schedule {
+            // Planning can introduce logical reads absent from name resolution.
+            // Do not let rounding skip a requested refresh on those inputs.
+            for refresh_at_ts in &refresh_schedule.ats {
+                if !least_valid_read.less_equal(refresh_at_ts) {
+                    return Err(AdapterError::InputNotReadableAtRefreshAtTime(
+                        *refresh_at_ts,
+                        least_valid_read,
+                    ));
+                }
+            }
             if let Some(least_valid_read_ts) = least_valid_read.as_option() {
                 if let Some(first_refresh_ts) =
                     refresh_schedule.round_up_timestamp(*least_valid_read_ts)
@@ -918,6 +964,12 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
+        if self.catalog().state().catalog_read_protection_enabled() && storage_as_of.is_empty() {
+            return Err(AdapterError::internal(
+                "create materialized view",
+                "no readable timestamp for materialized view inputs",
+            ));
+        }
         Ok((dataflow_as_of, storage_as_of, until))
     }
 
@@ -988,7 +1040,7 @@ impl Coordinator {
     }
 
     pub(crate) async fn explain_pushdown_materialized_view(
-        &self,
+        &mut self,
         ctx: ExecuteContext,
         item_id: CatalogItemId,
     ) {
@@ -1017,7 +1069,13 @@ impl Coordinator {
             storage_ids: plan.source_imports.keys().copied().collect(),
             compute_ids: BTreeMap::new(),
         };
-        let read_holds = Some(self.acquire_read_holds(&id_bundle));
+        let read_holds = match self.acquire_query_read_holds(&id_bundle).await {
+            Ok(holds) => Some(holds),
+            Err(error) => {
+                ctx.retire(Err(error));
+                return;
+            }
+        };
 
         let frontiers = self
             .controller

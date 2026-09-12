@@ -200,6 +200,44 @@ impl<T> Drop for PressOnDrop<T> {
     }
 }
 
+/// Broadcast storage admission and failure to every partition serving the query.
+/// The callbacks activate Timely even when execution is suspended awaiting Schedule.
+pub(crate) fn query_source_events<'scope>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
+    mut observe: impl FnMut(GlobalId, Result<(), String>) + 'static,
+) -> impl Fn(GlobalId) -> ErrorHandler + 'static {
+    use timely::dataflow::operators::core::InspectCore;
+    use timely::dataflow::operators::vec::{Broadcast, UnorderedInput};
+    let ((input, cap), events) = scope.new_unordered_input::<(GlobalId, Result<(), String>)>();
+    events.broadcast().inspect_container(move |event| {
+        if let Ok((_, events)) = event {
+            for (id, event) in events {
+                observe(*id, event.clone());
+            }
+        }
+    });
+    let input = Rc::new(std::cell::RefCell::new((input, cap)));
+    move |source_id| {
+        let ready_input = Rc::clone(&input);
+        let error_input = Rc::clone(&input);
+        ErrorHandler::Query {
+            ready: Rc::new(move || {
+                let mut input = ready_input.borrow_mut();
+                let (input, cap) = &mut *input;
+                input.activate().session(cap).give((source_id, Ok(())));
+            }),
+            error: Rc::new(move |error| {
+                let mut input = error_input.borrow_mut();
+                let (input, cap) = &mut *input;
+                input
+                    .activate()
+                    .session(cap)
+                    .give((source_id, Err(error.to_string())));
+            }),
+        }
+    }
+}
+
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
 /// This method imports sources from provided assets, and then builds the remaining
@@ -243,6 +281,13 @@ pub fn build_compute_dataflow(
     let build_name = format!("BuildRegion: {}", dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // Admission events must reach every worker. A source acquires its leased reader
+        // on just its distributing worker, while every worker can serve query results.
+        let query_events = compute_state.query_admission.clone().map(|admission| {
+            query_source_events(scope, move |id, event| {
+                admission.borrow_mut().observe(id, event)
+            })
+        });
         let scope = scope.with_label();
 
         // The scope.clone() occurs to allow import in the region.
@@ -290,6 +335,10 @@ pub fn build_compute_dataflow(
                         SnapshotMode::Exclude
                     };
                     let suppress_early_progress_as_of = dataflow.as_of.clone();
+                    let error_handler = query_events
+                        .as_ref()
+                        .map(|handler| handler(*source_id))
+                        .unwrap_or(ErrorHandler::Halt("compute_import"));
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
@@ -309,7 +358,7 @@ pub fn build_compute_dataflow(
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone().into_send_future(),
-                        ErrorHandler::Halt("compute_import"),
+                        error_handler,
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.
@@ -679,9 +728,21 @@ where
                 }
             };
             self.update_id(Id::Global(idx.on_id), bundle);
+            // Readers can outlive catalog exports, including through maintained imports.
+            // Each edge retains its producer so the entire dependency chain keeps running
+            // until the importing trace or sink releases its read protection.
+            let producer = compute_state
+                .collections
+                .get(&idx_id)
+                .map(|c| Rc::clone(&c.dataflow_index));
             tokens.insert(
                 idx_id,
-                Rc::new((PressOnDrop(ok_button), PressOnDrop(err_button), token)),
+                Rc::new((
+                    PressOnDrop(ok_button),
+                    PressOnDrop(err_button),
+                    token,
+                    producer,
+                )),
             );
         } else {
             panic!(
@@ -761,6 +822,10 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
+                // Maintained aliases must retain their producers too: a query can
+                // keep an alias alive after lifecycle deletion of the whole chain.
+                let retained = trace.to_drop().clone();
+                let trace = trace.with_drop((retained, needed_tokens));
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
@@ -863,6 +928,8 @@ where
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
+                let retained = trace.to_drop().clone();
+                let trace = trace.with_drop((retained, needed_tokens));
                 compute_state.traces.set(idx_id, trace);
             }
             None => {

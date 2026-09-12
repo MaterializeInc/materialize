@@ -24,7 +24,6 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
-use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -676,9 +675,11 @@ impl Controller {
     #[instrument(name = "controller::new")]
     pub async fn new(
         config: ControllerConfig,
-        envd_epoch: NonZeroI64,
+        envd_epoch: std::num::NonZeroI64,
         read_only: bool,
+        catalog_read_protection_enabled: bool,
         storage_txn: &dyn StorageTxn,
+        txns_metrics: Arc<TxnMetrics>,
     ) -> Self {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
@@ -689,7 +690,6 @@ impl Controller {
 
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
-        let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
             Arc::clone(&config.persist_clients),
@@ -698,6 +698,7 @@ impl Controller {
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
+            catalog_read_protection_enabled,
             config.connection_context.clone(),
             storage_txn,
         )
@@ -726,6 +727,7 @@ impl Controller {
             config.build_info,
             storage_collections,
             read_only,
+            catalog_read_protection_enabled,
             &config.metrics_registry,
             config.persist_location,
             controller_metrics,

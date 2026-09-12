@@ -82,7 +82,9 @@ impl Staged for PeekStage {
                 coord.peek_real_time_recency(ctx.session(), stage).await
             }
             PeekStage::TimestampReadHold(stage) => {
-                coord.peek_timestamp_read_hold(ctx.session_mut(), stage)
+                coord
+                    .peek_timestamp_read_hold(ctx.session_mut(), stage)
+                    .await
             }
             PeekStage::Optimize(stage) => coord.peek_optimize(ctx.session(), stage).await,
             PeekStage::Finish(stage) => coord.peek_finish(ctx, stage).await,
@@ -410,7 +412,7 @@ impl Coordinator {
 
     /// Determine a read timestamp and create appropriate read holds.
     #[instrument]
-    fn peek_timestamp_read_hold(
+    async fn peek_timestamp_read_hold(
         &mut self,
         session: &mut Session,
         PeekStageTimestampReadHold {
@@ -438,17 +440,19 @@ impl Coordinator {
             .map(|id| self.catalog().resolve_item_id(&id));
         validity.extend_dependencies(self.catalog(), item_ids);
 
-        let determination = self.sequence_peek_timestamp(
-            session,
-            &plan.when,
-            cluster_id,
-            timeline_context,
-            oracle_read_ts,
-            &id_bundle,
-            &source_ids,
-            real_time_recency_ts,
-            (&explain_ctx).into(),
-        )?;
+        let determination = self
+            .sequence_peek_timestamp(
+                session,
+                &plan.when,
+                cluster_id,
+                timeline_context,
+                oracle_read_ts,
+                &id_bundle,
+                &source_ids,
+                real_time_recency_ts,
+                (&explain_ctx).into(),
+            )
+            .await?;
 
         let stage = PeekStage::Optimize(PeekStageOptimize {
             validity,
@@ -929,6 +933,7 @@ impl Coordinator {
         // Callback for the active copy to.
         let (tx, rx) = oneshot::channel();
         let active_copy_to = ActiveCopyTo {
+            query_execution: None,
             conn_id: ctx.session().conn_id().clone(),
             tx,
             cluster_id,
@@ -937,9 +942,25 @@ impl Coordinator {
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
         drop(self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to)));
 
-        // Ship dataflow.
-        self.ship_dataflow(df_desc, cluster_id, target_replica)
-            .await;
+        if self.query_client.is_some() {
+            let imports = CollectionIdBundle {
+                storage_ids: df_desc.source_imports.keys().copied().collect(),
+                compute_ids: [(cluster_id, df_desc.index_imports.keys().copied().collect())]
+                    .into_iter()
+                    .collect(),
+            };
+            let result = match self.acquire_query_read_holds(&imports).await {
+                Ok(holds) => self.start_query_sink(df_desc, cluster_id, target_replica, holds),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result {
+                self.remove_active_compute_sink(sink_id).await;
+                return Err(error);
+            }
+        } else {
+            self.ship_dataflow(df_desc, cluster_id, target_replica)
+                .await;
+        }
 
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
@@ -1006,7 +1027,7 @@ impl Coordinator {
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
     #[instrument]
-    pub(super) fn sequence_peek_timestamp(
+    pub(super) async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
         when: &QueryWhen,
@@ -1049,15 +1070,17 @@ impl Coordinator {
                     // If not in a transaction, use the source.
                     source_bundle
                 };
-                let (determination, read_holds) = self.determine_timestamp(
-                    session,
-                    determine_bundle,
-                    when,
-                    cluster_id,
-                    &timeline_context,
-                    oracle_read_ts,
-                    real_time_recency_ts,
-                )?;
+                let (determination, read_holds) = self
+                    .determine_timestamp(
+                        session,
+                        determine_bundle,
+                        when,
+                        cluster_id,
+                        &timeline_context,
+                        oracle_read_ts,
+                        real_time_recency_ts,
+                    )
+                    .await?;
                 // We only need read holds if the read depends on a timestamp.
                 let read_holds = match determination.timestamp_context.timestamp() {
                     Some(_ts) => Some(read_holds),

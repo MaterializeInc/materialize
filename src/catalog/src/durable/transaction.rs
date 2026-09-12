@@ -49,19 +49,23 @@ use crate::durable::initialize::{
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
-    AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
+    AuditLogKey, ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
+    ClientReadRequirementValue, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
     ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
     ClusterReplicaValue, ClusterSystemConfiguration, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
-    ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
+    ClusterSystemConfigurationValue, ClusterValue, CollectionCompactionBound,
+    CollectionCompactionBoundKey, CollectionCompactionBoundValue, CommentKey, CommentValue, Config,
+    ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, MaintainedReadRequirement,
+    MaintainedReadRequirementKey, MaintainedReadRequirementValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReadProtectionIndex, ReplicaConfig, ReplicaSystemConfiguration,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
@@ -85,7 +89,10 @@ struct CommitCapability;
 pub struct Transaction<'a> {
     #[derivative(Debug = "ignore")]
     #[derivative(PartialEq = "ignore")]
-    durable_catalog: &'a mut dyn DurableCatalogState,
+    durable_catalog: Option<&'a mut dyn DurableCatalogState>,
+    is_bootstrap_complete: bool,
+    is_savepoint: bool,
+    read_protection_index: ReadProtectionIndex,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -111,6 +118,13 @@ pub struct Transaction<'a> {
     network_policies: TableTransaction<NetworkPolicyKey, NetworkPolicyValue>,
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
+    collection_compaction_bounds:
+        TableTransaction<CollectionCompactionBoundKey, CollectionCompactionBoundValue>,
+    maintained_read_requirements:
+        TableTransaction<MaintainedReadRequirementKey, MaintainedReadRequirementValue>,
+    client_incarnations: TableTransaction<ClientIncarnationKey, ClientIncarnationValue>,
+    client_read_requirements:
+        TableTransaction<ClientReadRequirementKey, ClientReadRequirementValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
     txn_wal_shard: TableTransaction<(), TxnWalShardValue>,
     // Don't make this a table transaction so that it's not read into the
@@ -150,10 +164,45 @@ impl<'a> DryRunTransaction<'a> {
     }
 }
 
+impl DryRunTransaction<'static> {
+    /// Constructs non-committable state from an owned snapshot and its opening context.
+    pub fn from_snapshot(
+        snapshot: Snapshot,
+        upper: mz_repr::Timestamp,
+        is_bootstrap_complete: bool,
+        is_savepoint: bool,
+    ) -> Result<Self, CatalogError> {
+        Ok(Self {
+            transaction: Transaction::from_snapshot(
+                snapshot,
+                upper,
+                is_bootstrap_complete,
+                is_savepoint,
+            )?,
+        })
+    }
+}
+
 impl<'a> Transaction<'a> {
     pub(super) fn new(
         durable_catalog: &'a mut dyn DurableCatalogState,
+        snapshot: Snapshot,
+        upper: mz_repr::Timestamp,
+    ) -> Result<Transaction<'a>, CatalogError> {
+        let mut transaction = Self::from_snapshot(
+            snapshot,
+            upper,
+            durable_catalog.is_bootstrap_complete(),
+            durable_catalog.is_savepoint(),
+        )?;
+        transaction.durable_catalog = Some(durable_catalog);
+        transaction.commit_capability = Some(CommitCapability);
+        Ok(transaction)
+    }
+
+    fn from_snapshot(
         Snapshot {
+            read_protection_index,
             databases,
             schemas,
             roles,
@@ -175,10 +224,16 @@ impl<'a> Transaction<'a> {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
+            client_incarnations,
+            client_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
         }: Snapshot,
         upper: mz_repr::Timestamp,
+        is_bootstrap_complete: bool,
+        is_savepoint: bool,
     ) -> Result<Transaction<'a>, CatalogError> {
         // For these collections uniqueness is plain equality of the name fields, so the same
         // predicate answers both "do these two conflict?" and "did this update keep the same key?".
@@ -194,7 +249,10 @@ impl<'a> Transaction<'a> {
             |a, b| a.cluster_id == b.cluster_id && a.name == b.name;
 
         Ok(Transaction {
-            durable_catalog,
+            durable_catalog: None,
+            is_bootstrap_complete,
+            is_savepoint,
+            read_protection_index,
             databases: TableTransaction::new_with_uniqueness_fn(
                 databases,
                 database_unique_fn,
@@ -262,6 +320,10 @@ impl<'a> Transaction<'a> {
             default_privileges: TableTransaction::new(default_privileges)?,
             system_privileges: TableTransaction::new(system_privileges)?,
             storage_collection_metadata: TableTransaction::new(storage_collection_metadata)?,
+            collection_compaction_bounds: TableTransaction::new(collection_compaction_bounds)?,
+            maintained_read_requirements: TableTransaction::new(maintained_read_requirements)?,
+            client_incarnations: TableTransaction::new(client_incarnations)?,
+            client_read_requirements: TableTransaction::new(client_read_requirements)?,
             unfinalized_shards: TableTransaction::new(unfinalized_shards)?,
             // Uniqueness violations for this value occur at the key rather than
             // the value (the key is the unit struct `()` so this is a singleton
@@ -270,7 +332,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates: Vec::new(),
             upper,
             op_id: 0,
-            commit_capability: Some(CommitCapability),
+            commit_capability: None,
         })
     }
 
@@ -782,24 +844,23 @@ impl<'a> Transaction<'a> {
         extra_versions: BTreeMap<RelationVersion, GlobalId>,
         ephemeral_owner_session: Option<Uuid>,
     ) -> Result<(), CatalogError> {
-        match self.items.insert(
-            ItemKey { id },
-            ItemValue {
-                schema_id,
-                name: item_name.to_string(),
-                create_sql,
-                owner_id,
-                privileges,
-                oid,
-                global_id,
-                extra_versions,
-                ephemeral_owner_session,
-            },
-            self.op_id,
-        ) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
-        }
+        let value = ItemValue {
+            schema_id,
+            name: item_name.to_string(),
+            create_sql,
+            owner_id,
+            privileges,
+            oid,
+            global_id,
+            extra_versions,
+            ephemeral_owner_session,
+        };
+        self.items
+            .insert(ItemKey { id }, value, self.op_id)
+            .map_err(|_| {
+                CatalogError::from(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()))
+            })?;
+        Ok(())
     }
 
     /// Removes every item owned by an ephemeral session from the transaction,
@@ -899,7 +960,7 @@ impl<'a> Transaction<'a> {
         amount: u64,
     ) -> Result<Vec<u64>, CatalogError> {
         assert!(
-            key != SYSTEM_ITEM_ALLOC_KEY || !self.durable_catalog.is_bootstrap_complete(),
+            key != SYSTEM_ITEM_ALLOC_KEY || !self.is_bootstrap_complete,
             "system item IDs cannot be allocated outside of bootstrap"
         );
 
@@ -931,7 +992,7 @@ impl<'a> Transaction<'a> {
         amount: u64,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         assert!(
-            !self.durable_catalog.is_bootstrap_complete(),
+            !self.is_bootstrap_complete,
             "we can only allocate system item IDs during bootstrap"
         );
         Ok(self
@@ -1180,6 +1241,7 @@ impl<'a> Transaction<'a> {
     /// accumulated `CatalogState`.
     pub fn current_snapshot(&self) -> Snapshot {
         Snapshot {
+            read_protection_index: self.current_read_protection_index(),
             databases: self.databases.current_items_proto(),
             schemas: self.schemas.current_items_proto(),
             roles: self.roles.current_items_proto(),
@@ -1201,6 +1263,10 @@ impl<'a> Transaction<'a> {
             source_references: self.source_references.current_items_proto(),
             system_privileges: self.system_privileges.current_items_proto(),
             storage_collection_metadata: self.storage_collection_metadata.current_items_proto(),
+            collection_compaction_bounds: self.collection_compaction_bounds.current_items_proto(),
+            maintained_read_requirements: self.maintained_read_requirements.current_items_proto(),
+            client_incarnations: self.client_incarnations.current_items_proto(),
+            client_read_requirements: self.client_read_requirements.current_items_proto(),
             unfinalized_shards: self.unfinalized_shards.current_items_proto(),
             txn_wal_shard: self.txn_wal_shard.current_items_proto(),
         }
@@ -1521,7 +1587,8 @@ impl<'a> Transaction<'a> {
         }
 
         let ks: Vec<_> = ids.clone().into_iter().map(|id| ItemKey { id }).collect();
-        let n = self.items.delete_by_keys(ks, self.op_id).len();
+        let deleted = self.items.delete_by_keys(ks, self.op_id);
+        let n = deleted.len();
         if n == ids.len() {
             Ok(())
         } else {
@@ -1554,7 +1621,8 @@ impl<'a> Transaction<'a> {
                 object_name: desc.object_name,
             })
             .collect();
-        let n = self.system_gid_mapping.delete_by_keys(ks, self.op_id).len();
+        let deleted = self.system_gid_mapping.delete_by_keys(ks, self.op_id);
+        let n = deleted.len();
 
         if n == descriptions.len() {
             Ok(())
@@ -1598,10 +1666,8 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(|(cluster_id, name)| ClusterIntrospectionSourceIndexKey { cluster_id, name })
             .collect();
-        let n = self
-            .introspection_sources
-            .delete_by_keys(ks, self.op_id)
-            .len();
+        let deleted = self.introspection_sources.delete_by_keys(ks, self.op_id);
+        let n = deleted.len();
         if n == introspection_source_indexes.len() {
             Ok(())
         } else {
@@ -1625,9 +1691,10 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(&mut self, id: CatalogItemId, item: Item) -> Result<(), CatalogError> {
-        let updated =
-            self.items
-                .update_by_key(ItemKey { id }, item.into_key_value().1, self.op_id)?;
+        let value = item.into_key_value().1;
+        let updated = self
+            .items
+            .update_by_key(ItemKey { id }, value, self.op_id)?;
         if updated {
             Ok(())
         } else {
@@ -1652,7 +1719,6 @@ impl<'a> Transaction<'a> {
 
         let update_ids: BTreeSet<_> = items.keys().cloned().collect();
         let kvs: Vec<_> = items
-            .clone()
             .into_iter()
             .map(|(id, item)| (ItemKey { id }, item.into_key_value().1))
             .collect();
@@ -2074,7 +2140,7 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        let mappings = mappings
+        let mappings: BTreeMap<_, _> = mappings
             .into_iter()
             .map(DurableType::into_key_value)
             .map(|(k, v)| (k, Some(v)))
@@ -2557,6 +2623,9 @@ impl<'a> Transaction<'a> {
 
         let Transaction {
             durable_catalog: _,
+            is_bootstrap_complete: _,
+            is_savepoint: _,
+            read_protection_index: _,
             databases,
             schemas,
             items,
@@ -2576,6 +2645,10 @@ impl<'a> Transaction<'a> {
             system_privileges,
             audit_log_updates,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
+            client_incarnations,
+            client_read_requirements,
             unfinalized_shards,
             // Not representable as a `StateUpdate`.
             id_allocator: _,
@@ -2679,6 +2752,26 @@ impl<'a> Transaction<'a> {
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
+                collection_compaction_bounds,
+                StateUpdateKind::CollectionCompactionBound,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                maintained_read_requirements,
+                StateUpdateKind::MaintainedReadRequirement,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                client_incarnations,
+                StateUpdateKind::ClientIncarnation,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                client_read_requirements,
+                StateUpdateKind::ClientReadRequirement,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
                 unfinalized_shards,
                 StateUpdateKind::UnfinalizedShard,
                 self.op_id,
@@ -2699,7 +2792,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn is_savepoint(&self) -> bool {
-        self.durable_catalog.is_savepoint()
+        self.is_savepoint
     }
 
     fn commit_op(&mut self) {
@@ -2714,6 +2807,492 @@ impl<'a> Transaction<'a> {
         self.upper
     }
 
+    /// Allocates a fresh client identity. Durably committed identities are never
+    /// reused, including after reclamation. The identity is usable only after durable commit.
+    pub fn create_client_incarnation(&mut self) -> Result<u64, CatalogError> {
+        let name = "client_incarnation".to_string();
+        if self
+            .id_allocator
+            .get(&IdAllocKey { name: name.clone() })
+            .is_none()
+        {
+            self.insert_id_allocator(name.clone(), 1)?;
+        }
+        let id = self.get_and_increment_id(name)?;
+        self.client_incarnations.insert(
+            ClientIncarnationKey { id },
+            ClientIncarnationValue { heartbeat: 0 },
+            self.op_id,
+        )?;
+        Ok(id)
+    }
+
+    /// Replaces this incarnation's complete protection and renews its heartbeat.
+    /// Returns the incremented heartbeat, even when the requirements are unchanged.
+    /// Protection is usable only after durable commit. The adapter must include independent
+    /// storage-leaf requirements covering the logical inputs of index targets.
+    /// A closed incarnation cannot publish, even an empty requirement map.
+    pub fn publish_client_read_requirements(
+        &mut self,
+        incarnation: u64,
+        requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
+    ) -> Result<u64, CatalogError> {
+        let key = ClientIncarnationKey { id: incarnation };
+        let heartbeat = self
+            .client_incarnations
+            .get(&key)
+            .ok_or_else(|| {
+                DurableCatalogError::InvalidReadProtection(format!(
+                    "client incarnation {incarnation} is closed or missing"
+                ))
+            })?
+            .heartbeat
+            .checked_add(1)
+            .ok_or_else(|| {
+                DurableCatalogError::InvalidReadProtection(format!(
+                    "client incarnation {incarnation} heartbeat exhausted"
+                ))
+            })?;
+        let mut updates: BTreeMap<_, _> = self
+            .client_requirement_keys(incarnation)
+            .into_iter()
+            .map(|key| (key, None))
+            .collect();
+        updates.extend(requirements.into_iter().map(|(id, frontier)| {
+            (
+                ClientReadRequirementKey { incarnation, id },
+                Some(ClientReadRequirementValue { frontier }),
+            )
+        }));
+        updates.retain(|key, value| self.client_read_requirements.get(key) != value.as_ref());
+        self.client_read_requirements
+            .set_many(updates, self.op_id)?;
+        self.client_incarnations.set(
+            key,
+            Some(ClientIncarnationValue { heartbeat }),
+            self.op_id,
+        )?;
+        Ok(heartbeat)
+    }
+
+    /// Permanently closes an incarnation only if its heartbeat still matches.
+    /// The caller observes expiry with its own monotonic clock. This compare and
+    /// the requirement deletions take effect together at transaction commit.
+    pub fn reclaim_client_incarnation(
+        &mut self,
+        incarnation: u64,
+        expected_heartbeat: u64,
+    ) -> Result<bool, CatalogError> {
+        let key = ClientIncarnationKey { id: incarnation };
+        if !self
+            .client_incarnations
+            .get(&key)
+            .is_some_and(|value| value.heartbeat == expected_heartbeat)
+        {
+            return Ok(false);
+        }
+        let requirements = self.client_requirement_keys(incarnation);
+        self.client_read_requirements
+            .delete_by_keys(requirements, self.op_id);
+        self.client_incarnations.set(key, None, self.op_id)?;
+        Ok(true)
+    }
+
+    fn client_requirement_keys(&self, incarnation: u64) -> BTreeSet<ClientReadRequirementKey> {
+        self.read_protection_index
+            .client_targets
+            .get(&incarnation)
+            .into_iter()
+            .flat_map(|targets| targets.keys())
+            .map(|id| ClientReadRequirementKey {
+                incarnation,
+                id: *id,
+            })
+            .chain(
+                self.client_read_requirements
+                    .pending
+                    .keys()
+                    .filter(|key| key.incarnation == incarnation)
+                    .cloned(),
+            )
+            .collect()
+    }
+
+    /// Stages a storage collection's or index's compaction permission.
+    ///
+    /// A first storage bound must accompany collection birth. The caller must
+    /// secure actual readability at that bound, including when reusing a shard.
+    /// Validation checks committed permission and read requirements, not physical
+    /// frontiers. Protected indexes may publish their first bound after birth.
+    /// `None` denotes the empty frontier, not an ungoverned collection.
+    pub fn set_collection_compaction_bound(
+        &mut self,
+        id: GlobalId,
+        frontier: Option<mz_repr::Timestamp>,
+    ) -> Result<(), CatalogError> {
+        self.collection_compaction_bounds.set(
+            CollectionCompactionBoundKey { id },
+            Some(CollectionCompactionBoundValue { frontier }),
+            self.op_id,
+        )?;
+        Ok(())
+    }
+
+    /// Stages a maintained read requirement, checked against permission at commit.
+    ///
+    /// The caller supplies all logical inputs and may advance the required frontier
+    /// only when recovery no longer needs earlier history. `None` marks completion.
+    pub fn set_maintained_read_requirement(
+        &mut self,
+        id: GlobalId,
+        inputs: BTreeSet<GlobalId>,
+        frontier: Option<mz_repr::Timestamp>,
+    ) -> Result<(), CatalogError> {
+        self.maintained_read_requirements.set(
+            MaintainedReadRequirementKey { id },
+            Some(MaintainedReadRequirementValue { inputs, frontier }),
+            self.op_id,
+        )?;
+        Ok(())
+    }
+
+    /// Stages protection records in bulk, checked against the final state at commit.
+    ///
+    /// The caller must satisfy the readability and recovery contracts of
+    /// [`Self::set_collection_compaction_bound`] and [`Self::set_maintained_read_requirement`].
+    /// For repeated IDs in either vector, the last record wins.
+    pub fn set_read_protection(
+        &mut self,
+        requirements: Vec<MaintainedReadRequirement>,
+        bounds: Vec<CollectionCompactionBound>,
+    ) -> Result<(), CatalogError> {
+        self.maintained_read_requirements.set_many(
+            requirements
+                .into_iter()
+                .map(|requirement| {
+                    let (key, value) = requirement.into_key_value();
+                    (key, Some(value))
+                })
+                .collect(),
+            self.op_id,
+        )?;
+        self.collection_compaction_bounds.set_many(
+            bounds
+                .into_iter()
+                .map(|bound| {
+                    let (key, value) = bound.into_key_value();
+                    (key, Some(value))
+                })
+                .collect(),
+            self.op_id,
+        )?;
+        Ok(())
+    }
+
+    fn pending_index_identities(&self) -> (ReadProtectionIndex, BTreeSet<GlobalId>) {
+        let mut index = self.read_protection_index.clone();
+        let mut touched = BTreeSet::new();
+        // Only pending owner keys are visited. Include intermediate identities for
+        // retirement, but apply only initial/final identities to the projection.
+        macro_rules! project {
+            ($table:expr, $identity:expr) => {
+                for (key, updates) in &$table.pending {
+                    let identity = $identity;
+                    for value in $table
+                        .initial
+                        .get(key)
+                        .into_iter()
+                        .chain(updates.iter().map(|u| &u.value))
+                    {
+                        if let Some(id) = identity(key, value) {
+                            touched.insert(id);
+                        }
+                    }
+                    if let Some(id) = $table.initial.get(key).and_then(|v| identity(key, v)) {
+                        index.update_identity(id, -1);
+                    }
+                    if let Some(id) = $table.get(key).and_then(|v| identity(key, v)) {
+                        index.update_identity(id, 1);
+                    }
+                }
+            };
+        }
+        project!(self.items, |_: &ItemKey, v: &ItemValue| {
+            (v.item_type() == CatalogItemType::Index).then_some(v.global_id)
+        });
+        project!(
+            self.system_gid_mapping,
+            |k: &GidMappingKey, v: &GidMappingValue| {
+                (k.object_type == CatalogItemType::Index).then_some(GlobalId::from(v.global_id))
+            }
+        );
+        project!(
+            self.introspection_sources,
+            |_: &ClusterIntrospectionSourceIndexKey, v: &ClusterIntrospectionSourceIndexValue| {
+                Some(GlobalId::from(v.global_id))
+            }
+        );
+        (index, touched)
+    }
+
+    fn current_read_protection_index(&self) -> ReadProtectionIndex {
+        let (mut index, _) = self.pending_index_identities();
+        for key in self.client_read_requirements.pending.keys() {
+            if self.client_read_requirements.initial.contains_key(key) {
+                index.update_client_requirement(key, -1);
+            }
+            if self.client_read_requirements.get(key).is_some() {
+                index.update_client_requirement(key, 1);
+            }
+        }
+        for key in self.maintained_read_requirements.pending.keys() {
+            if let Some(value) = self.maintained_read_requirements.initial.get(key) {
+                index.update_requirement(key.id, value, -1);
+            }
+            if let Some(value) = self.maintained_read_requirements.get(key) {
+                index.update_requirement(key.id, value, 1);
+            }
+        }
+        index
+    }
+
+    /// Retires sparse bounds for index identities absent from the final batch.
+    ///
+    /// Call after staging all lifetime changes, before extracting adapter updates,
+    /// exporting a dry-run snapshot, or validating/committing the transaction.
+    /// Repeated calls are safe without intervening lifetime changes. Storage bound
+    /// cleanup belongs to `delete_collection_metadata`.
+    pub fn finalize_index_compaction_bounds(&mut self) {
+        let (index, touched) = self.pending_index_identities();
+        let retired = touched
+            .into_iter()
+            .filter(|id| {
+                let key = StorageCollectionMetadataKey { id: *id };
+                !index.contains_index(*id)
+                    && self.storage_collection_metadata.get(&key).is_none()
+                    && !self.storage_collection_metadata.initial.contains_key(&key)
+            })
+            .map(|id| CollectionCompactionBoundKey { id })
+            .collect::<Vec<_>>();
+        self.collection_compaction_bounds
+            .delete_by_keys(retired, self.op_id);
+    }
+
+    /// Validates changed protection records and affected unchanged consumers.
+    ///
+    /// Requires a valid initial snapshot and its matching derived projection.
+    /// Call after finalization and before entering a commit path that treats errors as fatal.
+    pub fn validate_read_protection(&self) -> Result<(), CatalogError> {
+        let invalid =
+            |message| CatalogError::from(DurableCatalogError::InvalidReadProtection(message));
+        let (indexes, mut touched) = self.pending_index_identities();
+        touched.extend(
+            self.storage_collection_metadata
+                .pending
+                .keys()
+                .map(|k| k.id),
+        );
+        touched.extend(
+            self.collection_compaction_bounds
+                .pending
+                .keys()
+                .map(|k| k.id),
+        );
+        let storage_exists = |id| {
+            self.storage_collection_metadata
+                .get(&StorageCollectionMetadataKey { id })
+                .is_some()
+        };
+        let owns_bound = |id| storage_exists(id) || indexes.contains_index(id);
+        let protected_initially = self
+            .configs
+            .initial
+            .get(&ConfigKey {
+                key: "catalog_read_protection_enabled".to_string(),
+            })
+            .is_some_and(|v| v.value == 1);
+
+        // Baseline comparison preserves history across delete/reinsert and ID swaps.
+        for id in &touched {
+            let key = CollectionCompactionBoundKey { id: *id };
+            let initial = self.collection_compaction_bounds.initial.get(&key);
+            let bound = self.collection_compaction_bounds.get(&key);
+            if owns_bound(*id) {
+                if let Some(initial) = initial {
+                    let Some(bound) = bound else {
+                        return Err(invalid(format!(
+                            "collection {id} lost its compaction bound"
+                        )));
+                    };
+                    let monotonic = match (initial.frontier, bound.frontier) {
+                        (_, None) => true,
+                        (Some(initial), Some(final_frontier)) => initial <= final_frontier,
+                        (None, Some(_)) => false,
+                    };
+                    if !monotonic {
+                        return Err(invalid(format!(
+                            "collection {id} compaction bound regressed"
+                        )));
+                    }
+                }
+            }
+            if bound.is_some() {
+                if initial.is_none()
+                    && (self
+                        .storage_collection_metadata
+                        .initial
+                        .contains_key(&StorageCollectionMetadataKey { id: *id })
+                        || (self.read_protection_index.contains_index(*id) && !protected_initially))
+                {
+                    return Err(invalid(format!(
+                        "cannot introduce a compaction bound for existing collection {id}"
+                    )));
+                }
+                if !owns_bound(*id) {
+                    return Err(invalid(format!(
+                        "compaction bound owner {id} has neither storage metadata nor an index identity"
+                    )));
+                }
+            }
+        }
+
+        let check_input = |owner, input, required| {
+            let readable = storage_exists(input)
+                && self
+                    .collection_compaction_bounds
+                    .get(&CollectionCompactionBoundKey { id: input })
+                    .and_then(|bound| bound.frontier)
+                    .is_some_and(|bound| bound <= required);
+            if readable {
+                Ok(())
+            } else {
+                Err(invalid(format!(
+                    "read requirement {owner} needs input {input} readable at {required}"
+                )))
+            }
+        };
+        let changed_requirements = self
+            .maintained_read_requirements
+            .pending
+            .keys()
+            .map(|k| k.id)
+            .chain(
+                self.storage_collection_metadata
+                    .pending
+                    .keys()
+                    .map(|k| k.id),
+            )
+            .collect::<BTreeSet<_>>();
+        for id in &changed_requirements {
+            let Some(requirement) = self
+                .maintained_read_requirements
+                .get(&MaintainedReadRequirementKey { id: *id })
+            else {
+                continue;
+            };
+            if !storage_exists(*id) {
+                return Err(invalid(format!(
+                    "read requirement owner {id} has no storage metadata"
+                )));
+            }
+            if let Some(required) = requirement.frontier {
+                for input in &requirement.inputs {
+                    check_input(*id, *input, required)?;
+                }
+            }
+        }
+        // Client requirements name their direct target. Index input coverage is
+        // checked by the adapter, using independent storage-leaf requirements.
+        let mut client_keys: BTreeSet<_> = self
+            .client_read_requirements
+            .pending
+            .keys()
+            .cloned()
+            .collect();
+        for id in &touched {
+            if let Some(clients) = self.read_protection_index.client_consumers.get(id) {
+                client_keys.extend(clients.keys().map(|incarnation| ClientReadRequirementKey {
+                    incarnation: *incarnation,
+                    id: *id,
+                }));
+            }
+        }
+        for key in self.client_incarnations.pending.keys() {
+            // Renewal alone does not revisit the incarnation's requirements.
+            if self.client_incarnations.get(key).is_none() {
+                client_keys.extend(self.client_requirement_keys(key.id));
+            }
+        }
+        for key in client_keys {
+            let Some(requirement) = self.client_read_requirements.get(&key) else {
+                continue;
+            };
+            if self
+                .client_incarnations
+                .get(&ClientIncarnationKey {
+                    id: key.incarnation,
+                })
+                .is_none()
+            {
+                return Err(invalid(format!(
+                    "client requirement references closed incarnation {}",
+                    key.incarnation
+                )));
+            }
+            let new_grant = self
+                .client_read_requirements
+                .initial
+                .get(&key)
+                .is_none_or(|initial| requirement.frontier < initial.frontier);
+            let storage_initially = self
+                .storage_collection_metadata
+                .initial
+                .contains_key(&StorageCollectionMetadataKey { id: key.id });
+            // Existing index grants may drain after index retirement. They cannot
+            // recreate the index or its permission, nor grant earlier history.
+            if (new_grant && !owns_bound(key.id)) || (storage_initially && !storage_exists(key.id))
+            {
+                return Err(invalid(format!(
+                    "client requirement target {} has no live storage or index identity",
+                    key.id
+                )));
+            }
+            let bound = self
+                .collection_compaction_bounds
+                .get(&CollectionCompactionBoundKey { id: key.id });
+            if bound.is_some_and(|bound| {
+                bound
+                    .frontier
+                    .is_none_or(|frontier| frontier > requirement.frontier)
+            }) || (storage_exists(key.id) && bound.is_none())
+            {
+                return Err(invalid(format!(
+                    "client incarnation {} needs target {} readable at {}",
+                    key.incarnation, key.id, requirement.frontier
+                )));
+            }
+        }
+        for input in touched {
+            if let Some(consumers) = self.read_protection_index.active_consumers.get(&input) {
+                for (owner, _) in consumers {
+                    if changed_requirements.contains(owner) {
+                        continue;
+                    }
+                    let requirement = self
+                        .maintained_read_requirements
+                        .get(&MaintainedReadRequirementKey { id: *owner })
+                        .expect("reverse edge has an unchanged requirement");
+                    check_input(
+                        *owner,
+                        input,
+                        requirement.frontier.expect("reverse edge is active"),
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn ensure_committable(&self) -> Result<(), CatalogError> {
         match self.commit_capability {
             Some(_) => Ok(()),
@@ -2724,13 +3303,17 @@ impl<'a> Transaction<'a> {
     /// Verifies that this process has not missed catalog content updates.
     pub(super) async fn ensure_not_out_of_sync(&mut self) -> Result<(), CatalogError> {
         self.durable_catalog
+            .as_mut()
+            .ok_or(DurableCatalogError::DryRunTransaction)?
             .ensure_not_out_of_sync(self.upper)
             .await
     }
 
     pub(crate) fn into_parts(
-        self,
+        mut self,
     ) -> Result<(TransactionBatch, &'a mut dyn DurableCatalogState), CatalogError> {
+        self.finalize_index_compaction_bounds();
+        self.validate_read_protection()?;
         let commit_capability = self
             .commit_capability
             .ok_or(DurableCatalogError::DryRunTransaction)?;
@@ -2762,19 +3345,31 @@ impl<'a> Transaction<'a> {
             default_privileges: self.default_privileges.pending(),
             system_privileges: self.system_privileges.pending(),
             storage_collection_metadata: self.storage_collection_metadata.pending(),
+            collection_compaction_bounds: self.collection_compaction_bounds.pending(),
+            maintained_read_requirements: self.maintained_read_requirements.pending(),
+            client_incarnations: self.client_incarnations.pending(),
+            client_read_requirements: self.client_read_requirements.pending(),
             unfinalized_shards: self.unfinalized_shards.pending(),
             txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates,
             upper: self.upper,
             _commit_capability: commit_capability,
         };
-        Ok((txn_batch, self.durable_catalog))
+        Ok((
+            txn_batch,
+            self.durable_catalog
+                .ok_or(DurableCatalogError::DryRunTransaction)?,
+        ))
     }
 
     /// Commits the storage transaction to durable storage.
     ///
-    /// [`DurableCatalogError::DryRunTransaction`] is a pre-effect
-    /// programming error that leaves durable state unchanged. Any other error
+    /// [`DurableCatalogError::DryRunTransaction`],
+    /// [`DurableCatalogError::InvalidReadProtection`], and
+    /// [`DurableCatalogError::CatalogOutOfSync`] do not commit this transaction.
+    /// On a content conflict, consume peer updates and rebuild against the refreshed
+    /// projection before retrying. Read protection validation fails before any commit
+    /// effects. Any other error
     /// outside read-only mode indicates the catalog may be in an indeterminate
     /// state and needs to be fully re-read before proceeding. In general, such
     /// errors must be fatal to the calling process. We do not panic/halt here so
@@ -2815,6 +3410,10 @@ impl<'a> Transaction<'a> {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
+            client_incarnations,
+            client_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
@@ -2844,6 +3443,10 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
         differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
+        differential_dataflow::consolidation::consolidate_updates(collection_compaction_bounds);
+        differential_dataflow::consolidation::consolidate_updates(maintained_read_requirements);
+        differential_dataflow::consolidation::consolidate_updates(client_incarnations);
+        differential_dataflow::consolidation::consolidate_updates(client_read_requirements);
         differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
@@ -2856,8 +3459,12 @@ impl<'a> Transaction<'a> {
 
     /// Commits the storage transaction to durable storage.
     ///
-    /// [`DurableCatalogError::DryRunTransaction`] is a pre-effect
-    /// programming error that leaves durable state unchanged. Any other error
+    /// [`DurableCatalogError::DryRunTransaction`],
+    /// [`DurableCatalogError::InvalidReadProtection`], and
+    /// [`DurableCatalogError::CatalogOutOfSync`] do not commit this transaction.
+    /// On a content conflict, consume peer updates and rebuild against the refreshed
+    /// projection before retrying. Read protection validation fails before any commit
+    /// effects. Any other error
     /// outside read-only mode indicates the catalog may be in an indeterminate
     /// state and needs to be fully re-read before proceeding. In general, such
     /// errors must be fatal to the calling process. We do not panic/halt here so
@@ -2875,8 +3482,9 @@ impl<'a> Transaction<'a> {
     /// after committing and only then apply the updates in-memory. While this removes assumptions
     /// about the caller in this method, in practice it results in duplicate work on every commit.
     #[mz_ore::instrument(level = "debug")]
-    pub async fn commit(self, commit_ts: mz_repr::Timestamp) -> Result<(), CatalogError> {
+    pub async fn commit(mut self, commit_ts: mz_repr::Timestamp) -> Result<(), CatalogError> {
         self.ensure_committable()?;
+        self.finalize_index_compaction_bounds();
         let op_updates = self.get_op_updates();
         assert!(
             op_updates.is_empty(),
@@ -2951,12 +3559,35 @@ impl StorageTxn for Transaction<'_> {
     }
 
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)> {
-        let ks: Vec<_> = ids
-            .into_iter()
-            .map(|id| StorageCollectionMetadataKey { id })
+        // Dropping a producer retires its maintenance even while client readers
+        // keep its output metadata and permission alive.
+        let owners: Vec<_> = ids
+            .iter()
+            .filter(|id| {
+                self.storage_collection_metadata
+                    .get(&StorageCollectionMetadataKey { id: **id })
+                    .is_some()
+            })
+            .map(|id| MaintainedReadRequirementKey { id: *id })
             .collect();
-        self.storage_collection_metadata
-            .delete_by_keys(ks, self.op_id)
+        self.maintained_read_requirements
+            .delete_by_keys(owners, self.op_id);
+        let index = self.current_read_protection_index();
+        let deleted = self.storage_collection_metadata.delete_by_keys(
+            ids.into_iter()
+                .filter(|id| !index.client_consumers.contains_key(id))
+                .map(|id| StorageCollectionMetadataKey { id }),
+            self.op_id,
+        );
+        // Only actual storage owners authorize cleanup. An unknown owner must
+        // remain visible to protection validation.
+        self.collection_compaction_bounds.delete_by_keys(
+            deleted
+                .iter()
+                .map(|(key, _)| CollectionCompactionBoundKey { id: key.id }),
+            self.op_id,
+        );
+        deleted
             .into_iter()
             .map(
                 |(
@@ -3071,6 +3702,26 @@ pub struct TransactionBatch {
         proto::StorageCollectionMetadataValue,
         Diff,
     )>,
+    pub(crate) collection_compaction_bounds: Vec<(
+        proto::CollectionCompactionBoundKey,
+        proto::CollectionCompactionBoundValue,
+        Diff,
+    )>,
+    pub(crate) maintained_read_requirements: Vec<(
+        proto::MaintainedReadRequirementKey,
+        proto::MaintainedReadRequirementValue,
+        Diff,
+    )>,
+    pub(crate) client_incarnations: Vec<(
+        proto::ClientIncarnationKey,
+        proto::ClientIncarnationValue,
+        Diff,
+    )>,
+    pub(crate) client_read_requirements: Vec<(
+        proto::ClientReadRequirementKey,
+        proto::ClientReadRequirementValue,
+        Diff,
+    )>,
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
     pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
@@ -3105,6 +3756,10 @@ impl TransactionBatch {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
+            client_incarnations,
+            client_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
@@ -3132,6 +3787,10 @@ impl TransactionBatch {
             && default_privileges.is_empty()
             && system_privileges.is_empty()
             && storage_collection_metadata.is_empty()
+            && collection_compaction_bounds.is_empty()
+            && maintained_read_requirements.is_empty()
+            && client_incarnations.is_empty()
+            && client_read_requirements.is_empty()
             && unfinalized_shards.is_empty()
             && txn_wal_shard.is_empty()
             && audit_log_updates.is_empty()
@@ -3207,6 +3866,10 @@ mod unique_name {
         SettingValue,
         SourceReferencesValue,
         StorageCollectionMetadataValue,
+        CollectionCompactionBoundValue,
+        MaintainedReadRequirementValue,
+        ClientIncarnationValue,
+        ClientReadRequirementValue,
         SystemPrivilegesValue,
         TxnWalShardValue,
         RoleAuthValue,
@@ -3544,9 +4207,9 @@ where
     ///
     /// Prefer using [`Self::update_by_key`] or [`Self::update_by_keys`], which generally have
     /// better performance.
-    fn update<F: Fn(&K, &V) -> Option<V>>(
+    fn update<F: FnMut(&K, &V) -> Option<V>>(
         &mut self,
-        f: F,
+        mut f: F,
         ts: Timestamp,
     ) -> Result<Diff, DurableCatalogError> {
         let mut changed = Diff::ZERO;

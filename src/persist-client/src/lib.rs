@@ -739,6 +739,42 @@ impl PersistClient {
         Ok(machine.applier.fetch_upper(|upper| upper.clone()).await)
     }
 
+    /// Fetches and returns a recent shard-global `since` without registering a
+    /// leased or critical reader.
+    ///
+    /// This operation is linearized with since advances by fetching fresh state
+    /// from consensus. Reconstructing that state from a rollup and recent diffs
+    /// is potentially expensive.
+    ///
+    /// This is only an observation, not a read hold. The since may advance again
+    /// before this call returns, and callers must separately establish any
+    /// protection required to read at an observed frontier.
+    ///
+    /// If `shard_id` has never been used before, initializes the shard and
+    /// returns a since of `Antichain::from_elem(T::minimum())`.
+    pub async fn recent_since<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<Antichain<T>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        let state_versions = &machine.applier.state_versions;
+        let diffs = state_versions.fetch_recent_live_diffs::<T>(&shard_id).await;
+        let state = state_versions
+            .fetch_current_state::<T>(&shard_id, diffs.0)
+            .await
+            .check_codecs::<K, V, D>(&shard_id)?;
+        Ok(state.since().clone())
+    }
+
     /// Registers a schema for the given shard.
     ///
     /// Returns the new schema ID if the registration succeeds, and `None`
@@ -1104,6 +1140,72 @@ mod tests {
         // Downgrading the since is tracked locally (but otherwise is a no-op).
         read.downgrade_since(&Antichain::from_elem(2)).await;
         assert_eq!(read.since(), &Antichain::from_elem(2));
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn recent_since_observes_without_protecting(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        let shard_id = ShardId::new();
+        assert_eq!(
+            client
+                .recent_since::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+                .await
+                .expect("valid codecs"),
+            Antichain::from_elem(0)
+        );
+
+        // Keep the observer's cached state alive while a separate client advances
+        // the since. Observations must fetch consensus, not just consult this cache.
+        let writer = client
+            .open_writer::<(), (), u64, i64>(
+                shard_id,
+                Arc::new(Default::default()),
+                Arc::new(Default::default()),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("valid codecs");
+        let before = client.consensus.head(&shard_id.to_string()).await.unwrap();
+        assert_eq!(
+            client
+                .recent_since::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+                .await
+                .expect("valid codecs"),
+            Antichain::from_elem(0)
+        );
+        // Even a temporary reader registration would write to consensus.
+        assert_eq!(
+            client.consensus.head(&shard_id.to_string()).await.unwrap(),
+            before
+        );
+
+        let mut advancing_client = client.clone();
+        advancing_client.shared_states = Arc::new(StateCache::new_no_metrics());
+        let mut since_handle: SinceHandle<(), (), u64, i64> = advancing_client
+            .open_critical_since(
+                shard_id,
+                CriticalReaderId::new(),
+                Opaque::encode(&0u64),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("valid codecs");
+        let epoch = since_handle.opaque().clone();
+        for since in [Antichain::from_elem(5), Antichain::new()] {
+            since_handle
+                .compare_and_downgrade_since(&epoch, (&epoch, &since))
+                .await
+                .expect("unchanged epoch");
+            assert_eq!(
+                client
+                    .recent_since::<(), (), u64, i64>(shard_id, Diagnostics::for_tests())
+                    .await
+                    .expect("valid codecs"),
+                since
+            );
+        }
+        writer.expire().await;
     }
 
     // Sanity check that the open_reader and open_writer calls work.
