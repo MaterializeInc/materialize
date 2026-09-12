@@ -2322,6 +2322,9 @@ impl StorageController for Controller {
                     }
                     status_updates.push(status_update);
                 }
+                (_, StorageResponse::QueryReady) => {
+                    panic!("query response on lifecycle connection")
+                }
                 (_replica_id, StorageResponse::StagedBatches(batches)) => {
                     for (ingestion_id, batches) in batches {
                         match self.pending_oneshot_ingestions.remove(&ingestion_id) {

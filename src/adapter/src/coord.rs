@@ -402,6 +402,7 @@ pub enum Message {
     LinearizeReads,
     StagedBatches {
         conn_id: ConnectionId,
+        ingestion_id: Uuid,
         table_id: CatalogItemId,
         batches: Vec<Result<ProtoBatch, String>>,
     },

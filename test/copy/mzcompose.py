@@ -221,6 +221,53 @@ def workflow_ci(c: Composition, _parser: WorkflowArgumentParser) -> None:
     c.test_parts([name for name in c.workflows.keys() if name not in excluded], process)
 
 
+def workflow_storage_query_connections(c: Composition) -> None:
+    """Stage remote COPY across processes without replacing maintained storage."""
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "minio")
+        c.testdrive(dedent("""
+            > CREATE CLUSTER storage_query SIZE 'scale=2,workers=1', REPLICATION FACTOR 1;
+            > SET cluster = storage_query;
+            > CREATE SOURCE storage_query_counter IN CLUSTER storage_query
+              FROM LOAD GENERATOR COUNTER;
+            > SELECT count(*) > 0 FROM storage_query_counter;
+            true
+            $ set-from-sql var=counter-before
+            SELECT max(counter)::text FROM storage_query_counter;
+
+            > CREATE TABLE storage_query_input (a int);
+            > INSERT INTO storage_query_input VALUES (1), (2), (3);
+            > CREATE TABLE storage_query_target (a int);
+            > CREATE MATERIALIZED VIEW storage_query_total AS
+              SELECT sum(a) AS total FROM storage_query_target;
+            > SELECT total IS NULL FROM storage_query_total;
+            true
+            > CREATE SECRET storage_query_secret AS 'minioadmin';
+            > CREATE CONNECTION storage_query_aws TO AWS (
+                ACCESS KEY ID = 'minioadmin', SECRET ACCESS KEY = SECRET storage_query_secret,
+                ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+            > COPY (SELECT a FROM storage_query_input)
+              TO 's3://copytos3/test/storage-query-connections/'
+              WITH (AWS CONNECTION = storage_query_aws, FORMAT = 'csv');
+            > COPY INTO storage_query_target FROM 's3://copytos3/test/storage-query-connections/'
+              (FORMAT CSV, AWS CONNECTION = storage_query_aws);
+            > SELECT a FROM storage_query_target ORDER BY a;
+            1
+            2
+            3
+            > SELECT total FROM storage_query_total;
+            6
+            > SELECT max(counter) > ${counter-before}::bigint FROM storage_query_counter;
+            true
+
+            > RESET cluster;
+            > DROP CLUSTER storage_query CASCADE;
+            > DROP TABLE storage_query_input, storage_query_target;
+            > DROP CONNECTION storage_query_aws;
+            > DROP SECRET storage_query_secret;
+            """))
+
+
 def workflow_auth(c: Composition) -> None:
     c.up(Service("mc", idle=True), "materialized", "minio")
 

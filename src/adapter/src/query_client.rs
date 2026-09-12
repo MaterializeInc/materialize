@@ -41,6 +41,7 @@ pub(crate) mod compute;
 pub(crate) mod connections;
 pub(crate) mod dataflows;
 pub(crate) mod read_protection;
+mod storage;
 
 use compute::{QueryError, ReplicaQueryClient};
 use connections::QueryReplicaConnections;

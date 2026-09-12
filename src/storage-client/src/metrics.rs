@@ -258,6 +258,8 @@ impl transport::Metrics<StorageCommand, StorageResponse> for ReplicaMetrics {
 pub struct CommandMetrics<M> {
     /// Metrics for `Hello`.
     pub hello: M,
+    /// Metrics for `HelloQuery`.
+    pub hello_query: M,
     /// Metrics for `InitializationComplete`.
     pub initialization_complete: M,
     /// Metrics for `AllowWrites`.
@@ -283,6 +285,7 @@ impl<M> CommandMetrics<M> {
     {
         Self {
             hello: build_metric("hello"),
+            hello_query: build_metric("hello_query"),
             initialization_complete: build_metric("initialization_complete"),
             allow_writes: build_metric("allow_writes"),
             update_configuration: build_metric("update_configuration"),
@@ -299,6 +302,7 @@ impl<M> CommandMetrics<M> {
         F: Fn(&M),
     {
         f(&self.hello);
+        f(&self.hello_query);
         f(&self.initialization_complete);
         f(&self.allow_writes);
         f(&self.update_configuration);
@@ -314,6 +318,7 @@ impl<M> CommandMetrics<M> {
 
         match command {
             Hello { .. } => &self.hello,
+            HelloQuery { .. } => &self.hello_query,
             InitializationComplete => &self.initialization_complete,
             AllowWrites => &self.allow_writes,
             UpdateConfiguration(..) => &self.update_configuration,
@@ -329,6 +334,7 @@ impl<M> CommandMetrics<M> {
 /// Metrics keyed by `StorageResponse` type.
 #[derive(Debug)]
 struct ResponseMetrics<M> {
+    query_ready: M,
     frontier_upper: M,
     dropped_id: M,
     staged_batches: M,
@@ -342,6 +348,7 @@ impl<M> ResponseMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
+            query_ready: build_metric("query_ready"),
             frontier_upper: build_metric("frontier_upper"),
             dropped_id: build_metric("dropped_id"),
             staged_batches: build_metric("staged_batches"),
@@ -354,6 +361,7 @@ impl<M> ResponseMetrics<M> {
         use StorageResponse::*;
 
         match response {
+            QueryReady => &self.query_ready,
             FrontierUpper(..) => &self.frontier_upper,
             DroppedId(..) => &self.dropped_id,
             StagedBatches(..) => &self.staged_batches,

@@ -807,3 +807,16 @@ Remaining request ownership includes webhook batching, idle progress and statist
 and storage-side oneshot COPY execution. Metadata-driven Persist reads need no
 controller state. Storage query connections must coexist with maintained execution,
 not replace its connection or replay completed COPY requests.
+
+Remote COPY staging uses fresh, request-owned storage query connections, with row
+commitment still in the adapter. Query admission, retirement, and all-worker
+completion use the storage sequencer. Completion must retain tokens until every
+worker finishes, or local release can stall a sibling. COPY completion carries its
+ingestion UUID so a late canceled result cannot consume a newer request's context.
+Connection lifetime bounds replay/cancellation state for the per-COPY client.
+
+Asked Aljoscha whether webhook idle progress must continue without the sole adapter,
+or may pause alongside adapter-driven table time. Webhooks have a separate idle
+driver coupled to HTTP batching and statistics. The proposal is to preserve idle
+progress in lifecycle components and separate adapter-owned HTTP execution, but
+that boundary and statistics ownership are not yet settled.

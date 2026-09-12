@@ -91,7 +91,7 @@ use mz_persist_client::operators::shard_source::ErrorHandler;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
-    RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
+    RunIngestionCommand, RunOneshotIngestion, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_types::AlterCompatible;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -125,6 +125,25 @@ pub mod async_storage_worker;
 type CommandReceiver = mpsc::UnboundedReceiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
+/// A local endpoint is classified by its first worker-visible command.
+struct Peer {
+    commands: CommandReceiver,
+    responses: ResponseSender,
+    query: Option<bool>,
+}
+
+/// Lives in the sequencer's order, independently of local endpoint arrival.
+#[derive(Default)]
+struct Query {
+    /// Retained until disconnect to suppress repeated runs and runs overtaken by
+    /// cancellation, even after the ingestion itself has been reclaimed.
+    seen: BTreeSet<Uuid>,
+    pending: BTreeMap<Uuid, Box<RunOneshotIngestion>>,
+    /// Terminal callbacks observed in the common order, one per worker.
+    finished: BTreeMap<Uuid, usize>,
+    responses: Vec<StorageResponse>,
+}
+
 /// State maintained for each worker thread.
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
@@ -139,6 +158,11 @@ pub struct Worker<'w> {
     pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
+    peers: BTreeMap<Uuid, Peer>,
+    lifecycle: Option<Uuid>,
+    initialization: Option<Vec<StorageCommand>>,
+    queries: BTreeMap<Uuid, Query>,
+    query_ready: bool,
 }
 
 impl<'w> Worker<'w> {
@@ -178,7 +202,7 @@ impl<'w> Worker<'w> {
         // we only create the async worker once because a) the worker state is
         // re-used when a new client connects and b) commands that have already
         // been sent and might yield a response will be lost if a new iteration
-        // of `run_client` creates a new async worker.
+        // of the client loop creates a new async worker.
         //
         // If we created a new async worker every time we get a new client
         // (likely because the controller re-started and re-connected), we can
@@ -190,7 +214,7 @@ impl<'w> Worker<'w> {
         //
         // The core idea is that both the sequencer and the async worker are
         // part of the per-worker state, and must be treated as such, meaning
-        // they must survive between invocations of `run_client`.
+        // they must survive across client connections.
 
         // TODO(aljoscha): This thread unparking business seems brittle, but that's
         // also how the command channel works currently. We can wrap it inside a
@@ -210,6 +234,7 @@ impl<'w> Worker<'w> {
             ingestions: BTreeMap::new(),
             exports: BTreeMap::new(),
             oneshot_ingestions: BTreeMap::new(),
+            query_owners: BTreeMap::new(),
             now,
             timely_worker_index: timely_worker.index(),
             timely_worker_peers: timely_worker.peers(),
@@ -250,6 +275,11 @@ impl<'w> Worker<'w> {
             timely_worker,
             client_rx,
             storage_state,
+            peers: BTreeMap::new(),
+            lifecycle: None,
+            initialization: None,
+            queries: BTreeMap::new(),
+            query_ready: false,
         }
     }
 }
@@ -277,6 +307,9 @@ pub struct StorageState {
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
     /// Descriptions of oneshot ingestions that are currently running.
     pub oneshot_ingestions: BTreeMap<uuid::Uuid, OneshotIngestionDescription<ProtoBatch>>,
+    /// Query ownership outlives local completion, until all workers finish.
+    /// Lifecycle reconciliation and legacy cancellation must not touch these IDs.
+    query_owners: BTreeMap<Uuid, Uuid>,
     /// Undocumented
     pub now: NowFn,
     /// Index of the associated timely dataflow worker.
@@ -414,33 +447,30 @@ impl StorageInstanceContext {
 }
 
 impl<'w> Worker<'w> {
-    /// Waits for client connections and runs them to completion.
+    /// Services lifecycle and query endpoints without blocking on initialization.
     pub fn run(&mut self) {
-        while let Some((_nonce, rx, tx)) = self.client_rx.blocking_recv() {
-            self.run_client(rx, tx);
-        }
-    }
-
-    /// Runs this (timely) storage worker until the given `command_rx` is
-    /// disconnected.
-    ///
-    /// See the [module documentation](crate::storage_state) for this
-    /// workers responsibilities, how it communicates with the other workers and
-    /// how commands flow from the controller and through the workers.
-    fn run_client(&mut self, mut command_rx: CommandReceiver, response_tx: ResponseSender) {
-        // At this point, all workers are still reading from the command flow.
-        if self.reconcile(&mut command_rx).is_err() {
-            return;
-        }
-
         // The last time we reported statistics.
         let mut last_stats_time = Instant::now();
 
         // The last time we did periodic maintenance.
         let mut last_maintenance = std::time::Instant::now();
+        let (discard_responses, _) = mpsc::unbounded_channel();
 
-        let mut disconnected = false;
-        while !disconnected {
+        loop {
+            self.poll_clients();
+            // Client disconnection alone must not stop maintained work. Closing the
+            // container's endpoint channel, with no clients left, ends the worker.
+            if self.client_rx.is_closed() && self.client_rx.is_empty() && self.peers.is_empty() {
+                return;
+            }
+            // A disconnected lifecycle may ignore responses. Query results are routed
+            // separately and maintained work continues while no lifecycle is attached.
+            let response_tx = self
+                .lifecycle
+                .filter(|_| self.initialization.is_none())
+                .and_then(|n| self.peers.get(&n))
+                .map(|p| p.responses.clone())
+                .unwrap_or_else(|| discard_responses.clone());
             let config = &self.storage_state.storage_configuration;
             let stats_interval = config.parameters.statistics_collection_interval;
 
@@ -473,7 +503,10 @@ impl<'w> Worker<'w> {
             // pending commands or responses. The command may have already been
             // consumed by the call to `client_rx.recv`. See:
             // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
-            if command_rx.is_empty() && self.storage_state.async_worker.is_empty() {
+            if self.client_rx.is_empty()
+                && self.peers.values().all(|p| p.commands.is_empty())
+                && self.storage_state.async_worker.is_empty()
+            {
                 // Make sure we wake up again to report any pending statistics updates.
                 let mut park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
                 if let Some(sleep_duration) = sleep_duration {
@@ -498,18 +531,6 @@ impl<'w> Worker<'w> {
                 last_stats_time = Instant::now();
             }
 
-            // Handle any received commands.
-            loop {
-                match command_rx.try_recv() {
-                    Ok(cmd) => self.storage_state.handle_storage_command(cmd),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-
             // Handle responses from the async worker.
             while let Ok(response) = self.storage_state.async_worker.try_recv() {
                 self.handle_async_worker_response(response);
@@ -518,6 +539,182 @@ impl<'w> Worker<'w> {
             // Handle any received commands.
             while let Some(command) = self.storage_state.internal_cmd_rx.try_recv() {
                 self.handle_internal_storage_command(command);
+            }
+        }
+    }
+
+    fn poll_clients(&mut self) {
+        for _ in 0..self.client_rx.len() {
+            let Ok((nonce, commands, responses)) = self.client_rx.try_recv() else {
+                break;
+            };
+            self.peers.entry(nonce).or_insert(Peer {
+                commands,
+                responses,
+                query: None,
+            });
+        }
+        let nonces: Vec<_> = self.peers.keys().copied().collect();
+        for nonce in nonces {
+            // Bound each turn by the queued work, so a continuous producer cannot
+            // prevent sibling clients or Timely from making progress. The extra
+            // receive observes disconnect even when the queue starts empty.
+            let budget = self.peers.get(&nonce).map_or(0, |p| p.commands.len() + 1);
+            for _ in 0..budget {
+                let Some(peer) = self.peers.get_mut(&nonce) else {
+                    break;
+                };
+                let command = match peer.commands.try_recv() {
+                    Ok(command) => Some(command),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => None,
+                };
+                if peer.query.is_none() {
+                    let Some(first) = &command else {
+                        self.peers.remove(&nonce);
+                        break;
+                    };
+                    let query = matches!(first, StorageCommand::HelloQuery { .. });
+                    peer.query = Some(query);
+                    if !query {
+                        if let Some(old) = self.lifecycle.replace(nonce) {
+                            if old != nonce {
+                                self.peers.remove(&old);
+                            }
+                        }
+                        self.initialization = Some(Vec::new());
+                    }
+                }
+                let query = self.peers[&nonce].query.expect("classified");
+                let disconnected = command.is_none();
+                if query {
+                    // Only worker zero admits commands, including disconnect. Other
+                    // process endpoints can arrive after globally sequenced responses.
+                    if self.timely_worker.index() == 0 {
+                        self.storage_state
+                            .internal_cmd_tx
+                            .send(InternalStorageCommand::Query { nonce, command });
+                    }
+                } else if let Some(command) = command {
+                    if let Some(commands) = &mut self.initialization {
+                        if matches!(command, StorageCommand::InitializationComplete) {
+                            let commands = self.initialization.take().expect("initializing");
+                            self.reconcile(commands);
+                            if self.timely_worker.index() == 0 {
+                                self.storage_state
+                                    .internal_cmd_tx
+                                    .send(InternalStorageCommand::QueryReady);
+                            }
+                        } else {
+                            commands.push(command);
+                        }
+                    } else {
+                        self.storage_state.handle_storage_command(command);
+                    }
+                }
+                if disconnected {
+                    self.peers.remove(&nonce);
+                    if self.lifecycle == Some(nonce) {
+                        self.lifecycle = None;
+                        self.initialization = None;
+                    }
+                    break;
+                }
+            }
+        }
+        self.flush_query_responses();
+    }
+
+    fn flush_query_responses(&mut self) {
+        for (nonce, query) in &mut self.queries {
+            if let Some(peer) = self.peers.get(nonce).filter(|p| p.query == Some(true)) {
+                for response in query.responses.drain(..) {
+                    let _ = peer.responses.send(response);
+                }
+            }
+        }
+    }
+
+    fn handle_query(&mut self, nonce: Uuid, command: Option<StorageCommand>) {
+        match command {
+            Some(StorageCommand::HelloQuery { nonce: hello }) => {
+                assert_eq!(nonce, hello);
+                if let std::collections::btree_map::Entry::Vacant(entry) = self.queries.entry(nonce)
+                {
+                    let query = entry.insert(Query::default());
+                    if self.query_ready {
+                        query.responses.push(StorageResponse::QueryReady);
+                    }
+                }
+            }
+            None => {
+                self.queries.remove(&nonce);
+                self.peers.remove(&nonce);
+                self.storage_state.query_owners.retain(|id, owner| {
+                    if *owner == nonce {
+                        self.storage_state.oneshot_ingestions.remove(id);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+            Some(StorageCommand::RunOneshotIngestion(ingestion)) => {
+                let Some(query) = self.queries.get_mut(&nonce) else {
+                    return;
+                };
+                let id = ingestion.ingestion_id;
+                if !query.seen.insert(id) {
+                    return;
+                }
+                // IDs are replica-wide, including legacy oneshots. A collision must
+                // never replace or expose another connection's ingestion.
+                if self.storage_state.query_owners.contains_key(&id)
+                    || self.storage_state.oneshot_ingestions.contains_key(&id)
+                {
+                    query
+                        .responses
+                        .push(StorageResponse::StagedBatches(BTreeMap::from([(
+                            id,
+                            vec![Err("oneshot ingestion ID is already in use".into())],
+                        )])));
+                    return;
+                }
+                self.storage_state.query_owners.insert(id, nonce);
+                query.pending.insert(id, ingestion);
+            }
+            Some(StorageCommand::CancelOneshotIngestion(id)) => {
+                if let Some(query) = self.queries.get_mut(&nonce) {
+                    // Remember cancellation even when it overtakes admission.
+                    query.seen.insert(id);
+                    query.pending.remove(&id);
+                    query.finished.remove(&id);
+                    if self.storage_state.query_owners.get(&id) == Some(&nonce) {
+                        self.storage_state.drop_oneshot_ingestion(id);
+                        self.storage_state.query_owners.remove(&id);
+                    }
+                }
+            }
+            Some(_) => panic!("invalid query command passed role validation"),
+        }
+        self.admit_queries();
+        self.flush_query_responses();
+    }
+
+    fn admit_queries(&mut self) {
+        if !self.query_ready {
+            return;
+        }
+        for query in self.queries.values_mut() {
+            for ingestion in std::mem::take(&mut query.pending).into_values() {
+                crate::render::build_oneshot_ingestion_dataflow(
+                    self.timely_worker,
+                    &mut self.storage_state,
+                    ingestion.ingestion_id,
+                    ingestion.collection_id,
+                    ingestion.collection_meta,
+                    ingestion.request,
+                );
             }
         }
     }
@@ -569,6 +766,37 @@ impl<'w> Worker<'w> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(&mut self, internal_cmd: InternalStorageCommand) {
         match internal_cmd {
+            InternalStorageCommand::Query { nonce, command } => self.handle_query(nonce, command),
+            InternalStorageCommand::QueryFinished {
+                nonce,
+                ingestion_id,
+            } => {
+                if self.storage_state.query_owners.get(&ingestion_id) == Some(&nonce) {
+                    let query = self.queries.get_mut(&nonce).expect("owner exists");
+                    let finished = query.finished.entry(ingestion_id).or_default();
+                    *finished += 1;
+                    if *finished == self.timely_worker.peers() {
+                        query.finished.remove(&ingestion_id);
+                        self.storage_state.drop_oneshot_ingestion(ingestion_id);
+                        self.storage_state.query_owners.remove(&ingestion_id);
+                    }
+                }
+            }
+            InternalStorageCommand::CancelOneshotIngestion(id) => {
+                if !self.storage_state.query_owners.contains_key(&id) {
+                    self.storage_state.drop_oneshot_ingestion(id);
+                }
+            }
+            InternalStorageCommand::QueryReady => {
+                if !self.query_ready {
+                    self.query_ready = true;
+                    for query in self.queries.values_mut() {
+                        query.responses.push(StorageResponse::QueryReady);
+                    }
+                    self.admit_queries();
+                    self.flush_query_responses();
+                }
+            }
             InternalStorageCommand::SuspendAndRestart { id, reason } => {
                 info!(
                     "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",
@@ -764,6 +992,9 @@ impl<'w> Worker<'w> {
                 collection_meta,
                 request,
             } => {
+                if self.storage_state.query_owners.contains_key(&ingestion_id) {
+                    return;
+                }
                 crate::render::build_oneshot_ingestion_dataflow(
                     self.timely_worker,
                     &mut self.storage_state,
@@ -986,6 +1217,11 @@ impl<'w> Worker<'w> {
 
     fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
         for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
+            if !self.storage_state.query_owners.contains_key(ingestion_id)
+                && (self.lifecycle.is_none() || self.initialization.is_some())
+            {
+                continue;
+            }
             loop {
                 match ingestion_state.results.try_recv() {
                     Ok(result) => {
@@ -994,7 +1230,23 @@ impl<'w> Worker<'w> {
                             Err(err) => vec![Err(err)],
                         };
                         let staged_batches = BTreeMap::from([(*ingestion_id, response)]);
-                        let _ = response_tx.send(StorageResponse::StagedBatches(staged_batches));
+                        let response = StorageResponse::StagedBatches(staged_batches);
+                        if let Some(owner) = self.storage_state.query_owners.get(ingestion_id) {
+                            if let Some(query) = self.queries.get_mut(owner) {
+                                query.responses.push(response);
+                            }
+                            // The renderer invokes each worker's callback exactly once.
+                            // Releasing local tokens here could freeze capabilities
+                            // still needed for another worker's terminal result.
+                            self.storage_state.internal_cmd_tx.send(
+                                InternalStorageCommand::QueryFinished {
+                                    nonce: *owner,
+                                    ingestion_id: *ingestion_id,
+                                },
+                            );
+                        } else {
+                            let _ = response_tx.send(response);
+                        }
                     }
                     Err(TryRecvError::Empty) => {
                         break;
@@ -1005,24 +1257,12 @@ impl<'w> Worker<'w> {
                 }
             }
         }
+        self.flush_query_responses();
     }
 
-    /// Extract commands until `InitializationComplete`, and make the worker
-    /// reflect those commands. If the worker can not be made to reflect the
-    /// commands, return an error.
-    fn reconcile(&mut self, command_rx: &mut CommandReceiver) -> Result<(), ()> {
+    /// Reconcile a complete lifecycle snapshot without touching query-owned work.
+    fn reconcile(&mut self, mut commands: Vec<StorageCommand>) {
         let worker_id = self.timely_worker.index();
-
-        // To initialize the connection, we want to drain all commands until we
-        // receive a `StorageCommand::InitializationComplete` command to form a
-        // target command state.
-        let mut commands = vec![];
-        loop {
-            match command_rx.blocking_recv().ok_or(())? {
-                StorageCommand::InitializationComplete => break,
-                command => commands.push(command),
-            }
-        }
 
         // Track which frontiers this envd expects; we will also set their
         // initial timestamp to the minimum timestamp to reset them as we don't
@@ -1038,7 +1278,7 @@ impl<'w> Worker<'w> {
 
         for command in &mut commands {
             match command {
-                StorageCommand::Hello { .. } => {
+                StorageCommand::Hello { .. } | StorageCommand::HelloQuery { .. } => {
                     panic!("Hello must be captured before")
                 }
                 StorageCommand::AllowCompaction(id, since) => {
@@ -1110,7 +1350,7 @@ impl<'w> Worker<'w> {
         for mut command in commands.into_iter().rev() {
             let mut should_keep = true;
             match &mut command {
-                StorageCommand::Hello { .. } => {
+                StorageCommand::Hello { .. } | StorageCommand::HelloQuery { .. } => {
                     panic!("Hello must be captured before")
                 }
                 StorageCommand::RunIngestion(ingestion) => {
@@ -1251,6 +1491,7 @@ impl<'w> Worker<'w> {
             .storage_state
             .oneshot_ingestions
             .keys()
+            .filter(|ingestion_id| !self.storage_state.query_owners.contains_key(ingestion_id))
             .filter(|ingestion_id| {
                 let to_create = create_oneshot_ingestions.contains(ingestion_id);
                 let to_drop = cancel_oneshot_ingestions.contains(ingestion_id);
@@ -1272,7 +1513,8 @@ impl<'w> Worker<'w> {
             self.storage_state.drop_collection(id);
         }
         for id in stale_oneshot_ingestions {
-            self.storage_state.drop_oneshot_ingestion(id);
+            self.storage_state
+                .handle_storage_command(StorageCommand::CancelOneshotIngestion(id));
         }
 
         // Do not report dropping any objects that do not belong to expected
@@ -1300,8 +1542,6 @@ impl<'w> Worker<'w> {
         for command in commands {
             self.storage_state.handle_storage_command(command);
         }
-
-        Ok(())
     }
 }
 
@@ -1314,7 +1554,9 @@ impl StorageState {
     /// commands to the `internal_cmd_tx`.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::Hello { .. } => panic!("Hello must be captured before"),
+            StorageCommand::Hello { .. } | StorageCommand::HelloQuery { .. } => {
+                panic!("Hello must be captured before")
+            }
             StorageCommand::InitializationComplete => (),
             StorageCommand::AllowWrites => {
                 self.read_only_tx
@@ -1377,6 +1619,9 @@ impl StorageState {
                 }
             }
             StorageCommand::RunOneshotIngestion(oneshot) => {
+                if self.query_owners.contains_key(&oneshot.ingestion_id) {
+                    return;
+                }
                 if self.timely_worker_index == 0 {
                     self.internal_cmd_tx
                         .send(InternalStorageCommand::RunOneshotIngestion {
@@ -1388,7 +1633,10 @@ impl StorageState {
                 }
             }
             StorageCommand::CancelOneshotIngestion(id) => {
-                self.drop_oneshot_ingestion(id);
+                if self.timely_worker_index == 0 {
+                    self.internal_cmd_tx
+                        .send(InternalStorageCommand::CancelOneshotIngestion(id));
+                }
             }
             StorageCommand::RunSink(export) => {
                 // Remember the sink description to facilitate possible
@@ -1471,5 +1719,355 @@ impl StorageState {
     fn drop_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) {
         let prev = self.oneshot_ingestions.remove(&ingestion_id);
         info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_storage_types::oneshot_sources::{
+        ContentFilter, ContentFormat, ContentShape, ContentSource, OneshotIngestionRequest,
+    };
+
+    fn worker<'w>(
+        timely: &'w mut TimelyWorker,
+        clients: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
+    ) -> Worker<'w> {
+        Worker::new(
+            timely,
+            clients,
+            StorageMetrics::register_with(&MetricsRegistry::new()),
+            mz_ore::now::SYSTEM_TIME.clone(),
+            ConnectionContext::for_tests(Arc::new(mz_secrets::InMemorySecretsController::new())),
+            StorageInstanceContext::new(None, None),
+            Arc::new(PersistClientCache::new_no_metrics()),
+            TxnsContext::default(),
+            Arc::new(TracingHandle::disabled()),
+            Default::default(),
+        )
+    }
+
+    fn connect(
+        clients: &mpsc::UnboundedSender<(Uuid, CommandReceiver, ResponseSender)>,
+        nonce: Uuid,
+        query: bool,
+    ) -> (
+        mpsc::UnboundedSender<StorageCommand>,
+        mpsc::UnboundedReceiver<StorageResponse>,
+    ) {
+        let (tx, commands) = mpsc::unbounded_channel();
+        let (responses, rx) = mpsc::unbounded_channel();
+        clients.send((nonce, commands, responses)).unwrap();
+        tx.send(if query {
+            StorageCommand::HelloQuery { nonce }
+        } else {
+            // ClusterClient consumes lifecycle Hello before the worker boundary.
+            StorageCommand::UpdateConfiguration(Default::default())
+        })
+        .unwrap();
+        (tx, rx)
+    }
+
+    fn drive(worker: &mut Worker<'_>, done: impl Fn(&Worker<'_>) -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let (discard_responses, _) = mpsc::unbounded_channel();
+        loop {
+            worker.poll_clients();
+            worker.timely_worker.step();
+            worker.process_oneshot_ingestions(&discard_responses);
+            while let Some(command) = worker.storage_state.internal_cmd_rx.try_recv() {
+                worker.handle_internal_storage_command(command);
+            }
+            if done(worker) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker boundary timed out"
+            );
+        }
+    }
+
+    fn request(id: Uuid) -> StorageCommand {
+        let desc = mz_repr::RelationDesc::empty();
+        StorageCommand::RunOneshotIngestion(Box::new(RunOneshotIngestion {
+            ingestion_id: id,
+            collection_id: GlobalId::User(1),
+            collection_meta: CollectionMetadata {
+                persist_location: mz_persist_types::PersistLocation {
+                    blob_uri: "mem://query-test".parse().unwrap(),
+                    consensus_uri: "mem://query-test".parse().unwrap(),
+                },
+                data_shard: mz_persist_client::ShardId::new(),
+                relation_desc: desc.clone(),
+                txns_shard: None,
+            },
+            request: OneshotIngestionRequest {
+                source: ContentSource::Http {
+                    // Port zero cannot host an HTTP service. The real renderer
+                    // reports a fetch error without an external dependency.
+                    url: "http://127.0.0.1:0/unused".parse().unwrap(),
+                },
+                format: ContentFormat::Parquet,
+                filter: ContentFilter::None,
+                shape: ContentShape {
+                    source_desc: desc,
+                    source_mfp: mz_expr::SafeMfpPlan::from_mfp(mz_expr::MapFilterProject::new(0)),
+                },
+            },
+        }))
+    }
+
+    #[mz_ore::test]
+    fn query_worker_pending_routing_and_retirement() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let handle = runtime.handle().clone();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let guards = timely::execute(timely::Config::process(2), move |timely| {
+            let _guard = handle.enter();
+            let (clients, rx) = mpsc::unbounded_channel();
+            let mut worker = worker(timely, rx);
+            let lifecycle = Uuid::from_u128(1);
+            let owner = Uuid::from_u128(2);
+            let sibling = Uuid::from_u128(3);
+            let id = Uuid::from_u128(4);
+            let (lifecycle_tx, mut lifecycle_rx) = connect(&clients, lifecycle, false);
+            let (owner_tx, mut owner_rx) = connect(&clients, owner, true);
+            let (sibling_tx, mut sibling_rx) = connect(&clients, sibling, true);
+            owner_tx.send(request(id)).unwrap();
+            drive(&mut worker, |w| {
+                w.storage_state.query_owners.contains_key(&id) && w.queries.contains_key(&sibling)
+            });
+            assert!(worker.initialization.is_some());
+            assert!(!worker.query_ready);
+            assert!(owner_rx.try_recv().is_err());
+            barrier.wait();
+            // A sibling cannot cancel another connection's pending run.
+            sibling_tx
+                .send(StorageCommand::CancelOneshotIngestion(id))
+                .unwrap();
+            drive(&mut worker, |w| w.queries[&sibling].seen.contains(&id));
+            assert!(worker.queries[&owner].pending.contains_key(&id));
+            barrier.wait();
+            owner_tx
+                .send(StorageCommand::CancelOneshotIngestion(id))
+                .unwrap();
+            drive(&mut worker, |w| {
+                !w.queries[&owner].pending.contains_key(&id)
+            });
+            assert!(!worker.storage_state.query_owners.contains_key(&id));
+            barrier.wait();
+            let pending = Uuid::from_u128(5);
+            // The sibling cancelled this ID before ever submitting a run.
+            sibling_tx.send(request(id)).unwrap();
+            owner_tx.send(request(pending)).unwrap();
+            drive(&mut worker, |w| {
+                w.storage_state.query_owners.contains_key(&pending)
+            });
+            assert!(!worker.queries[&sibling].pending.contains_key(&id));
+            barrier.wait();
+            drop(owner_tx);
+            drive(&mut worker, |w| !w.queries.contains_key(&owner));
+            assert!(worker.storage_state.query_owners.is_empty());
+            assert!(worker.queries.contains_key(&sibling));
+            assert!(worker.initialization.is_some());
+            barrier.wait();
+            lifecycle_tx
+                .send(StorageCommand::InitializationComplete)
+                .unwrap();
+            drive(&mut worker, |w| w.query_ready);
+            assert!(matches!(
+                sibling_rx.try_recv(),
+                Ok(StorageResponse::QueryReady)
+            ));
+            assert!(lifecycle_rx.try_recv().is_err());
+            barrier.wait();
+            drop(sibling_tx);
+            drive(&mut worker, |w| w.queries.is_empty());
+            barrier.wait();
+            drop(lifecycle_tx);
+            drop(clients);
+            worker.run();
+            // Timely's sequencer is intentionally live until the server returns.
+            worker.timely_worker.drop_dataflow(0);
+        })
+        .unwrap();
+        for result in guards.join() {
+            result.unwrap();
+        }
+    }
+
+    #[mz_ore::test]
+    fn query_worker_results_preserve_maintained_work() {
+        let results_barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let saw_error = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let handle = runtime.handle().clone();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let guards = timely::execute(timely::Config::process(2), move |timely| {
+            let _guard = handle.enter();
+            let (clients, rx) = mpsc::unbounded_channel();
+            let mut worker = worker(timely, rx);
+            let (lifecycle_tx, mut lifecycle_rx) = connect(&clients, Uuid::from_u128(1), false);
+            lifecycle_tx
+                .send(StorageCommand::InitializationComplete)
+                .unwrap();
+            drive(&mut worker, |w| w.query_ready);
+            barrier.wait();
+
+            let maintained = GlobalId::User(9);
+            let token = worker.timely_worker.dataflow::<Timestamp, _, _>(|scope| {
+                mz_timely_util::builder_async::OperatorBuilder::new("maintained".into(), scope)
+                    .build(|_| std::future::pending::<()>())
+                    .press_on_drop()
+            });
+            worker
+                .storage_state
+                .source_tokens
+                .insert(maintained, vec![token]);
+            let upper = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::from(42))));
+            worker
+                .storage_state
+                .source_uppers
+                .insert(maintained, Rc::clone(&upper));
+            worker
+                .storage_state
+                .reported_frontiers
+                .insert(maintained, upper.borrow().clone());
+
+            let owner = Uuid::from_u128(2);
+            // Worker one's local endpoint arrives after the sequenced open and
+            // QueryReady. Responses must wait for that endpoint, not leak to lifecycle.
+            let mut owner_client =
+                (worker.timely_worker.index() == 0).then(|| connect(&clients, owner, true));
+            drive(&mut worker, |w| w.queries.contains_key(&owner));
+            barrier.wait();
+            let (owner_tx, mut owner_rx) = owner_client
+                .take()
+                .unwrap_or_else(|| connect(&clients, owner, true));
+            let (sibling_tx, mut sibling_rx) = connect(&clients, Uuid::from_u128(3), true);
+            let (replacement_tx, mut replacement_rx) = connect(&clients, Uuid::from_u128(4), false);
+
+            let results_barrier = Arc::clone(&results_barrier);
+            let saw_error = Arc::clone(&saw_error);
+            let worker_thread = thread::current();
+            let task = mz_ore::task::spawn(|| "storage query test client", async move {
+                // No new endpoints can arrive, but existing clients must still work.
+                drop(clients);
+                let result = tokio::time::timeout(Duration::from_secs(30), async {
+                    assert!(matches!(
+                        owner_rx.recv().await,
+                        Some(StorageResponse::QueryReady)
+                    ));
+                    assert!(matches!(
+                        sibling_rx.recv().await,
+                        Some(StorageResponse::QueryReady)
+                    ));
+                    let id = Uuid::from_u128(5);
+                    owner_tx.send(request(id)).unwrap();
+                    worker_thread.unpark();
+                    let Some(StorageResponse::StagedBatches(batches)) = owner_rx.recv().await
+                    else {
+                        panic!("expected owner result");
+                    };
+                    assert_eq!(batches.keys().copied().collect::<Vec<_>>(), vec![id]);
+                    if batches[&id].iter().any(Result::is_err) {
+                        saw_error.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    assert!(sibling_rx.try_recv().is_err());
+                    assert!(lifecycle_rx.try_recv().is_err());
+                    assert!(replacement_rx.try_recv().is_err());
+                    results_barrier.wait().await;
+                    assert!(saw_error.load(std::sync::atomic::Ordering::SeqCst));
+                    drop(owner_tx);
+                    let id = Uuid::from_u128(6);
+                    sibling_tx.send(request(id)).unwrap();
+                    worker_thread.unpark();
+                    let Some(StorageResponse::StagedBatches(batches)) = sibling_rx.recv().await
+                    else {
+                        panic!("expected healthy sibling result");
+                    };
+                    assert_eq!(batches.keys().copied().collect::<Vec<_>>(), vec![id]);
+                    results_barrier.wait().await;
+                })
+                .await;
+                // Closing the real channels must terminate Worker::run, including
+                // when the assertion/timeout path leaves initialization incomplete.
+                drop((lifecycle_tx, replacement_tx, sibling_tx));
+                worker_thread.unpark();
+                result.unwrap();
+            });
+            worker.run();
+            handle.block_on(task);
+            assert!(worker.storage_state.source_tokens.contains_key(&maintained));
+            assert!(Rc::ptr_eq(
+                &worker.storage_state.source_uppers[&maintained],
+                &upper
+            ));
+            assert_eq!(
+                worker.storage_state.reported_frontiers[&maintained],
+                *upper.borrow()
+            );
+            worker.timely_worker.drop_dataflow(0);
+        })
+        .unwrap();
+        for result in guards.join() {
+            result.unwrap();
+        }
+    }
+
+    #[mz_ore::test]
+    fn query_worker_completion_reclaims_work_before_disconnect() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let handle = runtime.handle().clone();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let guards = timely::execute(timely::Config::process(2), move |timely| {
+            let _guard = handle.enter();
+            let (clients, rx) = mpsc::unbounded_channel();
+            let mut worker = worker(timely, rx);
+            let (lifecycle_tx, _) = connect(&clients, Uuid::from_u128(1), false);
+            let owner = Uuid::from_u128(2);
+            let (owner_tx, mut owner_rx) = connect(&clients, owner, true);
+            lifecycle_tx.send(StorageCommand::InitializationComplete).unwrap();
+            drive(&mut worker, |w| w.query_ready && w.queries.contains_key(&owner));
+            assert!(matches!(owner_rx.try_recv(), Ok(StorageResponse::QueryReady)));
+            let id = Uuid::from_u128(3);
+            owner_tx.send(request(id)).unwrap();
+            drive(&mut worker, |w| {
+                w.queries[&owner].seen.contains(&id)
+                    && !w.storage_state.query_owners.contains_key(&id)
+            });
+            assert!(worker.storage_state.oneshot_ingestions.is_empty());
+            assert!(worker.queries[&owner].finished.is_empty());
+            assert!(matches!(owner_rx.try_recv(), Ok(StorageResponse::StagedBatches(b)) if b.contains_key(&id)));
+            barrier.wait();
+            drop((clients, owner_tx, lifecycle_tx));
+            worker.run();
+            worker.timely_worker.drop_dataflow(0);
+        }).unwrap();
+        for result in guards.join() {
+            result.unwrap();
+        }
+    }
+
+    #[mz_ore::test]
+    fn query_worker_container_shutdown() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _guard = runtime.enter();
+        timely::execute_directly(|timely| {
+            let (clients, rx) = mpsc::unbounded_channel();
+            let mut worker = worker(timely, rx);
+            let (commands, responses) = mpsc::unbounded_channel();
+            let (response_tx, _response_rx) = mpsc::unbounded_channel();
+            clients
+                .send((Uuid::new_v4(), responses, response_tx))
+                .unwrap();
+            drop(commands);
+            drop(clients);
+            worker.run();
+            assert!(worker.peers.is_empty());
+            worker.timely_worker.drop_dataflow(0);
+        });
     }
 }

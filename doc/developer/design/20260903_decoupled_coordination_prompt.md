@@ -28,8 +28,9 @@ boundary moves:
 
 The query connection split and generation-scoped cooperating catalog writers are
 implemented in-process. MV and metric-sink compute installation and sink alteration
-derive from committed state. These are implementation checkpoints, not milestone
-acceptance. Remaining work:
+derive from committed state. Remote COPY staging uses request-owned storage query
+connections, while its row commitment stays in the adapter. These are checkpoints,
+not milestone acceptance. Remaining work:
 
 1. Finish replacing the adapter's direct use of controller frontiers and holds
    with the query client: storage frontiers from persist, compute
