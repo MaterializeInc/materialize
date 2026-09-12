@@ -934,7 +934,6 @@ mod tests {
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-    use mz_persist_types::ShardId;
     use mz_repr::{RelationDesc, RelationVersion, Row, SqlRelationType};
     use mz_repr::{ReprRelationType, Timestamp};
     use mz_storage_client::client::TimestamplessUpdateBuilder;
@@ -1076,14 +1075,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn prepare_state(
-            &self,
-            _txn: &mut (dyn StorageTxn + Send),
-            _ids_to_add: BTreeSet<GlobalId>,
-            _ids_to_drop: BTreeSet<GlobalId>,
-            _ids_to_register: BTreeMap<GlobalId, ShardId>,
-            _live_collection_ids: &BTreeSet<GlobalId>,
-        ) -> Result<(), StorageError> {
+        fn acknowledge_finalized_shards(&self, _txn: &mut (dyn StorageTxn + Send)) {
             unimplemented!()
         }
 

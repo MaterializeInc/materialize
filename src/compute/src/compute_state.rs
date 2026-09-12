@@ -1123,8 +1123,9 @@ impl<'a> ActiveComputeState<'a> {
     pub fn report_frontiers(&mut self) {
         let mut responses = Vec::new();
 
-        // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
+        // Reuse frontier allocations across collections.
         let mut new_frontier = Antichain::new();
+        let mut write_frontier = Antichain::new();
 
         for (&id, collection) in self.compute_state.collections.iter_mut() {
             if self.compute_state.active_query.is_some() && !id.is_transient() {
@@ -1163,15 +1164,19 @@ impl<'a> ActiveComputeState<'a> {
                 error!(id = ?id, "collection without write frontier");
                 continue;
             }
+            // The collection cannot write before its as-of, even if its trace or shared
+            // Persist upper is still behind. Keep the raw upper for output progress.
+            write_frontier.clone_from(&new_frontier);
+            write_frontier.join_assign(&collection.as_of);
             let new_write_frontier = reported
                 .write_frontier
-                .allows_reporting(&new_frontier)
-                .then(|| new_frontier.clone());
+                .allows_reporting(&write_frontier)
+                .then(|| write_frontier.clone());
 
             // Collect the output frontier and check for progress.
             //
-            // By default, the output frontier equals the write frontier (which is still stored in
-            // `new_frontier`). If the collection provides a compute frontier, we construct the
+            // By default, the output frontier equals the raw write frontier (which is still stored
+            // in `new_frontier`). If the collection provides a compute frontier, we construct the
             // output frontier by taking the meet of write and compute frontier, to avoid:
             //  * reporting progress through times we have not yet written
             //  * reporting progress through times we have not yet fully processed, for

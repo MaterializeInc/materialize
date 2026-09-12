@@ -172,7 +172,7 @@ impl Coordinator {
                 }
                 let enforce_external_addresses =
                     mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-                        .get(self.controller.storage.config().config_set());
+                        .get(self.storage_configuration.config_set());
                 if enforce_external_addresses {
                     if let Err(err) = mz_ore::netio::ensure_url_ip_global(&url) {
                         return ctx

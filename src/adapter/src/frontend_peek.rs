@@ -798,6 +798,9 @@ impl PeekClient {
             true,
             catalog.system_config(),
             &*self.storage_collections,
+            self.query_client
+                .as_deref()
+                .map(|client| (client, &*catalog)),
         )
         .await
         .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
@@ -1191,6 +1194,7 @@ impl PeekClient {
                         session,
                         &*catalog,
                         &self.storage_collections,
+                        self.query_client.as_ref(),
                         as_of,
                         mz_now,
                         imports,

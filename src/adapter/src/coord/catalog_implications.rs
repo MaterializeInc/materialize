@@ -300,6 +300,8 @@ impl Coordinator {
 
     fn update_storage_config(&mut self) {
         let config_params = flags::storage_config(self.catalog().system_config());
+        self.adapter_storage.update_parameters(&config_params);
+        self.storage_configuration.update(config_params.clone());
         self.controller.storage.update_parameters(config_params);
     }
 
@@ -1359,7 +1361,7 @@ impl Coordinator {
                 let caching_secrets_reader = self.caching_secrets_reader.clone();
                 let secrets_controller = Arc::clone(&self.secrets_controller);
                 let secrets_reader = Arc::clone(self.secrets_reader());
-                let storage_config = self.controller.storage.config().clone();
+                let storage_config = self.storage_configuration.clone();
 
                 async move {
                     for (connection, replication_slot_name) in replication_slots_to_drop {
@@ -1702,6 +1704,8 @@ impl Coordinator {
             })
             .collect::<Vec<_>>();
         let collections = table_collections_to_create.into_iter().collect_vec();
+        self.register_adapter_storage_collections(&collections, &BTreeSet::new())
+            .await;
 
         // Confirm leadership after allocating the collections' initial timestamp.
         let write_ts = self.get_local_write_ts().await;
@@ -1771,6 +1775,9 @@ impl Coordinator {
         &mut self,
         source_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
     ) -> Result<(), AdapterError> {
+        let collections = source_collections_to_create.into_iter().collect_vec();
+        self.register_adapter_storage_collections(&collections, &BTreeSet::new())
+            .await;
         let storage_metadata = self.catalog.state().storage_metadata();
 
         self.controller
@@ -1778,12 +1785,54 @@ impl Coordinator {
             .create_collections(
                 storage_metadata,
                 None, // Sources don't need a write timestamp
-                source_collections_to_create.into_iter().collect_vec(),
+                collections,
             )
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
         Ok(())
+    }
+
+    /// Start request-side writers from committed shard identities, independently of storage enactment.
+    pub(super) async fn register_adapter_storage_collections(
+        &self,
+        collections: &[(GlobalId, CollectionDescription)],
+        migrated_storage_collections: &BTreeSet<GlobalId>,
+    ) {
+        for (id, collection) in collections {
+            let history = match collection.data_source {
+                DataSource::Webhook => None,
+                DataSource::Introspection(typ) if typ.is_statement_history() => Some(typ),
+                _ => continue,
+            };
+            let shard = self
+                .catalog
+                .state()
+                .storage_metadata()
+                .get_collection_shard(*id)
+                .expect("adapter-written collection has committed shard metadata");
+            let writer = self
+                .persist_client
+                .open_writer(
+                    shard,
+                    Arc::new(collection.desc.clone()),
+                    Arc::new(mz_persist_types::codec_impls::UnitSchema),
+                    mz_persist_client::Diagnostics {
+                        shard_name: id.to_string(),
+                        handle_purpose: "adapter storage writes".to_owned(),
+                    },
+                )
+                .await
+                .expect("adapter-written schema matches committed description");
+            if let Some(typ) = history {
+                let force_writable =
+                    self.controller.read_only() && migrated_storage_collections.contains(id);
+                self.adapter_storage
+                    .register_history(typ, *id, writer, force_writable);
+            } else {
+                self.adapter_storage.register_webhook(*id, writer);
+            }
+        }
     }
 
     #[instrument(level = "debug")]

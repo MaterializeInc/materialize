@@ -279,7 +279,7 @@ impl Coordinator {
 
         // Collect optimizer parameters.
         let compute_instance = self
-            .instance_snapshot(cluster_id)
+            .query_instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
         let (_, view_id) = self.allocate_transient_id();
         let (_, sink_id) = self.allocate_transient_id();

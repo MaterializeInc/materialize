@@ -125,7 +125,7 @@ impl Coordinator {
 
         // Collect optimizer parameters.
         let compute_instance = self
-            .instance_snapshot(cluster_id)
+            .candidate_instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = self.allocate_user_id().await?;
         // A transient id for the view the optimizer builds over `from` to shape its rows (see

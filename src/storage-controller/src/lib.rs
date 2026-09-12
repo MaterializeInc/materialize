@@ -57,22 +57,20 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
-    IntrospectionType, MonotonicAppender, Response, StorageController, StorageMetadata, StorageTxn,
-    StorageWriteOp, WallclockLag, WallclockLagHistogramPeriod,
+    IntrospectionType, Response, StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
+    WallclockLag, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
     MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_STATUS_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_client::statistics::{
-    ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
-};
+use mz_storage_client::statistics::{ControllerSinkStatistics, ControllerSourceStatistics};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
-use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
+use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
@@ -96,10 +94,11 @@ use tokio::time::MissedTickBehavior;
 use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
 
+pub mod adapter_storage;
 mod collection_mgmt;
 mod history;
 mod instance;
-mod rtr;
+pub mod rtr;
 mod statistics;
 
 #[derive(Derivative)]
@@ -174,9 +173,9 @@ pub struct Controller {
 
     // The following two fields must always be locked in order.
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
-    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s, as well
-    /// as webhook statistics.
-    source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
+    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`.
+    source_statistics:
+        Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSourceStatistics>>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics: Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSinkStatistics>>>,
@@ -940,11 +939,6 @@ impl StorageController for Controller {
             .rev()
             .chain(collections_to_register.into_iter());
 
-        // Statistics need a level of indirection so we can mutably borrow
-        // `self` when registering collections and when we are inserting
-        // statistics.
-        let mut new_webhook_statistic_entries = BTreeSet::new();
-
         for (id, description, write, metadata) in to_register {
             let is_in_txns = |id, metadata: &CollectionMetadata| {
                 metadata.txns_shard.is_some()
@@ -1042,7 +1036,7 @@ impl StorageController for Controller {
             let mut extra_state = CollectionStateExtra::None;
             let mut maybe_instance_id = None;
             match &data_source {
-                DataSource::Introspection(typ) => {
+                DataSource::Introspection(typ) if !typ.is_statement_history() => {
                     debug!(
                         ?data_source, meta = ?metadata,
                         "registering {id} with persist monotonic worker",
@@ -1059,26 +1053,7 @@ impl StorageController for Controller {
                         persist_client.clone(),
                     )?;
                 }
-                DataSource::Webhook => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "registering {id} with persist monotonic worker",
-                    );
-                    // This collection of statistics is periodically aggregated into
-                    // `source_statistics`.
-                    new_webhook_statistic_entries.insert(id);
-                    // Register the collection so our manager knows about it.
-                    //
-                    // NOTE: Maybe this shouldn't be in the collection manager,
-                    // and collection manager should only be responsible for
-                    // built-in introspection collections?
-                    self.collection_manager.register_append_only_collection(
-                        id,
-                        write.expect_handle("webhook collections are not tables"),
-                        false,
-                        None,
-                    );
-                }
+                DataSource::Webhook | DataSource::Introspection(_) => {}
                 DataSource::IngestionExport {
                     ingestion_id,
                     details,
@@ -1198,20 +1173,6 @@ impl StorageController for Controller {
             self.collections.insert(id, collection_state);
         }
 
-        {
-            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-
-            // Webhooks don't run on clusters/replicas, so we initialize their
-            // statistics collection here.
-            for id in new_webhook_statistic_entries {
-                source_statistics.webhook_statistics.entry(id).or_default();
-            }
-
-            // Sources and sinks only have statistics in the collection when
-            // there is a replica that is reporting them. No need to initialize
-            // here.
-        }
-
         self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
 
         // TODO(guswynn): perform the io in this final section concurrently.
@@ -1239,31 +1200,6 @@ impl StorageController for Controller {
                     }
                 }
             };
-        }
-
-        Ok(())
-    }
-
-    fn check_alter_ingestion_source_desc(
-        &mut self,
-        ingestion_id: GlobalId,
-        source_desc: &SourceDesc,
-    ) -> Result<(), StorageError> {
-        let source_collection = self.collection(ingestion_id)?;
-        let data_source = &source_collection.data_source;
-        match &data_source {
-            DataSource::Ingestion(cur_ingestion) => {
-                cur_ingestion
-                    .desc
-                    .alter_compatible(ingestion_id, source_desc)?;
-            }
-            o => {
-                tracing::info!(
-                    "{ingestion_id} inalterable because its data source is {:?} and not an ingestion",
-                    o
-                );
-                Err(AlterError { id: ingestion_id })?
-            }
         }
 
         Ok(())
@@ -1810,11 +1746,6 @@ impl StorageController for Controller {
             if let Some(collection_state) = collection_state {
                 match collection_state.data_source {
                     DataSource::Webhook => {
-                        // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                        // could probably use some love and maybe get merged together?
-                        let fut = self.collection_manager.unregister_collection(*id);
-                        mz_ore::task::spawn(|| format!("storage-webhook-cleanup-{id}"), fut);
-
                         collections_to_drop.push(*id);
                         source_statistics_to_drop.push(*id);
                     }
@@ -1924,12 +1855,7 @@ impl StorageController for Controller {
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
             for id in source_statistics_to_drop {
-                source_statistics
-                    .source_statistics
-                    .retain(|(stats_id, _), _| stats_id != &id);
-                source_statistics
-                    .webhook_statistics
-                    .retain(|stats_id, _| stats_id != &id);
+                source_statistics.retain(|(stats_id, _), _| stats_id != &id);
             }
         }
 
@@ -2076,20 +2002,6 @@ impl StorageController for Controller {
             .drop_collections_unvalidated(storage_metadata, sinks_to_drop);
     }
 
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
-        self.collection_manager.monotonic_appender(id)
-    }
-
-    fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError> {
-        // Call to this method are usually cached so the lock is not in the critical path.
-        let source_statistics = self.source_statistics.lock().expect("poisoned");
-        source_statistics
-            .webhook_statistics
-            .get(&id)
-            .cloned()
-            .ok_or(StorageError::IdentifierMissing(id))
-    }
-
     async fn ready(&mut self) {
         if self.maintenance_scheduled {
             return;
@@ -2172,9 +2084,7 @@ impl StorageController for Controller {
                                 continue;
                             }
 
-                            let entry = shared_stats
-                                .source_statistics
-                                .entry((stat.id, Some(replica_id)));
+                            let entry = shared_stats.entry((stat.id, Some(replica_id)));
 
                             match entry {
                                 btree_map::Entry::Vacant(vacant_entry) => {
@@ -2403,7 +2313,9 @@ impl StorageController for Controller {
         type_: IntrospectionType,
     ) -> mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)> {
         let id = self.introspection_ids[&type_];
-        self.collection_manager.differential_write_sender(id)
+        self.collection_manager
+            .differential_write_sender(id)
+            .expect("introspection collection is registered")
     }
 
     async fn real_time_recent_timestamp(
@@ -2704,10 +2616,7 @@ where
             introspection_tokens,
             now,
             read_only,
-            source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
-                source_statistics: BTreeMap::new(),
-                webhook_statistics: BTreeMap::new(),
-            })),
+            source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             statistics_interval_sender,
             instances: BTreeMap::new(),
@@ -3110,7 +3019,6 @@ where
         self.source_statistics
             .lock()
             .expect("poisoned")
-            .source_statistics
             // collections should also contain subsources.
             .retain(|(k, _replica_id), _| self.storage_collections.check_exists(*k).is_ok());
         self.sink_statistics

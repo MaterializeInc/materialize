@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use futures::future::{BoxFuture, FutureExt};
 use mz_catalog::memory::objects::{CatalogItem, TableDataSource};
 use mz_compute_client::protocol::command::Peek;
 use mz_compute_client::protocol::response::{PeekError, PeekResponse};
@@ -23,12 +24,14 @@ use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::SessionCatalog;
+use mz_storage_client::collection_reader::CollectionReader;
 use mz_storage_types::StorageDiff;
-use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
+use mz_txn_wal::txn_read::TxnsRead;
 use timely::PartialOrder;
 use timely::progress::Antichain;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{OnceCell, oneshot, watch};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -41,6 +44,7 @@ pub(crate) mod compute;
 pub(crate) mod connections;
 pub(crate) mod dataflows;
 pub(crate) mod read_protection;
+mod rtr;
 mod storage;
 
 use compute::{QueryError, ReplicaQueryClient};
@@ -63,6 +67,7 @@ pub(crate) struct QueryClient {
     persist: PersistClient,
     persist_location: PersistLocation,
     txns_shard: ShardId,
+    collection_reader: OnceCell<CollectionReader>,
     pub(crate) connections: Arc<QueryReplicaConnections>,
     last_publication: Mutex<Instant>,
     pending_peeks: Arc<Mutex<BTreeMap<Uuid, watch::Sender<Option<PeekResponse>>>>>,
@@ -100,6 +105,7 @@ impl QueryClient {
             persist,
             persist_location,
             txns_shard,
+            collection_reader: OnceCell::new(),
             connections,
             last_publication: Mutex::new(Instant::now()),
             pending_peeks: Arc::new(Mutex::new(BTreeMap::new())),
@@ -182,22 +188,38 @@ impl QueryClient {
         ComputeInstanceSnapshot::new_from_parts(cluster, ids)
     }
 
+    /// Initializes the independent WAL reader on first use, after WAL bootstrap.
+    /// Callers must await this off the coordinator loop, within their read timeout.
+    pub(crate) async fn collection_reader(&self) -> &CollectionReader {
+        self.collection_reader
+            .get_or_init(|| async {
+                let txns =
+                    TxnsRead::start::<TxnsCodecRow>(self.persist.clone(), self.txns_shard).await;
+                CollectionReader::new(self.persist.clone(), txns)
+            })
+            .await
+    }
+
     pub(crate) fn collection_metadata(
         &self,
         catalog: &Catalog,
         id: GlobalId,
     ) -> Result<CollectionMetadata, AdapterError> {
+        let entry = catalog
+            .try_get_entry_by_global_id(&id)
+            .ok_or_else(|| unavailable(id))?;
         let session = catalog.for_system_session();
         let collection = session
             .try_get_item_by_global_id(&id)
             .ok_or_else(|| unavailable(id))?;
-        let relation_desc = collection
-            .relation_desc()
-            .ok_or_else(|| unavailable(id))?
-            .into_owned();
-        let entry = catalog
-            .try_get_entry_by_global_id(&id)
-            .ok_or_else(|| unavailable(id))?;
+        let relation_desc = if matches!(entry.item(), CatalogItem::Sink(_)) {
+            mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC.clone()
+        } else {
+            collection
+                .relation_desc()
+                .ok_or_else(|| unavailable(id))?
+                .into_owned()
+        };
         let in_txns = matches!(entry.item(), CatalogItem::Table(table)
             if matches!(table.data_source, TableDataSource::TableWrites { .. }));
         Ok(CollectionMetadata {
@@ -257,19 +279,112 @@ impl QueryClient {
         for (cluster, ids) in &bundle.compute_ids {
             let replicas = self.replica_clients(*cluster, None);
             for id in ids {
-                let mut write = Antichain::from_elem(Timestamp::MIN);
-                for replica in &replicas {
-                    if let Ok(Some(observed)) = replica.collection_frontiers(*id)
-                        && let Some(new) = observed.write_frontier.as_ref()
-                        && PartialOrder::less_than(&write, new)
-                    {
-                        write = new.clone();
-                    }
-                }
+                let write = Self::observed_compute_frontier(&replicas, *id)
+                    .unwrap_or_else(|| Antichain::from_elem(Timestamp::MIN));
                 upper.extend(write);
             }
         }
         Ok(upper)
+    }
+
+    fn observed_compute_frontier(
+        replicas: &[ReplicaQueryClient],
+        id: GlobalId,
+    ) -> Option<Antichain<Timestamp>> {
+        let mut upper = None;
+        for replica in replicas {
+            if let Ok(Some(frontiers)) = replica.collection_frontiers(id)
+                && let Some(frontier) = frontiers.write_frontier
+                && upper
+                    .as_ref()
+                    .is_none_or(|current| PartialOrder::less_than(current, &frontier))
+            {
+                upper = Some(frontier);
+            }
+        }
+        upper
+    }
+
+    /// Waits for an actual compute observation, optionally beyond a timestamp.
+    /// Unknown installation is not an observation at MIN.
+    pub(crate) async fn wait_for_compute_frontier(
+        &self,
+        cluster: ComputeInstanceId,
+        id: GlobalId,
+        after: Option<Timestamp>,
+    ) -> Antichain<Timestamp> {
+        use futures::StreamExt;
+        loop {
+            let mut topology = self.connections.changes();
+            let replicas = self.replica_clients(cluster, None);
+            let changes: Vec<_> = replicas
+                .iter()
+                .map(|replica| replica.frontier_changes())
+                .collect();
+            if let Some(upper) = Self::observed_compute_frontier(&replicas, id)
+                && after.is_none_or(|timestamp| !upper.less_equal(&timestamp))
+            {
+                return upper;
+            }
+            let mut notifications: futures::stream::FuturesUnordered<_> = changes
+                .into_iter()
+                .map(|mut changed| async move {
+                    let _ = changed.changed().await;
+                })
+                .collect();
+            tokio::select! {
+                _ = topology.changed() => {},
+                _ = notifications.next(), if !notifications.is_empty() => {},
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+            }
+        }
+    }
+
+    /// Waits for durable storage or observed compute progress, without read holds.
+    pub(crate) async fn wait_for_progress(
+        &self,
+        catalog: &Catalog,
+        bundle: &CollectionIdBundle,
+        timestamp: Timestamp,
+    ) -> Result<(), AdapterError> {
+        let mut shards = BTreeSet::new();
+        for id in &bundle.storage_ids {
+            let metadata = self.collection_metadata(catalog, *id)?;
+            shards.insert(metadata.txns_shard.unwrap_or(metadata.data_shard));
+        }
+        let mut waits: Vec<BoxFuture<'_, Result<(), AdapterError>>> = Vec::new();
+        for shard in shards {
+            waits.push(
+                async move {
+                    self.persist
+                        .wait_for_upper_past::<SourceData, (), Timestamp, StorageDiff>(
+                            shard,
+                            &Antichain::from_elem(timestamp),
+                            Diagnostics {
+                                shard_name: shard.to_string(),
+                                handle_purpose: "query progress".into(),
+                            },
+                        )
+                        .await
+                        .map_err(|error| AdapterError::Unstructured(error.into()))
+                }
+                .boxed(),
+            );
+        }
+        for (cluster, ids) in &bundle.compute_ids {
+            for id in ids {
+                waits.push(
+                    async move {
+                        self.wait_for_compute_frontier(*cluster, *id, Some(timestamp))
+                            .await;
+                        Ok(())
+                    }
+                    .boxed(),
+                );
+            }
+        }
+        futures::future::try_join_all(waits).await?;
+        Ok(())
     }
 
     /// Observes candidate frontiers. This method grants no protection.

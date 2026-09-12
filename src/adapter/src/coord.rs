@@ -358,6 +358,7 @@ pub struct ArrangementSizeRecord {
 pub enum Message {
     Command(OpenTelemetryContext, Command),
     QueryDataflowResponse(crate::query_client::compute::DataflowResponse),
+    QueryWatchSetReady(WatchSetId, Result<(), AdapterError>),
     ControllerReady {
         controller: ControllerReadiness,
     },
@@ -559,6 +560,7 @@ impl Message {
                 controller: ControllerReadiness::Internal,
             } => "controller_ready(internal)",
             Message::QueryDataflowResponse(_) => "query_dataflow_response",
+            Message::QueryWatchSetReady(..) => "query_watch_set_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
@@ -2067,6 +2069,10 @@ pub struct Coordinator {
     controller: mz_controller::Controller,
     /// Adapter-owned table writes. Runtime operations use the group committer's FIFO.
     table_write_handle: Arc<dyn crate::table_writer::TableWriteHandle>,
+    /// Adapter-owned webhook and statement-history writes and idle frontier advancement.
+    adapter_storage: mz_controller::AdapterStorageWriter,
+    /// Request-side connection configuration projected from the catalog and CLI.
+    storage_configuration: mz_storage_types::configuration::StorageConfiguration,
     /// The catalog in an Arc suitable for readonly references. The Arc allows
     /// us to hand out cheap copies of the catalog to functions that can use it
     /// off of the main coordinator thread. If the coordinator needs to mutate
@@ -2273,7 +2279,8 @@ pub struct Coordinator {
     scoped_frontend: Option<Arc<SystemParameterFrontend>>,
 
     /// Tracks the state associated with the currently installed watchsets.
-    installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
+    installed_watch_sets: BTreeMap<WatchSetId, InstalledWatchSet>,
+    query_watch_set_ids: mz_ore::id_gen::Gen<WatchSetId>,
 
     /// Tracks the currently installed watchsets for each connection.
     connection_watch_sets: BTreeMap<ConnectionId, BTreeSet<WatchSetId>>,
@@ -3289,6 +3296,19 @@ impl Coordinator {
             .iter()
             .filter(|meta| meta.id.is_system() && !retained_across_restarts.contains(&meta.id))
             .collect();
+        let txns_shard = self
+            .catalog()
+            .txn_wal_shard()
+            .await
+            .unwrap_or_terminate("table writer has committed WAL metadata");
+        let reader = mz_storage_client::collection_reader::CollectionReader::new(
+            self.persist_client.clone(),
+            mz_txn_wal::txn_read::TxnsRead::start::<mz_storage_types::controller::TxnsCodecRow>(
+                self.persist_client.clone(),
+                txns_shard,
+            )
+            .await,
+        );
 
         for system_table in system_tables {
             let table_id = system_table.id;
@@ -3296,20 +3316,36 @@ impl Coordinator {
             debug!("coordinator init: resetting system table {full_name} ({table_id})");
 
             // Fetch the current contents of the table for retraction.
-            let snapshot_fut = self
-                .controller
-                .storage_collections
-                .snapshot_cursor(system_table.table.global_id_writes(), read_ts);
-            let batch_fut = self
-                .controller
-                .storage_collections
-                .create_update_builder(system_table.table.global_id_writes());
+            let global_id = system_table.table.global_id_writes();
+            let metadata = mz_storage_types::controller::CollectionMetadata {
+                persist_location: self.query_persist_location.clone(),
+                data_shard: self
+                    .catalog()
+                    .state()
+                    .storage_metadata()
+                    .get_collection_shard(global_id)
+                    .expect("system table has committed shard metadata"),
+                relation_desc: system_table.table.desc.latest(),
+                txns_shard: Some(txns_shard),
+            };
+            let snapshot_fut = reader.snapshot_cursor(global_id, metadata.clone(), read_ts);
+            let persist = self.persist_client.clone();
 
             let task = spawn(|| format!("snapshot-{table_id}"), async move {
-                // Create a TimestamplessUpdateBuilder.
-                let mut batch = batch_fut
+                use mz_storage_types::{StorageDiff, sources::SourceData};
+                let writer = persist
+                    .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                        metadata.data_shard,
+                        Arc::new(metadata.relation_desc),
+                        Arc::new(mz_persist_types::codec_impls::UnitSchema),
+                        mz_persist_client::Diagnostics {
+                            shard_name: global_id.to_string(),
+                            handle_purpose: "system table reset batch".into(),
+                        },
+                    )
                     .await
-                    .unwrap_or_terminate("cannot fail to create a batch for a BuiltinTable");
+                    .expect("system table schema matches committed description");
+                let mut batch = mz_storage_client::client::TimestamplessUpdateBuilder::new(&writer);
                 tracing::info!(?table_id, "starting snapshot");
                 // Get a cursor which will emit a consolidated snapshot.
                 let mut snapshot_cursor = snapshot_fut
@@ -3326,6 +3362,7 @@ impl Coordinator {
                 tracing::info!(?table_id, "finished snapshot");
 
                 let batch = batch.finish().await;
+                writer.expire().await;
                 BuiltinTableUpdate::batch(table_id, batch)
             });
             retraction_tasks.push(task);
@@ -3668,6 +3705,8 @@ impl Coordinator {
                 .then(|| self.table_registration(*gid, collection.desc.clone()))
             }));
 
+            self.register_adapter_storage_collections(&ready, &migrated_storage_collections)
+                .await;
             self.controller
                 .storage
                 .create_collections_for_bootstrap(
@@ -3679,6 +3718,29 @@ impl Coordinator {
                 .await
                 .unwrap_or_terminate("cannot fail to create collections");
         }
+
+        let statistics_item = self
+            .catalog
+            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATISTICS_RAW);
+        let statistics_id = self.catalog.get_entry(&statistics_item).latest_global_id();
+        self.adapter_storage
+            .initialize_statistics(
+                self.persist_client.clone(),
+                statistics_id,
+                mz_storage_types::controller::CollectionMetadata {
+                    persist_location: self.query_persist_location.clone(),
+                    data_shard: storage_metadata
+                        .get_collection_shard(statistics_id)
+                        .expect("statistics have committed shard metadata"),
+                    relation_desc: mz_storage_client::statistics::MZ_SOURCE_STATISTICS_RAW_DESC
+                        .clone(),
+                    txns_shard: None,
+                },
+                mz_storage_types::dyncfgs::STATISTICS_RETENTION_DURATION
+                    .get(self.storage_configuration.config_set()),
+                migrated_storage_collections.contains(&statistics_id),
+            )
+            .await;
 
         // Register txn-wal tables before the later system-table snapshot.
         if !table_registrations.is_empty() {
@@ -4683,7 +4745,7 @@ impl Coordinator {
 
     /// Obtain a reference to the coordinator's connection context.
     fn connection_context(&self) -> &ConnectionContext {
-        self.controller.connection_context()
+        &self.storage_configuration.connection_context
     }
 
     /// Obtain a reference to the coordinator's secret reader, in an `Arc`.
@@ -4739,7 +4801,7 @@ impl Coordinator {
     #[instrument(level = "debug")]
     pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder<'_> {
         let compute = self
-            .instance_snapshot(instance)
+            .query_instance_snapshot(instance)
             .expect("compute instance does not exist");
         DataflowBuilder::new(self.catalog().state(), compute)
     }
@@ -4750,6 +4812,44 @@ impl Coordinator {
         id: ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
         ComputeInstanceSnapshot::new(&self.controller, id)
+    }
+
+    /// Query planning only offers indexes observed on query connections.
+    fn query_instance_snapshot(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+        if let Some(client) = self.query_client.as_ref() {
+            self.catalog()
+                .try_get_cluster(id)
+                .ok_or(InstanceMissing(id))?;
+            Ok(client.instance_snapshot(self.catalog(), id))
+        } else {
+            self.instance_snapshot(id)
+        }
+    }
+
+    /// Maintained DDL produces a planning candidate from catalog declarations.
+    /// Installation separately validates available paths and their readability.
+    fn candidate_instance_snapshot(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+        if self.query_client.is_none() {
+            return self.instance_snapshot(id);
+        }
+        let cluster = self
+            .catalog()
+            .try_get_cluster(id)
+            .ok_or(InstanceMissing(id))?;
+        let mut indexes: BTreeSet<_> = cluster.log_indexes.values().copied().collect();
+        indexes.extend(cluster.bound_objects.iter().filter_map(|item| {
+            match self.catalog().get_entry(item).item() {
+                CatalogItem::Index(index) => Some(index.global_id()),
+                _ => None,
+            }
+        }));
+        Ok(ComputeInstanceSnapshot::new_from_parts(id, indexes))
     }
 
     /// Call into the compute controller to install a finalized dataflow, and
@@ -4893,12 +4993,43 @@ impl Coordinator {
         t: Timestamp,
         state: WatchSetResponse,
     ) -> Result<(), CollectionLookupError> {
+        if let Some(client) = self.query_client.clone() {
+            let catalog = self.owned_catalog();
+            let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+            for id in objects {
+                let cluster = catalog
+                    .try_get_entry_by_global_id(&id)
+                    .and_then(|entry| entry.item().cluster_id())
+                    .ok_or(CollectionLookupError::CollectionMissing(id))?;
+                compute_ids.entry(cluster).or_default().insert(id);
+            }
+            self.install_query_watch_set(conn_id, state, async move {
+                client
+                    .wait_for_progress(
+                        &catalog,
+                        &CollectionIdBundle {
+                            storage_ids: BTreeSet::new(),
+                            compute_ids,
+                        },
+                        t,
+                    )
+                    .await
+            });
+            return Ok(());
+        }
         let ws_id = self.controller.install_compute_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())
             .or_default()
             .insert(ws_id);
-        self.installed_watch_sets.insert(ws_id, (conn_id, state));
+        self.installed_watch_sets.insert(
+            ws_id,
+            InstalledWatchSet {
+                conn_id,
+                response: state,
+                _execution: None,
+            },
+        );
         Ok(())
     }
 
@@ -4912,13 +5043,69 @@ impl Coordinator {
         t: Timestamp,
         state: WatchSetResponse,
     ) -> Result<(), CollectionMissing> {
+        if let Some(client) = self.query_client.clone() {
+            let catalog = self.owned_catalog();
+            for id in &objects {
+                client
+                    .collection_metadata(&catalog, *id)
+                    .map_err(|_| CollectionMissing(*id))?;
+            }
+            self.install_query_watch_set(conn_id, state, async move {
+                client
+                    .wait_for_progress(
+                        &catalog,
+                        &CollectionIdBundle {
+                            storage_ids: objects,
+                            compute_ids: BTreeMap::new(),
+                        },
+                        t,
+                    )
+                    .await
+            });
+            return Ok(());
+        }
         let ws_id = self.controller.install_storage_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())
             .or_default()
             .insert(ws_id);
-        self.installed_watch_sets.insert(ws_id, (conn_id, state));
+        self.installed_watch_sets.insert(
+            ws_id,
+            InstalledWatchSet {
+                conn_id,
+                response: state,
+                _execution: None,
+            },
+        );
         Ok(())
+    }
+
+    /// Owns a cancellable progress wait, including waits for initial observations.
+    fn install_query_watch_set(
+        &mut self,
+        conn_id: ConnectionId,
+        response: WatchSetResponse,
+        future: impl std::future::Future<Output = Result<(), AdapterError>> + Send + 'static,
+    ) {
+        let id = self.query_watch_set_ids.allocate_id();
+        let tx = self.internal_cmd_tx.clone();
+        let execution = mz_ore::task::spawn(|| "query progress watch", async move {
+            let result = future.await;
+            let _ = tx.send(Message::QueryWatchSetReady(id, result));
+        })
+        .abort_on_drop();
+        self.connection_watch_sets
+            .entry(conn_id.clone())
+            .or_default()
+            .insert(id);
+        self.installed_watch_sets.insert(
+            id,
+            InstalledWatchSet {
+                conn_id,
+                response,
+                _execution: Some(execution),
+            },
+        );
     }
 
     /// Cancels pending watchsets associated with the provided connection id.
@@ -5600,6 +5787,12 @@ pub fn serve(
         let query_orchestrator = controller_config.orchestrator.namespace("cluster");
         let query_deploy_generation = controller_config.deploy_generation;
         let query_persist_location = controller_config.persist_location.clone();
+        let adapter_storage =
+            mz_controller::AdapterStorageWriter::new(read_only_controllers, now.clone());
+        let storage_configuration = mz_storage_types::configuration::StorageConfiguration::new(
+            controller_config.connection_context.clone(),
+            catalog.system_config().dyncfgs().clone(),
+        );
 
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()
@@ -5650,6 +5843,8 @@ pub fn serve(
                 let mut coord = Coordinator {
                     controller,
                     table_write_handle,
+                    adapter_storage,
+                    storage_configuration,
                     catalog,
                     compaction_bound_subscriber: compaction_bound_subscriber
                         .map(CompactionBoundSubscriber::new),
@@ -5706,6 +5901,7 @@ pub fn serve(
                     caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
+                    query_watch_set_ids: Default::default(),
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
@@ -5944,6 +6140,13 @@ pub async fn load_remote_system_parameters(
     } else {
         Ok(None)
     }
+}
+
+#[derive(Debug)]
+struct InstalledWatchSet {
+    conn_id: ConnectionId,
+    response: WatchSetResponse,
+    _execution: Option<AbortOnDropHandle<()>>,
 }
 
 #[derive(Debug)]

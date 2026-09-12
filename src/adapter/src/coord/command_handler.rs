@@ -542,7 +542,7 @@ impl Coordinator {
                     let connection_context = self.connection_context().clone();
                     let enforce_external_addresses =
                         mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-                            .get(self.controller.storage.config().config_set());
+                            .get(self.storage_configuration.config_set());
                     task::spawn(|| "copy_to_preflight", async move {
                         let result = mz_storage_types::sinks::s3_oneshot_sink::preflight(
                             connection_context,
@@ -1609,7 +1609,7 @@ impl Coordinator {
                 let catalog = self.owned_catalog();
                 let now = self.now();
                 let otel_ctx = OpenTelemetryContext::obtain();
-                let current_storage_configuration = self.controller.storage.config().clone();
+                let current_storage_configuration = self.storage_configuration.clone();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let conn_catalog = catalog.for_session(ctx.session());
 
@@ -1898,12 +1898,17 @@ impl Coordinator {
             let catalog = self.catalog().for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &cmvs.query);
-            let mut ids = self
-                .index_oracle(cluster)
-                .sufficient_collections(resolved_ids.collections().copied());
             let logical_inputs =
                 self.materialized_view_logical_inputs(resolved_ids.collections().copied())?;
-            ids.extend(&logical_inputs);
+            let ids = if self.query_client.is_some() {
+                logical_inputs.clone()
+            } else {
+                let mut ids = self
+                    .index_oracle(cluster)
+                    .sufficient_collections(resolved_ids.collections().copied());
+                ids.extend(&logical_inputs);
+                ids
+            };
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -2242,14 +2247,12 @@ impl Coordinator {
 
             // Get a channel so we can queue updates to be written.
             let row_tx = coord
-                .controller
-                .storage
+                .adapter_storage
                 .monotonic_appender(global_id)
                 .map_err(|_| name.clone())?;
             let stats = coord
-                .controller
-                .storage
-                .webhook_statistics(global_id)
+                .adapter_storage
+                .statistics(global_id)
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks

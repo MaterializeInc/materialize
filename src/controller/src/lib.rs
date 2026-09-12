@@ -65,7 +65,9 @@ pub mod replica_http_locator;
 
 // Export this on behalf of the storage controller to provide a unified
 // interface, allowing other crates to depend on this crate alone.
+pub use mz_storage_controller::adapter_storage::AdapterStorageWriter;
 pub use mz_storage_controller::prepare_initialization;
+pub use mz_storage_controller::rtr::real_time_recency_ts;
 pub use replica_http_locator::ReplicaHttpLocator;
 
 /// Configures a controller.

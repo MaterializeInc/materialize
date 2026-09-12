@@ -73,6 +73,9 @@ impl Coordinator {
                 span.in_scope(|| otel_ctx.attach_as_parent());
                 self.message_command(cmd).instrument(span).await
             }
+            Message::QueryWatchSetReady(id, result) => {
+                self.message_watch_set_ready(id, result).await;
+            }
             Message::QueryDataflowResponse(response) => {
                 use crate::query_client::compute::DataflowResponse;
                 use mz_compute_client::protocol::response::{
@@ -813,32 +816,47 @@ impl Coordinator {
                 }
             }
             ControllerResponse::WatchSetFinished(ws_ids) => {
-                let now = self.now();
-                for ws_id in ws_ids {
-                    let Some((conn_id, rsp)) = self.installed_watch_sets.remove(&ws_id) else {
-                        continue;
-                    };
-                    self.connection_watch_sets
-                        .get_mut(&conn_id)
-                        .expect("corrupted coordinator state: unknown connection id")
-                        .remove(&ws_id);
-                    if self.connection_watch_sets[&conn_id].is_empty() {
-                        self.connection_watch_sets.remove(&conn_id);
-                    }
-
-                    match rsp {
-                        WatchSetResponse::StatementDependenciesReady(id, ev) => {
-                            self.record_statement_lifecycle_event(&id, &ev, now);
-                        }
-                        WatchSetResponse::AlterSinkReady(ctx) => {
-                            self.sequence_alter_sink_finish(ctx).await;
-                        }
-                        WatchSetResponse::AlterMaterializedViewReady(ctx) => {
-                            self.sequence_alter_materialized_view_apply_replacement_finish(ctx)
-                                .await;
-                        }
-                    }
+                for id in ws_ids {
+                    self.message_watch_set_ready(id, Ok(())).await;
                 }
+            }
+        }
+    }
+
+    async fn message_watch_set_ready(
+        &mut self,
+        id: mz_controller_types::WatchSetId,
+        result: Result<(), crate::AdapterError>,
+    ) {
+        let Some(watch) = self.installed_watch_sets.remove(&id) else {
+            return;
+        };
+        let conn_id = watch.conn_id;
+        let watches = self
+            .connection_watch_sets
+            .get_mut(&conn_id)
+            .expect("watch has a registered connection");
+        watches.remove(&id);
+        if watches.is_empty() {
+            self.connection_watch_sets.remove(&conn_id);
+        }
+        match (watch.response, result) {
+            (WatchSetResponse::StatementDependenciesReady(id, event), Ok(())) => {
+                self.record_statement_lifecycle_event(&id, &event, self.now());
+            }
+            (WatchSetResponse::StatementDependenciesReady(..), Err(error)) => {
+                tracing::debug!(?error, "dependency progress observation ended");
+            }
+            (WatchSetResponse::AlterSinkReady(ctx), Ok(())) => {
+                self.sequence_alter_sink_finish(ctx).await;
+            }
+            (WatchSetResponse::AlterSinkReady(ctx), Err(error)) => ctx.retire(Err(error)),
+            (WatchSetResponse::AlterMaterializedViewReady(ctx), Ok(())) => {
+                self.sequence_alter_materialized_view_apply_replacement_finish(ctx)
+                    .await;
+            }
+            (WatchSetResponse::AlterMaterializedViewReady(ctx), Err(error)) => {
+                ctx.retire(Err(error))
             }
         }
     }

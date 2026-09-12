@@ -397,6 +397,60 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
 }
 
 #[mz_ore::test(tokio::test)]
+async fn maintained_sink_write_frontiers_respect_installed_as_of() {
+    let frontier = |time| Antichain::from_elem(Timestamp::from(time));
+    for initial in [frontier(0), frontier(5), Antichain::new()] {
+        let mut h = Harness::new();
+        let raw = Rc::new(RefCell::new(initial.clone()));
+        let mut collection = CollectionState::new(
+            Rc::new(h.worker.next_dataflow_index()),
+            false,
+            frontier(10),
+            h.state.metrics.for_collection(CATALOG),
+        );
+        collection.sink_write_frontier = Some(Rc::clone(&raw));
+        h.state.collections.insert(CATALOG, collection);
+        h.open(A);
+        let writes = |responses: Vec<(ComputeResponse, Uuid)>| {
+            responses
+                .into_iter()
+                .filter_map(|(response, nonce)| match response {
+                    ComputeResponse::Frontiers(id, f) if nonce == A && id == CATALOG => {
+                        f.write_frontier
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = if initial.is_empty() {
+            Antichain::new()
+        } else {
+            frontier(10)
+        };
+        assert_eq!(writes(h.drain()), vec![expected.clone()], "snapshot");
+
+        let mut steps = vec![(initial.clone(), vec![expected])];
+        if !initial.is_empty() {
+            steps.extend([
+                (frontier(5), vec![]),
+                (frontier(12), vec![frontier(12)]),
+                (Antichain::new(), vec![Antichain::new()]),
+            ]);
+        }
+        for (progress, expected) in steps {
+            *raw.borrow_mut() = progress;
+            ActiveComputeState {
+                timely_worker: &mut h.worker,
+                compute_state: &mut h.state,
+                response_tx: &mut h.sender,
+            }
+            .report_frontiers();
+            assert_eq!(writes(h.drain()), expected, "incremental broadcast");
+        }
+    }
+}
+
+#[mz_ore::test(tokio::test)]
 async fn query_read_frontiers_snapshot_update_and_retirement() {
     for as_of in [Timestamp::MIN, Timestamp::from(8)] {
         let mut h = Harness::new();

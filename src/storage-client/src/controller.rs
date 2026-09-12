@@ -23,7 +23,6 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::num::NonZeroI64;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -59,7 +58,6 @@ use timely::progress::frontier::MutableAntichain;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client::{AppendOnlyUpdate, StatusUpdate};
-use crate::statistics::WebhookStatistics;
 
 #[derive(
     Clone,
@@ -114,6 +112,20 @@ pub enum IntrospectionType {
     PrivatelinkConnectionStatusHistory,
 }
 
+impl IntrospectionType {
+    /// Whether the adapter owns this statement-history collection's writer.
+    pub fn is_statement_history(self) -> bool {
+        matches!(
+            self,
+            Self::SessionHistory
+                | Self::PreparedStatementHistory
+                | Self::StatementExecutionHistory
+                | Self::StatementLifecycleHistory
+                | Self::SqlText
+        )
+    }
+}
+
 /// Describes how data is written to the collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataSource {
@@ -128,8 +140,8 @@ pub enum DataSource {
         details: SourceExportDetails,
         data_config: SourceExportDataConfig,
     },
-    /// Data comes from introspection sources, which the controller itself is
-    /// responsible for generating.
+    /// Data comes from introspection sources. Statement histories are written
+    /// by the adapter, while other writers are managed by the controller.
     Introspection(IntrospectionType),
     /// Data comes from the source's remapping/reclock operator.
     Progress,
@@ -519,18 +531,6 @@ pub trait StorageController: Debug {
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError>;
 
-    /// Check that the ingestion associated with `id` can use the provided
-    /// [`SourceDesc`].
-    ///
-    /// Note that this check is optimistic and its return of `Ok(())` does not
-    /// guarantee that subsequent calls to `alter_ingestion_source_desc` are
-    /// guaranteed to succeed.
-    fn check_alter_ingestion_source_desc(
-        &mut self,
-        ingestion_id: GlobalId,
-        source_desc: &SourceDesc,
-    ) -> Result<(), StorageError>;
-
     /// Alters each identified ingestion to use the correlated [`SourceDesc`].
     async fn alter_ingestion_source_desc(
         &mut self,
@@ -648,19 +648,6 @@ pub trait StorageController: Debug {
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
-
-    /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
-    /// append to the specified [`GlobalId`].
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
-
-    /// Returns a shared [`WebhookStatistics`] which can be used to report user-facing
-    /// statistics for this given webhhook, specified by the [`GlobalId`].
-    ///
-    // This is used to support a fairly special case, where a source needs to report statistics
-    // from outside the ordinary controller-clusterd path. Its possible to merge this with
-    // `monotonic_appender`, whose only current user is webhooks, but given that they will
-    // likely be moved to clusterd, we just leave this a special case.
-    fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError>;
 
     /// Waits until the controller is ready to process a response.
     ///

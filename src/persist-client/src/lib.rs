@@ -739,6 +739,39 @@ impl PersistClient {
         Ok(machine.applier.fetch_upper(|upper| upper.clone()).await)
     }
 
+    /// Waits until `frontier` is strictly less than the shard upper, without
+    /// registering a writer or acquiring read protection.
+    ///
+    /// Uses Persist notifications and its normal listen retry policy. Dropping
+    /// the future cancels the wait. An unused shard is initialized at minimum.
+    pub async fn wait_for_upper_past<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        frontier: &Antichain<T>,
+        diagnostics: Diagnostics,
+    ) -> Result<(), InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        let mut watch = machine.applier.watch();
+        machine
+            .wait_for_upper_past(
+                frontier,
+                &mut watch,
+                None,
+                &self.metrics.retries.next_listen_batch,
+                crate::internal::machine::next_listen_batch_retry_params(&self.cfg),
+            )
+            .await;
+        Ok(())
+    }
+
     /// Fetches and returns a recent shard-global `since` without registering a
     /// leased or critical reader.
     ///
@@ -1206,6 +1239,68 @@ mod tests {
             );
         }
         writer.expire().await;
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // epoll_wait is unavailable in Miri
+    async fn wait_for_upper_without_registering(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        let shard = ShardId::new();
+        let mut writer = client
+            .open_writer::<(), (), u64, i64>(
+                shard,
+                Arc::new(Default::default()),
+                Arc::new(Default::default()),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        writer
+            .compare_and_append(
+                Vec::<(((), ()), u64, i64)>::new(),
+                Antichain::from_elem(0),
+                Antichain::from_elem(5),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let mut observer = client.clone();
+        observer.shared_states = Arc::new(StateCache::new_no_metrics());
+        let frontier = Antichain::from_elem(5);
+        let mut wait = Box::pin(observer.wait_for_upper_past::<(), (), u64, i64>(
+            shard,
+            &frontier,
+            Diagnostics::for_tests(),
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut wait)
+                .await
+                .is_err()
+        );
+        writer
+            .compare_and_append(
+                Vec::<(((), ()), u64, i64)>::new(),
+                Antichain::from_elem(5),
+                Antichain::from_elem(6),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), wait)
+            .await
+            .unwrap()
+            .unwrap();
+        writer.expire().await;
+
+        let before = client.consensus.head(&shard.to_string()).await.unwrap();
+        observer
+            .wait_for_upper_past::<(), (), u64, i64>(shard, &frontier, Diagnostics::for_tests())
+            .await
+            .unwrap();
+        assert_eq!(
+            client.consensus.head(&shard.to_string()).await.unwrap(),
+            before
+        );
     }
 
     // Sanity check that the open_reader and open_writer calls work.

@@ -29,8 +29,10 @@ boundary moves:
 The query connection split and generation-scoped cooperating catalog writers are
 implemented in-process. MV and metric-sink compute installation and sink alteration
 derive from committed state. Remote COPY staging uses request-owned storage query
-connections, while its row commitment stays in the adapter. These are checkpoints,
-not milestone acceptance. Remaining work:
+connections, while its row commitment stays in the adapter. Webhook and statement
+history writes are adapter-owned. Request statistics, real-time recency and progress
+use metadata/Persist and the query protocol. These are in-process checkpoints, not
+milestone acceptance. Remaining work:
 
 1. Finish replacing the adapter's direct use of controller frontiers and holds
    with the query client: storage frontiers from persist, compute
@@ -44,7 +46,8 @@ not milestone acceptance. Remaining work:
    as its interface. DDL and table appends stay with the adapter. Table time stays
    adapter-driven for now: assume a live adapter ticks transaction-WAL time, and
    let the demonstration state that table-fed dataflows pause while the adapter
-   is down.
+   is down. Webhook batching and idle ticking likewise require a live adapter
+    for this milestone.
 
 Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
 shared-view index topology and diagnostics. Larger-scale work and the known

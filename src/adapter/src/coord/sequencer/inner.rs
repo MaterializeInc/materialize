@@ -788,7 +788,7 @@ impl Coordinator {
                 .to_connection()
                 .into_inline_connection(self.catalog().state());
 
-            let current_storage_parameters = self.controller.storage.config().clone();
+            let current_storage_parameters = self.storage_configuration.clone();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
                 let result = match std::panic::AssertUnwindSafe(
                     connection.validate(connection_id, &current_storage_parameters),
@@ -2438,6 +2438,28 @@ impl Coordinator {
             .flat_map(|item_id| self.catalog().get_entry(&item_id).global_ids())
             .collect();
 
+        if self.catalog().state().catalog_read_protection_enabled() {
+            let client = self.query_client.clone().ok_or(AdapterError::ReadOnly)?;
+            let catalog = self
+                .client_protection_catalog
+                .as_ref()
+                .map(|catalog| Arc::new(catalog.clone()))
+                .unwrap_or_else(|| self.owned_catalog());
+            let config = self.storage_configuration.clone();
+            // A grant miss sends a command back to this coordinator. Return the
+            // request future before acquiring protection so the loop can serve it.
+            return Ok(Some(Box::pin(async move {
+                client
+                    .real_time_recent_timestamp(
+                        &catalog,
+                        timestamp_objects,
+                        config,
+                        real_time_recency_timeout,
+                    )
+                    .await
+            })));
+        }
+
         let r = self
             .controller
             .determine_real_time_recent_timestamp(timestamp_objects, real_time_recency_timeout)
@@ -2610,6 +2632,7 @@ impl Coordinator {
             session,
             &self.catalog,
             &self.controller.storage_collections,
+            self.query_client.as_ref(),
             as_of,
             mz_now,
             imports,
@@ -3475,14 +3498,7 @@ impl Coordinator {
             ctx.session().role_metadata().clone(),
         );
 
-        info!(
-            "preparing alter sink for {}: frontiers={:?} export={:?}",
-            plan.global_id,
-            self.controller
-                .storage_collections
-                .collections_frontiers(vec![plan.global_id, plan.sink.from]),
-            self.controller.storage.export(plan.global_id)
-        );
+        info!(id = %plan.global_id, ?read_ts, "preparing alter sink");
 
         // Now we must wait for the sink to make enough progress such that there is overlap between
         // the new `from` collection's read hold and the sink's write frontier.
@@ -3545,28 +3561,40 @@ impl Coordinator {
             return;
         }
 
-        info!(
-            "finishing alter sink for {global_id}: frontiers={:?} export={:?}",
-            self.controller
-                .storage_collections
-                .collections_frontiers(vec![global_id, sink_plan.from]),
-            self.controller.storage.export(global_id),
-        );
-
         // Assert that we can recover the updates that happened at the timestamps of the write
         // frontier. This must be true in this call.
-        let write_frontier = &self
-            .controller
-            .storage
-            .export(global_id)
-            .expect("sink known to exist")
-            .write_frontier;
+        let write_frontier = if let Some(client) = self.query_client.as_ref() {
+            match client
+                .write_frontier(
+                    self.catalog(),
+                    &crate::CollectionIdBundle {
+                        storage_ids: BTreeSet::from([global_id]),
+                        compute_ids: BTreeMap::new(),
+                    },
+                )
+                .await
+            {
+                Ok(frontier) => frontier,
+                Err(error) => {
+                    ctx.retire(Err(error));
+                    return;
+                }
+            }
+        } else {
+            self.controller
+                .storage
+                .export(global_id)
+                .expect("sink known to exist")
+                .write_frontier
+                .clone()
+        };
+        info!(%global_id, ?write_frontier, "finishing alter sink");
         let as_of = ctx.read_hold.least_valid_read();
         assert!(
             write_frontier.iter().all(|t| as_of.less_than(t)),
             "{:?} should be strictly less than {:?}",
             &*as_of,
-            &**write_frontier
+            &write_frontier
         );
         let mut ops = Vec::new();
         if self.catalog().state().catalog_read_protection_enabled() {
@@ -3828,7 +3856,7 @@ impl Coordinator {
             let conn_id = ctx.session().conn_id().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
-            let current_storage_parameters = self.controller.storage.config().clone();
+            let current_storage_parameters = self.storage_configuration.clone();
 
             task::spawn(
                 || format!("validate_alter_connection:{conn_id}"),
@@ -4207,10 +4235,20 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
-                self.controller
-                    .storage
-                    .check_alter_ingestion_source_desc(ingestion_id, &desc)
-                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                let current_desc = match &cur_source.data_source {
+                    DataSourceDesc::Ingestion { desc, .. }
+                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                        desc.clone().into_inline_connection(self.catalog().state())
+                    }
+                    _ => unreachable!("already verified of type ingestion"),
+                };
+                mz_storage_types::AlterCompatible::alter_compatible(
+                    &current_desc,
+                    ingestion_id,
+                    &desc,
+                )
+                .map_err(StorageError::from)
+                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 // Redefine source. This must be done before we create any new
                 // subsources so that it has the right ingestion.
@@ -4966,6 +5004,46 @@ impl Coordinator {
         let replacement = self.catalog.get_entry(&replacement_id);
         let replacement_gid = replacement.latest_global_id();
 
+        if let Some(client) = self.query_client.clone() {
+            let cluster = replacement
+                .cluster_id()
+                .expect("materialized view has a cluster");
+            let name = target.name().item.clone();
+            let catalog = self.owned_catalog();
+            self.install_query_watch_set(
+                ctx.session().conn_id().clone(),
+                WatchSetResponse::AlterMaterializedViewReady(AlterMaterializedViewReadyContext {
+                    ctx: Some(ctx),
+                    otel_ctx: OpenTelemetryContext::obtain(),
+                    plan,
+                    plan_validity,
+                }),
+                async move {
+                    // Sharing the target's Persist shard does not prove that the
+                    // replacement has been installed. Require its own observation.
+                    let upper = client
+                        .wait_for_compute_frontier(cluster, replacement_gid, None)
+                        .await;
+                    let timestamp = upper
+                        .into_option()
+                        .ok_or(AdapterError::ReplaceMaterializedViewSealed { name })?
+                        .step_back()
+                        .unwrap_or(Timestamp::MIN);
+                    client
+                        .wait_for_progress(
+                            &catalog,
+                            &crate::CollectionIdBundle {
+                                storage_ids: BTreeSet::from([target_gid]),
+                                compute_ids: BTreeMap::new(),
+                            },
+                            timestamp,
+                        )
+                        .await
+                },
+            );
+            return;
+        }
+
         let target_upper = self
             .controller
             .storage_collections
@@ -5081,6 +5159,9 @@ impl Coordinator {
             is_oneshot,
             self.catalog().system_config(),
             self.controller.storage_collections.as_ref(),
+            self.query_client
+                .as_deref()
+                .map(|client| (client, self.catalog())),
         )
         .await
     }

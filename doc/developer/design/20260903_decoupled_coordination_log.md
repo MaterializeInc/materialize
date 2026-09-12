@@ -820,3 +820,23 @@ or may pause alongside adapter-driven table time. Webhooks have a separate idle
 driver coupled to HTTP batching and statistics. The proposal is to preserve idle
 progress in lifecycle components and separate adapter-owned HTTP execution, but
 that boundary and statistics ownership are not yet settled.
+
+### 2026-09-12: adapter-owned webhook ticking
+
+Aljoscha chose the same live-adapter assumption for webhook ticking as table time.
+Keep HTTP batching and idle advancement together with the adapter. The adapter-loss
+demonstration can let webhook-fed work pause and must show autonomous source-fed
+maintenance and compaction continuing.
+
+Adapter-owned storage execution includes statement histories and webhook statistics.
+The existing raw statistics relation is partitioned by replica ID, with NULL rows
+owned by the adapter. Even an empty restored inventory must reconcile persisted
+rows. Catalog shard preparation is independent of controller inventory, while
+physical finalization acknowledgments remain with the finalizer.
+
+Maintained creation admits logical input history, not candidate index readiness.
+Query progress observes Persist and compute directly. Compute write observations
+must include the installed as-of lower bound, and fresh notification subscriptions
+must not replay old changes. Remaining extraction includes selected-plan/notice
+publication, startup protection ordering, and separating maintained enactment from
+the request-serving event loop. Naming does not require an extra wrapper.

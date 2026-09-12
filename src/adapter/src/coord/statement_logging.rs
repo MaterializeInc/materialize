@@ -249,9 +249,7 @@ impl Coordinator {
             (SqlText, sql_text_updates),
         ] {
             if !updates.is_empty() && !self.controller.read_only() {
-                self.controller
-                    .storage
-                    .append_introspection_updates(type_, updates);
+                self.adapter_storage.append_history(type_, updates);
             }
         }
     }
