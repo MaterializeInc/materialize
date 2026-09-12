@@ -36,12 +36,22 @@
 //! The cases below are not oversights. Each is either not ours to choose or waiting
 //! on a change elsewhere, and all are tracked on CPU-253.
 //!
-//! * **Reduce and TopK internals.** Both render their stages over `Vec`
-//!   collections, so their inputs decode and their outputs re-encode. These are
-//!   worth removing and are not structural. They are also not a single change: the
-//!   stages hand intermediate results to differential operators that would need to
-//!   take a container builder first, and converting one stage at a time would
-//!   replace one decode with several.
+//! * **Reduce and TopK internals.** Both render their stages over keyed `Vec`
+//!   collections, so the step that forms the key materializes an owned `(Row, Row)`
+//!   per record. Neither decodes in the sense above: TopK's `map_topk_key` and
+//!   reduce's key-value flat map each read the edge and pack what they need, so no
+//!   `ColumnarToVec` stands at either input. On the way out they differ. TopK
+//!   re-encodes at `topk_result_to_columnar`; reduce hands out an arrangement rather
+//!   than an edge, and a consumer that wants one rebuilds it from the arrangement.
+//!   Both are worth removing and neither is structural. Neither is a single change
+//!   either: the stages hand intermediate results to differential operators that
+//!   would need to take a container builder first, and converting one stage at a
+//!   time would replace one materialization with several.
+//! * **The delta-join stage chain.** `VecCollection<(Row, T)>` from the seed through
+//!   every `half_join`, re-encoded once at the node's output. Left alone
+//!   deliberately rather than missed: differential has `half_join` input changes
+//!   lined up, and every part of the chain hangs off that container, so a conversion
+//!   made here would be discarded.
 //! * **Sinks.** A sink serializes every row it writes, so materializing the row is
 //!   the output format's requirement rather than a container choice.
 //! * **The `DifferentialDataflow` linear-join arm.** `join_core` returns a
