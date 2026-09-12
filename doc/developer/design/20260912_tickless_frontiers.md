@@ -272,6 +272,10 @@ Event-driven bindings without a lead cut median staleness from about one second 
 The lead removes that tail, 254 ms to 22 ms at p95, and pays for it in staleness, 299 ms to 581 ms at the median, so the lead is a read latency instrument and not a freshness instrument, and the sum of read latency and staleness is about the same in both event-driven modes.
 The baseline with a one second keepalive shows a 950 ms median read latency, which is the since rounding effect the Binding lead section describes: the source since is floored to the second, the oracle read timestamp lags by up to a second, and every read is pushed to the since and waits for the next keepalive.
 
+The nightly workload replay, a sandbox environment with PostgreSQL and MySQL CDC sources, Kafka, load generators, and a continuous query mix, compared the flag on against the merge base on one run each.
+Query latency fell across the distribution, p95 from 695 ms to 242 ms and average from 264 ms to 63 ms, while average CPU rose from 100 to 137 percent of a core, a 36 percent increase that the benchmark flags as a regression, and memory was flat.
+Every source in that workload receives data continuously, so this is the all-busy end of the consensus budget: four times the frontier steps through every downstream dataflow and persist sink, paid in CPU, bought with a threefold improvement in tail query latency.
+
 A quiet run at one insert per five seconds counted 0.3 bindings per second in both modes, below the expected one per second from the `X_max` probe.
 The counter only sees bindings that move the upstream frontier, because a binding that repeats the same frontier at a new timestamp consolidates to nothing in the progress collection, so the harness measures data-bearing bindings and cannot see idle ones.
 Idle binding rate needs a persist-level counter, which is the same instrument the rejected-proposal count needs.
