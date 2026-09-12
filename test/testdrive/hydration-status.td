@@ -78,6 +78,17 @@ si true
   LIMIT 1;
 hydrated true
 
+# System clusters participate in the collection rotation too.
+> SELECT count(*) > 0,
+         bool_and(h.status = 'hydrated'
+                  AND h.finished_at IS NOT NULL
+                  AND h.started_at <= h.finished_at)
+  FROM mz_internal.mz_replica_hydration_history AS h
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  JOIN mz_catalog.mz_clusters AS c ON c.id = r.cluster_id AND c.id = h.cluster_id
+  WHERE c.name = 'mz_catalog_server';
+true true
+
 # Test adding new compute dataflows.
 
 > CREATE TABLE t (a int)
