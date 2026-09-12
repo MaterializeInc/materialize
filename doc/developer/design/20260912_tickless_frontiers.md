@@ -109,6 +109,8 @@ The remap operator mints a binding whenever one of two triggers fires.
 The first trigger is an advance of the source's own data frontier, the frontier of what the reader has ingested, delivered to the remap operator as a probe.
 The second is the idle timer, which fires `X_max` after the previous binding and performs an explicit probe of the upstream system exactly as today.
 Both triggers produce a proposal `(frontier, probe_ts)`, and the remap operator must wake on a changed frontier even when the timestamp is unchanged, because two arrivals inside one grid cell carry the same timestamp and today's wake condition compares timestamps only.
+Arrival proposals are only made at or beyond the most advanced frontier an explicit probe has reported, so the first binding of a source is always minted from an explicit probe.
+Without that gate a Kafka source, whose data frontier moves from the first fetch because it has no separate snapshot phase, minted its snapshot binding from a partial snapshot, and a sink created right after the source observed intermediate states instead of one accumulated record.
 
 The binding timestamp is `floor_grid(probe_ts + H)`, where `floor_grid` rounds down to the `X_min` grid and `probe_ts` is the wall clock at which the proposal was made, already on the `X_max` grid for explicit probes.
 A proposal whose floored timestamp is not at or beyond the current remap upper is deferred to the start of the next grid cell rather than dropped, and a probe arriving in the meantime replaces the held one only if its frontier is at least as advanced, so the explicit `X_max` probe is not lost to an arrival probe that used the same cell.
