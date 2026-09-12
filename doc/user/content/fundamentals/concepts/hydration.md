@@ -28,6 +28,16 @@ table.
 
 {{% yaml-table data="hydration-objects-table" %}}
 
+## Measuring hydration
+
+How much memory and time hydration needs depends on the data, not just on the
+query, so the reliable way to find out is to measure a hydration you have
+already run. Materialize records completed hydration episodes durably, per
+object and per replica, including the resource high-water marks observed for
+each replica episode. Those records outlive the replica restart or resize that
+produced them, which is what makes them usable for sizing a cluster. See
+[Optimize cluster size](/clusters/sizing/).
+
 ## Hydration strategies
 
 Hydration primarily impacts memory usage, and its speed scales with cluster

@@ -76,7 +76,7 @@ size  text  The␠human-readable␠replica␠size.
 processes  uint8  The␠number␠of␠processes␠in␠the␠replica.
 workers  uint8  The␠number␠of␠Timely␠Dataflow␠workers␠per␠process.
 cpu_nano_cores  uint8  The␠CPU␠allocation␠per␠process,␠in␠billionths␠of␠a␠vCPU␠core.
-memory_bytes  uint8  The␠RAM␠allocation␠per␠process,␠in␠billionths␠of␠a␠vCPU␠core.
+memory_bytes  uint8  The␠RAM␠allocation␠per␠process,␠in␠bytes.
 disk_bytes  uint8  The␠disk␠allocation␠per␠process.
 credits_per_hour  numeric  The␠number␠of␠compute␠credits␠consumed␠per␠hour.
 

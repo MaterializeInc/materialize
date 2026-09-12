@@ -2804,10 +2804,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
             "cpu_nano_cores",
             "The CPU allocation per process, in billionths of a vCPU core.",
         ),
-        (
-            "memory_bytes",
-            "The RAM allocation per process, in billionths of a vCPU core.",
-        ),
+        ("memory_bytes", "The RAM allocation per process, in bytes."),
         ("disk_bytes", "The disk allocation per process."),
         (
             "credits_per_hour",
