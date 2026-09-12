@@ -572,6 +572,9 @@ def get_variable_system_parameters(
             ["", "0", "1", "1000", "2071", "1000000"],
         ),
         VariableSystemParameter(
+            "storage_event_driven_bindings", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "storage_source_decode_fuel",
             "100000",
             ["10000", "100000", "1000000"],
