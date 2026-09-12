@@ -796,3 +796,14 @@ unprotected input holds that can advance with the target. Sealed-target pruning
 retains its existing semantics. Compaction publication cannot release abandoned
 client grants, independently of its cadence. Next: finish the remaining query-side
 controller dependencies and extract the controller bundle.
+
+Read accounting can retire before execution cleanup. Table/source cleanup now
+validates the controller's own inventory, and table cleanup follows adapter
+forgetting without a deferred channel. Retained aliases whose live primary belongs
+to a later bootstrap batch wait for that batch, with shared-shard permission still
+enforced across all aliases.
+
+Remaining request ownership includes webhook batching, idle progress and statistics,
+and storage-side oneshot COPY execution. Metadata-driven Persist reads need no
+controller state. Storage query connections must coexist with maintained execution,
+not replace its connection or replay completed COPY requests.

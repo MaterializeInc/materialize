@@ -1912,13 +1912,36 @@ impl StorageCollections for StorageCollectionsImpl {
                 .extend(bound.iter().copied());
         }
         let creating: BTreeSet<_> = collections.iter().map(|(id, _)| *id).collect();
+        let mut retained_to_open = BTreeSet::new();
         {
             let existing = self.collections.lock().expect("lock poisoned");
-            let creating_shards: BTreeSet<_> = creating
+            let mut creating_shards: BTreeSet<_> = creating
                 .iter()
-                .chain(storage_metadata.retained_collections.iter())
                 .map(|id| storage_metadata.get_collection_shard(*id))
                 .collect::<Result<_, _>>()?;
+            let pending_live_shards: BTreeSet<_> = storage_metadata
+                .collection_metadata
+                .iter()
+                .filter(|(id, _)| {
+                    !storage_metadata.retained_collections.contains(*id)
+                        && !creating.contains(*id)
+                        && !existing.contains_key(*id)
+                })
+                .map(|(_, shard)| *shard)
+                .collect();
+            // Bootstrap can reach a shard's live primary in a later batch. Open
+            // its retained aliases with that batch, so they share the primary's
+            // dependency accounting rather than becoming independent roots.
+            // A shard with only retained lifetimes can be recovered immediately.
+            for id in &storage_metadata.retained_collections {
+                let shard = storage_metadata.get_collection_shard(*id)?;
+                if creating_shards.contains(&shard) || !pending_live_shards.contains(&shard) {
+                    retained_to_open.insert(*id);
+                }
+            }
+            for id in &retained_to_open {
+                creating_shards.insert(storage_metadata.get_collection_shard(*id)?);
+            }
             if self.catalog_read_protection_enabled && !self.read_only {
                 // An alias omitted from the create batch still constrains its shard.
                 // Missing permission cannot be interpreted as an absent requirement.
@@ -1998,7 +2021,7 @@ impl StorageCollections for StorageCollectionsImpl {
             }
             let mut retained = Vec::new();
             if !self.read_only {
-                for id in &storage_metadata.retained_collections {
+                for id in &retained_to_open {
                     if existing.contains_key(id) {
                         continue;
                     }
@@ -5129,6 +5152,23 @@ mod tests {
             if live {
                 metadata.collection_metadata.insert(primary, shard);
                 metadata.compaction_bounds.insert(primary, frontier(20));
+                // Bootstrap can install unrelated dependencies before the live
+                // primary. Retained aliases must not require its batch early.
+                let earlier = GlobalId::User(4);
+                metadata.collection_metadata.insert(earlier, ShardId::new());
+                metadata.compaction_bounds.insert(earlier, frontier(0));
+                controller
+                    .create_collections_for_bootstrap(
+                        &metadata,
+                        None,
+                        vec![(
+                            earlier,
+                            CollectionDescription::for_other(RelationDesc::empty(), None),
+                        )],
+                        &BTreeSet::new(),
+                    )
+                    .await
+                    .unwrap();
                 creates.push((
                     primary,
                     CollectionDescription::for_other(RelationDesc::empty(), None),

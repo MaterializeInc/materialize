@@ -104,14 +104,9 @@ impl Coordinator {
                 self.message_controller(response).boxed_local().await;
             }
             Message::ControllerReady { controller: _ } => {
-                let Coordinator {
-                    controller,
-                    catalog,
-                    ..
-                } = self;
-                let storage_metadata = catalog.state().storage_metadata();
-                if let Some(m) = controller
-                    .process(storage_metadata)
+                if let Some(m) = self
+                    .controller
+                    .process()
                     .expect("`process` never returns an error")
                 {
                     self.message_controller(m).boxed_local().await

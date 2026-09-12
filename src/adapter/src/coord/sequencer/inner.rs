@@ -1947,11 +1947,16 @@ impl Coordinator {
                 },
             ));
         }
+        let shard = self
+            .catalog()
+            .state()
+            .storage_metadata()
+            .get_collection_shard(plan.id)?;
         let state = self
-            .controller
-            .storage
-            .inspect_persist_state(plan.id)
+            .persist_client
+            .inspect_shard::<Timestamp>(&shard)
             .await?;
+        let state = serde_json::to_value(state).map_err(anyhow::Error::from)?;
         let jsonb = Jsonb::from_serde_json(state)?;
         Ok(Self::send_immediate_rows(jsonb.into_row()))
     }

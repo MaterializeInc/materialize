@@ -673,24 +673,7 @@ pub trait StorageController: Debug {
     async fn ready(&mut self);
 
     /// Processes the work queued by [`StorageController::ready`].
-    fn process(
-        &mut self,
-        storage_metadata: &StorageMetadata,
-    ) -> Result<Option<Response>, anyhow::Error>;
-
-    /// Exposes the internal state of the data shard for debugging and QA.
-    ///
-    /// We'll be thoughtful about making unnecessary changes, but the **output
-    /// of this method needs to be gated from users**, so that it's not subject
-    /// to our backward compatibility guarantees.
-    ///
-    /// TODO: Ideally this would return `impl Serialize` so the caller can do
-    /// with it what they like, but that doesn't work in traits yet. The
-    /// workaround (an associated type) doesn't work because persist doesn't
-    /// want to make the type public. In the meantime, move the `serde_json`
-    /// call from the single user into this method.
-    async fn inspect_persist_state(&self, id: GlobalId)
-    -> Result<serde_json::Value, anyhow::Error>;
+    fn process(&mut self) -> Result<Option<Response>, anyhow::Error>;
 
     /// Records append-only updates for the given introspection type.
     ///

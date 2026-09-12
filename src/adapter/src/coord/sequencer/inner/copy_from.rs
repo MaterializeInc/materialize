@@ -323,13 +323,12 @@ impl Coordinator {
         };
         let collection_id = dest_table.global_id_writes();
 
-        let collection_meta = self
-            .controller
-            .storage
-            .collection_metadata(collection_id)
-            .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{e}")))?;
-        let shard_id = collection_meta.data_shard;
-        let collection_desc = collection_meta.relation_desc.clone();
+        let shard_id = self
+            .catalog()
+            .state()
+            .storage_metadata()
+            .get_collection_shard(collection_id)?;
+        let collection_desc = dest_table.desc.latest();
 
         // Pre-compute the column transformation.
         let pcx = session.pcx().clone();
