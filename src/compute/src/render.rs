@@ -142,6 +142,7 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, RowArena, 
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
@@ -168,7 +169,8 @@ use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::columnar::{
-    columnar_consolidate, columnar_negate, columnar_to_vec, concat_many, vec_to_columnar,
+    CollectionEdge, columnar_consolidate, columnar_negate, columnar_to_vec, concat_many,
+    vec_to_columnar,
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
@@ -596,6 +598,66 @@ where
         Arranged::<'outer, Tr>::flat_map_batches(oks, move |a, b| [logic(a, b)]).enter(self.scope)
     }
 
+    /// Extracts a filtered index's contents onto the columnar collection edge, discarding
+    /// batches that the snapshot covers.
+    ///
+    /// `logic` packs each `(key, val)` pair into the row buffer it is handed. The buffer is
+    /// reused across records and pushed borrowed, so a pair that carries many times costs one
+    /// pack rather than an owned [`Row`] per time.
+    ///
+    /// The `TotalOrder` bound is what makes discarding a batch by its upper safe.
+    fn import_filtered_index_edge<'outer, Tr>(
+        &self,
+        arranged: Arranged<'outer, Tr>,
+        start_signal: StartSignal,
+        mut logic: impl FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>, &mut Row) + 'static,
+    ) -> CollectionEdge<'g, T>
+    where
+        Tr: TraceReader<Time = mz_repr::Timestamp, Batch: Navigable> + Clone,
+        mz_repr::Timestamp: TotalOrder,
+        BatchCursor<Tr>: Cursor<Time = mz_repr::Timestamp, Diff = Diff>,
+    {
+        let as_of = self.as_of_frontier.clone();
+        arranged
+            .stream
+            .with_start_signal(start_signal)
+            .unary::<ColumnBuilder<(Row, mz_repr::Timestamp, Diff)>, _, _, _>(
+                Pipeline,
+                "IndexToColumnar",
+                move |_cap, _info| {
+                    let mut row_buf = Row::default();
+                    move |input, output| {
+                        input.for_each(|time, data| {
+                            let mut session = output.session_with_builder(&time);
+                            for batch in data.iter() {
+                                if <Antichain<mz_repr::Timestamp> as PartialOrder>::less_equal(
+                                    batch.upper(),
+                                    &as_of,
+                                ) {
+                                    continue;
+                                }
+                                let mut cursor = batch.cursor();
+                                while let Some(key) = cursor.get_key(batch) {
+                                    while let Some(val) = cursor.get_val(batch) {
+                                        logic(key, val, &mut row_buf);
+                                        cursor.map_times(batch, |t, d| {
+                                            let t = <BatchCursor<Tr> as Cursor>::owned_time(t);
+                                            let d = <BatchCursor<Tr> as Cursor>::owned_diff(d);
+                                            session.give((&*row_buf, &t, &d));
+                                        });
+                                        cursor.step_val(batch);
+                                    }
+                                    cursor.step_key(batch);
+                                }
+                            }
+                        });
+                    }
+                },
+            )
+            .as_collection()
+            .enter(self.scope)
+    }
+
     pub(crate) fn import_index<'outer>(
         &mut self,
         outer: Scope<'outer, mz_repr::Timestamp>,
@@ -656,15 +718,16 @@ where
                         let mut datums = DatumVec::new();
                         let (permutation, _thinning) =
                             permutation_for_arrangement(&idx.key, typ.arity());
-                        self.import_filtered_index_collection(
+                        self.import_filtered_index_edge(
                             oks,
                             start_signal.clone(),
-                            move |k: DatumSeq, v: DatumSeq| {
+                            move |k: DatumSeq, v: DatumSeq, row: &mut Row| {
                                 let temp_storage = RowArena::new();
                                 let mut datums_borrow = datums.borrow();
                                 k.extend_datums(&temp_storage, &mut datums_borrow, None);
                                 v.extend_datums(&temp_storage, &mut datums_borrow, None);
-                                SharedRow::pack(permutation.iter().map(|i| datums_borrow[*i]))
+                                row.packer()
+                                    .extend(permutation.iter().map(|i| datums_borrow[*i]));
                             },
                         )
                     };
@@ -673,9 +736,7 @@ where
                         start_signal,
                         |e, _| e.clone(),
                     );
-                    // The filtered index collection is row-shaped and already
-                    // consolidated, so the encode here is non-consolidating.
-                    CollectionBundle::from_edge(vec_to_columnar(oks), errs)
+                    CollectionBundle::from_edge(oks, errs)
                 }
             };
             self.update_id(Id::Global(idx.on_id), bundle);
