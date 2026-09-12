@@ -282,8 +282,10 @@ that provisions an extra burst replica at a larger size while the cluster has
 un-hydrated objects.
 {{< /tip >}}
 
-For more information, including hydration strategies and the memory usage of
-hydrating objects, see [Hydration](/fundamentals/concepts/hydration/).
+For more information, including the memory usage of hydrating objects, see
+[Hydration](/fundamentals/concepts/hydration/). For strategies to reduce
+hydration memory, see [Optimize hydration
+requirements](/clusters/optimize-hydration-requirements/).
 
 ## Best practices
 
@@ -315,6 +317,7 @@ production cluster(s) to run development workloads or non-production tasks.
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`ALTER CLUSTER`](/sql/alter-cluster)
 - [Hydration](/fundamentals/concepts/hydration/)
+- [Optimize hydration requirements](/clusters/optimize-hydration-requirements/)
 - [System clusters](/sql/system-clusters)
 - [Usage & billing](/materialize-cloud/billing/)
 - [Operational guidelines](/clusters/operational-guidelines/)
