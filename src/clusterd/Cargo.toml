@@ -23,6 +23,7 @@ mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute = { path = "../compute", default-features = false }
+mz-compute-client = { path = "../compute-client" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-http-util = { path = "../http-util" }
 mz-metrics = { path = "../metrics" }
