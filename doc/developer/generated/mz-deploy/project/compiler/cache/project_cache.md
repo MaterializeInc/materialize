@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/compiler/cache/project_cache.rs
-revision: 673fdb9d44
+revision: c8a2857de2
 ---
 
 # mz-deploy::project::compiler::cache::project_cache

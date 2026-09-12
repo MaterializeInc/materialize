@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/lsp/completion.rs
-revision: c3db2feba9
+revision: c8a2857de2
 ---
 
 # mz-deploy::lsp::completion

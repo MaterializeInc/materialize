@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/lib.rs
-revision: db15d3b2dc
+revision: a054d68710
 ---
 
 # persist
@@ -17,7 +17,6 @@ revision: db15d3b2dc
 * `mem` — in-memory backend (testing/benchmarking).
 * `s3` — Amazon S3 backend.
 * `postgres` — Postgres/CockroachDB consensus backend.
-* `foundationdb` *(feature-gated)* — FoundationDB consensus backend.
 * `hedge` — `HedgedBlob`, a `Blob` decorator that races a hedge request on a connection-pool-isolated sibling to absorb dead-connection stalls.
 * `turmoil` *(feature-gated)* — network-simulation backends for chaos testing.
 * `metrics` — Prometheus metrics structs for backends.
@@ -29,5 +28,5 @@ revision: db15d3b2dc
 
 ## Key dependencies
 
-Depends on `mz-persist-types` for codec traits, `mz-ore` for utilities (metrics, lgalloc, bytes), `mz-postgres-client` for Postgres pooling, `mz-foundationdb` (optional), `mz-aws-util`, and the AWS, Azure, and Parquet/Arrow SDK crates.
+Depends on `mz-persist-types` for codec traits, `mz-ore` for utilities (metrics, lgalloc, bytes), `mz-postgres-client` for Postgres pooling, `mz-aws-util`, and the AWS, Azure, and Parquet/Arrow SDK crates.
 Consumed by `mz-persist-client` (the high-level persist API) and tooling such as `mz-persist-cli`.

@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/kafka.rs
-revision: 8f3bf9dd62
+revision: 4c45b862e2
 ---
 
 # mz-storage::source::kafka

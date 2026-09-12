@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/join/mz_join_core.rs
-revision: de27f5b2b1
+revision: 1e56d9c9c4
 ---
 
 # mz-compute::render::join::mz_join_core
