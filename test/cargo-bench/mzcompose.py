@@ -32,6 +32,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ from materialize.cargo_bench.compare import (
     CompareReport,
     Verdict,
     compare,
+    confirm,
     render_markdown,
 )
 from materialize.cargo_bench.targets import (
@@ -61,6 +63,12 @@ SERVICES = []
 BASELINE = "ancestor"
 
 REPORTS_ARTIFACT = "criterion-reports.tar.zst"
+
+# Criterion output of the first ancestor-vs-current pass and of the
+# confirmation rerun, as subdirectory names under the results root. Kept
+# apart so the rerun cannot overwrite the first pass's `new/` and `change/`.
+FIRST_PASS = "compare"
+RERUN = "confirm"
 
 # Repo-relative paths outside any crate directory that feed every build:
 # dependency versions, workspace profiles, and the rustflags cargo applies.
@@ -300,7 +308,8 @@ def run_benches(
     head_targets: list[BenchTarget],
     ancestor_targets: list[BenchTarget],
     env: dict[str, str],
-    criterion_home: Path,
+    results_root: Path,
+    threshold: float,
 ) -> tuple[list[TargetFailure], list[TargetFailure], list[BuiltBench]]:
     """Run every HEAD bench binary, its ancestor counterpart first when one was built for the same target.
 
@@ -311,6 +320,13 @@ def run_benches(
     mz-ore/pager benches when the two phases ran far apart. A target present
     only in the ancestor is never run, since there is no HEAD result to
     compare it against.
+
+    Benchmarks that regress in the first pass are measured once more, both
+    sides again, restricted to exactly those benchmark ids. Between-process
+    variance on large inputs dwarfs criterion's within-run interval, and a
+    swing that does not reproduce on the spot is not a regression. The rerun
+    costs time proportional to the number of flagged rows, nothing when there
+    are none.
     """
     ancestor_by_key = {(b.package, b.name): b for b in ancestor_built}
     ancestor_target_by_key = {(t.package, t.name): t for t in ancestor_targets}
@@ -328,43 +344,54 @@ def run_benches(
         # Benchmark ids are only unique within a target, so a collision
         # across targets sharing one criterion home would silently merge two
         # unrelated benchmarks.
-        target_home = criterion_home / head_bin.package / head_bin.name
+        target_home = results_root / FIRST_PASS / head_bin.package / head_bin.name
         ancestor_bin = ancestor_by_key.get(key)
-        header_suffix = ""
-        if ancestor_bin is not None:
-            if ancestor_bin.executable == head_bin.executable:
-                raise RuntimeError(
-                    f"{head_bin.package}/{head_bin.name}: ancestor and current bench "
-                    f"binaries resolve to the same file {head_bin.executable}"
-                )
-            # A target whose loaded program is identical between ancestor and
-            # current cannot have changed in any way that affects the
-            # benchmark, and running it anyway only costs time and risks a
-            # false regression from shared CI hardware.
-            ancestor_digest = loaded_image_digest(ancestor_bin.executable, scratch)
-            head_digest = loaded_image_digest(head_bin.executable, scratch)
-            if (
-                ancestor_digest is not None
-                and head_digest is not None
-                and ancestor_digest == head_digest
-            ):
-                print(
-                    f"--- Skipping {head_bin.package}/{head_bin.name}: identical binaries"
-                )
-                identical.append(head_bin)
-                continue
-            ancestor_label = ancestor_digest[:12] if ancestor_digest else "unknown"
-            head_label = head_digest[:12] if head_digest else "unknown"
-            header_suffix = f" ancestor={ancestor_label} current={head_label}"
+        if ancestor_bin is None:
+            rc = run_bench(
+                head_bin, ["--baseline-lenient", BASELINE], env, target_home, "current"
+            )
+            if rc is not None:
+                current_failures.append(TargetFailure(head_target_by_key[key], rc))
+            continue
+        if ancestor_bin.executable == head_bin.executable:
+            raise RuntimeError(
+                f"{head_bin.package}/{head_bin.name}: ancestor and current bench "
+                f"binaries resolve to the same file {head_bin.executable}"
+            )
+        # A target whose loaded program is identical between ancestor and
+        # current cannot have changed in any way that affects the
+        # benchmark, and running it anyway only costs time and risks a
+        # false regression from shared CI hardware.
+        ancestor_digest = loaded_image_digest(ancestor_bin.executable, scratch)
+        head_digest = loaded_image_digest(head_bin.executable, scratch)
+        if (
+            ancestor_digest is not None
+            and head_digest is not None
+            and ancestor_digest == head_digest
+        ):
+            print(
+                f"--- Skipping {head_bin.package}/{head_bin.name}: identical binaries"
+            )
+            identical.append(head_bin)
+            continue
+        ancestor_label = ancestor_digest[:12] if ancestor_digest else "unknown"
+        head_label = head_digest[:12] if head_digest else "unknown"
+        header_suffix = f" ancestor={ancestor_label} current={head_label}"
+
+        def run_pair(home: Path, filter_args: list[str], suffix: str) -> bool:
+            """Run ancestor then current into `home`, returning whether both succeeded."""
+            assert ancestor_bin is not None
+            ok = True
             rc = run_bench(
                 ancestor_bin,
-                ["--save-baseline", BASELINE],
+                [*filter_args, "--save-baseline", BASELINE],
                 env,
-                target_home,
-                "ancestor",
+                home,
+                "ancestor" + suffix,
             )
             if rc is not None:
                 ancestor_failures.append(TargetFailure(ancestor_target_by_key[key], rc))
+                ok = False
             # Criterion's --save-baseline leaves a `new/` copy of the
             # ancestor run behind in addition to the baseline it saves. An id
             # absent at HEAD would otherwise keep that copy and get reported
@@ -372,19 +399,39 @@ def run_benches(
             # recreates `new/` on the HEAD run and only reads
             # `ancestor/estimates.json` and `ancestor/sample.json` for
             # comparison, so removing it here is safe.
-            for d in target_home.rglob("new"):
+            for d in home.rglob("new"):
                 if d.is_dir():
                     shutil.rmtree(d)
-        rc = run_bench(
-            head_bin,
-            ["--baseline-lenient", BASELINE],
-            env,
-            target_home,
-            "current",
-            header_suffix,
-        )
-        if rc is not None:
-            current_failures.append(TargetFailure(head_target_by_key[key], rc))
+            rc = run_bench(
+                head_bin,
+                [*filter_args, "--baseline-lenient", BASELINE],
+                env,
+                home,
+                "current" + suffix,
+                header_suffix,
+            )
+            if rc is not None:
+                current_failures.append(TargetFailure(head_target_by_key[key], rc))
+                ok = False
+            return ok
+
+        if not run_pair(target_home, [], ""):
+            continue
+        regressed = [
+            r.id
+            for r in compare(target_home, threshold).results
+            if r.verdict == Verdict.REGRESSION
+        ]
+        if regressed:
+            # Criterion's positional filter is a regex over the full
+            # benchmark id, so an anchored alternation reruns exactly the
+            # flagged ids and nothing else.
+            pattern = "^(?:" + "|".join(re.escape(id) for id in regressed) + ")$"
+            run_pair(
+                results_root / RERUN / head_bin.package / head_bin.name,
+                [pattern],
+                f", confirming {len(regressed)} regression(s)",
+            )
     return ancestor_failures, current_failures, identical
 
 
@@ -525,11 +572,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         else [p for p in shard_packages if p not in unchanged]
     )
 
-    criterion_home = target_dir() / "criterion-compare"
+    results_root = target_dir() / "cargo-bench-results"
     # Stale baselines from an earlier run would silently become the
     # comparison target, so start from an empty directory every time.
-    shutil.rmtree(criterion_home, ignore_errors=True)
-    criterion_home.mkdir(parents=True)
+    shutil.rmtree(results_root, ignore_errors=True)
+    results_root.mkdir(parents=True)
     env = dict(os.environ, CARGO_TARGET_DIR=str(target_dir()))
     # Persist's test storage configs panic under CI when no external Postgres
     # or S3 endpoint is configured. This step measures code, not network
@@ -667,7 +714,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 current_targets,
                 ancestor_targets,
                 env,
-                criterion_home,
+                results_root,
+                args.threshold,
             )
             ancestor_failures = ancestor_build_failures + ancestor_run_failures
             current_failures = current_build_failures + current_run_failures
@@ -690,7 +738,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if any((t.package, t.name) not in identical_keys for t in targets):
                 mispredicted.append(package)
 
-    report = compare(criterion_home, args.threshold)
+    report = confirm(
+        compare(results_root / FIRST_PASS, args.threshold),
+        compare(results_root / RERUN, args.threshold),
+    )
     markdown = render_report(
         ancestor,
         args.threshold,
@@ -702,6 +753,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         verify_closure,
         mispredicted,
     )
+    # Opens its own log group, otherwise the table lands inside the last
+    # benchmark's collapsed section.
+    print("+++ Results")
     print(markdown)
 
     failed = report.has_regressions or bool(current_failures) or bool(mispredicted)
@@ -718,8 +772,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "-caf",
                     REPORTS_ARTIFACT,
                     "-C",
-                    str(criterion_home.parent),
-                    criterion_home.name,
+                    str(results_root.parent),
+                    results_root.name,
                 ],
                 cwd=MZ_ROOT,
             )

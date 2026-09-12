@@ -13,6 +13,7 @@ from pathlib import Path
 from materialize.cargo_bench.compare import (
     Verdict,
     compare,
+    confirm,
     format_duration,
     render_markdown,
 )
@@ -162,9 +163,59 @@ def test_render_markdown(tmp_path: Path) -> None:
     markdown = render_markdown(report)
 
     lines = markdown.splitlines()
-    assert lines[0] == "| Benchmark | Ancestor | Current | Change | 95% CI | Verdict |"
-    assert lines[1] == "| --- | --- | --- | --- | --- | --- |"
-    assert lines[2] == (
-        "| g/regressed | 100.00 ns | 120.00 ns | +20.0% | [+15.0%, +25.0%] | **regression** |"
+    assert (
+        lines[0]
+        == "| Benchmark | Ancestor | Current | Change | 95% CI | Rerun | Verdict |"
     )
-    assert lines[3] == "| g/brand_new |  | 50.00 ns |  |  | new |"
+    assert lines[1] == "| --- | --- | --- | --- | --- | --- | --- |"
+    assert lines[2] == (
+        "| g/regressed | 100.00 ns | 120.00 ns | +20.0% | [+15.0%, +25.0%] |  | **regression** |"
+    )
+    assert lines[3] == "| g/brand_new |  | 50.00 ns |  |  |  | new |"
+
+
+def test_confirm_keeps_regression_the_rerun_reproduces(tmp_path: Path) -> None:
+    _bench(tmp_path / "a", "g/slow", "g/slow", 120.0, 100.0, (0.20, 0.15, 0.25))
+    _bench(tmp_path / "a", "g/same", "g/same", 100.0, 100.0, (0.0, -0.01, 0.01))
+    _bench(tmp_path / "b", "g/slow", "g/slow", 118.0, 100.0, (0.18, 0.14, 0.22))
+
+    report = confirm(compare(tmp_path / "a", 0.10), compare(tmp_path / "b", 0.10))
+
+    assert [(r.id, r.verdict) for r in report.results] == [
+        ("g/slow", Verdict.REGRESSION),
+        ("g/same", Verdict.UNCHANGED),
+    ]
+    assert report.results[0].rerun_change == 0.18
+    assert report.has_regressions
+    assert report.warnings == []
+
+
+def test_confirm_downgrades_regression_the_rerun_does_not_reproduce(
+    tmp_path: Path,
+) -> None:
+    _bench(tmp_path / "a", "g/slow", "g/slow", 120.0, 100.0, (0.20, 0.15, 0.25))
+    _bench(tmp_path / "a", "g/fast", "g/fast", 80.0, 100.0, (-0.20, -0.25, -0.15))
+    _bench(tmp_path / "b", "g/slow", "g/slow", 101.0, 100.0, (0.01, -0.01, 0.03))
+
+    report = confirm(compare(tmp_path / "a", 0.10), compare(tmp_path / "b", 0.10))
+
+    assert [(r.id, r.verdict) for r in report.results] == [
+        ("g/slow", Verdict.UNCONFIRMED),
+        ("g/fast", Verdict.IMPROVEMENT),
+    ]
+    assert report.results[0].rerun_change == 0.01
+    assert not report.has_regressions
+    assert "unconfirmed" in render_markdown(report).splitlines()[2]
+    assert "| +1.0% | unconfirmed |" in render_markdown(report).splitlines()[2]
+
+
+def test_confirm_warns_when_rerun_lacks_the_benchmark(tmp_path: Path) -> None:
+    _bench(tmp_path / "a", "g/slow", "g/slow", 120.0, 100.0, (0.20, 0.15, 0.25))
+    (tmp_path / "b").mkdir()
+
+    report = confirm(compare(tmp_path / "a", 0.10), compare(tmp_path / "b", 0.10))
+
+    assert report.results[0].verdict == Verdict.UNCONFIRMED
+    assert report.results[0].rerun_change is None
+    assert not report.has_regressions
+    assert report.warnings == ["g/slow: regression was not measured again on the rerun"]
