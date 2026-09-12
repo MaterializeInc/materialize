@@ -27,6 +27,7 @@ use super::error_scan::tests::{
     ErrorUpdates, PEEK_TIMESTAMP, cancelling, error, error_batch, holding,
 };
 use super::*;
+use crate::arrangement::manager::TraceBundle;
 
 /// The collection the peeks in these tests read.
 pub(crate) const TARGET_ID: GlobalId = GlobalId::User(1);
@@ -198,10 +199,10 @@ impl TestMetrics {
         }
     }
 
-    /// How often each metric that `collect_finished_data` can observe into was observed.
+    /// How often each metric that a walk can observe into was observed.
     ///
     /// The two histograms the enclosing `seek_fulfillment` owns are left out, because the
-    /// tests that read this call `collect_finished_data` directly.
+    /// tests that read this call [`collect`] directly.
     fn observations(&self) -> BTreeMap<&'static str, u64> {
         let metrics = &self.metrics;
         BTreeMap::from([
@@ -282,8 +283,8 @@ enum Answer {
     Ready(PeekResponse),
 }
 
-impl From<PeekStatus> for Answer {
-    fn from(status: PeekStatus) -> Self {
+impl From<PeekStatus<IndexPeekScan>> for Answer {
+    fn from(status: PeekStatus<IndexPeekScan>) -> Self {
         match status {
             PeekStatus::NotReady => Answer::NotReady,
             // The scan an offload carries has no comparison of its own. What is comparable
@@ -295,10 +296,35 @@ impl From<PeekStatus> for Answer {
 }
 
 /// An index peek of `peek` over an index holding `keys` and `errors`.
+/// Walks `subject` without the frontier gate, so the observations are the walk's alone.
+fn collect(
+    subject: &mut IndexPeek,
+    max_result_size: u64,
+    stash: StashBounds,
+    row_iteration_limit: Option<usize>,
+    fuel: &mut usize,
+    metrics: &IndexPeekMetrics<'_>,
+) -> PeekStatus<IndexPeekScan> {
+    let (oks, errs) = subject
+        .traces
+        .resolve(subject.peek.target.id())
+        .expect("local traces resolve");
+    IndexPeek::walk_traces(
+        &subject.peek,
+        oks,
+        errs,
+        max_result_size,
+        stash,
+        row_iteration_limit,
+        fuel,
+        metrics,
+    )
+}
+
 fn index_peek_over(peek: Peek, keys: &[Row], errors: ErrorUpdates) -> IndexPeek {
     IndexPeek {
         peek,
-        trace_bundle: trace_bundle(keys, errors),
+        traces: IndexTraces::Local(trace_bundle(keys, errors)),
         span: tracing::Span::none(),
     }
 }
@@ -330,7 +356,8 @@ fn a_completed_scan_answers_with_rows_and_reports_every_phase() {
     );
     let metrics = TestMetrics::new();
 
-    let answer = subject.collect_finished_data(
+    let answer = collect(
+        &mut subject,
         u64::MAX,
         NO_STASH,
         None,
@@ -356,7 +383,8 @@ fn an_error_answered_peek_reports_no_phase_timers() {
     let mut subject = index_peek_over(index_peek(trivial_finishing(), None), &keys, errors);
     let metrics = TestMetrics::new();
 
-    let answer = subject.collect_finished_data(
+    let answer = collect(
+        &mut subject,
         u64::MAX,
         NO_STASH,
         None,
@@ -390,7 +418,8 @@ fn a_scan_that_fills_a_batch_leaves_the_worker_with_fuel_to_spare() {
     // A threshold of zero bytes is crossed by the first row, so the scan fills a batch well
     // before the trace runs out and well before unbounded fuel could run out.
     let mut fuel = unbounded_fuel();
-    let answer = subject.collect_finished_data(
+    let answer = collect(
+        &mut subject,
         u64::MAX,
         STASH_EVERYTHING,
         None,
@@ -420,7 +449,8 @@ fn a_batch_ready_suspension_out_of_fuel_is_offloaded_too() {
     // suspends holding a full batch and out of fuel, with both causes of a suspension in force
     // at once.
     let mut fuel = 1;
-    let answer = subject.collect_finished_data(
+    let answer = collect(
+        &mut subject,
         u64::MAX,
         STASH_EVERYTHING,
         None,
@@ -451,8 +481,14 @@ fn a_scan_that_outruns_its_fuel_leaves_the_worker_reporting_nothing() {
     // An empty error trace is walked out within a position or two, so this fuel is spent
     // inside the ok walk with most of the six keys still ahead of it.
     let mut fuel = 2;
-    let answer =
-        subject.collect_finished_data(u64::MAX, NO_STASH, None, &mut fuel, &metrics.as_metrics());
+    let answer = collect(
+        &mut subject,
+        u64::MAX,
+        NO_STASH,
+        None,
+        &mut fuel,
+        &metrics.as_metrics(),
+    );
 
     assert_eq!(Answer::from(answer), Answer::Offload);
     assert_eq!(
@@ -482,7 +518,8 @@ fn an_ok_phase_failure_reports_the_phases_the_walk_reached() {
     // A ceiling of one byte is crossed by the first row the ok walk produces, so the peek
     // fails inside that walk rather than in the error walk before it.
     let max_result_size = 1;
-    let answer = subject.collect_finished_data(
+    let answer = collect(
+        &mut subject,
         max_result_size,
         NO_STASH,
         None,
