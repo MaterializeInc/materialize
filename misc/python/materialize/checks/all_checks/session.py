@@ -54,8 +54,11 @@ class PreparedStatements(Check):
 
             > DEALLOCATE prepared_stmt_select
 
+            # Not asserting the name: validate() also runs against released
+            # binaries, which spell it unquoted. The quoting is pinned in
+            # test/sqllogictest/prepare.slt, which only runs on the new build.
             ! EXECUTE prepared_stmt_select(0, 3)
-            contains: unknown prepared statement prepared_stmt_select
+            contains: unknown prepared statement
 
             # A deallocated name can be reused.
             > PREPARE prepared_stmt_select AS SELECT count(*) FROM prepared_stmt_table
