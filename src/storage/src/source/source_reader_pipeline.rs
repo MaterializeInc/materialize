@@ -609,12 +609,22 @@ where
                         probed_upper.wait_for(|new_probe| is_fresh(&prev_probe, new_probe));
                     tokio::select! {
                         result = fresh_probe => {
-                            // A newer probe carries a frontier at least as advanced as the held
-                            // one, so it replaces it.
-                            result
+                            let new_probe = result
                                 .map(|probe| (*probe).clone())
                                 .unwrap_or_else(|_| Some(shutdown_probe()))
-                                .expect("known to be Some")
+                                .expect("known to be Some");
+                            // An arrival probe carries the ingested data frontier, which is
+                            // normally behind an explicit probe's upstream frontier. Replace the
+                            // held probe only if the new one is at least as advanced, so the
+                            // explicit probe's frontier is not lost.
+                            if PartialOrder::less_equal(
+                                &held.upstream_frontier,
+                                &new_probe.upstream_frontier,
+                            ) {
+                                new_probe
+                            } else {
+                                held
+                            }
                         }
                         _ = tokio::time::sleep(wait) => Probe {
                             probe_ts: now_fn().into(),
