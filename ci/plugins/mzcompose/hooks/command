@@ -142,7 +142,38 @@ cleanup() {
   END_TIME=$(date +%s)
   ELAPSED=$((END_TIME - START_TIME))
   if [ $ELAPSED -ge $((BUILDKITE_TIMEOUT * 60)) ]; then
-    printf "\n%s" "$BUILDKITE_LABEL: test timed out" >> run.log
+    printf "\n%s\n" "$BUILDKITE_LABEL: test timed out" >> run.log
+  fi
+
+  # A composition that holds resources outside of Docker, such as a Cloud
+  # region, can declare a `ci-cleanup` workflow. It runs here, before the Docker
+  # teardown, with the arguments of the main workflow. A cancelled or timed-out
+  # job reaches this trap through SIGTERM, which ends the mzcompose process
+  # without running the composition's own cleanup path, so this is the only
+  # cleanup such a run gets. A failure goes to run.log, where ci-annotate-errors
+  # turns it into an error annotation and fails an otherwise green job.
+  if echo "$workflows" | grep -x "ci-cleanup" > /dev/null; then
+    ci_unimportant_heading ":docker: Running the composition's ci-cleanup workflow"
+    # The main workflow's containers can outlive its process: SIGTERM ends
+    # mzcompose, but a `docker compose run` container it started keeps going,
+    # and an in-flight `mz region enable` could re-create the region after the
+    # cleanup deleted it. Only this composition's compose project (named after
+    # the composition): other jobs' containers, and containers a composition
+    # drives outside compose, such as kind nodes, keep running for the log
+    # collection below. Killed containers keep their logs for services.log;
+    # `mzcompose down` removes them. Skipped under coverage: the coverage
+    # teardown below stops containers gracefully on purpose, and a kill here
+    # would defeat it.
+    if [ -z "${CI_COVERAGE_ENABLED:-}" ]; then
+      docker ps --quiet --filter "label=com.docker.compose.project=$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" | xargs --no-run-if-empty docker kill > /dev/null || true
+    fi
+    # 15m keeps a hung cleanup from eating the agents' 40-minute cancel grace
+    # period before the artifacts and the error annotation. Normal disables
+    # take about 30 s. The output also goes to run.log so that the artifact
+    # shows why a cleanup failed.
+    if ! bin/ci-builder run "$builder" timeout --signal=TERM --kill-after=30s 15m bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" run ci-cleanup "${run_args[@]:1}" |& sed -u -r 's/\x1B\[[0-9;]*[A-Za-z]//g' | tee -a run.log; then
+      printf "\n%s\n" "$BUILDKITE_LABEL: ci-cleanup workflow failed" >> run.log
+    fi
   fi
 
   ci_unimportant_heading "Post command steps"
