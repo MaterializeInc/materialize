@@ -34,11 +34,14 @@ use columnar::common::IterOwn;
 use columnar::{Clear, FromBytes, Index, Len};
 use columnar::{Columnar, Ref};
 use differential_dataflow::Hashable;
+use differential_dataflow::collection::containers::Enter;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
+use timely::progress::Timestamp;
+use timely::progress::timestamp::Refines;
 
 use crate::columnation::ColInternalMerger;
 
@@ -188,6 +191,53 @@ where
                 // We really oughtn't be calling this in this case.
                 // We could convert to owned, but need more constraints on `C`.
                 unimplemented!("Pushing into Column::Bytes without first clearing");
+            }
+        }
+    }
+}
+
+/// Re-encodes a column's times into a refining timestamp, so a columnar collection can enter
+/// an iterative scope.
+impl<D, T1, T2, R> Enter<T1, T2> for Column<(D, T1, R)>
+where
+    D: Columnar,
+    T1: Columnar + Timestamp,
+    T2: Columnar + Refines<T1>,
+    R: Columnar,
+    (D, T1, R): Columnar<Container = (D::Container, T1::Container, R::Container)>,
+    (D, T2, R): Columnar<Container = (D::Container, T2::Container, R::Container)>,
+    for<'a> D::Container: columnar::Push<Ref<'a, D>>,
+    for<'a> T2::Container: columnar::Push<&'a T2>,
+    for<'a> R::Container: columnar::Push<Ref<'a, R>>,
+{
+    type InnerContainer = Column<(D, T2, R)>;
+
+    fn enter(self) -> Self::InnerContainer {
+        use columnar::Push;
+        match self {
+            // Only the times change, so the data and diff columns move across whole.
+            Column::Typed((data, times, diffs)) => {
+                let mut inner = T2::Container::default();
+                for time in times.borrow().into_index_iter() {
+                    inner.push(&T2::to_inner(T1::into_owned(time)));
+                }
+                Column::Typed((data, inner, diffs))
+            }
+            // A serialized column owns no typed sub-containers, so only the times are
+            // materialized. The data and diff columns go from their borrowed views
+            // straight into the output allocation, a copy per column rather than a
+            // decode and re-encode per record.
+            serialized => {
+                let (borrowed_data, borrowed_times, borrowed_diffs) = serialized.borrow();
+                let mut times = T2::Container::default();
+                for time in borrowed_times.into_index_iter() {
+                    times.push(&T2::to_inner(T1::into_owned(time)));
+                }
+                let view = (borrowed_data, times.borrow(), borrowed_diffs);
+                let words = indexed::length_in_words(&view);
+                let mut alloc: Vec<u64> = Vec::with_capacity(words);
+                indexed::encode(&mut alloc, &view);
+                Column::Align(alloc)
             }
         }
     }
