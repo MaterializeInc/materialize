@@ -110,8 +110,9 @@ The first trigger is an advance of the source's own data frontier, the frontier 
 The second is the idle timer, which fires `X_max` after the previous binding and performs an explicit probe of the upstream system exactly as today.
 Both triggers produce a proposal `(frontier, probe_ts)`, and the remap operator must wake on a changed frontier even when the timestamp is unchanged, because two arrivals inside one grid cell carry the same timestamp and today's wake condition compares timestamps only.
 
-The binding timestamp is `max(floor_grid(now_ms + H), previous_binding + 1)`, where `floor_grid` rounds down to the `X_min` grid.
-The floor is applied before the maximum, otherwise it could undo the maximum and produce a timestamp equal to the previous binding, which `mint` rejects without a diagnostic.
+The binding timestamp is `floor_grid(now_ms + H)`, where `floor_grid` rounds down to the `X_min` grid.
+A proposal whose floored timestamp is not at or beyond the current remap upper is skipped without minting, and the operator waits for the next probe.
+Taking the maximum with the previous binding instead would mint off the grid at arrival rate whenever arrivals are faster than the grid, which defeats the rate bound, and the pending arrival probe fires in the next grid cell anyway.
 The target upper is derived from the final timestamp, because `mint` asserts that the upper is beyond the binding timestamp.
 Flooring to a shared grid keeps independent sources on the same timestamps, so a join of several sources sees one input frontier step per grid point rather than one per source ([database-issues#8885] describes the cost of misalignment).
 
@@ -245,6 +246,32 @@ It implements arrival-driven minting with `X_min` and `X_max`, a lead from a fix
 The measurements are end-to-end freshness as the difference between upstream commit time and first visibility in a strict serializable read, strict serializable read latency distribution, compare-and-set rate per shard from persist metrics, and explicit probe count against the upstream database.
 Success is a freshness median below `X_min` plus pipeline latency at unchanged read latency and unchanged probe count, with the consensus rate matching the budget formula.
 
+### Prototype results
+
+The prototype is on this branch behind `storage_event_driven_bindings`, with `test/tickless-spike/spike.py` as the harness.
+It runs a local PostgreSQL source at 20 inserts per second against a local `environmentd` with the optimized profile, one strict serializable reader polling `max(ts)` every 50 ms, and one `SUBSCRIBE` on the progress subsource counting distinct binding timestamps.
+Staleness is wall clock at read completion minus the row's upstream commit time, so it includes the read's own latency, and the keepalive is emulated by lowering `default_timestamp_interval` after source creation.
+The lead is a fixed value rather than a measurement.
+
+| Mode | Staleness p50 ms | Staleness p95 ms | Read p50 ms | Read p95 ms | Bindings/s |
+|---|---|---|---|---|---|
+| Baseline, 1 s keepalive | 1035 | 1063 | 950 | 954 | 1.03 |
+| Baseline, 250 ms keepalive | 1151 | 1256 | 18 | 751 | 1.03 |
+| Event-driven, lead 0, 250 ms keepalive | 299 | 504 | 22 | 254 | 3.92 |
+| Event-driven, lead 400 ms, 250 ms keepalive | 581 | 727 | 18 | 22 | 4.06 |
+
+Table 3: One 30 second run per mode, single machine, 20 inserts per second.
+
+Four things follow from the numbers.
+The binding rate lands on the grid as designed, four per second against one, and the log shows no rejected proposals, no panics, and no persist errors.
+Event-driven bindings without a lead cut median staleness from about one second to 300 ms, which is the pipeline latency plus a fraction of the grid, and the read tail of 254 ms is the wait for the next binding that the lead section predicts.
+The lead removes that tail, 254 ms to 22 ms at p95, and pays for it in staleness, 299 ms to 581 ms at the median, so the lead is a read latency instrument and not a freshness instrument, and the sum of read latency and staleness is about the same in both event-driven modes.
+The baseline with a one second keepalive shows a 950 ms median read latency, which is the since rounding effect the Binding lead section describes: the source since is floored to the second, the oracle read timestamp lags by up to a second, and every read is pushed to the since and waits for the next keepalive.
+
+A quiet run at one insert per five seconds counted 0.3 bindings per second in both modes, below the expected one per second from the `X_max` probe.
+The counter only sees bindings that move the upstream frontier, because a binding that repeats the same frontier at a new timestamp consolidates to nothing in the progress collection, so the harness measures data-bearing bindings and cannot see idle ones.
+Idle binding rate needs a persist-level counter, which is the same instrument the rejected-proposal count needs.
+
 ## Alternatives
 
 ### Lower the timestamp interval globally
@@ -295,6 +322,7 @@ It is complementary and is the natural next design once the budget formula above
 ## Open questions
 
 * How should the wall-clock lag metric account for the lead? Uppers ahead of wall clock read as zero lag. Each writer can announce its lead through source statistics so the controller subtracts it, or the metric can be anchored on the mint wall clock rather than the binding timestamp. Deferred until the prototype shows how large `H` is in practice.
+* Should the lead default to zero? The prototype shows the lead trading staleness for read tail latency one for one. If freshness is the goal, a zero lead with the read tail bounded by `X_min` may be the better default, with the lead reserved for environments that care about read latency.
 * Can `X_min` adapt to observed consensus latency at the controller level, so that a struggling consensus store widens binding intervals across all sources instead of relying on operator tuning?
 * Should the demand-driven keepalive distinguish reads that touch no table, which only need the oracle advanced and not a txns shard append?
 * Which tests encode the one second tick as an assumption? The rollout flag being on in CI will surface them, and they need review rather than blanket relaxation.
