@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
+use crate::relation::unique_keys::UniqueKeySets;
 use crate::row::{RowCollection, RowCollectionIter};
 use crate::scalar::columns::Columns;
 use crate::scalar::func::variadic::{
@@ -56,6 +57,7 @@ use crate::{
 pub mod canonicalize;
 pub mod func;
 pub mod join_input_mapper;
+pub mod unique_keys;
 
 /// A recursion limit to be used for stack-safe traversals of [`MirRelationExpr`] trees.
 ///
@@ -339,8 +341,14 @@ impl MirRelationExpr {
     /// The relation type is computed incrementally with a recursive post-order
     /// traversal, that accumulates the input types for the relations yet to be
     /// visited in `type_stack`.
+    ///
+    /// Unique keys are threaded through the traversal as [`UniqueKeySets`], so
+    /// that column equivalences discovered at one operator strengthen key
+    /// inference at the operators above it. The returned type reports only the
+    /// canonical keys.
     pub fn typ(&self) -> ReprRelationType {
-        let mut type_stack = Vec::new();
+        let mut type_stack: Vec<(Vec<ReprColumnType>, UniqueKeySets)> = Vec::new();
+        let empty = || (Vec::new(), UniqueKeySets::none());
         self.visit_pre_post(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 match &e {
@@ -353,31 +361,36 @@ impl MirRelationExpr {
                 match e {
                     MirRelationExpr::Let { .. } => {
                         let body_typ = type_stack.pop().unwrap();
-                        // Insert a dummy relation type for the value, since `typ_with_input_types`
-                        // won't look at it, but expects the relation type of the body to be second.
-                        type_stack.push(ReprRelationType::empty());
+                        // Insert a dummy type for the value, since the methods
+                        // below won't look at it, but expect the type of the
+                        // body to be second.
+                        type_stack.push(empty());
                         type_stack.push(body_typ);
                     }
                     MirRelationExpr::LetRec { values, .. } => {
                         let body_typ = type_stack.pop().unwrap();
-                        type_stack.extend(
-                            std::iter::repeat(ReprRelationType::empty()).take(values.len()),
-                        );
-                        // Insert dummy relation types for the values, since `typ_with_input_types`
-                        // won't look at them, but expects the relation type of the body to be last.
+                        type_stack.extend(std::iter::repeat_with(empty).take(values.len()));
+                        // Insert dummy types for the values, since the methods
+                        // below won't look at them, but expect the type of the
+                        // body to be last.
                         type_stack.push(body_typ);
                     }
                     _ => {}
                 }
                 let num_inputs = e.num_inputs();
-                let relation_type =
-                    e.typ_with_input_types(&type_stack[type_stack.len() - num_inputs..]);
+                let inputs = &type_stack[type_stack.len() - num_inputs..];
+                let column_types = e.col_with_input_cols(inputs.iter().map(|(cols, _)| cols));
+                let keys = e.unique_keys_with_input_keys(
+                    inputs.iter().map(|(cols, _)| cols.len()),
+                    inputs.iter().map(|(_, keys)| keys),
+                );
                 type_stack.truncate(type_stack.len() - num_inputs);
-                type_stack.push(relation_type);
+                type_stack.push((column_types, keys));
             },
         );
         assert_eq!(type_stack.len(), 1);
-        type_stack.pop().unwrap()
+        let (column_types, keys) = type_stack.pop().unwrap();
+        ReprRelationType::new(column_types).with_keys(keys.into_keys())
     }
 
     /// Reports the repr schema of the relation given the repr schema of the input relations.
@@ -541,6 +554,25 @@ impl MirRelationExpr {
     /// Reports the unique keys of the relation given the arities and the unique
     /// keys of the input relations.
     ///
+    /// This is a convenience wrapper around `unique_keys_with_input_keys` for
+    /// callers that track keys as plain lists, for example as part of a
+    /// `ReprRelationType`. Column equivalences of the inputs are unknown in
+    /// that form, and the output reports only the canonical keys.
+    pub fn keys_with_input_keys<'a, I, J>(&self, input_arities: I, input_keys: J) -> Vec<Vec<usize>>
+    where
+        I: Iterator<Item = usize>,
+        J: Iterator<Item = &'a Vec<Vec<usize>>>,
+    {
+        let input_keys = input_keys
+            .map(|keys| UniqueKeySets::from_keys(keys.clone()))
+            .collect::<Vec<_>>();
+        self.unique_keys_with_input_keys(input_arities, input_keys.iter())
+            .into_keys()
+    }
+
+    /// Reports the unique keys of the relation given the arities and the unique
+    /// keys of the input relations.
+    ///
     /// `input_arities` and `input_keys` are required to contain the
     /// corresponding info for the input relations of
     /// the current relation in the same order as they are visited by `try_visit_children`
@@ -551,18 +583,18 @@ impl MirRelationExpr {
     ///
     /// It is meant to be used during post-order traversals to compute unique keys
     /// incrementally.
-    pub fn keys_with_input_keys<'a, I, J>(
+    pub fn unique_keys_with_input_keys<'a, I, J>(
         &self,
         mut input_arities: I,
         mut input_keys: J,
-    ) -> Vec<Vec<usize>>
+    ) -> UniqueKeySets
     where
         I: Iterator<Item = usize>,
-        J: Iterator<Item = &'a Vec<Vec<usize>>>,
+        J: Iterator<Item = &'a UniqueKeySets>,
     {
         use MirRelationExpr::*;
 
-        let mut keys = match self {
+        match self {
             Constant {
                 rows: Ok(rows),
                 typ,
@@ -583,23 +615,21 @@ impl MirRelationExpr {
                     }
                 }
                 if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == Diff::ONE) {
-                    vec![vec![]]
+                    UniqueKeySets::at_most_one_row()
                 } else {
                     // XXX - Multi-column keys are not detected.
-                    typ.keys
-                        .iter()
-                        .cloned()
-                        .chain(
-                            unique_values_per_col
-                                .into_iter()
-                                .enumerate()
-                                .filter(|(_idx, unique_vals)| unique_vals.is_some())
-                                .map(|(idx, _)| vec![idx]),
-                        )
-                        .collect()
+                    let mut result = UniqueKeySets::from_keys(typ.keys.clone());
+                    for (idx, unique_vals) in unique_values_per_col.into_iter().enumerate() {
+                        if unique_vals.is_some() {
+                            result.add_key(vec![idx]);
+                        }
+                    }
+                    result
                 }
             }
-            Constant { rows: Err(_), typ } | Get { typ, .. } => typ.keys.clone(),
+            Constant { rows: Err(_), typ } | Get { typ, .. } => {
+                UniqueKeySets::from_keys(typ.keys.clone())
+            }
             Threshold { .. } | ArrangeBy { .. } => input_keys.next().unwrap().clone(),
             Let { .. } => {
                 // skip over the unique keys for value
@@ -609,31 +639,11 @@ impl MirRelationExpr {
                 // skip over the unique keys for value
                 input_keys.nth(values.len()).unwrap().clone()
             }
-            Project { outputs, .. } => {
-                let input = input_keys.next().unwrap();
-                input
-                    .iter()
-                    .filter_map(|key_set| {
-                        if key_set.iter().all(|k| outputs.contains(k)) {
-                            Some(
-                                key_set
-                                    .iter()
-                                    .map(|c| outputs.iter().position(|o| o == c).unwrap())
-                                    .collect(),
-                            )
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            }
+            Project { outputs, .. } => input_keys.next().unwrap().project(outputs),
             Map { scalars, .. } => {
-                let mut remappings = Vec::new();
                 let arity = input_arities.next().unwrap();
+                let mut result = input_keys.next().unwrap().clone();
                 for (column, scalar) in scalars.iter().enumerate() {
-                    // assess whether the scalar preserves uniqueness,
-                    // and could participate in a key!
-
                     fn uniqueness(expr: &MirScalarExpr) -> Option<usize> {
                         match expr {
                             MirScalarExpr::CallUnary { func, expr } => {
@@ -648,170 +658,62 @@ impl MirRelationExpr {
                         }
                     }
 
+                    // A column that is an injective function of another column
+                    // mutually determines it, and can substitute for it in any
+                    // key.
                     if let Some(c) = uniqueness(scalar) {
-                        remappings.push((c, column + arity));
+                        result.equate(c, arity + column);
                     }
-                }
-
-                let mut result = input_keys.next().unwrap().clone();
-                let mut new_keys = Vec::new();
-                // Any column in `remappings` could be replaced in a key
-                // by the corresponding c. This could lead to combinatorial
-                // explosion using our current representation, so we wont
-                // do that. Instead, we'll handle the case of one remapping.
-                if remappings.len() == 1 {
-                    let (old, new) = remappings.pop().unwrap();
-                    for key in &result {
-                        if key.contains(&old) {
-                            let mut new_key: Vec<usize> =
-                                key.iter().cloned().filter(|k| k != &old).collect();
-                            new_key.push(new);
-                            new_key.sort_unstable();
-                            new_keys.push(new_key);
-                        }
-                    }
-                    result.append(&mut new_keys);
                 }
                 result
             }
             FlatMap { .. } => {
                 // FlatMap can add duplicate rows, so input keys are no longer
-                // valid
-                vec![]
+                // valid, but the equivalences among the input's columns
+                // continue to hold.
+                input_keys.next().unwrap().equivalences_only()
             }
             Negate { .. } => {
                 // Although negate may have distinct records for each key,
                 // the multiplicity is -1 rather than 1. This breaks many
                 // of the optimization uses of "keys".
-                vec![]
+                input_keys.next().unwrap().equivalences_only()
             }
             Filter { predicates, .. } => {
-                // A filter inherits the keys of its input unless the filters
-                // have reduced the input to a single row, in which case the
-                // keys of the input are `()`.
-                let mut input = input_keys.next().unwrap().clone();
-
-                if !input.is_empty() {
-                    // Track columns equated to literals, which we can prune.
-                    let mut cols_equal_to_literal = BTreeSet::new();
-
-                    // Perform union find on `col1 = col2` to establish
-                    // connected components of equated columns. Absent any
-                    // equalities, this will be `0 .. #c` (where #c is the
-                    // greatest column referenced by a predicate), but each
-                    // equality will orient the root of the greater to the root
-                    // of the lesser.
-                    let mut union_find = Vec::new();
-
-                    for expr in predicates.iter() {
-                        if let MirScalarExpr::CallBinary {
-                            func: crate::BinaryFunc::Eq(_),
-                            expr1,
-                            expr2,
-                        } = expr
-                        {
-                            if let MirScalarExpr::Column(c, _name) = &**expr1 {
-                                if expr2.is_literal_ok() {
-                                    cols_equal_to_literal.insert(c);
-                                }
-                            }
-                            if let MirScalarExpr::Column(c, _name) = &**expr2 {
-                                if expr1.is_literal_ok() {
-                                    cols_equal_to_literal.insert(c);
-                                }
-                            }
-                            // Perform union-find to equate columns.
-                            if let (Some(c1), Some(c2)) = (expr1.as_column(), expr2.as_column()) {
-                                if c1 != c2 {
-                                    // Ensure union_find has entries up to
-                                    // max(c1, c2) by filling up missing
-                                    // positions with identity mappings.
-                                    while union_find.len() <= std::cmp::max(c1, c2) {
-                                        union_find.push(union_find.len());
-                                    }
-                                    let mut r1 = c1; // Find the representative column of [c1].
-                                    while r1 != union_find[r1] {
-                                        assert!(union_find[r1] < r1);
-                                        r1 = union_find[r1];
-                                    }
-                                    let mut r2 = c2; // Find the representative column of [c2].
-                                    while r2 != union_find[r2] {
-                                        assert!(union_find[r2] < r2);
-                                        r2 = union_find[r2];
-                                    }
-                                    // Union [c1] and [c2] by pointing the
-                                    // larger to the smaller representative (we
-                                    // update the remaining equivalence class
-                                    // members only once after this for-loop).
-                                    union_find[std::cmp::max(r1, r2)] = std::cmp::min(r1, r2);
-                                }
+                // A filter inherits the keys of its input, strengthened by the
+                // column equalities among its predicates.
+                let mut result = input_keys.next().unwrap().clone();
+                let mut literal_cols = Vec::new();
+                for expr in predicates.iter() {
+                    if let MirScalarExpr::CallBinary {
+                        func: crate::BinaryFunc::Eq(_),
+                        expr1,
+                        expr2,
+                    } = expr
+                    {
+                        if let MirScalarExpr::Column(c, _name) = &**expr1 {
+                            if expr2.is_literal_ok() {
+                                literal_cols.push(*c);
                             }
                         }
-                    }
-
-                    // Complete union-find by pointing each element at its representative column.
-                    for i in 0..union_find.len() {
-                        // Iteration not required, as each prior already references the right column.
-                        union_find[i] = union_find[union_find[i]];
-                    }
-
-                    // Remove columns bound to literals, and remap columns equated to earlier columns.
-                    // We will re-expand remapped columns in a moment, but this avoids exponential work.
-                    for key_set in &mut input {
-                        key_set.retain(|k| !cols_equal_to_literal.contains(&k));
-                        for col in key_set.iter_mut() {
-                            if let Some(equiv) = union_find.get(*col) {
-                                *col = *equiv;
+                        if let MirScalarExpr::Column(c, _name) = &**expr2 {
+                            if expr1.is_literal_ok() {
+                                literal_cols.push(*c);
                             }
                         }
-                        key_set.sort();
-                        key_set.dedup();
-                    }
-                    input.sort();
-                    input.dedup();
-
-                    // Expand out each key to each of its equivalent forms.
-                    // Each instance of `col` can be replaced by any equivalent column.
-                    // This has the potential to result in exponentially sized number of unique keys,
-                    // and in the future we should probably maintain unique keys modulo equivalence.
-
-                    // First, compute an inverse map from each representative
-                    // column `sub` to all other equivalent columns `col`.
-                    let mut subs = Vec::new();
-                    for (col, sub) in union_find.iter().enumerate() {
-                        if *sub != col {
-                            assert!(*sub < col);
-                            while subs.len() <= *sub {
-                                subs.push(Vec::new());
-                            }
-                            subs[*sub].push(col);
+                        if let (Some(c1), Some(c2)) = (expr1.as_column(), expr2.as_column()) {
+                            result.equate(c1, c2);
                         }
-                    }
-                    // For each column, substitute for it in each occurrence.
-                    let mut to_add = Vec::new();
-                    for (col, subs) in subs.iter().enumerate() {
-                        if !subs.is_empty() {
-                            for key_set in input.iter() {
-                                if key_set.contains(&col) {
-                                    let mut to_extend = key_set.clone();
-                                    to_extend.retain(|c| c != &col);
-                                    for sub in subs {
-                                        to_extend.push(*sub);
-                                        to_add.push(to_extend.clone());
-                                        to_extend.pop();
-                                    }
-                                }
-                            }
-                        }
-                        // No deduplication, as we cannot introduce duplicates.
-                        input.append(&mut to_add);
-                    }
-                    for key_set in input.iter_mut() {
-                        key_set.sort();
-                        key_set.dedup();
                     }
                 }
-                input
+                // A column equated to a literal is constant and drops out of
+                // every key. Apply these after all equalities are recorded, so
+                // the entire equivalence class of each such column drops out
+                // regardless of predicate order.
+                for col in literal_cols {
+                    result.remove_constant_column(col);
+                }
+                result
             }
             Join { equivalences, .. } => {
                 // It is important the `new_from_input_arities` constructor is
@@ -822,31 +724,38 @@ impl MirRelationExpr {
                 input_mapper.global_keys(input_keys, equivalences)
             }
             Reduce { group_key, .. } => {
-                // The group key should form a key, but we might already have
-                // keys that are subsets of the group key, and should retain
-                // those instead, if so.
-                let mut result = Vec::new();
-                for key_set in input_keys.next().unwrap() {
-                    if key_set
-                        .iter()
-                        .all(|k| group_key.contains(&MirScalarExpr::column(*k)))
-                    {
-                        result.push(
-                            key_set
-                                .iter()
-                                .map(|i| {
-                                    group_key
-                                        .iter()
-                                        .position(|k| k == &MirScalarExpr::column(*i))
-                                        .unwrap()
-                                })
-                                .collect::<Vec<_>>(),
-                        );
+                let input = input_keys.next().unwrap();
+                // Group key positions, indexed by the equivalence class
+                // representative of the input column they contain.
+                let mut positions_by_rep: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+                for (pos, expr) in group_key.iter().enumerate() {
+                    if let Some(col) = expr.as_column() {
+                        positions_by_rep
+                            .entry(input.rep(col))
+                            .or_default()
+                            .push(pos);
                     }
                 }
-                if result.is_empty() {
-                    result.push((0..group_key.len()).collect());
+                let mut result = UniqueKeySets::none();
+                // Group key positions holding equivalent columns remain
+                // equivalent among the distinct grouped values.
+                for positions in positions_by_rep.values() {
+                    for pair in positions.windows(2) {
+                        result.equate(pair[0], pair[1]);
+                    }
                 }
+                // The group key forms a key, and any input key expressible in
+                // group key positions is a smaller one.
+                for key in input.keys() {
+                    let translated = key
+                        .iter()
+                        .map(|col| positions_by_rep.get(col).map(|positions| positions[0]))
+                        .collect::<Option<Vec<_>>>();
+                    if let Some(key) = translated {
+                        result.add_key(key);
+                    }
+                }
+                result.add_key((0..group_key.len()).collect());
                 result
             }
             TopK {
@@ -856,7 +765,7 @@ impl MirRelationExpr {
                 // a unique key, as there will be only one record with that key.
                 let mut result = input_keys.next().unwrap().clone();
                 if limit.as_ref().and_then(|x| x.as_literal_int64()) == Some(1) {
-                    result.push(group_key.clone())
+                    result.add_key(group_key.clone());
                 }
                 result
             }
@@ -893,7 +802,7 @@ impl MirRelationExpr {
                         // with the project being all columns in the input in order.
                         ((0..arity).collect::<Vec<_>>(), &**base)
                     };
-                let mut result = Vec::new();
+                let mut result = UniqueKeySets::none();
                 if let MirRelationExpr::Get {
                     id: first_id,
                     typ: _,
@@ -912,20 +821,27 @@ impl MirRelationExpr {
                                         } = input
                                         {
                                             if first_id == second_id {
-                                                result.extend(
-                                                    input_keys
-                                                        .next()
-                                                        .unwrap()
-                                                        .into_iter()
-                                                        .filter(|key| {
-                                                            key.iter().all(|c| {
-                                                                outputs.get(*c) == Some(c)
-                                                                    && base_projection.get(*c)
-                                                                        == Some(c)
-                                                            })
+                                                let base_keys = input_keys.next().unwrap();
+                                                for key in base_keys.keys() {
+                                                    // Each key column must pass through both
+                                                    // projections unpermuted. Any equivalent
+                                                    // column that does so can stand in.
+                                                    let translated = key
+                                                        .iter()
+                                                        .map(|col| {
+                                                            base_keys.equivalent_columns(*col).find(
+                                                                |c| {
+                                                                    outputs.get(*c) == Some(c)
+                                                                        && base_projection.get(*c)
+                                                                            == Some(c)
+                                                                },
+                                                            )
                                                         })
-                                                        .cloned(),
-                                                );
+                                                        .collect::<Option<Vec<_>>>();
+                                                    if let Some(key) = translated {
+                                                        result.add_key(key);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -934,13 +850,12 @@ impl MirRelationExpr {
                         }
                     }
                 }
-                // Important: do not inherit keys of either input, as not unique.
+                // Important: do not inherit keys of either input, as not
+                // unique. Equivalences do not survive either: rows of the
+                // other input need not respect the equivalences of the base.
                 result
             }
-        };
-        keys.sort();
-        keys.dedup();
-        keys
+        }
     }
 
     /// The number of columns in the relation.
@@ -4155,6 +4070,31 @@ mod tests {
 
         let r = finishing.finish_incremental_inner(batch, max_result_size);
         assert!(r.unwrap_err().contains("total result exceeds max size"));
+    }
+
+    /// Key inference on a filter with column equality predicates must not
+    /// enumerate all equivalent key variants. With a 128 column unique key and
+    /// 24 disjoint column equalities such an enumeration produces 2^24 keys,
+    /// which exhausts memory. The canonical representation reports the single
+    /// key with each equated column mapped to its representative.
+    #[mz_ore::test]
+    fn test_filter_key_inference_compact_under_column_equalities() {
+        use crate::func::Eq;
+
+        let arity = 128;
+        let equalities = 24;
+        let typ = ReprRelationType::new(vec![ReprScalarType::Int32.nullable(true); arity])
+            .with_key((0..arity).collect());
+        let get = MirRelationExpr::global_get(GlobalId::User(1), typ);
+        let predicates = (0..equalities).map(|i| {
+            MirScalarExpr::column(i).call_binary(MirScalarExpr::column(i + equalities), Eq)
+        });
+        let keys = get.filter(predicates).typ().keys;
+
+        let canonical: Vec<usize> = (0..arity)
+            .filter(|c| !(equalities..2 * equalities).contains(c))
+            .collect();
+        assert_eq!(keys, vec![canonical]);
     }
 }
 

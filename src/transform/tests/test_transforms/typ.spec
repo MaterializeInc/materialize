@@ -113,7 +113,7 @@ Filter (#0 = #1)
   Distinct project=[#0, #2]
     Get x
 ----
-Filter (#0 = #1) // { types: "(r_int32, r_int32)", keys: "([0], [1])" }
+Filter (#0 = #1) // { types: "(r_int32, r_int32)", keys: "([0])" }
   Distinct project=[#0, #2] // { types: "(r_int32?, r_int32?)", keys: "([0, 1])" }
     Get x // { types: "(r_int32?, r_int64?, r_int32?)", keys: "()" }
 
@@ -129,7 +129,7 @@ explain with=(types, keys)
 Filter (#0 = #2)
   Get with_keys
 ----
-Filter (#0 = #2) // { types: "(r_int32, r_int32?, r_int32)", keys: "([0, 1], [1, 2])" }
+Filter (#0 = #2) // { types: "(r_int32, r_int32?, r_int32)", keys: "([0, 1])" }
   Get with_keys // { types: "(r_int32?, r_int32?, r_int32?)", keys: "([0, 1], [1, 2])" }
 
 define
@@ -145,7 +145,7 @@ explain with=(types, keys)
 Filter (#0 = #2)
   Get with_keys2
 ----
-Filter (#0 = #2) // { types: "(r_int32, r_int32?, r_int32, r_int32?)", keys: "([0, 1], [0, 3], [1, 2], [2, 3])" }
+Filter (#0 = #2) // { types: "(r_int32, r_int32?, r_int32, r_int32?)", keys: "([0, 1], [0, 3])" }
   Get with_keys2 // { types: "(r_int32?, r_int32?, r_int32?, r_int32?)", keys: "([0, 1], [2, 3])" }
 
 # Regression test for materialize#14146. The keys at the end should be [#0]
