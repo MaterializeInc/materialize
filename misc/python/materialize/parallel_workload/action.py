@@ -2998,6 +2998,20 @@ class FlipFlagsAction(Action):
             "'1s'",
             "'10s'",
         ]
+        self.flags_with_values["storage_event_driven_bindings"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["storage_min_binding_interval"] = [
+            "'100ms'",
+            "'250ms'",
+            "'1s'",
+        ]
+        # The lead must stay below the default one second compaction window
+        # minus the binding interval, otherwise strict serializable reads wait
+        # on the source since.
+        self.flags_with_values["storage_binding_lead"] = [
+            "'0ms'",
+            "'250ms'",
+            "'500ms'",
+        ]
         self.flags_with_values["arrangement_size_history_collection_interval"] = [
             "'1s'",
             "'10s'",
