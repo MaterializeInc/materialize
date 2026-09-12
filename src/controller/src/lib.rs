@@ -679,6 +679,7 @@ impl Controller {
         read_only: bool,
         catalog_read_protection_enabled: bool,
         storage_txn: &dyn StorageTxn,
+        txns_metrics: Arc<TxnMetrics>,
     ) -> Self {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
@@ -689,7 +690,6 @@ impl Controller {
 
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
-        let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
             Arc::clone(&config.persist_clients),

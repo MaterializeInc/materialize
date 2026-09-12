@@ -730,22 +730,13 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping tables.
-    pub(crate) async fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
+    /// Txn-wal membership must already be forgotten through the group committer.
+    pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
         for (item_id, _gid) in &tables {
             self.active_webhooks.remove(item_id);
         }
 
         let table_gids: Vec<_> = tables.into_iter().map(|(_id, gid)| gid).collect();
-
-        // FIFO ordering places the forget after every staged append.
-        let forget_ids = self
-            .controller
-            .storage
-            .txns_table_ids(table_gids.clone())
-            .unwrap_or_terminate("cannot fail to look up txns-registered tables");
-        if !forget_ids.is_empty() {
-            self.forget_tables_via_committer(forget_ids).await;
-        }
 
         let storage_metadata = self.catalog.state().storage_metadata();
         self.controller

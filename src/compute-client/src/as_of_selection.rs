@@ -104,10 +104,15 @@ use tracing::{info, warn};
 /// frontier, regardless of whether they have a published compaction bound. Durable index read
 /// requirements can be admitted independently of selection, so soft preferences must not skip
 /// readable history. Published bounds still govern compaction through the controller.
+///
+/// `pending_replacements` supplies creation frontiers for exports that do not yet own output
+/// writes. Protected replacements retain that history independently of their target's progress.
+/// Unprotected replacements may recover later as their input holds advance with the target.
 pub fn run(
     dataflows: &mut [DataflowDescription<LirRelationExpr, ()>],
     read_policies: &BTreeMap<GlobalId, ReadPolicy>,
     committed_index_bounds: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+    pending_replacements: &BTreeMap<GlobalId, Antichain<Timestamp>>,
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
@@ -145,7 +150,7 @@ pub fn run(
 
     // Apply hard constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
-    ctx.apply_downstream_storage_constraints();
+    ctx.apply_downstream_storage_constraints(pending_replacements, catalog_read_protection);
     ctx.apply_committed_index_bounds(committed_index_bounds);
     if catalog_read_protection {
         ctx.apply_index_readability_constraints();
@@ -484,7 +489,12 @@ impl<'a> Context<'a> {
     ///
     /// Failing to apply this constraint to a collection is an error. The storage collection it
     /// exports to may have times visible to readers skipped in its output, violating correctness.
-    fn apply_downstream_storage_constraints(&self) {
+    /// Pending replacements do not own these writes and instead preserve their creation frontier.
+    fn apply_downstream_storage_constraints(
+        &self,
+        pending_replacements: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        catalog_read_protection: bool,
+    ) {
         // Apply direct constraints from storage exports.
         for id in self.collections.keys() {
             let Ok(frontiers) = self.storage_collections.collection_frontiers(*id) else {
@@ -493,17 +503,29 @@ impl<'a> Context<'a> {
 
             let collection_empty =
                 PartialOrder::less_equal(&frontiers.write_frontier, &frontiers.read_capabilities);
-            let upper = if collection_empty {
+            let output_upper = if collection_empty {
                 frontiers.read_capabilities
             } else {
                 step_back_frontier(&frontiers.write_frontier)
+            };
+            let (upper, reason) = if let Some(initial_as_of) = pending_replacements.get(id) {
+                // Protected pending requirements retain creation history. Without that
+                // durable promise, input holds can advance with the target's progress.
+                let upper = if catalog_read_protection {
+                    initial_as_of.clone()
+                } else {
+                    initial_as_of.join(&output_upper)
+                };
+                (upper, format!("pending replacement {id} creation frontier"))
+            } else {
+                (output_upper, format!("storage export {id} write frontier"))
             };
 
             let constraint = Constraint {
                 type_: ConstraintType::Hard,
                 bound_type: BoundType::Upper,
                 frontier: &upper,
-                reason: &format!("storage export {id} write frontier"),
+                reason: &reason,
             };
             self.apply_constraint(*id, constraint);
         }
@@ -1241,6 +1263,7 @@ mod tests {
             current_time: $current_time:literal,
             $( read_policies: { $( $policy_id:literal: $policy:expr, )* }, )?
             $( committed_bounds: { $( $bound_id:literal: $bound:expr, )* }, )?
+            $( pending_replacements: { $( $replacement_id:literal: $initial:expr, )* }, )?
             $( read_only: $read_only:expr, )?
             $( catalog_read_protection: $catalog_read_protection:expr, )?
         }) => {
@@ -1281,6 +1304,9 @@ mod tests {
                     &BTreeMap::from([
                         $($( ($bound_id.parse().unwrap(), ts_to_frontier($bound)), )*)?
                     ]),
+                    &BTreeMap::from([
+                        $($( ($replacement_id.parse().unwrap(), ts_to_frontier($initial)), )*)?
+                    ]),
                     &storage_frontiers,
                     $current_time.into(),
                     read_only,
@@ -1297,6 +1323,47 @@ mod tests {
             }
         };
     }
+
+    testcase!(pending_replacement_creation_frontier, {
+        storage: {
+            "s1": (40, 100),
+            "s2": (10, 100),
+            "u2": (10, 20),
+            "u3": (10, 20),
+        },
+        dataflows: [
+            "u1" <- ["s1"] => 50,
+            "u2" <- ["u1"] => 50,
+            "u3" <- ["s2"] => 19,
+        ],
+        current_time: 90,
+        pending_replacements: { "u2": 50, },
+    });
+
+    testcase!(protected_pending_replacement_retains_creation, {
+        storage: {
+            "s1": (40, 100),
+            "u2": (10, 100),
+        },
+        dataflows: [
+            "u1" <- ["s1"] => 40,
+            "u2" <- ["u1"] => 50,
+        ],
+        current_time: 90,
+        pending_replacements: { "u2": 50, },
+        read_only: true,
+        catalog_read_protection: true,
+    });
+
+    testcase!(unprotected_pending_replacement_advances_with_target, {
+        storage: {
+            "s1": (60, 100),
+            "u1": (10, 100),
+        },
+        dataflows: [ "u1" <- ["s1"] => 99, ],
+        current_time: 90,
+        pending_replacements: { "u1": 50, },
+    });
 
     // Publication does not enumerate durable index read requirements. Even an unpublished
     // index must retain readable history rather than select the soft preference at 90.

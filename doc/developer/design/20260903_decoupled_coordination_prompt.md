@@ -21,7 +21,7 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
-Milestone 2 is active. The lifecycle-service scope question is decided in the
+Milestone 2 is active. The controller-bundle placement question is decided in the
 design's Lifecycle placement and Query client decisions and the re-cut milestone.
 Order the work so each step lands and is verified in-process before the process
 boundary moves:
@@ -37,8 +37,8 @@ acceptance. Remaining work:
    dataflows through it, durable client protection as its only protection. The
    client records and reclamation rule are agreed. No remote controller access API.
 2. Verify committed maintained installation, including cache rejection, same-batch
-   dependencies, and pending replacements. Suspended-target replacement recovery
-   remains an explicit investigation in the log.
+   dependencies, and pending replacements. Exercise suspended-target replacement
+   recovery in both protection modes.
 3. Move the controller bundle out with catalog following, enactment, and publication
    as its interface. DDL and table appends stay with the adapter. Table time stays
    adapter-driven for now: assume a live adapter ticks transaction-WAL time, and

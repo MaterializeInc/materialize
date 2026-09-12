@@ -2064,6 +2064,8 @@ pub struct Coordinator {
     /// The controller for the storage and compute layers.
     #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
+    /// Adapter-owned table writes. Runtime operations use the group committer's FIFO.
+    table_write_handle: Arc<dyn crate::table_writer::TableWriteHandle>,
     /// The catalog in an Arc suitable for readonly references. The Arc allows
     /// us to hand out cheap copies of the catalog to functions that can use it
     /// off of the main coordinator thread. If the coordinator needs to mutate
@@ -3043,6 +3045,9 @@ impl Coordinator {
                 let mut grouped_appends: BTreeMap<GlobalId, Vec<TableData>> = BTreeMap::new();
                 for update in migrated_builtin_table_updates {
                     let gid = self.catalog().get_entry(&update.id).latest_global_id();
+                    assert!(
+                        gid.is_system() && migrated_storage_collections_0dt.contains(&update.id)
+                    );
                     grouped_appends.entry(gid).or_default().push(update.data);
                 }
                 info!(
@@ -3068,11 +3073,11 @@ impl Coordinator {
                     all_appends.push((item_id, all_data));
                 }
 
-                let fut = self
-                    .controller
-                    .storage
-                    .append_table(min_timestamp, boot_ts.step_forward(), all_appends)
-                    .expect("cannot fail to append");
+                let fut = self.table_write_handle.append(
+                    min_timestamp,
+                    boot_ts.step_forward(),
+                    all_appends,
+                );
                 async {
                     fut.await
                         .expect("One-shot shouldn't be dropped during bootstrap")
@@ -3258,10 +3263,8 @@ impl Coordinator {
         // timestamp and reading a snapshot of each table, so the snapshots will block on their own
         // until the appends are complete.
         let table_fence_rx = self
-            .controller
-            .storage
-            .append_table(write_ts.clone(), advance_to, appends)
-            .expect("invalid updates");
+            .table_write_handle
+            .append(write_ts.clone(), advance_to, appends);
 
         self.apply_local_write(write_ts).await;
 
@@ -3554,7 +3557,7 @@ impl Coordinator {
         };
 
         let storage_metadata = self.catalog.state().storage_metadata();
-        let migrated_storage_collections = migrated_storage_collections
+        let migrated_storage_collections: BTreeSet<_> = migrated_storage_collections
             .into_iter()
             .flat_map(|item_id| self.catalog.get_entry(item_id).global_ids())
             .collect();
@@ -3621,7 +3624,7 @@ impl Coordinator {
                 )
             }),
         );
-        let mut created_gids = Vec::new();
+        let mut table_registrations = Vec::new();
 
         for batch in batches {
             let mut ready: Vec<_> = batch
@@ -3658,7 +3661,11 @@ impl Coordinator {
                 collection.since = Some(derived_since);
             }
 
-            created_gids.extend(ready.iter().map(|(gid, _collection)| *gid));
+            table_registrations.extend(ready.iter().filter_map(|(gid, collection)| {
+                (matches!(collection.data_source, DataSource::Table)
+                    && (!self.controller.read_only() || migrated_storage_collections.contains(gid)))
+                .then(|| self.table_registration(*gid, collection.desc.clone()))
+            }));
 
             self.controller
                 .storage
@@ -3673,11 +3680,13 @@ impl Coordinator {
         }
 
         // Register txn-wal tables before the later system-table snapshot.
-        self.controller
-            .storage
-            .register_table_collections(register_ts, created_gids)
-            .await
-            .unwrap_or_terminate("cannot fail to register tables");
+        if !table_registrations.is_empty() {
+            self.table_write_handle
+                .register(register_ts, table_registrations)
+                .await
+                .expect("table worker is alive during bootstrap")
+                .unwrap_or_terminate("cannot fail to register tables");
+        }
 
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
@@ -4122,6 +4131,7 @@ impl Coordinator {
         let mut catalog_ids = Vec::new();
         let mut dataflows = Vec::new();
         let mut read_policies: BTreeMap<GlobalId, ReadPolicy> = BTreeMap::new();
+        let mut pending_replacements = BTreeMap::new();
         for entry in self.catalog.entries() {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
@@ -4141,6 +4151,16 @@ impl Coordinator {
                 catalog_ids.push(gid);
                 dataflows.push(plan.clone());
 
+                if let CatalogItem::MaterializedView(mv) = entry.item()
+                    && mv.replacement_target.is_some()
+                {
+                    pending_replacements.insert(
+                        gid,
+                        mv.initial_as_of
+                            .clone()
+                            .expect("pending replacement has an initial visibility frontier"),
+                    );
+                }
                 if let Some(compaction_window) = entry.item().initial_logical_compaction_window() {
                     read_policies.insert(gid, compaction_window.into());
                 }
@@ -4168,6 +4188,7 @@ impl Coordinator {
             &mut dataflows,
             &read_policies,
             &index_bounds,
+            &pending_replacements,
             &*self.controller.storage_collections,
             read_ts,
             self.controller.read_only(),
@@ -5501,7 +5522,7 @@ pub fn serve(
                 // get a writer at cut-over.
                 //
                 // Seeded from all of `new_builtin_collections`, not just the MVs: a new builtin
-                // table or source has no read-only writer either (`register_table_collections`
+                // table or source has no read-only writer either (bootstrap registration
                 // retains only *migrated* tables), so an MV reading one never advances past its
                 // empty frontier. A *migrated* table is the opposite case, even though a builtin
                 // MV can read one (`mz_clusters` joins `mz_cluster_replica_size_internal`):
@@ -5593,7 +5614,7 @@ pub fn serve(
                     handle.block_on(catalog.writer_projection(storage))
                         .unwrap_or_terminate("failed to acquire client protection projection")
                 });
-                let controller = handle
+                let (controller, table_write_handle) = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
@@ -5627,6 +5648,7 @@ pub fn serve(
                 let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
                 let mut coord = Coordinator {
                     controller,
+                    table_write_handle,
                     catalog,
                     compaction_bound_subscriber: compaction_bound_subscriber
                         .map(CompactionBoundSubscriber::new),
@@ -5697,7 +5719,7 @@ pub fn serve(
                     appends::spawn_group_committer(
                         group_committer_rx,
                         coord.get_local_timestamp_oracle(),
-                        coord.controller.storage.table_write_handle(),
+                        Arc::clone(&coord.table_write_handle),
                         coord.catalog().upper_handle(),
                         coord.internal_cmd_tx.clone(),
                         coord.catalog().config().now.clone(),

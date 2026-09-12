@@ -75,6 +75,7 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
+mz-txn-wal = { path = "../txn-wal" }
 mz-timestamp-oracle = { path = "../timestamp-oracle", default-features = false }
 openssl.workspace = true
 opentelemetry.workspace = true

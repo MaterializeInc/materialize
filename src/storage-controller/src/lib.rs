@@ -44,7 +44,6 @@ use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::critical::Opaque;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
@@ -54,13 +53,12 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
 use mz_storage_client::client::{
     AppendOnlyUpdate, RunIngestionCommand, RunOneshotIngestion, RunSinkCommand, Status,
-    StatusUpdate, StorageCommand, StorageResponse, TableData,
+    StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
-    IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
-    WallclockLagHistogramPeriod,
+    IntrospectionType, MonotonicAppender, Response, StorageController, StorageMetadata, StorageTxn,
+    StorageWriteOp, WallclockLag, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -89,7 +87,6 @@ use mz_storage_types::sources::{
 use mz_storage_types::{AlterCompatible, StorageDiff, dyncfgs};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
-use mz_txn_wal::txns::TxnsHandle;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch};
@@ -102,7 +99,6 @@ use tracing::{debug, info, warn};
 mod collection_mgmt;
 mod history;
 mod instance;
-mod persist_handles;
 mod rtr;
 mod statistics;
 
@@ -157,8 +153,6 @@ pub struct Controller {
     /// messages from the replica.
     dropped_objects: BTreeMap<GlobalId, BTreeSet<ReplicaId>>,
 
-    /// Write handle for table shards.
-    pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker,
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<Timestamp>,
     txns_metrics: Arc<TxnMetrics>,
@@ -1488,62 +1482,6 @@ impl StorageController for Controller {
         Ok(())
     }
 
-    async fn register_table_collections(
-        &mut self,
-        register_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> Result<(), StorageError> {
-        let mut tables = self.table_registrations(ids)?;
-
-        // A read-only deployment only writes its migrated builtin tables.
-        if self.read_only {
-            tables.retain(|table| self.migrated_storage_collections.contains(&table.id));
-        }
-        if tables.is_empty() {
-            return Ok(());
-        }
-
-        match self
-            .persist_table_worker
-            .register(register_ts, tables)
-            .await
-        {
-            Ok(res) => res,
-            Err(_recv) => Err(StorageError::ShuttingDown("persist_table_worker")),
-        }
-    }
-
-    fn table_registrations(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Result<Vec<TableRegistration>, StorageError> {
-        // The storage data source decides which table catalog items use txn-wal.
-        let mut tables = Vec::with_capacity(ids.len());
-        for id in ids {
-            let collection = self.collection(id)?;
-            if matches!(collection.data_source, DataSource::Table) {
-                let metadata = &collection.collection_metadata;
-                tables.push(TableRegistration {
-                    id,
-                    data_shard: metadata.data_shard,
-                    relation_desc: metadata.relation_desc.clone(),
-                });
-            }
-        }
-        Ok(tables)
-    }
-
-    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError> {
-        let mut tables = Vec::with_capacity(ids.len());
-        for id in ids {
-            let collection = self.collection(id)?;
-            if matches!(collection.data_source, DataSource::Table) {
-                tables.push(id);
-            }
-        }
-        Ok(tables)
-    }
-
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError> {
         self.collections
             .get(&id)
@@ -2151,44 +2089,6 @@ impl StorageController for Controller {
             .drop_collections_unvalidated(storage_metadata, sinks_to_drop);
     }
 
-    #[instrument(level = "debug")]
-    fn append_table(
-        &mut self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
-        if self.read_only {
-            // While in read only mode, ONLY collections that have been migrated
-            // and need to be re-hydrated in read only mode can be written to.
-            if !commands
-                .iter()
-                .all(|(id, _)| id.is_system() && self.migrated_storage_collections.contains(id))
-            {
-                return Err(StorageError::ReadOnly);
-            }
-        }
-
-        // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
-        for (id, updates) in commands.iter() {
-            if !updates.is_empty() {
-                if !write_ts.less_than(&advance_to) {
-                    return Err(StorageError::UpdateBeyondUpper(*id));
-                }
-            }
-        }
-
-        Ok(self
-            .persist_table_worker
-            .append(write_ts, advance_to, commands))
-    }
-
-    fn table_write_handle(&self) -> Arc<dyn mz_storage_client::controller::TableWriteHandle> {
-        Arc::new(persist_handles::TableWriteWorkerHandle(
-            self.persist_table_worker.clone(),
-        ))
-    }
-
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
         self.collection_manager.monotonic_appender(id)
     }
@@ -2672,7 +2572,6 @@ impl StorageController for Controller {
             read_only,
             collections,
             dropped_objects,
-            persist_table_worker: _,
             txns_read: _,
             txns_metrics: _,
             stashed_responses,
@@ -2817,36 +2716,6 @@ where
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
 
-        let persist_table_worker = if read_only {
-            let txns_write = txns_client
-                .open_writer(
-                    txns_id,
-                    Arc::new(TxnsCodecRow::desc()),
-                    Arc::new(UnitSchema),
-                    Diagnostics {
-                        shard_name: "txns".to_owned(),
-                        handle_purpose: "follow txns upper".to_owned(),
-                    },
-                )
-                .await
-                .expect("txns schema shouldn't change");
-            persist_handles::PersistTableWriteWorker::new_read_only_mode(
-                txns_write,
-                txns_client.clone(),
-            )
-        } else {
-            let mut txns = TxnsHandle::open(
-                Timestamp::MIN,
-                txns_client.clone(),
-                txns_client.dyncfgs().clone(),
-                Arc::clone(&txns_metrics),
-                txns_id,
-                Opaque::encode(&PersistEpoch::default()),
-            )
-            .await;
-            txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns, txns_client.clone())
-        };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
@@ -2873,7 +2742,6 @@ where
             build_info,
             collections: BTreeMap::default(),
             dropped_objects: Default::default(),
-            persist_table_worker,
             txns_read,
             txns_metrics,
             stashed_responses: vec![],

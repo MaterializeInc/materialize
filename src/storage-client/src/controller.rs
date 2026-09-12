@@ -58,7 +58,7 @@ use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
+use crate::client::{AppendOnlyUpdate, StatusUpdate};
 use crate::statistics::WebhookStatistics;
 
 #[derive(
@@ -322,43 +322,6 @@ impl StorageWriteOp {
     }
 }
 
-/// Metadata required to register a table with the txns shard.
-#[derive(Debug, Clone)]
-pub struct TableRegistration {
-    pub id: GlobalId,
-    pub data_shard: ShardId,
-    pub relation_desc: RelationDesc,
-}
-
-/// Queues txns-shard operations on the storage table worker.
-///
-/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
-/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
-/// restores its bookkeeping and the caller must retry at a fresh timestamp.
-pub trait TableWriteHandle: Debug + Send + Sync {
-    /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
-    fn append(
-        &self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
-
-    /// Registers `tables` at `register_ts`.
-    fn register(
-        &self,
-        register_ts: Timestamp,
-        tables: Vec<TableRegistration>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
-
-    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
-    fn forget(
-        &self,
-        forget_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
-}
-
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     /// Marks the end of any initialization commands.
@@ -527,8 +490,8 @@ pub trait StorageController: Debug {
     /// collections are a table (i.e. all materialized views, sources, etc).
     ///
     /// This sets up storage but does not register tables in the txns shard. Runtime registration
-    /// must go through the adapter's group committer. Bootstrap uses
-    /// [`Self::register_table_collections`].
+    /// must go through the adapter's group committer. Bootstrap registers tables through
+    /// the adapter's table writer.
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -597,27 +560,6 @@ pub trait StorageController: Debug {
         new_desc: RelationDesc,
         expected_version: RelationVersion,
     ) -> Result<(), StorageError>;
-
-    /// Registers the `DataSource::Table` collections among `ids` during bootstrap.
-    ///
-    /// Runtime registration must go through the adapter's group committer. In read-only mode, only
-    /// migrated tables are registered.
-    async fn register_table_collections(
-        &mut self,
-        register_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> Result<(), StorageError>;
-
-    /// Returns registration metadata for the `DataSource::Table` collections among `ids`.
-    ///
-    /// Other data sources are ignored.
-    fn table_registrations(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Result<Vec<TableRegistration>, StorageError>;
-
-    /// Returns the `DataSource::Table` IDs among `ids`.
-    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError>;
@@ -706,20 +648,6 @@ pub trait StorageController: Debug {
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
-
-    /// Appends to tables during bootstrap.
-    ///
-    /// Runtime writes must go through the adapter's group committer. The returned receiver resolves
-    /// when the atomic write completes.
-    fn append_table(
-        &mut self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
-
-    /// Returns the process-lifetime storage mechanism used by the adapter's group committer.
-    fn table_write_handle(&self) -> Arc<dyn TableWriteHandle>;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].

@@ -905,18 +905,24 @@ impl Catalog {
         Ok(())
     }
 
-    /// [`mz_controller::Controller`] depends on durable catalog state to boot,
-    /// so make it available and initialize the controller.
-    pub async fn initialize_controller(
+    /// Initialize maintained controllers and the adapter table writer after their
+    /// shared storage identities are durable.
+    pub(crate) async fn initialize_controller(
         &mut self,
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-    ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
+    ) -> Result<
+        (
+            mz_controller::Controller,
+            Arc<dyn crate::table_writer::TableWriteHandle>,
+        ),
+        mz_catalog::durable::CatalogError,
+    > {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
-        let controller = {
+        let (controller, table_writer) = {
             let mut storage = self.storage().await;
             let mut tx = storage.transaction().await?;
             mz_controller::prepare_initialization(&mut tx)
@@ -930,15 +936,34 @@ impl Catalog {
             tx.commit(commit_ts).await?;
 
             let read_only_tx = storage.transaction().await?;
-
-            mz_controller::Controller::new(
+            let txns_metrics =
+                Arc::new(mz_txn_wal::metrics::Metrics::new(&config.metrics_registry));
+            let persist = config
+                .persist_clients
+                .open(config.persist_location.clone())
+                .await
+                .expect("persist location is valid");
+            // Upgrade the WAL before controller transaction readers start. The
+            // writer is adapter-owned and does not depend on installed collections.
+            let table_writer = crate::table_writer::open(
+                persist,
+                read_only_tx
+                    .get_txn_wal_shard()
+                    .expect("WAL identity is initialized"),
+                Arc::clone(&txns_metrics),
+                read_only,
+            )
+            .await;
+            let controller = mz_controller::Controller::new(
                 config,
                 envd_epoch,
                 read_only,
                 self.state().catalog_read_protection_enabled(),
                 &read_only_tx,
+                txns_metrics,
             )
-            .await
+            .await;
+            (controller, table_writer)
         };
 
         self.initialize_storage_state(&controller.storage_collections)
@@ -949,7 +974,7 @@ impl Catalog {
             controller_start.elapsed()
         );
 
-        Ok(controller)
+        Ok((controller, table_writer))
     }
 
     /// Politely releases all external resources that can only be released in an async context.

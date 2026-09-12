@@ -439,6 +439,8 @@ def workflow_test_github_9627(c: Composition):
             JOIN mz_tables t ON t.id = f.object_id
             WHERE t.name = 't'
             """
+        # Keep interpolated SQL on one testdrive command line.
+        query = " ".join(query.split())
 
         # Introspection is asynchronous. Client protection is also released in
         # batches, so test eventual advancement rather than a fixed sleep.

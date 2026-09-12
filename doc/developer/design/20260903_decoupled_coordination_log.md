@@ -782,3 +782,17 @@ source-fed dataflows and compaction continuing. This resolves the extraction
 question without adding another WAL writer. Use “lifecycle components” or “the
 process running the controller bundle,” not “lifecycle process” or “lifecycle
 service.” Next: resume the remaining in-process prerequisites and bundle extraction.
+
+### 2026-09-12: Adapter-owned table writer and replacement recovery
+
+The adapter owns the existing WAL worker and its append/register/forget FIFO.
+Registration uses committed descriptions and shard metadata, not controller
+inventory. Read-only backfill remains limited to migrated system tables and does
+not tick the WAL. The bundle retains transaction reading and collection lifetime
+management.
+
+Pending replacement recovery distinguishes durable creation protection from
+unprotected input holds that can advance with the target. Sealed-target pruning
+retains its existing semantics. Compaction publication cannot release abandoned
+client grants, independently of its cadence. Next: finish the remaining query-side
+controller dependencies and extract the controller bundle.
