@@ -78,7 +78,8 @@ def mz_setup(mode: Mode) -> None:
             "CREATE CONNECTION pg TO POSTGRES (HOST 'localhost', PORT 5434, USER postgres, PASSWORD SECRET pgpass, DATABASE postgres)"
         )
         conn.execute(
-            "CREATE SOURCE pg_src FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_pub')"
+            "CREATE SOURCE pg_src FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_pub') "
+            "EXPOSE PROGRESS AS pg_src_progress"
         )
         conn.execute("CREATE TABLE t FROM SOURCE pg_src (REFERENCE t)")
         deadline = time.monotonic() + 60
