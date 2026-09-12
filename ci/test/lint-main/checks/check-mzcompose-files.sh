@@ -19,13 +19,21 @@ cd "$(dirname "$0")/../../../.."
 
 check_all_files_referenced_in_ci() {
     RETURN=0
-    COMPOSITIONS=$(find . -name mzcompose.py \
-        -not -wholename "./misc/python/materialize/cli/mzcompose.py" `# Only glue code, no workflows` \
-        -not -wholename "./misc/monitoring/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
-        -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
+    UNREFERENCED_COMPOSITIONS=(
+        "misc/python/materialize/cli/mzcompose.py" # Only glue code, no workflows
+        "misc/monitoring/mzcompose.py"             # Only run manually
+        "test/canary-environment/mzcompose.py"     # Only run manually
+        "test/console/mzcompose.py"                # Only run manually
+        "test/mzcompose_examples/mzcompose.py"     # Example only
+        "test/get-cloud-hostname/mzcompose.py"     # Utility, no test
+    )
+    # Discover compositions the way `mzbuild.Repository` does, via Git. A plain
+    # `find` descends into gitignored directories, so a nested worktree or a
+    # build directory containing a checkout contributes its own copies of these
+    # files, and the exclusions above miss them because they are anchored at the
+    # repository root.
+    COMPOSITIONS=$(git_files '**/mzcompose.py' \
+        | grep -vxF -f <(printf '%s\n' "${UNREFERENCED_COMPOSITIONS[@]}") \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
         # Anchor at end of line, otherwise a composition whose name prefixes
