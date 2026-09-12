@@ -375,7 +375,7 @@ pub struct SubscribeBatch {
 
 impl SubscribeBatch {
     /// Converts `self` to an error if a maximum size is exceeded.
-    fn to_error_if_exceeds(&mut self, max_result_size: usize) {
+    pub fn to_error_if_exceeds(&mut self, max_result_size: usize) {
         if let Ok(updates) = &self.updates {
             let total_size: usize = updates.iter().map(|updates| updates.byte_len()).sum();
             if total_size > max_result_size {

@@ -74,7 +74,7 @@ use crate::coord::appends::{PendingWriteTxn, UserWriteResponder, WriteResult};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
-    PurifiedStatementReady, validate_ip_with_policy_rules,
+    PurifiedStatementReady, SubscribeImplementation, validate_ip_with_policy_rules,
 };
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
@@ -461,7 +461,7 @@ impl Coordinator {
                 }
 
                 Command::ExecuteSubscribe {
-                    df_desc,
+                    implementation,
                     dependency_ids,
                     cluster_id,
                     replica_id,
@@ -476,20 +476,41 @@ impl Coordinator {
                         statement_logging_id,
                         self.internal_cmd_tx.clone(),
                     );
-                    match self
-                        .implement_subscribe(
+                    let result = match implementation {
+                        SubscribeImplementation::Dataflow(df_desc) => {
+                            self.implement_subscribe(
+                                &mut ctx_extra,
+                                df_desc,
+                                dependency_ids,
+                                cluster_id,
+                                replica_id,
+                                conn_id,
+                                session_uuid,
+                                read_holds,
+                                plan,
+                            )
+                            .await
+                        }
+                        SubscribeImplementation::PersistTail {
+                            from_id,
+                            sink_id,
+                            as_of,
+                            arity,
+                        } => self.implement_persist_subscribe(
                             &mut ctx_extra,
-                            df_desc,
+                            from_id,
+                            sink_id,
+                            as_of,
+                            arity,
                             dependency_ids,
                             cluster_id,
-                            replica_id,
                             conn_id,
                             session_uuid,
                             read_holds,
                             plan,
-                        )
-                        .await
-                    {
+                        ),
+                    };
+                    match result {
                         Ok((resp, write_notify)) => {
                             // Wait for the `mz_subscriptions` bookkeeping write off the
                             // coordinator loop before returning the `SUBSCRIBE` response to

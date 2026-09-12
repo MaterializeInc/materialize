@@ -43,7 +43,9 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
-use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
+use mz_storage_types::dyncfgs::{
+    STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION, SUBSCRIBE_SNAPSHOT_CHUNK_SIZE,
+};
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
@@ -67,6 +69,9 @@ use crate::controller::{
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
 mod metrics;
+mod subscribe;
+
+pub use subscribe::{SubscribeEvent, SubscribeLimits, Update};
 
 /// An abstraction for keeping track of storage collections and managing access
 /// to them.
@@ -198,6 +203,35 @@ pub trait StorageCollections: Debug + Sync {
         'static,
         Result<BoxStream<'static, (SourceData, Timestamp, StorageDiff)>, StorageError>,
     >;
+
+    /// Returns a snapshot of collection `id` at `as_of`, if `with_snapshot`,
+    /// followed by a listen of every later update, as a stream of
+    /// [`SubscribeEvent`]s.
+    ///
+    /// The snapshot arrives as `Updates` events with all times advanced to
+    /// `as_of`. After it come updates at times strictly greater than `as_of`,
+    /// interleaved with `Progress` events. `Progress(upper)` means every update
+    /// at a time before `upper` has been emitted. The stream ends after an
+    /// empty `Progress` frontier, which means the collection is closed. Updates
+    /// are not consolidated.
+    ///
+    /// The returned stream holds a persist read lease at its frontier for as
+    /// long as it lives, so the caller needs its own read hold on `id` only
+    /// until the returned future resolves. Only the persist shard is read, no
+    /// cluster is involved. Concurrent streams on one collection share a
+    /// single persist listen, see `storage_collections::subscribe`.
+    ///
+    /// Events are queued as the shard advances and pulled as the stream is
+    /// polled. A stream whose queue exceeds `max_buffered_bytes` ends with
+    /// [`SubscribeEvent::Detached`], after which the caller resumes from the
+    /// last frontier it received with a new stream, without a snapshot.
+    fn subscribe(
+        &self,
+        id: GlobalId,
+        as_of: Timestamp,
+        with_snapshot: bool,
+        max_buffered_bytes: usize,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, SubscribeEvent>, StorageError>>;
 
     /// Create a [`TimestamplessUpdateBuilder`] that can be used to stage
     /// updates for the provided [`GlobalId`].
@@ -382,6 +416,9 @@ pub struct StorageCollectionsImpl {
     /// Collections maintained by this [StorageCollections].
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState>>>,
 
+    /// The shared persist tails serving [StorageCollections::subscribe].
+    shared_tails: Arc<subscribe::SharedTails>,
+
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<Timestamp>,
 
@@ -540,6 +577,7 @@ impl StorageCollectionsImpl {
             finalizable_shards,
             finalized_shards,
             collections,
+            shared_tails: Default::default(),
             txns_read,
             envd_epoch,
             read_only,
@@ -996,6 +1034,17 @@ impl StorageCollectionsImpl {
         metadata: &CollectionMetadata,
         id: GlobalId,
     ) -> Result<ReadHandle<SourceData, (), Timestamp, StorageDiff>, StorageError> {
+        Self::open_leased_reader(persist, metadata, id, "snapshot").await
+    }
+
+    /// Opens a leased reader on the shard of `id`, starting at the critical
+    /// since so that anything the controller's read holds cover is readable.
+    async fn open_leased_reader(
+        persist: Arc<PersistClientCache>,
+        metadata: &CollectionMetadata,
+        id: GlobalId,
+        purpose: &str,
+    ) -> Result<ReadHandle<SourceData, (), Timestamp, StorageDiff>, StorageError> {
         let persist_client = persist
             .open(metadata.persist_location.clone())
             .await
@@ -1013,7 +1062,7 @@ impl StorageCollectionsImpl {
                 Arc::new(UnitSchema),
                 Diagnostics {
                     shard_name: id.to_string(),
-                    handle_purpose: format!("snapshot {}", id),
+                    handle_purpose: format!("{purpose} {id}"),
                 },
                 USE_CRITICAL_SINCE_SNAPSHOT.get(&persist.cfg),
             )
@@ -1127,6 +1176,95 @@ impl StorageCollectionsImpl {
             Ok(stream)
         }
         .boxed()
+    }
+
+    fn subscribe(
+        &self,
+        id: GlobalId,
+        as_of: Timestamp,
+        with_snapshot: bool,
+        max_buffered_bytes: usize,
+        txns_read: &TxnsRead<Timestamp>,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, SubscribeEvent>, StorageError>> {
+        let metadata = match self.collection_metadata(id) {
+            Ok(metadata) => metadata.clone(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
+        };
+        let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
+            assert_eq!(txns_id, txns_read.txns_id());
+            txns_read.clone()
+        });
+        let persist = Arc::clone(&self.persist);
+        let shared_tails = Arc::clone(&self.shared_tails);
+        let collections = Arc::clone(&self.collections);
+        let limits = SubscribeLimits {
+            max_buffered_bytes,
+            snapshot_chunk: SUBSCRIBE_SNAPSHOT_CHUNK_SIZE
+                .get(self.config.lock().expect("lock poisoned").config_set()),
+        };
+
+        async move {
+            let open = move |as_of| {
+                Self::open_tail_handles(persist, metadata, id, txns_read, as_of).boxed()
+            };
+            shared_tails
+                .join(id, as_of, with_snapshot, limits, collections, open)
+                .await
+        }
+        .boxed()
+    }
+
+    /// Opens the persist handles for tailing `id` from `as_of`, see
+    /// `storage_collections::subscribe`. A txn-wal backed collection also gets
+    /// its remap subscription, which unblocks the shard at `as_of` first.
+    async fn open_tail_handles(
+        persist: Arc<PersistClientCache>,
+        metadata: CollectionMetadata,
+        id: GlobalId,
+        txns_read: Option<TxnsRead<Timestamp>>,
+        as_of: Timestamp,
+    ) -> Result<subscribe::TailHandles, StorageError> {
+        let (txns, remap_rx) = match txns_read {
+            None => (None, None),
+            Some(txns_read) => {
+                txns_read.update_gt(as_of).await;
+                let persist_client = persist
+                    .open(metadata.persist_location.clone())
+                    .await
+                    .expect("invalid persist usage");
+                let unblock = persist_client
+                    .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                        metadata.data_shard,
+                        Arc::new(metadata.relation_desc.clone()),
+                        Arc::new(UnitSchema),
+                        Diagnostics {
+                            shard_name: id.to_string(),
+                            handle_purpose: format!("subscribe unblock {id}"),
+                        },
+                    )
+                    .await
+                    .expect("invalid persist usage");
+                let remap_rx = txns_read
+                    .data_subscribe(metadata.data_shard, as_of, unblock)
+                    .await;
+                (Some((txns_read, metadata.data_shard)), Some(remap_rx))
+            }
+        };
+
+        let snapshot_handle =
+            Self::open_leased_reader(Arc::clone(&persist), &metadata, id, "subscribe snapshot")
+                .await?;
+        let listen = Self::open_leased_reader(persist, &metadata, id, "subscribe listen")
+            .await?
+            .listen(Antichain::from_elem(as_of))
+            .await
+            .map_err(|_| StorageError::ReadBeforeSince(id))?;
+        Ok(subscribe::TailHandles {
+            listen,
+            snapshot_handle,
+            remap_rx,
+            txns,
+        })
     }
 
     fn set_read_policies_inner(
@@ -1627,6 +1765,22 @@ impl StorageCollections for StorageCollectionsImpl {
         Result<BoxStream<'static, (SourceData, Timestamp, StorageDiff)>, StorageError>,
     > {
         self.snapshot_and_stream(id, as_of, &self.txns_read)
+    }
+
+    fn subscribe(
+        &self,
+        id: GlobalId,
+        as_of: Timestamp,
+        with_snapshot: bool,
+        max_buffered_bytes: usize,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, SubscribeEvent>, StorageError>> {
+        self.subscribe(
+            id,
+            as_of,
+            with_snapshot,
+            max_buffered_bytes,
+            &self.txns_read,
+        )
     }
 
     fn create_update_builder(
@@ -2425,6 +2579,7 @@ impl StorageCollections for StorageCollectionsImpl {
             finalizable_shards,
             finalized_shards,
             collections,
+            shared_tails: _,
             txns_read: _,
             config,
             initial_txn_upper,

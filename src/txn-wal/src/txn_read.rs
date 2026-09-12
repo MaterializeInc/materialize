@@ -61,8 +61,12 @@ pub struct DataSnapshot<T> {
 impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     /// Unblocks reading a snapshot at `self.as_of` by waiting for the latest
     /// write before that time and then running an empty CaA if necessary.
+    ///
+    /// Callers that read the data shard through their own persist handle, rather
+    /// than through the `snapshot_*` methods here, call this first so the shard's
+    /// physical upper is past `as_of`.
     #[instrument(level = "debug", fields(shard = %self.data_id, ts = ?self.as_of, empty_to = ?self.empty_to))]
-    pub(crate) async fn unblock_read<K, V, D>(&self, mut data_write: WriteHandle<K, V, T, D>)
+    pub async fn unblock_read<K, V, D>(&self, mut data_write: WriteHandle<K, V, T, D>)
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -398,8 +402,14 @@ impl<T: Timestamp + Lattice + Codec64 + Sync> TxnsRead<T> {
 
     /// Initiate a subscription to `data_id`.
     ///
-    /// Returns a channel that [`DataRemapEntry`]s are sent over.
-    pub(crate) async fn data_subscribe<K, V, D>(
+    /// Returns a channel that [`DataRemapEntry`]s are sent over. Before
+    /// returning, unblocks reading the data shard at `as_of` through `unblock`,
+    /// so a persist snapshot or listen of the data shard at `as_of` can proceed.
+    /// The physical upper of a txn-wal data shard only moves when a write is
+    /// applied, so a reader of the shard must combine the persist listen with
+    /// these entries to learn about logical progress in between writes, see
+    /// [`crate::operator::txns_progress`].
+    pub async fn data_subscribe<K, V, D>(
         &self,
         data_id: ShardId,
         as_of: T,

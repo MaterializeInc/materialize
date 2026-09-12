@@ -50,6 +50,19 @@ impl ActiveComputeSink {
         }
     }
 
+    /// Reports the cluster holding a compute collection under the sink's ID,
+    /// if any. A persist-tail subscribe has none, so it needs no controller
+    /// cleanup and does not depend on its cluster.
+    pub fn compute_collection_cluster(&self) -> Option<ClusterId> {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => match subscribe.execution {
+                SubscribeExecution::Dataflow => Some(subscribe.cluster_id),
+                SubscribeExecution::PersistTail => None,
+            },
+            ActiveComputeSink::CopyTo(copy_to) => Some(copy_to.cluster_id),
+        }
+    }
+
     /// Reports the ID of the connection which created the sink.
     pub fn connection_id(&self) -> Option<&ConnectionId> {
         match &self {
@@ -167,10 +180,44 @@ pub enum ActiveSubscribeOwner {
 pub struct ActiveSubscribe {
     /// The owner responsible for retiring the subscribe.
     pub owner: ActiveSubscribeOwner,
-    /// The ID of the cluster on which the subscribe is running.
+    /// The ID of the cluster the subscribe was issued on. A dataflow-executed
+    /// subscribe runs there. A persist tail uses no cluster and only reports
+    /// it in `mz_subscriptions`.
     pub cluster_id: ClusterId,
     /// The IDs of the objects on which the subscribe depends.
     pub depends_on: BTreeSet<GlobalId>,
+    /// Formats the subscribe's batches and queues them for the client.
+    pub emitter: SubscribeEmitter,
+    /// What produces the subscribe's batches.
+    pub execution: SubscribeExecution,
+    /// The time when the subscribe started.
+    pub start_time: EpochMillis,
+    /// If true, this is an internal subscribe that should not appear in
+    /// introspection tables like mz_subscriptions.
+    pub internal: bool,
+}
+
+/// What produces an [`ActiveSubscribe`]'s batches.
+#[derive(Debug)]
+pub enum SubscribeExecution {
+    /// A dataflow on the subscribe's cluster exporting a subscribe sink under
+    /// the sink ID. Its batches arrive through the compute controller.
+    Dataflow,
+    /// A stream in the session that pulls from the persist shard of the
+    /// subscribed collection as the client fetches, see
+    /// `crate::coord::persist_tail`. No compute collection exists under the
+    /// sink ID, and the coordinator reaches the client only through the
+    /// emitter's channel.
+    PersistTail,
+}
+
+/// Turns subscribe batches into client rows and queues them for delivery.
+///
+/// Clones share the client channel and the backlog accounting, so a producer
+/// running off the coordinator loop can deliver batches while the coordinator
+/// keeps its own copy for the terminal message.
+#[derive(Debug, Clone)]
+pub struct SubscribeEmitter {
     /// Channel on which to send responses to the client.
     // The responses have the form `PeekResponseUnary` but should perhaps
     // become `SubscribeResponse`.
@@ -178,27 +225,34 @@ pub struct ActiveSubscribe {
     /// Footprints of the messages queued in `channel` but not yet drained by the
     /// client writer. Shared with the receiver side, which pops as it drains.
     ///
-    /// The producer runs on the non-blockable coordinator loop and cannot block
-    /// on a slow client, so instead of applying backpressure the coordinator
-    /// watches `backlog_size` against `max_buffered_bytes` and retires the
-    /// subscribe once the backlog exceeds it.
+    /// The producer cannot block on a slow client, so instead of applying
+    /// backpressure it watches `backlog_bytes` against `max_buffered_bytes`
+    /// and retires the subscribe once the backlog exceeds it.
     pub backlog_accounting: Arc<Mutex<SubscribeBacklogAccounting>>,
     /// Budget for the buffered backlog. A snapshot of `subscribe_max_buffered_bytes`
     /// taken when the subscribe was created.
     pub max_buffered_bytes: usize,
+    pub formatter: SubscribeFormatter,
+}
+
+/// Turns subscribe batches into the rows a client sees.
+#[derive(Debug, Clone)]
+pub struct SubscribeFormatter {
     /// Whether progress information should be emitted.
     pub emit_progress: bool,
     /// The logical timestamp at which the subscribe began execution.
     pub as_of: Timestamp,
     /// The number of columns in the relation that was subscribed to.
     pub arity: usize,
-    /// The time when the subscribe started.
-    pub start_time: EpochMillis,
     /// How to present the subscribe's output.
     pub output: SubscribeOutput,
-    /// If true, this is an internal subscribe that should not appear in
-    /// introspection tables like mz_subscriptions.
-    pub internal: bool,
+}
+
+/// The client messages for one formatted batch, each with its payload size.
+pub struct FormattedBatch {
+    pub messages: Vec<(PeekResponseUnary, usize)>,
+    /// Set for the batch at the empty frontier, after which nothing follows.
+    pub finished: bool,
 }
 
 impl ActiveSubscribe {
@@ -221,18 +275,108 @@ impl ActiveSubscribe {
         }
     }
 
+    /// Retires the subscribe with the specified reason.
+    ///
+    /// This method must be called on every subscribe before it is dropped. It
+    /// informs the end client that the subscribe is finished for the specified
+    /// reason.
+    pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
+        let message = match reason {
+            ActiveComputeSinkRetireReason::Finished => return,
+            ActiveComputeSinkRetireReason::Canceled => PeekResponseUnary::Canceled,
+            ActiveComputeSinkRetireReason::DependencyDropped(d) => {
+                PeekResponseUnary::DependencyDropped(d)
+            }
+            ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes,
+                max_buffered_bytes,
+            } => PeekResponseUnary::Error(AdapterError::SubscribeFellBehind {
+                buffered_bytes,
+                max_buffered_bytes,
+            }),
+        };
+        self.emitter.send(message, 0);
+    }
+}
+
+impl SubscribeEmitter {
     /// Initializes the subscription.
     ///
-    /// This method must be called exactly once, after constructing an
-    /// `ActiveSubscribe` and before calling `process_response`.
+    /// This method must be called exactly once, after constructing a
+    /// `SubscribeEmitter` and before calling `process_response`.
     pub fn initialize(&self) {
-        // Always emit progress message indicating snapshot timestamp.
-        self.send_progress_message(&Antichain::from_elem(self.as_of));
+        if let Some((message, bytes)) = self.formatter.initial_progress() {
+            self.send(message, bytes);
+        }
     }
 
-    fn send_progress_message(&self, upper: &Antichain<Timestamp>) {
+    /// Processes a subscribe response from the controller.
+    ///
+    /// Returns `true` if the subscribe is finished.
+    pub fn process_response(&self, batch: SubscribeBatch) -> bool {
+        let formatted = self.formatter.format_batch(batch);
+        for (message, bytes) in formatted.messages {
+            self.send(message, bytes);
+        }
+        formatted.finished
+    }
+    /// Bytes queued behind the message the client is currently draining, see
+    /// [`SubscribeBacklogAccounting::backlog_size`].
+    pub fn backlog_bytes(&self) -> usize {
+        self.backlog_accounting
+            .lock()
+            .expect("subscribe backlog accounting poisoned")
+            .backlog_size()
+    }
+
+    /// The reason to retire the subscribe with if its backlog exceeds the
+    /// budget. Checked after every delivered batch, since `send` itself cannot
+    /// retire the subscribe.
+    pub fn backlog_exceeded(&self) -> Option<ActiveComputeSinkRetireReason> {
+        let buffered_bytes = self.backlog_bytes();
+        (buffered_bytes > self.max_buffered_bytes).then_some(
+            ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes,
+                max_buffered_bytes: self.max_buffered_bytes,
+            },
+        )
+    }
+
+    /// Reports an error to the client. The subscribe must be retired
+    /// afterwards, the client stops reading at the error.
+    pub fn send_error(&self, error: AdapterError) {
+        self.send(PeekResponseUnary::Error(error), 0);
+    }
+
+    /// Sends a message to the client if the subscribe has not already completed
+    /// and if the client has not already gone away.
+    ///
+    /// `bytes` is the message's payload size. Its footprint (payload plus a fixed
+    /// per-message overhead) is recorded in `backlog_accounting` here and
+    /// released by the receiver side when the message is drained. Overflow of
+    /// the budget is detected by the producer after `process_response`
+    /// returns, see `backlog_exceeded`, because this method cannot retire the
+    /// sink.
+    fn send(&self, response: PeekResponseUnary, bytes: usize) {
+        let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
+        self.backlog_accounting
+            .lock()
+            .expect("subscribe backlog accounting poisoned")
+            .push(footprint);
+        let _ = self.channel.send(response);
+    }
+}
+
+impl SubscribeFormatter {
+    /// The progress message announcing the snapshot timestamp, which every
+    /// subscribe emits first, if it emits progress at all.
+    pub fn initial_progress(&self) -> Option<(PeekResponseUnary, usize)> {
+        self.progress_message(&Antichain::from_elem(self.as_of))
+    }
+
+    fn progress_message(&self, upper: &Antichain<Timestamp>) -> Option<(PeekResponseUnary, usize)> {
         if !self.emit_progress {
-            return;
+            return None;
         }
         if let Some(upper) = upper.as_option() {
             let mut row_buf = Row::default();
@@ -256,14 +400,15 @@ impl ActiveSubscribe {
 
             let bytes = row_buf.byte_len();
             let row_iter = Box::new(row_buf.into_row_iter());
-            self.send(PeekResponseUnary::Rows(row_iter), bytes);
+            Some((PeekResponseUnary::Rows(row_iter), bytes))
+        } else {
+            None
         }
     }
 
-    /// Processes a subscribe response from the controller.
-    ///
-    /// Returns `true` if the subscribe is finished.
-    pub fn process_response(&self, batch: SubscribeBatch) -> bool {
+    /// Formats one batch into client messages, in delivery order.
+    pub fn format_batch(&self, batch: SubscribeBatch) -> FormattedBatch {
+        let mut messages = Vec::with_capacity(2);
         let comparator = RowComparator::new(self.output.row_order());
         let rows = match batch.updates {
             Ok(ref rows) => {
@@ -279,11 +424,14 @@ impl ActiveSubscribe {
                 mz_ore::iter::consolidate_update_iter(merged)
             }
             Err(s) => {
-                self.send(
+                messages.push((
                     PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::Error::msg(s))),
                     0,
-                );
-                return true;
+                ));
+                return FormattedBatch {
+                    messages,
+                    finished: true,
+                };
             }
         };
 
@@ -482,57 +630,20 @@ impl ActiveSubscribe {
         let rows = output_builder.build();
         let bytes = rows.byte_len();
         let rows = Box::new(rows.into_row_iter());
-        self.send(PeekResponseUnary::Rows(rows), bytes);
+        messages.push((PeekResponseUnary::Rows(rows), bytes));
 
         // Emit progress message if requested. Don't emit progress for the first
         // batch if the upper is exactly `as_of` (we're guaranteed it is not
         // less than `as_of`, but it might be exactly `as_of`) as we've already
-        // emitted that progress message in `initialize`.
+        // emitted that progress message in `initial_progress`.
         if !batch.upper.less_equal(&self.as_of) {
-            self.send_progress_message(&batch.upper);
+            messages.extend(self.progress_message(&batch.upper));
         }
 
-        batch.upper.is_empty()
-    }
-
-    /// Retires the subscribe with the specified reason.
-    ///
-    /// This method must be called on every subscribe before it is dropped. It
-    /// informs the end client that the subscribe is finished for the specified
-    /// reason.
-    pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
-        let message = match reason {
-            ActiveComputeSinkRetireReason::Finished => return,
-            ActiveComputeSinkRetireReason::Canceled => PeekResponseUnary::Canceled,
-            ActiveComputeSinkRetireReason::DependencyDropped(d) => {
-                PeekResponseUnary::DependencyDropped(d)
-            }
-            ActiveComputeSinkRetireReason::BufferExceeded {
-                buffered_bytes,
-                max_buffered_bytes,
-            } => PeekResponseUnary::Error(AdapterError::SubscribeFellBehind {
-                buffered_bytes,
-                max_buffered_bytes,
-            }),
-        };
-        self.send(message, 0);
-    }
-
-    /// Sends a message to the client if the subscribe has not already completed
-    /// and if the client has not already gone away.
-    ///
-    /// `bytes` is the message's payload size. Its footprint (payload plus a fixed
-    /// per-message overhead) is recorded in `backlog_accounting` here and
-    /// released by the receiver side when the message is drained. Overflow of
-    /// the budget is detected by the coordinator after `process_response`
-    /// returns, not here, because this method cannot retire the sink.
-    fn send(&self, response: PeekResponseUnary, bytes: usize) {
-        let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
-        self.backlog_accounting
-            .lock()
-            .expect("subscribe backlog accounting poisoned")
-            .push(footprint);
-        let _ = self.channel.send(response);
+        FormattedBatch {
+            messages,
+            finished: batch.upper.is_empty(),
+        }
     }
 }
 

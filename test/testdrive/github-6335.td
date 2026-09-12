@@ -16,6 +16,11 @@
 # introspection sources that take a while to update.
 
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
+
+# The cleanup under test is that of a subscribe dataflow, so keep the subscribe
+# below from being served by the persist fast path, which installs none.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_subscribe_persist_fast_path = false
 $ set-sql-timeout duration=360s
 
 # This test uses introspection queries that need to be targeted to a replica

@@ -859,7 +859,9 @@ mod tests {
     use mz_repr::{ReprRelationType, Timestamp};
     use mz_storage_client::client::TimestamplessUpdateBuilder;
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
-    use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
+    use mz_storage_client::storage_collections::{
+        CollectionFrontiers, SnapshotCursor, SubscribeEvent,
+    };
     use mz_storage_types::StorageDiff;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::errors::CollectionMissing;
@@ -976,6 +978,16 @@ mod tests {
             'static,
             Result<BoxStream<'static, (SourceData, Timestamp, StorageDiff)>, StorageError>,
         > {
+            unimplemented!()
+        }
+
+        fn subscribe(
+            &self,
+            _id: GlobalId,
+            _as_of: Timestamp,
+            _with_snapshot: bool,
+            _max_buffered_bytes: usize,
+        ) -> BoxFuture<'static, Result<BoxStream<'static, SubscribeEvent>, StorageError>> {
             unimplemented!()
         }
 

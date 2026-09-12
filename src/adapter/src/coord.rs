@@ -187,7 +187,9 @@ use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
+use crate::active_compute_sink::{
+    ActiveComputeSink, ActiveComputeSinkRetireReason, ActiveCopyFrom,
+};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
@@ -230,6 +232,7 @@ pub(crate) mod consistency;
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
+pub(crate) mod persist_tail;
 pub(crate) mod read_policy;
 pub(crate) mod read_then_write;
 pub(crate) mod sequencer;
@@ -480,6 +483,12 @@ pub enum Message {
     /// coordinator message loop from the catalog and live controller signals.
     /// See [`cluster_controller`].
     ClusterControllerRequest(cluster_controller::ClusterControllerRequest),
+    /// A persist-tail subscribe's stream has produced its last message and the
+    /// sink needs retiring. See [`persist_tail::PersistTailStream`].
+    RetireComputeSink {
+        sink_id: GlobalId,
+        reason: ActiveComputeSinkRetireReason,
+    },
 }
 
 impl Message {
@@ -591,6 +600,7 @@ impl Message {
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::ClusterControllerRequest(_) => "cluster_controller_request",
+            Message::RetireComputeSink { .. } => "retire_compute_sink",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
@@ -1124,8 +1134,26 @@ pub struct SubscribeFinish {
     cluster_id: ComputeInstanceId,
     replica_id: Option<ReplicaId>,
     plan: plan::SubscribePlan,
-    global_lir_plan: optimize::subscribe::GlobalLirPlan,
+    implementation: SubscribeImplementation,
+    /// Empty for a persist tail, which runs no optimizer.
+    df_meta: DataflowMetainfo,
     dependency_ids: BTreeSet<GlobalId>,
+}
+
+/// How a subscribe's batches get produced, decided once its timestamp is known.
+#[derive(Debug)]
+pub enum SubscribeImplementation {
+    /// Ship this dataflow, which exports a subscribe sink, to the cluster.
+    Dataflow(optimize::LirDataflowDescription),
+    /// Tail the persist shard of the subscribed collection from this process,
+    /// see [`persist_tail`]. Carries what `implement_subscribe` would otherwise
+    /// take from the dataflow description.
+    PersistTail {
+        from_id: GlobalId,
+        sink_id: GlobalId,
+        as_of: Timestamp,
+        arity: usize,
+    },
 }
 
 #[derive(Debug)]
