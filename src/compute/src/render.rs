@@ -144,10 +144,11 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::StreamExt;
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
 use timely::dataflow::operators::vec::ToStream;
@@ -169,12 +170,12 @@ use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::columnar::{
-    CollectionEdge, columnar_consolidate, columnar_negate, columnar_to_vec, concat_many,
-    vec_to_columnar,
+    CollectionEdge, RecTimestamp, columnar_consolidate, columnar_leave_dynamic, columnar_negate,
+    concat_many, flat_map_datums,
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
+use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
@@ -1017,24 +1018,16 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                     Variable::new(self.scope, Product::new(Default::default(), inner));
 
                 if variable_read.contains(id) {
-                    // The feedback `Variable` stays `Vec`, so each iteration crosses
-                    // the container boundary twice, encoded here for the readers and
-                    // decoded where the value is fed back. The encode is a stateless,
-                    // timestamp-agnostic pass-through, so it leaves the iterative
-                    // frontier and the fixpoint alone.
                     self.insert_id(
                         Id::Local(*id),
-                        CollectionBundle::from_edge(
-                            vec_to_columnar(oks_collection),
-                            err_collection,
-                        ),
+                        CollectionBundle::from_edge(oks_collection, err_collection),
                     );
                 }
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
-            // The decoded value is kept so the extraction below reuses it rather than
-            // decoding the same stream twice.
-            let mut decoded_oks = BTreeMap::new();
+            // The bound value is kept so the extraction below reuses it rather than
+            // reaching back into a bundle that forward reads have since collapsed.
+            let mut bound_oks = BTreeMap::new();
             let mut rec_iter = recs.into_iter().peekable();
             while let Some(RecBind { id, value, limit }) = rec_iter.next() {
                 let last = rec_iter.peek().is_none();
@@ -1043,8 +1036,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
-                let oks = columnar_to_vec(oks);
-                decoded_oks.insert(id, oks.clone());
+                bound_oks.insert(id, oks.clone());
                 // Collapses what forward reads see. `err_v` below feeds reads rendered before this
                 // binding and is collapsed separately; without this, a `Get` in a later rec binding
                 // or in the body resolves to the bundle stored here and compounds level over level,
@@ -1054,10 +1046,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                    oks,
-                    "LetRecConsolidation",
-                );
+                let mut oks = columnar_consolidate(oks, "LetRecConsolidation");
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
@@ -1069,13 +1058,31 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                             // The pointstamp starts counting from 0, so we need to add 1.
                             iteration_index + 1 >= limit.max_iters.into()
                         });
-                    oks = VecCollection::new(in_limit);
+                    oks = Collection::new(in_limit);
                     if !limit.return_at_limit {
-                        err = err.concat(VecCollection::new(over_limit).map(move |_data| {
-                            DataflowErrorSer::from(EvalError::LetRecLimitExceeded(
-                                format!("{}", limit.max_iters.get()).into(),
-                            ))
-                        }));
+                        // One error per record that passed the limit, replacing the record.
+                        // `flat_map_datums` reads the record without decoding it, and the ok
+                        // side stays empty, so the builder it names never ships a container.
+                        let (_, over_limit) = flat_map_datums::<
+                            _,
+                            CapacityContainerBuilder<Vec<(Row, RecTimestamp, Diff)>>,
+                            _,
+                        >(
+                            Collection::new(over_limit),
+                            "LetRecLimitExceeded",
+                            0,
+                            move |_datums, time, diff, _ok_session, err_session| {
+                                err_session.give((
+                                    DataflowErrorSer::from(EvalError::LetRecLimitExceeded(
+                                        format!("{}", limit.max_iters.get()).into(),
+                                    )),
+                                    time,
+                                    diff,
+                                ));
+                                1
+                            },
+                        );
+                        err = err.concat(over_limit.as_collection());
                     }
                 }
 
@@ -1105,15 +1112,13 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
                 let (_, err) = bundle.collection.unwrap();
-                let oks = decoded_oks
+                let oks = bound_oks
                     .remove(&id)
-                    .expect("rec binding decoded while rendering above");
-                // `leave_dynamic` has already stripped the iteration coordinate, so
-                // this encode runs in the parent scope.
+                    .expect("rec binding bound while rendering above");
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_edge(
-                        vec_to_columnar(oks.leave_dynamic(level + 1)),
+                        columnar_leave_dynamic(oks, level + 1),
                         err.leave_dynamic(level + 1),
                     ),
                 );

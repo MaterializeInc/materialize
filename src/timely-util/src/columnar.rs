@@ -34,8 +34,9 @@ use columnar::common::IterOwn;
 use columnar::{Clear, FromBytes, Index, Len};
 use columnar::{Columnar, Ref};
 use differential_dataflow::Hashable;
-use differential_dataflow::collection::containers::Enter;
+use differential_dataflow::collection::containers::{Enter, ResultsIn};
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use itertools::Itertools;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto, SizableContainer};
@@ -240,6 +241,77 @@ where
                 Column::Align(alloc)
             }
         }
+    }
+}
+
+/// Advances a column's times by `step`, so a columnar collection can be a loop variable.
+///
+/// A time that the summary does not advance drops its record, so the data and diff columns
+/// cannot move across whole the way [`Enter`] moves them: a record's position in one column
+/// has to keep matching its position in the others. The times are read and advanced first,
+/// and the rest is rebuilt only when the step actually dropped something.
+impl<D, T, R> ResultsIn<T::Summary> for Column<(D, T, R)>
+where
+    D: Columnar,
+    T: Columnar + Timestamp,
+    R: Columnar,
+    (D, T, R): Columnar<Container = (D::Container, T::Container, R::Container)>,
+    for<'a> D::Container: columnar::Push<Ref<'a, D>>,
+    for<'a> T::Container: columnar::Push<&'a T>,
+    for<'a> R::Container: columnar::Push<Ref<'a, R>>,
+{
+    fn results_in(self, step: &T::Summary) -> Self {
+        use columnar::Push;
+        use timely::progress::PathSummary;
+
+        // Advance the times first. Whether the step dropped any record decides whether the
+        // data and diff columns still line up with the new times, which is what lets them
+        // be reused rather than rebuilt.
+        let (times, kept) = {
+            let (_, borrowed_times, _) = self.borrow();
+            let mut times = T::Container::default();
+            let kept: Vec<bool> = borrowed_times
+                .into_index_iter()
+                .map(|time| match step.results_in(&T::into_owned(time)) {
+                    Some(time) => {
+                        times.push(&time);
+                        true
+                    }
+                    None => false,
+                })
+                .collect();
+            (times, kept)
+        };
+
+        if kept.iter().all(|kept| *kept) {
+            return match self {
+                // Only the times changed, so the data and diff columns move across whole.
+                Column::Typed((data, _, diffs)) => Column::Typed((data, times, diffs)),
+                // A serialized column owns no typed sub-containers, so its data and diff
+                // columns go from their borrowed views straight into the output allocation.
+                serialized => {
+                    let (borrowed_data, _, borrowed_diffs) = serialized.borrow();
+                    let view = (borrowed_data, times.borrow(), borrowed_diffs);
+                    let words = indexed::length_in_words(&view);
+                    let mut alloc: Vec<u64> = Vec::with_capacity(words);
+                    indexed::encode(&mut alloc, &view);
+                    Column::Align(alloc)
+                }
+            };
+        }
+
+        let (borrowed_data, _, borrowed_diffs) = self.borrow();
+        let mut data = D::Container::default();
+        let mut diffs = R::Container::default();
+        let records = borrowed_data
+            .into_index_iter()
+            .zip_eq(borrowed_diffs.into_index_iter())
+            .zip_eq(kept.iter());
+        for ((datum, diff), _) in records.filter(|(_, kept)| **kept) {
+            data.push(datum);
+            diffs.push(diff);
+        }
+        Column::Typed((data, times, diffs))
     }
 }
 
