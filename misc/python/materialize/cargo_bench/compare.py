@@ -14,7 +14,7 @@ itself never fails a run on a regression, so the verdict logic lives here.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -22,6 +22,7 @@ from typing import Any
 
 class Verdict(Enum):
     REGRESSION = "regression"
+    UNCONFIRMED = "unconfirmed"
     IMPROVEMENT = "improvement"
     UNCHANGED = "unchanged"
     NEW = "new"
@@ -43,6 +44,9 @@ class BenchResult:
     change_lower: float | None
     change_upper: float | None
     verdict: Verdict
+    # Relative mean change on the confirmation rerun, set only for benchmarks
+    # that regressed in the first round and were measured again.
+    rerun_change: float | None = None
 
 
 @dataclass(frozen=True)
@@ -57,10 +61,19 @@ class CompareReport:
 
 _VERDICT_ORDER = {
     Verdict.REGRESSION: 0,
-    Verdict.IMPROVEMENT: 1,
-    Verdict.UNCHANGED: 2,
-    Verdict.NEW: 3,
+    Verdict.UNCONFIRMED: 1,
+    Verdict.IMPROVEMENT: 2,
+    Verdict.UNCHANGED: 3,
+    Verdict.NEW: 4,
 }
+
+
+def _sorted(results: list[BenchResult]) -> list[BenchResult]:
+    def sort_key(r: BenchResult) -> tuple[int, float, str]:
+        change = r.change_mean if r.change_mean is not None else 0.0
+        return (_VERDICT_ORDER[r.verdict], -change, r.id)
+
+    return sorted(results, key=sort_key)
 
 
 def _load(path: Path) -> Any:
@@ -134,12 +147,38 @@ def compare(criterion_dir: Path, threshold: float) -> CompareReport:
             )
         )
 
-    def sort_key(r: BenchResult) -> tuple[int, float, str]:
-        change = r.change_mean if r.change_mean is not None else 0.0
-        return (_VERDICT_ORDER[r.verdict], -change, r.id)
+    return CompareReport(_sorted(results), warnings)
 
-    results.sort(key=sort_key)
-    return CompareReport(results, warnings)
+
+def confirm(first: CompareReport, rerun: CompareReport) -> CompareReport:
+    """Keep a regression from `first` only if `rerun` measured the same benchmark as a regression too.
+
+    A regression that the rerun does not reproduce becomes `UNCONFIRMED`,
+    which never fails the step. Rows that never regressed pass through
+    untouched. `rerun` is expected to contain only the benchmarks that
+    regressed in `first`, so a benchmark missing from it is a rerun that
+    did not happen or did not produce a result, and is reported with a
+    warning rather than trusted.
+    """
+    by_id = {r.id: r for r in rerun.results}
+    results = []
+    warnings = list(first.warnings) + list(rerun.warnings)
+    for r in first.results:
+        if r.verdict != Verdict.REGRESSION:
+            results.append(r)
+            continue
+        again = by_id.get(r.id)
+        if again is None:
+            warnings.append(f"{r.id}: regression was not measured again on the rerun")
+            results.append(replace(r, verdict=Verdict.UNCONFIRMED))
+            continue
+        verdict = (
+            Verdict.REGRESSION
+            if again.verdict == Verdict.REGRESSION
+            else Verdict.UNCONFIRMED
+        )
+        results.append(replace(r, verdict=verdict, rerun_change=again.change_mean))
+    return CompareReport(_sorted(results), warnings)
 
 
 def format_duration(ns: float) -> str:
@@ -157,8 +196,8 @@ def _pct(value: float) -> str:
 def render_markdown(report: CompareReport) -> str:
     """Render the results as a markdown table, one row per benchmark."""
     lines = [
-        "| Benchmark | Ancestor | Current | Change | 95% CI | Verdict |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Benchmark | Ancestor | Current | Change | 95% CI | Rerun | Verdict |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in report.results:
         ancestor = (
@@ -172,10 +211,11 @@ def render_markdown(report: CompareReport) -> str:
             if r.change_lower is not None and r.change_upper is not None
             else ""
         )
+        rerun = _pct(r.rerun_change) if r.rerun_change is not None else ""
         verdict = r.verdict.value
         if r.verdict == Verdict.REGRESSION:
             verdict = f"**{verdict}**"
         lines.append(
-            f"| {r.id} | {ancestor} | {format_duration(r.current_mean_ns)} | {change} | {ci} | {verdict} |"
+            f"| {r.id} | {ancestor} | {format_duration(r.current_mean_ns)} | {change} | {ci} | {rerun} | {verdict} |"
         )
     return "\n".join(lines)
