@@ -73,6 +73,7 @@ use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
 use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
+use crate::peek_registry::FrontendPeekRegistry;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -125,6 +126,10 @@ pub struct Client {
     metrics: Metrics,
     environment_id: EnvironmentId,
     segment_client: Option<mz_segment::Client>,
+    /// Registry of in-flight frontend-sequenced peeks, shared with the
+    /// coordinator. Each session's `PeekClient` registers and unregisters its
+    /// peeks here directly, off the coordinator task.
+    frontend_peek_registry: Arc<FrontendPeekRegistry>,
 }
 
 impl Client {
@@ -135,6 +140,7 @@ impl Client {
         now: NowFn,
         environment_id: EnvironmentId,
         segment_client: Option<mz_segment::Client>,
+        frontend_peek_registry: Arc<FrontendPeekRegistry>,
     ) -> Client {
         // Connection ids are 32 bits and have 3 parts.
         // 1. MSB bit is always 0 because these are interpreted as an i32, and it is possible some
@@ -152,6 +158,7 @@ impl Client {
             metrics,
             environment_id,
             segment_client,
+            frontend_peek_registry,
         }
     }
 
@@ -324,6 +331,7 @@ impl Client {
             frontend_read_then_write_enabled,
             group_commit_notifier,
             read_only,
+            Arc::clone(&self.frontend_peek_registry),
         );
 
         let mut client = SessionClient {
@@ -1370,6 +1378,7 @@ impl SessionClient {
                 | Command::LookupConnection { .. }
                 | Command::RegisterFrontendPeek { .. }
                 | Command::UnregisterFrontendPeek { .. }
+                | Command::InstallPeekWatchSets { .. }
                 | Command::ExplainTimestamp { .. }
                 | Command::FrontendStatementLogging(..)
                 | Command::InjectAuditEvents { .. }
