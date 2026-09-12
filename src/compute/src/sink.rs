@@ -16,6 +16,10 @@ mod correction;
 pub mod correction_v2;
 #[cfg(not(feature = "bench"))]
 mod correction_v2;
+#[cfg(feature = "bench")]
+pub mod correction_workload;
+#[cfg(all(test, not(feature = "bench")))]
+mod correction_workload;
 mod materialized_view;
 mod materialized_view_v2;
 mod metric_sink;

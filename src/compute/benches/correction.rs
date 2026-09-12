@@ -7,15 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Micro-benchmark comparing `CorrectionV1` and `CorrectionV2` on hydration-style
-//! workloads, i.e., workloads where the input catches up with the current time by
-//! passing through many distinct timestamps.
+//! Micro-benchmark comparing `CorrectionV1` and `CorrectionV2` on the hydration-style workloads
+//! from `mz_compute::sink::correction_workload`.
 //!
-//! The scenario this models: an MV sink restarts with an old as-of and the desired
-//! input replays through `T` distinct timestamps while persist writes (and thus
-//! `advance_since`/`updates_before` calls) trail behind. Reads and since advancement
-//! must only do work proportional to the drained slice, otherwise the catch-up
-//! degenerates into quadratic behavior in `T`.
+//! Wall-clock is the measurement here. The deterministic complexity guard for the same workloads
+//! lives in the `correction_v2` unit tests, which count structural work instead of time.
 //!
 //! Run with:
 //!
@@ -32,10 +28,11 @@ use criterion::{
 };
 use mz_compute::sink::correction::CorrectionV1;
 use mz_compute::sink::correction_v2::CorrectionV2;
+use mz_compute::sink::correction_workload::{Pattern, make_batches};
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::{Metrics, SinkMetrics};
-use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 use timely::progress::Antichain;
 
 /// Default value of `compute_correction_v2_chain_proportionality`.
@@ -44,12 +41,6 @@ const CHAIN_PROPORTIONALITY: f64 = 3.0;
 const CHUNK_SIZE: usize = 8 * 1024;
 /// Default value of `consolidating_vec_growth_dampener`.
 const GROWTH_DAMPENER: usize = 1;
-
-/// Number of updates inserted per distinct timestamp.
-const UPDATES_PER_TS: u64 = 16;
-
-/// Time offset of far-future retractions in the temporal-filter pattern.
-const TEMPORAL_OFFSET: u64 = 1 << 40;
 
 #[derive(Clone, Copy)]
 enum Version {
@@ -114,31 +105,6 @@ impl Corr {
     }
 }
 
-/// The shape of the update stream fed into the correction buffer.
-#[derive(Clone, Copy)]
-enum Pattern {
-    /// Every timestamp appends new, distinct rows. Nothing consolidates away.
-    Append,
-    /// Every timestamp updates the same set of keys: an addition for the new value and a
-    /// retraction of the previous one. Retraction-heavy, consolidates down to a small set.
-    Upsert,
-    /// Every timestamp appends new rows accompanied by their far-future retractions, and deletes
-    /// the previous timestamp's rows, retracting now and re-adding the far-future retraction at a
-    /// slightly different future time. Models an MV behind a temporal filter (e.g. a last-30-days
-    /// view): an ever-growing mass of far-future updates that never participates in reads.
-    TemporalFilter,
-}
-
-impl Pattern {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Append => "append",
-            Self::Upsert => "upsert",
-            Self::TemporalFilter => "temporal_filter",
-        }
-    }
-}
-
 fn sink_metrics() -> SinkMetrics {
     let registry = MetricsRegistry::new();
     let metrics = Metrics::new(&PersistConfig::new_for_tests(), &registry);
@@ -161,59 +127,6 @@ fn make_correction(version: Version, metrics: &SinkMetrics) -> Corr {
             CHUNK_SIZE,
         )),
     }
-}
-
-fn row(key: u64, value: u64) -> Row {
-    let payload = format!("payload-{value:016}");
-    Row::pack_slice(&[Datum::UInt64(key), Datum::String(&payload)])
-}
-
-/// Generate one batch of updates per distinct timestamp `0..num_ts`.
-fn make_batches(num_ts: u64, pattern: Pattern) -> Vec<Vec<(Row, Timestamp, Diff)>> {
-    (0..num_ts)
-        .map(|t| {
-            let time = Timestamp::from(t);
-            match pattern {
-                Pattern::Append => (0..UPDATES_PER_TS)
-                    .map(|i| (row(t * UPDATES_PER_TS + i, t), time, Diff::ONE))
-                    .collect(),
-                Pattern::Upsert => (0..UPDATES_PER_TS / 2)
-                    .flat_map(|key| {
-                        let addition = (row(key, t), time, Diff::ONE);
-                        let retraction = t
-                            .checked_sub(1)
-                            .map(|prev| (row(key, prev), time, -Diff::ONE));
-                        std::iter::once(addition).chain(retraction)
-                    })
-                    .collect(),
-                Pattern::TemporalFilter => (0..UPDATES_PER_TS / 4)
-                    .flat_map(|i| {
-                        let key = t * (UPDATES_PER_TS / 4) + i;
-                        // New row, plus its retraction when the temporal filter window closes.
-                        let this = [
-                            (row(key, t), time, Diff::ONE),
-                            (
-                                row(key, t),
-                                Timestamp::from(t + TEMPORAL_OFFSET),
-                                -Diff::ONE,
-                            ),
-                        ];
-                        // Delete the previous timestamp's row: retract it now and cancel its
-                        // window-close retraction. The cancellation lands at a different future
-                        // time than the original retraction, so the far-future mass grows.
-                        let prev = t.checked_sub(1).map(|p| {
-                            let key = p * (UPDATES_PER_TS / 4) + i;
-                            [
-                                (row(key, p), time, -Diff::ONE),
-                                (row(key, p), Timestamp::from(t + TEMPORAL_OFFSET), Diff::ONE),
-                            ]
-                        });
-                        this.into_iter().chain(prev.into_iter().flatten())
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
 }
 
 /// Fill a fresh correction buffer with all batches, mimicking desired input that has
@@ -310,7 +223,7 @@ fn bench_correction(c: &mut Criterion) {
     let metrics = sink_metrics();
     let num_ts_values = [1024, 4096, 16384];
 
-    for pattern in [Pattern::Append, Pattern::Upsert, Pattern::TemporalFilter] {
+    for pattern in Pattern::ALL {
         let mut group = c.benchmark_group(format!("correction_drain_stepwise/{}", pattern.name()));
         configure(&mut group);
         for num_ts in num_ts_values {
