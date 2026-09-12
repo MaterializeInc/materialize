@@ -10,7 +10,9 @@
 //! Columnar dataflow edge support.
 //!
 //! Defines [`CollectionEdge`], the columnar batch representation that dataflow
-//! edges between Plan nodes carry. Every producer emits this representation.
+//! edges between Plan nodes carry. Every producer emits this representation, and
+//! so does the feedback edge of a recursive binding, so an iteration costs no
+//! conversion.
 //!
 //! Within a Plan node, operators may freely materialize `Vec` collections. Only
 //! the collection edge format is constrained. A node that produces a row-based
@@ -19,6 +21,44 @@
 //! via [`columnar_to_vec`]. Both are named operators (`VecToColumnar`,
 //! `ColumnarToVec`), so those leaf seams stay visible in dataflow
 //! introspection.
+//!
+//! # Which consumers need a decode
+//!
+//! A consumer that reads a record's datums and packs a fresh row only ever borrows
+//! its input, so it reads the edge directly through [`flat_map_datums`] and the
+//! decode would buy it nothing. A decode earns its owned [`Row`] per record only
+//! where the consumer keeps that row. Reaching for [`columnar_to_vec`] without
+//! checking which of the two a consumer is was the mistake this rule exists to
+//! prevent.
+//!
+//! # Where `Vec` remains
+//!
+//! The cases below are not oversights. Each is either not ours to choose or waiting
+//! on a change elsewhere, and all are tracked on CPU-253.
+//!
+//! * **Reduce and TopK internals.** Both render their stages over `Vec`
+//!   collections, so their inputs decode and their outputs re-encode. These are
+//!   worth removing and are not structural. They are also not a single change: the
+//!   stages hand intermediate results to differential operators that would need to
+//!   take a container builder first, and converting one stage at a time would
+//!   replace one decode with several.
+//! * **Sinks.** A sink serializes every row it writes, so materializing the row is
+//!   the output format's requirement rather than a container choice.
+//! * **The `DifferentialDataflow` linear-join arm.** `join_core` returns a
+//!   `VecCollection` and takes no container builder, so that arm re-encodes what it
+//!   produces. Structural until differential offers the builder.
+//! * **The error half of a [`CollectionBundle`].** Errors travel as a
+//!   `VecCollection`. In a healthy dataflow that path carries no records, so
+//!   uniformity is the whole argument for converting it, against a change that
+//!   reaches every render signature. The question becomes real at the ok/err demux
+//!   inside the joins, which is the first consumer that would want both halves
+//!   columnar.
+//! * **Monotonic monoids.** `Top1Monoid` and `ReductionMonoid` carry owned rows
+//!   inside the *diff*, for in-place aggregation within a timestamp. That is an
+//!   arrangement's diff type rather than a channel's container, so the rule here
+//!   does not reach it.
+//!
+//! [`CollectionBundle`]: crate::render::context::CollectionBundle
 
 use columnar::{Borrow, Columnar, Container, Index, Len, Push};
 use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
