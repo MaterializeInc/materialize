@@ -380,6 +380,17 @@ impl Coordinator {
                     let _ = tx.send(self.controller.compute.instance_client(instance_id));
                 }
 
+                Command::AcquireClientReadProtection {
+                    incarnation,
+                    bundle,
+                    tx,
+                } => {
+                    let result = self
+                        .acquire_client_read_protection(incarnation, bundle)
+                        .await;
+                    let _ = tx.send(result);
+                }
+
                 Command::GetOracle { timeline, tx } => {
                     let oracle = self
                         .global_timelines
@@ -951,6 +962,7 @@ impl Coordinator {
                     session_defaults,
                     catalog,
                     storage_collections: Arc::clone(&self.controller.storage_collections),
+                    query_client: self.query_client.clone(),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
@@ -1901,7 +1913,7 @@ impl Coordinator {
             // It's important that we acquire read holds _before_ we determine the least valid read.
             // Otherwise, we're not guaranteed that the since frontier doesn't
             // advance forward from underneath us.
-            let read_holds = self.acquire_read_holds(&ids);
+            let read_holds = self.acquire_query_read_holds(&ids).await?;
 
             // Does `mz_now()` occur?
             let mz_now_ts = if cmvs

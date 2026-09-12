@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use maplit::{btreemap, btreeset};
-use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::SYSTEM_CONN_ID;
@@ -32,21 +31,20 @@ use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
-    self, DEFAULT_TIMESTAMP_INTERVAL, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
-    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
-    MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
-    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
+    MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES,
+    MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS, MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES,
+    MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
+    MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS,
+    MAX_TABLES, SystemVars, Var,
 };
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
@@ -59,7 +57,7 @@ use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
-use crate::{AdapterError, ExecuteContext, catalog, flags};
+use crate::{AdapterError, ExecuteContext, catalog};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].
@@ -104,7 +102,7 @@ impl Coordinator {
     {
         let start = Instant::now();
 
-        let (table_updates, catalog_updates) = self
+        let (table_updates, catalog_updates, _created_clients) = self
             .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
 
@@ -193,11 +191,24 @@ impl Coordinator {
         ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
+        self.catalog_transact_with_results(conn_id, ctx, ops)
+            .await
+            .map(|_| ())
+    }
+
+    /// Commits and applies catalog effects, returning client identities allocated by the batch.
+    pub(crate) async fn catalog_transact_with_results(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        ctx: Option<&mut ExecuteContext>,
+        ops: Vec<catalog::Op>,
+    ) -> Result<Vec<u64>, AdapterError> {
         let start = Instant::now();
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
-        let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
+        let (table_updates, catalog_updates, created_clients) =
+            self.catalog_transact_inner(conn_id, ops).await?;
 
         let table_updates_wait = self
             .metrics
@@ -246,7 +257,7 @@ impl Coordinator {
             .with_label_values(&["catalog_transact_with_context"])
             .observe(start.elapsed().as_secs_f64());
 
-        Ok(())
+        Ok(created_clients)
     }
 
     /// Executes a Catalog transaction with handling if the provided [`Session`]
@@ -399,8 +410,69 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_inner(
         &mut self,
         conn_id: Option<&ConnectionId>,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>, Vec<u64>), AdapterError> {
+        let metadata_only = ops.iter().all(|op| {
+            matches!(
+                op,
+                catalog::Op::SetReadProtection { .. }
+                    | catalog::Op::CreateClientIncarnation
+                    | catalog::Op::PublishClientReadRequirements { .. }
+                    | catalog::Op::ReclaimClientIncarnation { .. }
+            )
+        });
+        loop {
+            let revision = self.catalog().transient_revision();
+            match self.catalog_transact_attempt(conn_id, ops.clone()).await {
+                Err(AdapterError::Catalog(error))
+                    if matches!(
+                        &error.kind,
+                        mz_catalog::memory::error::ErrorKind::Durable(
+                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                        )
+                    ) =>
+                {
+                    let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
+                    let builtin = self
+                        .catalog()
+                        .state()
+                        .resolve_builtin_table_updates(builtin);
+                    let notify = self.builtin_table_update().execute(builtin);
+                    match mz_ore::future::OreFutureExt::ore_catch_unwind(
+                        std::panic::AssertUnwindSafe(Box::pin(
+                            self.apply_catalog_implications(None, updates),
+                        )),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => mz_ore::halt!(
+                            "cannot enact committed catalog changes, restart required: {error}"
+                        ),
+                        Err(payload) => {
+                            let cause = mz_ore::panic::downcast_panic_message(&*payload);
+                            mz_ore::halt!(
+                                "cannot enact committed catalog changes, restart required: {cause}"
+                            )
+                        }
+                    }
+                    notify.await;
+                    if !metadata_only && self.catalog().transient_revision() != revision {
+                        return Err(AdapterError::DDLTransactionRace);
+                    }
+                    // Rebuild the transaction, including admission checks, against
+                    // the refreshed state. Never replay a stale durable batch.
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn catalog_transact_attempt(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
-    ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
+    ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>, Vec<u64>), AdapterError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
@@ -419,18 +491,6 @@ impl Coordinator {
         let mut cluster_replicas_to_drop = vec![];
         let mut clusters_to_create = vec![];
         let mut cluster_replicas_to_create = vec![];
-        let mut update_metrics_config = false;
-        let mut update_tracing_config = false;
-        let mut update_controller_config = false;
-        let mut update_compute_config = false;
-        let mut update_storage_config = false;
-        let mut update_timestamp_oracle_config = false;
-        let mut update_metrics_retention = false;
-        let mut update_secrets_caching_config = false;
-        let mut update_cluster_scheduling_config = false;
-        let mut update_http_config = false;
-        let mut update_advance_timelines_interval = false;
-        let mut update_optimizer_e2e_latency_warning_threshold = false;
 
         for op in &ops {
             match op {
@@ -455,55 +515,6 @@ impl Coordinator {
                             _ => (),
                         }
                     }
-                }
-                catalog::Op::ResetSystemConfiguration { name }
-                | catalog::Op::UpdateSystemConfiguration { name, .. } => {
-                    update_metrics_config |= self
-                        .catalog
-                        .state()
-                        .system_config()
-                        .is_metrics_config_var(name);
-                    update_tracing_config |= vars::is_tracing_var(name);
-                    update_controller_config |= self
-                        .catalog
-                        .state()
-                        .system_config()
-                        .is_controller_config_var(name);
-                    update_compute_config |= self
-                        .catalog
-                        .state()
-                        .system_config()
-                        .is_compute_config_var(name);
-                    update_storage_config |= self
-                        .catalog
-                        .state()
-                        .system_config()
-                        .is_storage_config_var(name);
-                    update_timestamp_oracle_config |= vars::is_timestamp_oracle_config_var(name);
-                    update_metrics_retention |= name == vars::METRICS_RETENTION.name();
-                    update_secrets_caching_config |= vars::is_secrets_caching_var(name);
-                    update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
-                    update_http_config |= vars::is_http_config_var(name);
-                    update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
-                    update_optimizer_e2e_latency_warning_threshold |=
-                        name == vars::OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD.name();
-                }
-                catalog::Op::ResetAllSystemConfiguration => {
-                    // Assume they all need to be updated.
-                    // We could see if the config's have actually changed, but
-                    // this is simpler.
-                    update_tracing_config = true;
-                    update_controller_config = true;
-                    update_compute_config = true;
-                    update_storage_config = true;
-                    update_timestamp_oracle_config = true;
-                    update_metrics_retention = true;
-                    update_secrets_caching_config = true;
-                    update_cluster_scheduling_config = true;
-                    update_metrics_config = true;
-                    update_http_config = true;
-                    update_advance_timelines_interval = true;
-                    update_optimizer_e2e_latency_warning_threshold = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
@@ -607,6 +618,7 @@ impl Coordinator {
             builtin_table_updates,
             catalog_updates,
             audit_events,
+            created_client_incarnations,
         } = catalog
             .transact(
                 Some(&mut controller.storage_collections),
@@ -657,51 +669,6 @@ impl Coordinator {
             if !webhook_sources_to_restart.is_empty() {
                 self.restart_webhook_sources(webhook_sources_to_restart);
             }
-
-            if update_metrics_config {
-                mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
-            }
-            if update_controller_config {
-                self.update_controller_config();
-            }
-            if update_compute_config {
-                self.update_compute_config();
-            }
-            if update_storage_config {
-                self.update_storage_config();
-            }
-            if update_timestamp_oracle_config {
-                self.update_timestamp_oracle_config();
-            }
-            if update_metrics_retention {
-                self.update_metrics_retention();
-            }
-            if update_tracing_config {
-                self.update_tracing_config();
-            }
-            if update_secrets_caching_config {
-                self.update_secrets_caching_config();
-            }
-            if update_cluster_scheduling_config {
-                self.update_cluster_scheduling_config();
-            }
-            if update_http_config {
-                self.update_http_config();
-            }
-            if update_advance_timelines_interval {
-                let new_interval = self.catalog().system_config().default_timestamp_interval();
-                if new_interval != self.advance_timelines_interval.period() {
-                    self.advance_timelines_interval = tokio::time::interval(new_interval);
-                }
-            }
-            if update_optimizer_e2e_latency_warning_threshold {
-                let threshold = self
-                    .catalog()
-                    .system_config()
-                    .optimizer_e2e_latency_warning_threshold();
-                self.optimizer_metrics
-                    .set_e2e_optimization_time_log_threshold(threshold);
-            }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
         .await;
@@ -733,7 +700,11 @@ impl Coordinator {
             .with_label_values(&["finalize"])
             .observe(finalize_start.elapsed().as_secs_f64());
 
-        Ok((builtin_update_notify, catalog_updates))
+        Ok((
+            builtin_update_notify,
+            catalog_updates,
+            created_client_incarnations,
+        ))
     }
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
@@ -820,6 +791,14 @@ impl Coordinator {
         let mut by_id = BTreeMap::new();
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for sink_id in sink_ids {
+            let query_execution = self
+                .active_compute_sinks
+                .get_mut(&sink_id)
+                .and_then(|sink| sink.query_execution_mut().take());
+            let query_owned = query_execution.is_some();
+            // Release installed and pending query work before waiting on catalog
+            // bookkeeping. Only its owning connection may compact these exports.
+            drop(query_execution);
             let (sink, write_notify) = match self.remove_active_compute_sink(sink_id).await {
                 None => {
                     // This can happen due to a race condition: an internal
@@ -832,10 +811,12 @@ impl Coordinator {
                 Some(entry) => entry,
             };
 
-            by_cluster
-                .entry(sink.cluster_id())
-                .or_default()
-                .push(sink_id);
+            if !query_owned {
+                by_cluster
+                    .entry(sink.cluster_id())
+                    .or_default()
+                    .push(sink_id);
+            }
             by_id.insert(sink_id, (sink, write_notify));
         }
         for (cluster_id, ids) in by_cluster {
@@ -1008,90 +989,6 @@ impl Coordinator {
         self.catalog_transact_with_context(Some(conn_id), None, vec![op])
             .await
             .expect("unable to drop temporary items for conn_id");
-    }
-
-    fn update_cluster_scheduling_config(&self) {
-        let config = flags::orchestrator_scheduling_config(self.catalog.system_config());
-        self.controller
-            .update_orchestrator_scheduling_config(config);
-    }
-
-    fn update_secrets_caching_config(&self) {
-        let config = flags::caching_config(self.catalog.system_config());
-        self.caching_secrets_reader.set_policy(config);
-    }
-
-    fn update_tracing_config(&self) {
-        let tracing = flags::tracing_config(self.catalog().system_config());
-        tracing.apply(&self.tracing_handle);
-    }
-
-    fn update_compute_config(&mut self) {
-        let config_params = flags::compute_config(self.catalog().system_config());
-        self.controller.compute.update_configuration(config_params);
-    }
-
-    fn update_storage_config(&mut self) {
-        let config_params = flags::storage_config(self.catalog().system_config());
-        self.controller.storage.update_parameters(config_params);
-    }
-
-    fn update_timestamp_oracle_config(&self) {
-        let config_params = flags::timestamp_oracle_config(self.catalog().system_config());
-        if let Some(config) = self.timestamp_oracle_config.as_ref() {
-            config.apply_parameters(config_params)
-        }
-    }
-
-    fn update_metrics_retention(&self) {
-        let duration = self.catalog().system_config().metrics_retention();
-        let policy = ReadPolicy::lag_writes_by(
-            Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
-                tracing::error!("Absurd metrics retention duration: {duration:?}.");
-                u64::MAX
-            })),
-            SINCE_GRANULARITY,
-        );
-        let storage_policies = self
-            .catalog()
-            .entries()
-            .filter(|entry| {
-                entry.item().is_retained_metrics_object()
-                    && entry.item().is_compute_object_on_cluster().is_none()
-            })
-            .map(|entry| (entry.id(), policy.clone()))
-            .collect::<Vec<_>>();
-        let compute_policies = self
-            .catalog()
-            .entries()
-            .filter_map(|entry| {
-                if let (true, Some(cluster_id)) = (
-                    entry.item().is_retained_metrics_object(),
-                    entry.item().is_compute_object_on_cluster(),
-                ) {
-                    Some((cluster_id, entry.id(), policy.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        self.update_storage_read_policies(storage_policies);
-        self.update_compute_read_policies(compute_policies);
-    }
-
-    fn update_controller_config(&mut self) {
-        let sys_config = self.catalog().system_config();
-        self.controller
-            .update_configuration(sys_config.dyncfg_updates());
-    }
-
-    fn update_http_config(&mut self) {
-        let webhook_request_limit = self
-            .catalog()
-            .system_config()
-            .webhook_concurrent_request_limit();
-        self.webhook_concurrency_limit
-            .set_limit(webhook_request_limit);
     }
 
     pub(crate) async fn create_storage_export(
@@ -1402,6 +1299,9 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::SetReadProtection { .. }
+                | Op::CreateClientIncarnation
+                | Op::PublishClientReadRequirements { .. }
+                | Op::ReclaimClientIncarnation { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}

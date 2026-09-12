@@ -35,7 +35,6 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{
     AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig,
 };
-#[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
     BootstrapArgs, DurableCatalogState, STORAGE_USAGE_ID_ALLOC_KEY, TestCatalogStateBuilder,
@@ -100,7 +99,6 @@ pub use crate::catalog::transact::{
 };
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
-#[cfg(test)]
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Portal, PreparedStatement, Session};
 use crate::util::ResultExt;
@@ -754,6 +752,19 @@ impl Catalog {
         self.storage().await.current_upper().await
     }
 
+    /// Returns the catalog-owned transaction WAL identity after storage initialization.
+    pub(crate) async fn txn_wal_shard(&self) -> Result<mz_persist_client::ShardId, AdapterError> {
+        use mz_storage_client::controller::StorageTxn;
+        let mut storage = self.storage().await;
+        let transaction = storage.transaction().await?;
+        transaction.get_txn_wal_shard().ok_or_else(|| {
+            AdapterError::internal(
+                "query client initialization",
+                "transaction WAL has not been initialized",
+            )
+        })
+    }
+
     /// Certifies a durable prefix while the caller serializes catalog snapshot capture.
     pub(crate) async fn current_upper_if_in_sync(
         &self,
@@ -1320,9 +1331,9 @@ impl Catalog {
 
     /// Advances the catalog upper to at least `new_upper`.
     ///
-    /// Empty progress can overtake `new_upper`. A durable upper mismatch with content returns
-    /// `CatalogOutOfSync`. See [`mz_catalog::durable::DurableCatalogState::advance_upper`] for
-    /// fencing semantics.
+    /// Concurrent content is retained for this writer's next projection refresh.
+    /// Upper advancement retries contention without replaying content. See
+    /// [`mz_catalog::durable::DurableCatalogState::advance_upper`] for fencing semantics.
     #[mz_ore::instrument(level = "debug")]
     pub async fn advance_upper(&self, new_upper: mz_repr::Timestamp) -> Result<(), AdapterError> {
         Ok(self.storage().await.advance_upper(new_upper).await?)
@@ -1368,6 +1379,45 @@ impl Catalog {
             &bootstrap,
         )
         .await?)
+    }
+
+    /// Reconstructs a joined writer's own committed projection without bootstrap
+    /// or sharing revision notifications with the serving SQL catalog.
+    pub(crate) async fn writer_projection(
+        &self,
+        mut storage: Box<dyn DurableCatalogState>,
+    ) -> Result<Self, AdapterError> {
+        let deployment_generation = storage.get_deployment_generation().await?;
+        let is_bootstrap_complete = storage.is_bootstrap_complete();
+        let mut updates = Vec::new();
+        let (snapshot, upper) = loop {
+            updates.extend(storage.sync_to_current_updates().await?);
+            match storage.transaction().await {
+                Ok(tx) => break (tx.current_snapshot(), tx.upper()),
+                Err(CatalogError::Durable(
+                    mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. },
+                )) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        };
+        let state = self
+            .reconstruct_state(mz_catalog::durable::CatalogSnapshot {
+                snapshot,
+                updates,
+                upper,
+                deployment_generation,
+                is_bootstrap_complete,
+            })
+            .await?;
+        storage.mark_bootstrap_complete().await;
+        Ok(Self {
+            state,
+            expr_cache_handle: None,
+            storage: Arc::new(tokio::sync::Mutex::new(storage)),
+            transient_revision: 1,
+            shared_transient_revision: Arc::new(AtomicU64::new(1)),
+            diagnostic_config: Arc::clone(&self.diagnostic_config),
+        })
     }
 
     /// Checks the [`Catalog`]s internal consistency.
@@ -1695,11 +1745,24 @@ impl Catalog {
         }
     }
 
-    /// Listen for and apply all unconsumed updates to the durable catalog state.
-    // TODO(jkosh44) When this method is actually used outside of a test we can remove the
-    // `#[cfg(test)]` annotation.
-    #[cfg(test)]
-    async fn sync_to_current_updates(
+    fn update_affects_planning(kind: &mz_catalog::memory::objects::StateUpdateKind) -> bool {
+        use mz_catalog::memory::objects::StateUpdateKind;
+        !matches!(
+            kind,
+            StateUpdateKind::CollectionCompactionBound(_)
+                | StateUpdateKind::MaintainedReadRequirement(_)
+                | StateUpdateKind::ClientIncarnation(_)
+                | StateUpdateKind::ClientReadRequirement(_)
+                | StateUpdateKind::UnfinalizedShard(_)
+                | StateUpdateKind::AuditLog(_)
+        )
+    }
+
+    /// Apply this writer's unconsumed committed updates. Downstream owners must
+    /// enact the returned implications even when their own transaction failed.
+    /// Unapplicable committed state requires process recovery, never continuation
+    /// with a stale or partially updated projection.
+    pub(crate) async fn sync_to_current_updates(
         &mut self,
     ) -> Result<
         (
@@ -1708,11 +1771,43 @@ impl Catalog {
         ),
         CatalogError,
     > {
-        let updates = self.storage().await.sync_to_current_updates().await?;
-        let (builtin_table_updates, catalog_updates) = self
-            .state
-            .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
-            .await;
+        let updates = match mz_ore::future::OreFutureExt::ore_catch_unwind(
+            std::panic::AssertUnwindSafe(async {
+                self.storage().await.sync_to_current_updates().await
+            }),
+        )
+        .await
+        {
+            Ok(Ok(updates)) => updates,
+            Ok(Err(
+                error @ CatalogError::Durable(mz_catalog::durable::DurableCatalogError::Fence(_)),
+            )) => return Err(error),
+            Ok(Err(error)) => {
+                mz_ore::halt!("cannot decode committed catalog changes, restart required: {error}")
+            }
+            Err(payload) => {
+                let cause = mz_ore::panic::downcast_panic_message(&*payload);
+                mz_ore::halt!("cannot decode committed catalog changes, restart required: {cause}")
+            }
+        };
+        let planning_changed = updates
+            .iter()
+            .any(|update| Self::update_affects_planning(&update.kind));
+        let (builtin_table_updates, catalog_updates) =
+            mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(
+                self.state
+                    .apply_updates(updates, &mut state::LocalExpressionCache::Closed),
+            ))
+            .await
+            .unwrap_or_else(|payload| {
+                let cause = mz_ore::panic::downcast_panic_message(&*payload);
+                mz_ore::halt!("cannot apply committed catalog changes, restart required: {cause}")
+            });
+        if planning_changed {
+            self.transient_revision += 1;
+            self.shared_transient_revision
+                .store(self.transient_revision, std::sync::atomic::Ordering::SeqCst);
+        }
         Ok((builtin_table_updates, catalog_updates))
     }
 }
@@ -2799,6 +2894,225 @@ mod tests {
             catalog.expire().await;
         })
         .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn durable_temporary_membership_preserves_storage_lifetime() {
+        use mz_catalog::SYSTEM_CONN_ID;
+        use mz_catalog::durable::TestCatalogStateBuilder;
+        use mz_ore::now::SYSTEM_TIME;
+        use mz_persist_client::ShardId;
+        use mz_repr::RelationVersion;
+        use mz_storage_client::controller::StorageTxn;
+
+        async fn check(catalog: &Catalog) {
+            let reader = catalog.open_diagnostic_reader().await.unwrap();
+            let upper = catalog.current_upper().await;
+            let snapshot = reader.into_snapshot_at(upper).await.unwrap();
+            catalog.check_durable_consistency(snapshot).await.unwrap();
+        }
+
+        let persist = PersistClient::new_for_tests().await;
+        let organization = Uuid::new_v4();
+        let bootstrap = test_bootstrap_args();
+        let storage = TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .unwrap();
+        let mut catalog = Catalog::open_debug_catalog_inner(
+            persist,
+            storage,
+            SYSTEM_TIME.clone(),
+            Some(format!("local-az1-{organization}-0").parse().unwrap()),
+            &mz_build_info::DUMMY_BUILD_INFO,
+            BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+            &bootstrap,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(catalog.state().catalog_read_protection_enabled());
+
+        let local_owner = Uuid::new_v4();
+        let foreign_owner = Uuid::new_v4();
+        catalog
+            .state
+            .temporary_namespaces
+            .register(SYSTEM_CONN_ID.clone(), local_owner);
+        let local = GlobalId::User(100_000);
+        let foreign = GlobalId::User(100_001);
+        let version = GlobalId::User(100_002);
+        let local_item = CatalogItemId::User(100_000);
+        let foreign_item = CatalogItemId::User(100_001);
+        let alias_item = CatalogItemId::User(100_002);
+        let ids = [local, foreign, version];
+        let (updates, incarnation) = {
+            let mut storage = catalog.storage().await;
+            let mut tx = storage.transaction().await.unwrap();
+            // Same SQL name in distinct sessions must not collide or become visible
+            // locally. The foreign table's extra version also has a live alias.
+            for (offset, (item, id, name, owner, versions)) in [
+                (local_item, local, "t", local_owner, BTreeMap::new()),
+                (
+                    foreign_item,
+                    foreign,
+                    "t",
+                    foreign_owner,
+                    BTreeMap::from([(RelationVersion::root().bump(), version)]),
+                ),
+                (alias_item, version, "alias", foreign_owner, BTreeMap::new()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                tx.insert_item(
+                    item,
+                    FIRST_USER_OID + u32::try_from(offset).unwrap(),
+                    id,
+                    SchemaSpecifier::Temporary.into(),
+                    name,
+                    format!("CREATE TEMPORARY TABLE mz_temp.{name} (a pg_catalog.int4)"),
+                    MZ_SYSTEM_ROLE_ID,
+                    vec![],
+                    versions,
+                    Some(owner),
+                )
+                .unwrap();
+            }
+            // The native catalog harness has no storage controller. Allocate the
+            // metadata and initial permission together, as storage preparation does.
+            let foreign_shard = ShardId::new();
+            tx.insert_collection_metadata(BTreeMap::from([
+                (local, ShardId::new()),
+                (foreign, foreign_shard),
+                (version, foreign_shard),
+            ]))
+            .unwrap();
+            for id in ids {
+                tx.set_collection_compaction_bound(id, Some(Timestamp::MIN))
+                    .unwrap();
+            }
+            let incarnation = tx.create_client_incarnation().unwrap();
+            tx.publish_client_read_requirements(
+                incarnation,
+                ids.into_iter().map(|id| (id, Timestamp::MIN)).collect(),
+            )
+            .unwrap();
+            let updates = tx.get_and_commit_op_updates();
+            let ts = tx.upper();
+            tx.commit(ts).await.unwrap();
+            (updates, incarnation)
+        };
+        let _ = catalog
+            .state
+            .apply_updates(updates, &mut LocalExpressionCache::Closed)
+            .await;
+        assert!(catalog.state.try_get_entry(&local_item).is_some());
+        assert!(catalog.state.try_get_entry(&foreign_item).is_none());
+        assert!(catalog.state.try_get_entry(&alias_item).is_none());
+        check(&catalog).await;
+        assert!(
+            catalog
+                .state
+                .storage_metadata()
+                .retained_collections
+                .is_empty()
+        );
+
+        // Dry runs leave durable client protection in place for the drop checks.
+        let release = Op::PublishClientReadRequirements {
+            incarnation,
+            requirements: BTreeMap::new(),
+        };
+        let ts = catalog.current_upper().await;
+        let (released, _) = catalog
+            .transact_incremental_dry_run(catalog.state(), vec![release.clone()], None, None, ts)
+            .await
+            .unwrap();
+        for id in ids {
+            assert!(
+                released
+                    .storage_metadata()
+                    .collection_metadata
+                    .contains_key(&id),
+                "final client release must preserve live SQL collection {id}"
+            );
+            assert!(released.collection_compaction_bounds().contains_key(&id));
+        }
+
+        // Dropping one alias must not retire the extra version. Only the durable
+        // removal of its final SQL owner makes final release eligible for cleanup.
+        for item in [alias_item, foreign_item] {
+            let updates = {
+                let mut storage = catalog.storage().await;
+                let mut tx = storage.transaction().await.unwrap();
+                tx.remove_item(item).unwrap();
+                let updates = tx.get_and_commit_op_updates();
+                let ts = tx.upper();
+                tx.commit(ts).await.unwrap();
+                updates
+            };
+            let _ = catalog
+                .state
+                .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                .await;
+            let dropped = item == foreign_item;
+            for id in [foreign, version] {
+                assert!(
+                    catalog
+                        .state
+                        .storage_metadata()
+                        .collection_metadata
+                        .contains_key(&id)
+                );
+                assert_eq!(
+                    catalog
+                        .state
+                        .storage_metadata()
+                        .retained_collections
+                        .contains(&id),
+                    dropped
+                );
+            }
+            check(&catalog).await;
+            let ts = catalog.current_upper().await;
+            let (released, _) = catalog
+                .transact_incremental_dry_run(
+                    catalog.state(),
+                    vec![release.clone()],
+                    None,
+                    None,
+                    ts,
+                )
+                .await
+                .unwrap();
+            assert!(
+                released
+                    .storage_metadata()
+                    .collection_metadata
+                    .contains_key(&local)
+            );
+            for id in [foreign, version] {
+                assert_eq!(
+                    released
+                        .storage_metadata()
+                        .collection_metadata
+                        .contains_key(&id),
+                    !dropped
+                );
+                assert_eq!(
+                    released.collection_compaction_bounds().contains_key(&id),
+                    !dropped
+                );
+            }
+        }
+        catalog.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -4228,6 +4542,187 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // Requires a subprocess and persist's native dependencies.
+    async fn test_unapplicable_foreign_catalog_changes_halt_writer() {
+        use mz_catalog::durable::TestCatalogStateBuilder;
+        use mz_catalog::durable::debug::{ConfigCollection, ItemCollection};
+        use mz_catalog::durable::objects::serialization::proto;
+        use mz_ore::now::SYSTEM_TIME;
+
+        const CHILD: &str = "MZ_TEST_FOREIGN_CATALOG_RECOVERY_CHILD";
+        if env::var_os(CHILD).is_none() {
+            for case in ["invalid-sql", "protection-mode"] {
+                let output =
+                    std::process::Command::new(env::current_exe().expect("test executable"))
+                        .args([
+                            "--exact",
+                            "catalog::tests::test_unapplicable_foreign_catalog_changes_halt_writer",
+                            "--nocapture",
+                        ])
+                        .env(CHILD, case)
+                        .env("MZ_TEST_LOG_FILTER", "warn")
+                        .output()
+                        .expect("run child test");
+                let output_text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+                // halt! uses _exit(166), unlike libtest assertion/panic failures.
+                assert_eq!(output.status.code(), Some(166), "{output_text}");
+                if case == "invalid-sql" {
+                    assert!(
+                output_text.contains(
+                    "invalid persisted SQL: CREATE VIEW materialize.public.invalid_view AS SELECT missing_column"
+                ),
+                "{output_text}"
+            );
+                    assert!(
+                output_text.contains(
+                    "halting process: cannot apply committed catalog changes, restart required"
+                ),
+                "{output_text}"
+            );
+                } else {
+                    assert!(
+                        output_text.contains("catalog_read_protection_enabled"),
+                        "{output_text}"
+                    );
+                    assert!(output_text.contains("restart required"), "{output_text}");
+                }
+            }
+            return;
+        }
+
+        let persist = PersistClient::new_for_tests().await;
+        let organization = Uuid::new_v4();
+        let bootstrap = test_bootstrap_args();
+        let builder = TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation();
+        let storage = builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("open fresh durable catalog");
+        let mut writer = Catalog::open_debug_catalog_inner(
+            persist,
+            storage,
+            SYSTEM_TIME.clone(),
+            Some(
+                format!("local-az1-{organization}-0")
+                    .parse()
+                    .expect("parse test environment ID"),
+            ),
+            &mz_build_info::DUMMY_BUILD_INFO,
+            BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+            &bootstrap,
+            None,
+            None,
+        )
+        .await
+        .expect("bootstrap protected writer");
+        assert!(writer.state().catalog_read_protection_enabled());
+        assert!(!writer.storage().await.is_read_only());
+
+        let mut observer = builder.clone().unwrap_build().await;
+        let epoch = observer.epoch().await.expect("read initial catalog epoch");
+        let generation = observer
+            .get_deployment_generation()
+            .await
+            .expect("read initial deployment generation");
+        let key = proto::ItemKey {
+            gid: proto::CatalogItemId::User(1),
+        };
+        let value = proto::ItemValue {
+            schema_id: proto::SchemaId::User(3),
+            name: "invalid_view".into(),
+            definition: proto::CatalogItem::V1(proto::CatalogItemV1 {
+                // Parseable SQL with an unresolvable column reaches item planning.
+                create_sql: "CREATE VIEW materialize.public.invalid_view AS SELECT missing_column"
+                    .into(),
+            }),
+            owner_id: proto::RoleId::System(1),
+            privileges: vec![],
+            oid: FIRST_USER_OID,
+            global_id: proto::GlobalId::User(1),
+            extra_versions: vec![],
+            ephemeral_owner_session: None,
+        };
+        // A debug handle's pending generation must not promote the live writer.
+        let mut admin = builder
+            .with_deploy_generation(99)
+            .unwrap_build()
+            .await
+            .open_debug()
+            .await
+            .expect("open debug catalog for foreign edits");
+        if env::var(CHILD).expect("read child recovery test case") == "protection-mode" {
+            admin
+                .edit::<ConfigCollection>(
+                    proto::ConfigKey {
+                        key: "catalog_read_protection_enabled".into(),
+                    },
+                    proto::ConfigValue { value: 0 },
+                    true,
+                )
+                .await
+                .expect("disable catalog read protection through debug handle");
+            assert!(
+                observer
+                    .trace_consolidated()
+                    .await
+                    .expect("read catalog trace after protection-mode edit")
+                    .configs
+                    .values
+                    .iter()
+                    .any(
+                        |((key, value), _, diff)| key.key == "catalog_read_protection_enabled"
+                            && value.value == 0
+                            && *diff == mz_repr::Diff::ONE
+                    )
+            );
+        } else {
+            assert_eq!(
+                admin
+                    .edit::<ItemCollection>(key.clone(), value.clone(), true)
+                    .await
+                    .expect("persist unplannable view through debug handle"),
+                None
+            );
+            let trace = observer
+                .trace_consolidated()
+                .await
+                .expect("read catalog trace after invalid-SQL edit");
+            assert!(trace.items.values.iter().any(|((k, v), _, diff)| {
+                k == &key && v == &value && *diff == mz_repr::Diff::ONE
+            }));
+        }
+        assert_eq!(
+            observer
+                .epoch()
+                .await
+                .expect("read catalog epoch after foreign edit"),
+            epoch
+        );
+        assert_eq!(
+            observer
+                .get_deployment_generation()
+                .await
+                .expect("read deployment generation after foreign edit"),
+            generation
+        );
+
+        writer
+            .sync_to_current_updates()
+            .await
+            .expect("writer was not fenced");
+        panic!("writer continued after observing an unapplicable committed change");
+    }
+
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_multi_subscriber_catalog() {
         let persist_client = PersistClient::new_for_tests().await;
@@ -4235,10 +4730,32 @@ mod tests {
         let organization_id = Uuid::new_v4();
         let db_name = "DB";
 
-        let mut writer_catalog = Catalog::open_debug_catalog(
+        let storage = mz_catalog::durable::TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(organization_id)
+            .with_default_deploy_generation()
+            .build()
+            .await
+            .expect("build fresh protected writer")
+            .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap_args)
+            .await
+            .expect("open fresh protected writer");
+        let mut writer_catalog = Catalog::open_debug_catalog_inner(
             persist_client.clone(),
-            organization_id.clone(),
+            storage,
+            mz_ore::now::SYSTEM_TIME.clone(),
+            Some(
+                format!("local-az1-{organization_id}-0")
+                    .parse()
+                    .expect("environment id"),
+            ),
+            &mz_build_info::DUMMY_BUILD_INFO,
+            std::collections::BTreeMap::from([(
+                "enable_catalog_read_protection".into(),
+                "true".into(),
+            )]),
             &bootstrap_args,
+            None,
+            None,
         )
         .await
         .expect("open_debug_catalog");
@@ -4251,6 +4768,7 @@ mod tests {
         .expect("open_debug_read_only_catalog");
         assert_err!(writer_catalog.resolve_database(db_name));
         assert_err!(read_only_catalog.resolve_database(db_name));
+        let before_ddl = read_only_catalog.clone();
 
         let commit_ts = writer_catalog.current_upper().await;
         writer_catalog
@@ -4275,18 +4793,59 @@ mod tests {
             .expect("sync_to_current_updates");
         let read_db = read_only_catalog
             .resolve_database(db_name)
-            .expect("resolve_database");
+            .expect("resolve_database")
+            .clone();
 
-        assert_eq!(write_db, read_db);
+        assert_eq!(write_db, &read_db);
+        assert!(!before_ddl.transient_revision_is_current());
 
-        let writer_catalog_fencer =
-            Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
-                .await
-                .expect("open_debug_catalog for fencer");
-        let fencer_db = writer_catalog_fencer
+        let before_metadata = read_only_catalog.clone();
+        let commit_ts = writer_catalog.current_upper().await;
+        writer_catalog
+            .transact(None, commit_ts, None, vec![Op::CreateClientIncarnation])
+            .await
+            .expect("publish peer client metadata");
+        read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("follow client metadata");
+        assert!(before_metadata.transient_revision_is_current());
+
+        let joined = mz_catalog::durable::TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(organization_id)
+            .with_default_deploy_generation()
+            .build()
+            .await
+            .expect("build joined writer")
+            .join()
+            .await
+            .expect("join active writer generation");
+        let writer_catalog_peer = read_only_catalog
+            .writer_projection(joined)
+            .await
+            .expect("reconstruct independent writer projection");
+        let peer_db = writer_catalog_peer
             .resolve_database(db_name)
-            .expect("resolve_database for fencer");
-        assert_eq!(fencer_db, read_db);
+            .expect("resolve_database for peer");
+        assert_eq!(peer_db, &read_db);
+        writer_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("same-generation peer does not fence");
+        read_only_catalog
+            .sync_to_current_updates()
+            .await
+            .expect("same-generation reader survives");
+
+        let promoted = mz_catalog::durable::TestCatalogStateBuilder::new(persist_client)
+            .with_organization_id(organization_id)
+            .with_deploy_generation(1)
+            .build()
+            .await
+            .expect("build promotion")
+            .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap_args)
+            .await
+            .expect("promote generation");
 
         let write_fence_err = writer_catalog
             .sync_to_current_updates()
@@ -4294,7 +4853,9 @@ mod tests {
             .expect_err("sync_to_current_updates for fencer");
         assert!(matches!(
             write_fence_err,
-            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
         ));
         let read_fence_err = read_only_catalog
             .sync_to_current_updates()
@@ -4302,11 +4863,14 @@ mod tests {
             .expect_err("sync_to_current_updates after fencer");
         assert!(matches!(
             read_fence_err,
-            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
         ));
 
         writer_catalog.expire().await;
         read_only_catalog.expire().await;
-        writer_catalog_fencer.expire().await;
+        writer_catalog_peer.expire().await;
+        promoted.expire().await;
     }
 }

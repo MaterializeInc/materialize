@@ -118,6 +118,258 @@ fn cluster_id() -> ClusterId {
     ClusterId::user(1000).unwrap()
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn client_publication_reopen_and_reclamation() {
+    use mz_catalog_protos::objects::{ClientIncarnationKey, ClientReadRequirementKey};
+
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let id = GlobalId::User(1000);
+    let mut txn = state.transaction().await.unwrap();
+    txn.insert_collection_metadata(BTreeMap::from([(id, ShardId::new())]))
+        .unwrap();
+    txn.set_collection_compaction_bound(id, Some(10.into()))
+        .unwrap();
+    let a = txn.create_client_incarnation().unwrap();
+    let b = txn.create_client_incarnation().unwrap();
+    assert_ne!(a, b);
+    assert_eq!(
+        txn.publish_client_read_requirements(a, BTreeMap::from([(id, 20.into())]))
+            .unwrap(),
+        1
+    );
+    txn.publish_client_read_requirements(b, BTreeMap::from([(id, 30.into())]))
+        .unwrap();
+    commit(txn).await;
+    let before = state.snapshot().await.unwrap();
+    Box::new(state).expire().await;
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let reopened = state.snapshot().await.unwrap();
+    assert_eq!(before.client_incarnations, reopened.client_incarnations);
+    assert_eq!(
+        before.client_read_requirements,
+        reopened.client_read_requirements
+    );
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(id, Some(21.into()))
+        .unwrap();
+    reject(txn, "readable at 20").await;
+    let mut txn = state.transaction().await.unwrap();
+    // An unchanged publication must still renew, without requirement traffic.
+    assert_eq!(
+        txn.publish_client_read_requirements(a, BTreeMap::from([(id, 20.into())]))
+            .unwrap(),
+        2
+    );
+    let updates = txn.get_and_commit_op_updates();
+    assert_eq!(updates.len(), 2);
+    assert!(updates.iter().all(|update| matches!(
+        update.kind,
+        mz_catalog::memory::objects::StateUpdateKind::ClientIncarnation(_)
+    )));
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let snapshot = state.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.client_incarnations[&ClientIncarnationKey { id: a }].heartbeat,
+        2
+    );
+    assert_eq!(
+        snapshot.client_read_requirements[&ClientReadRequirementKey {
+            incarnation: a,
+            id: id.into_proto()
+        }]
+            .frontier,
+        20
+    );
+
+    let mut txn = state.transaction().await.unwrap();
+    assert!(!txn.reclaim_client_incarnation(a, 1).unwrap());
+    txn.set_collection_compaction_bound(id, Some(21.into()))
+        .unwrap();
+    reject(txn, "readable at 20").await;
+    let mut txn = state.transaction().await.unwrap();
+    assert!(txn.reclaim_client_incarnation(a, 2).unwrap());
+    assert!(
+        txn.publish_client_read_requirements(a, BTreeMap::new())
+            .is_err()
+    );
+    txn.set_collection_compaction_bound(id, Some(30.into()))
+        .unwrap();
+    commit(txn).await;
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(id, Some(31.into()))
+        .unwrap();
+    reject(txn, "readable at 30").await;
+    Box::new(state).expire().await;
+    let mut state = builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    assert!(!txn.reclaim_client_incarnation(a, 2).unwrap());
+    assert!(
+        txn.publish_client_read_requirements(a, BTreeMap::from([(id, 30.into())]))
+            .is_err()
+    );
+    let c = txn.create_client_incarnation().unwrap();
+    assert!(c > a && c > b);
+    commit(txn).await;
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn client_admission_and_protected_metadata_retirement() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut state = builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let id = GlobalId::User(1000);
+    let input = GlobalId::User(1001);
+    let shard = ShardId::new();
+    let mut txn = state.transaction().await.unwrap();
+    txn.insert_collection_metadata(BTreeMap::from([(id, shard), (input, ShardId::new())]))
+        .unwrap();
+    txn.set_collection_compaction_bound(id, Some(10.into()))
+        .unwrap();
+    txn.set_collection_compaction_bound(input, Some(10.into()))
+        .unwrap();
+    txn.set_maintained_read_requirement(id, BTreeSet::from([input]), Some(10.into()))
+        .unwrap();
+    let client = txn.create_client_incarnation().unwrap();
+    commit(txn).await;
+
+    for target in [id, GlobalId::User(9999)] {
+        let mut txn = state.transaction().await.unwrap();
+        txn.publish_client_read_requirements(client, BTreeMap::from([(target, 9.into())]))
+            .unwrap();
+        reject(
+            txn,
+            if target == id {
+                "readable at 9"
+            } else {
+                "no live storage or index identity"
+            },
+        )
+        .await;
+    }
+    let mut txn = state.transaction().await.unwrap();
+    txn.publish_client_read_requirements(client, BTreeMap::from([(id, 10.into())]))
+        .unwrap();
+    let other = txn.create_client_incarnation().unwrap();
+    txn.publish_client_read_requirements(other, BTreeMap::from([(id, 20.into())]))
+        .unwrap();
+    commit(txn).await;
+    let mut txn = state.transaction().await.unwrap();
+    assert!(
+        txn.delete_collection_metadata(BTreeSet::from([id]))
+            .is_empty()
+    );
+    // Producer maintenance retires independently of the client's output hold.
+    txn.set_collection_compaction_bound(input, None).unwrap();
+    commit(txn).await;
+    let snapshot = state.snapshot().await.unwrap();
+    assert!(snapshot.maintained_read_requirements.is_empty());
+    assert_eq!(bounds(snapshot)[&id], Some(10.into()));
+    let mut txn = state.transaction().await.unwrap();
+    assert_eq!(txn.get_collection_metadata()[&id], shard);
+    txn.publish_client_read_requirements(client, BTreeMap::new())
+        .unwrap();
+    assert!(
+        txn.delete_collection_metadata(BTreeSet::from([id]))
+            .is_empty()
+    );
+    assert!(txn.reclaim_client_incarnation(other, 1).unwrap());
+    assert_eq!(
+        txn.delete_collection_metadata(BTreeSet::from([id])),
+        vec![(id, shard)]
+    );
+    commit(txn).await;
+    let snapshot = state.snapshot().await.unwrap();
+    assert!(snapshot.client_read_requirements.is_empty());
+    assert!(!bounds(snapshot).contains_key(&id));
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn client_index_permission_and_retirement() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut state = builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".to_string(), Some(1))
+        .unwrap();
+    Owner::Ordinary.insert(&mut txn, 1000);
+    let id = Owner::Ordinary.id(1000);
+    let client = txn.create_client_incarnation().unwrap();
+    txn.publish_client_read_requirements(client, BTreeMap::from([(id, 20.into())]))
+        .unwrap();
+    commit(txn).await;
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(id, Some(21.into()))
+        .unwrap();
+    reject(txn, "readable at 20").await;
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(id, Some(15.into()))
+        .unwrap();
+    commit(txn).await;
+    let mut txn = state.transaction().await.unwrap();
+    txn.publish_client_read_requirements(client, BTreeMap::from([(id, 14.into())]))
+        .unwrap();
+    reject(txn, "readable at 14").await;
+    let mut txn = state.transaction().await.unwrap();
+    Owner::Ordinary.remove(&mut txn, 1000);
+    commit(txn).await;
+    assert!(!bounds(state.snapshot().await.unwrap()).contains_key(&id));
+    let mut txn = state.transaction().await.unwrap();
+    txn.publish_client_read_requirements(client, BTreeMap::from([(id, 21.into())]))
+        .unwrap();
+    commit(txn).await;
+    let mut txn = state.transaction().await.unwrap();
+    let other = txn.create_client_incarnation().unwrap();
+    txn.publish_client_read_requirements(other, BTreeMap::from([(id, 21.into())]))
+        .unwrap();
+    reject(txn, "no live storage or index identity").await;
+    let mut txn = state.transaction().await.unwrap();
+    txn.publish_client_read_requirements(client, BTreeMap::new())
+        .unwrap();
+    commit(txn).await;
+    Box::new(state).expire().await;
+}
+
 fn bounds(snapshot: Snapshot) -> BTreeMap<GlobalId, Option<Timestamp>> {
     snapshot
         .collection_compaction_bounds

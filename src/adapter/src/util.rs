@@ -319,7 +319,8 @@ impl ShouldTerminateGracefully for DurableCatalogError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
             DurableCatalogError::Fence(err) => err.should_terminate_gracefully(),
-            DurableCatalogError::CatalogOutOfSync { .. } => true,
+            DurableCatalogError::CatalogOutOfSync { .. }
+            | DurableCatalogError::RestartRequired { .. } => true,
             DurableCatalogError::IncompatibleDataVersion { .. }
             | DurableCatalogError::IncompatiblePersistVersion { .. }
             | DurableCatalogError::Proto(_)

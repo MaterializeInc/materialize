@@ -369,6 +369,17 @@ pub struct MetricValue {
 }
 
 impl NamespacedKubernetesOrchestrator {
+    fn service_hosts(&self, name: &str, scale: NonZero<u16>) -> Vec<String> {
+        (0..scale.get())
+            .map(|i| {
+                format!(
+                    "{name}-{i}.{name}.{}.svc.cluster.local",
+                    self.kubernetes_namespace
+                )
+            })
+            .collect()
+    }
+
     fn service_name(&self, id: &str) -> String {
         format!(
             "{}{}-{id}",
@@ -531,6 +542,19 @@ fn parse_k8s_quantity(s: &str) -> Result<ScaledQuantity, anyhow::Error> {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
+    fn service_addresses(
+        &self,
+        id: &str,
+        scale: NonZero<u16>,
+        port: &mz_orchestrator::ServicePort,
+    ) -> Result<Vec<String>, anyhow::Error> {
+        Ok(KubernetesService {
+            hosts: self.service_hosts(&self.service_name(id), scale),
+            ports: BTreeMap::from([(port.name.clone(), port.port_hint)]),
+        }
+        .addresses(&port.name))
+    }
+
     async fn fetch_service_metrics(
         &self,
         id: &str,
@@ -674,14 +698,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
-        let hosts = (0..scale.get())
-            .map(|i| {
-                format!(
-                    "{name}-{i}.{name}.{}.svc.cluster.local",
-                    self.kubernetes_namespace
-                )
-            })
-            .collect::<Vec<_>>();
+        let hosts = self.service_hosts(&name, scale);
         let ports = ports_in
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
@@ -1812,6 +1829,98 @@ fn topology_spread_min_domains(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn service_addresses_parity() {
+        // Construct a client without contacting Kubernetes. Lifecycle commands
+        // stay in the channel so this test cannot provision anything.
+        let client =
+            Client::try_from(kube::Config::new("http://127.0.0.1:1".parse().unwrap())).unwrap();
+        for prefix in [None, Some("environment-".to_string())] {
+            let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+            let orchestrator = NamespacedKubernetesOrchestrator {
+                pod_api: Api::namespaced(client.clone(), "kube-namespace"),
+                kubernetes_namespace: "kube-namespace".into(),
+                namespace: "compute".into(),
+                config: KubernetesOrchestratorConfig {
+                    context: String::new(),
+                    scheduler_name: None,
+                    priority_class_name: None,
+                    service_annotations: BTreeMap::new(),
+                    service_labels: BTreeMap::new(),
+                    service_node_selector: BTreeMap::new(),
+                    service_affinity: None,
+                    service_tolerations: None,
+                    service_account: None,
+                    image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
+                    aws_external_id_prefix: None,
+                    coverage: false,
+                    ephemeral_volume_storage_class: None,
+                    service_fs_group: None,
+                    name_prefix: prefix,
+                    collect_pod_metrics: false,
+                    enable_prometheus_scrape_annotations: false,
+                },
+                scheduling_config: Default::default(),
+                service_infos: Default::default(),
+                command_tx,
+                _worker: mz_ore::task::spawn(|| "discovery-test", std::future::pending())
+                    .abort_on_drop(),
+            };
+            for scale in [1, 3, 12] {
+                let scale = NonZero::new(scale).unwrap();
+                let id = "u1-replica-1";
+                let port = mz_orchestrator::ServicePort {
+                    name: "compute".into(),
+                    port_hint: 2100 + scale.get(),
+                };
+                let infos_before = orchestrator.service_infos.lock().unwrap().len();
+                let addresses = orchestrator.service_addresses(id, scale, &port).unwrap();
+                assert!(command_rx.try_recv().is_err());
+                assert_eq!(
+                    orchestrator.service_infos.lock().unwrap().len(),
+                    infos_before
+                );
+                let config = ServiceConfig {
+                    app_name: "discovery-test".into(),
+                    image: "materialize/clusterd:discovery-test".into(),
+                    init_container_image: None,
+                    args: Box::new(|_| Vec::new()),
+                    ports: vec![port.clone()],
+                    memory_limit: None,
+                    memory_request: None,
+                    cpu_limit: None,
+                    cpu_request: None,
+                    scale,
+                    labels: BTreeMap::new(),
+                    annotations: BTreeMap::new(),
+                    availability_zones: None,
+                    other_replicas_selector: Vec::new(),
+                    replicas_selector: Vec::new(),
+                    disk_limit: Some(DiskLimit::ZERO),
+                    node_selector: BTreeMap::new(),
+                };
+                let service = orchestrator.ensure_service(id, config).unwrap();
+                assert_eq!(addresses, service.addresses(&port.name));
+                let WorkerCommand::EnsureService { desc } = command_rx.try_recv().unwrap() else {
+                    panic!("expected lifecycle provisioning command");
+                };
+                assert_eq!(addresses.len(), usize::from(scale.get()));
+                let name = desc.stateful_set.metadata.name.unwrap();
+                let subdomain = desc.stateful_set.spec.unwrap().service_name.unwrap();
+                let provisioned_port = desc.service.spec.unwrap().ports.unwrap()[0].port;
+                for (i, address) in addresses.iter().enumerate() {
+                    assert_eq!(
+                        address,
+                        &format!(
+                            "{name}-{i}.{subdomain}.{}.svc.cluster.local:{provisioned_port}",
+                            orchestrator.kubernetes_namespace
+                        )
+                    );
+                }
+            }
+        }
+    }
 
     #[mz_ore::test]
     fn topology_spread_min_domains_suppression() {

@@ -1193,6 +1193,11 @@ impl Instance {
     /// indicate a bug in [`Self::create_dataflow`].
     fn target_replica(&self, cmd: &ComputeCommand) -> Option<ReplicaId> {
         match &cmd {
+            ComputeCommand::HelloQuery { .. }
+            | ComputeCommand::CreateQueryDataflow { .. }
+            | ComputeCommand::SetQueryMaxResultSize { .. } => {
+                panic!("query-only command sent through lifecycle controller")
+            }
             ComputeCommand::Schedule(id)
             | ComputeCommand::AllowWrites(id)
             | ComputeCommand::AllowCompaction { id, .. } => {
@@ -2072,6 +2077,9 @@ impl Instance {
         // Invariant: the replica exists and has the expected epoch.
 
         match response {
+            ComputeResponse::QueryReady | ComputeResponse::QueryDataflowResponse { .. } => {
+                soft_panic_or_log!("query-only response received on lifecycle connection");
+            }
             ComputeResponse::Frontiers(id, frontiers) => {
                 self.handle_frontiers_response(id, frontiers, replica_id);
             }
@@ -2098,6 +2106,14 @@ impl Instance {
         frontiers: FrontiersResponse,
         replica_id: ReplicaId,
     ) {
+        // Actual trace readability is consumed by query connections. It may
+        // retire after this controller has already observed all other frontiers.
+        if frontiers.write_frontier.is_none()
+            && frontiers.input_frontier.is_none()
+            && frontiers.output_frontier.is_none()
+        {
+            return;
+        }
         if !self.collections.contains_key(&id) {
             soft_panic_or_log!(
                 "frontiers update for an unknown collection \

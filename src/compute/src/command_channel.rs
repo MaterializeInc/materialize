@@ -18,9 +18,8 @@
 //! broadcasts them to other workers through the Timely fabric, taking care of the correct
 //! sequencing.
 //!
-//! Commands in the command channel are tagged with a nonce identifying the incarnation of the
-//! compute protocol the command belongs to, allowing workers to recognize client reconnects that
-//! require a reconciliation.
+//! Commands carry a connection nonce and origin. Workers reconcile lifecycle reconnects without
+//! treating query connections or their disconnects as changes to maintained desired state.
 
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -37,15 +36,25 @@ use timely::scheduling::SyncActivator;
 use timely::worker::Worker as TimelyWorker;
 use uuid::Uuid;
 
+/// Origin carried through worker 0's common command order.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Origin {
+    Lifecycle(Uuid),
+    Query(Uuid),
+}
+
+/// A missing command denotes query disconnect, never lifecycle replacement.
+pub type Envelope = (Option<ComputeCommand>, Origin);
+
 /// A sender pushing commands onto the command channel.
 pub struct Sender {
-    tx: mpsc::Sender<(ComputeCommand, Uuid)>,
+    tx: mpsc::Sender<Envelope>,
     activator: Arc<Mutex<Option<SyncActivator>>>,
 }
 
 impl Sender {
     /// Broadcasts the given command to all workers.
-    pub fn send(&self, message: (ComputeCommand, Uuid)) {
+    pub fn send(&self, message: Envelope) {
         if self.tx.send(message).is_err() {
             unreachable!("command channel never shuts down");
         }
@@ -60,7 +69,7 @@ impl Sender {
 
 /// A receiver reading commands from the command channel.
 pub struct Receiver {
-    rx: mpsc::Receiver<(ComputeCommand, Uuid)>,
+    rx: mpsc::Receiver<Envelope>,
 }
 
 impl Receiver {
@@ -68,7 +77,7 @@ impl Receiver {
     ///
     /// This returns `None` when there are currently no commands but there might be commands again
     /// in the future.
-    pub fn try_recv(&self) -> Option<(ComputeCommand, Uuid)> {
+    pub fn try_recv(&self) -> Option<Envelope> {
         match self.rx.try_recv() {
             Ok(msg) => Some(msg),
             Err(TryRecvError::Empty) => None,
@@ -106,11 +115,18 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
                 move |output| {
                     let Some(cap) = &mut capability else {
-                        // Non-leader workers will still receive `UpdateConfiguration` commands and
-                        // we must drain those to not leak memory.
-                        while let Ok((cmd, _nonce)) = input_rx.try_recv() {
+                        // Handshakes and configuration are observed by every partitioning layer.
+                        // Only worker 0 sequences them, so other workers drain their local copies.
+                        while let Ok((cmd, _origin)) = input_rx.try_recv() {
                             assert_ne!(worker_id, 0);
-                            assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                            assert!(matches!(
+                                cmd,
+                                Some(
+                                    ComputeCommand::UpdateConfiguration(_)
+                                        | ComputeCommand::HelloQuery { .. }
+                                        | ComputeCommand::SetQueryMaxResultSize { .. }
+                                )
+                            ));
                         }
                         return;
                     };
@@ -119,9 +135,13 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
                     let input: Vec<_> = input_rx.try_iter().collect();
                     for (cmd, nonce) in input {
-                        let worker_cmds =
-                            split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, nonce));
-                        output.session(&cap).give_iterator(worker_cmds);
+                        let worker_cmds: Vec<_> = match cmd {
+                            Some(cmd) => split_command(cmd, peers)
+                                .map(|(idx, cmd)| (idx, Some(cmd), nonce))
+                                .collect(),
+                            None => (0..peers).map(|idx| (idx, None, nonce)).collect(),
+                        };
+                        output.session(&cap).give_iterator(worker_cmds.into_iter());
 
                         cap.downgrade(&(cap.time() + 1));
                     }
@@ -159,6 +179,13 @@ fn split_command(
 ) -> impl Iterator<Item = (usize, ComputeCommand)> {
     use itertools::Either;
 
+    let (command, request_id) = match command {
+        ComputeCommand::CreateQueryDataflow {
+            request_id,
+            dataflow,
+        } => (ComputeCommand::CreateDataflow(dataflow), Some(request_id)),
+        command => (command, None),
+    };
     let commands = match command {
         ComputeCommand::CreateDataflow(dataflow) => {
             let dataflow = *dataflow;
@@ -204,5 +231,16 @@ fn split_command(
         }
     };
 
-    commands.into_iter().enumerate()
+    commands
+        .into_iter()
+        .map(move |command| match (request_id, command) {
+            (Some(request_id), ComputeCommand::CreateDataflow(dataflow)) => {
+                ComputeCommand::CreateQueryDataflow {
+                    request_id,
+                    dataflow,
+                }
+            }
+            (_, command) => command,
+        })
+        .enumerate()
 }

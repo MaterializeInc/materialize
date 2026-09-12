@@ -677,8 +677,8 @@ impl Coordinator {
     /// query remains executable at that time, and returns those.
     /// The caller is responsible for eventually dropping those read holds.
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) fn determine_timestamp(
-        &self,
+    pub(crate) async fn determine_timestamp(
+        &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -688,7 +688,22 @@ impl Coordinator {
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
-        let (det, read_holds) = self.determine_timestamp_for(
+        let (read_holds, upper) = if let Some(client) = &self.query_client {
+            let incarnation = client.protection.incarnation();
+            self.acquire_client_read_protection(incarnation, id_bundle.clone())
+                .await?
+        } else if self.catalog().state().catalog_read_protection_enabled() && !id_bundle.is_empty()
+        {
+            return Err(AdapterError::Internal(
+                "durable query read protection is not initialized".into(),
+            ));
+        } else {
+            (
+                self.acquire_read_holds(id_bundle),
+                self.least_valid_write(id_bundle),
+            )
+        };
+        let (det, read_holds) = Self::determine_timestamp_for_inner(
             session,
             id_bundle,
             when,
@@ -696,6 +711,8 @@ impl Coordinator {
             oracle_read_ts,
             real_time_recency_ts,
             isolation_level,
+            read_holds,
+            upper.clone(),
         )?;
         self.metrics
             .by_cluster
@@ -710,8 +727,9 @@ impl Coordinator {
             && real_time_recency_ts.is_none()
         {
             // Note down the difference between BoundedStaleness and Serializable into a metric.
+            // Compare isolation levels against the same protected input observations.
             if let Some(bs_ts) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
+                let (serializable_det, _tmp_read_holds) = Self::determine_timestamp_for_inner(
                     session,
                     id_bundle,
                     when,
@@ -719,6 +737,8 @@ impl Coordinator {
                     oracle_read_ts,
                     real_time_recency_ts,
                     &IsolationLevel::Serializable,
+                    read_holds.clone(),
+                    upper,
                 )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics

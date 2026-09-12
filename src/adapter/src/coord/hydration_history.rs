@@ -274,6 +274,7 @@ impl Coordinator {
             },
             &catalog,
             Arc::clone(&self.controller.storage_collections),
+            self.query_client.clone(),
             Arc::clone(&self.transient_id_gen),
             self.optimizer_metrics.clone(),
             self.persist_client.clone(),

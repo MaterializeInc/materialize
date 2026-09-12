@@ -26,6 +26,342 @@ use crate::coord::Coordinator;
 pub(super) const CATALOG_SUBSCRIPTION_INTERVAL: Duration = Duration::from_secs(1);
 
 impl Coordinator {
+    fn client_read_catalog(&self) -> &crate::catalog::Catalog {
+        self.client_protection_catalog
+            .as_ref()
+            .unwrap_or_else(|| self.catalog())
+    }
+
+    /// Client metadata is live even when SQL uses a prewarming savepoint. This
+    /// writer validates its own projection but does not enact maintained objects.
+    async fn transact_client_protection(&mut self, op: Op) -> Result<Vec<u64>, AdapterError> {
+        assert!(matches!(
+            &op,
+            Op::CreateClientIncarnation | Op::PublishClientReadRequirements { .. }
+        ));
+        let Some(catalog) = &mut self.client_protection_catalog else {
+            return self
+                .catalog_transact_with_results(None, None, vec![op])
+                .await;
+        };
+        loop {
+            if let Err(error) = catalog.sync_to_current_updates().await {
+                if matches!(
+                    &error,
+                    mz_catalog::durable::CatalogError::Durable(
+                        mz_catalog::durable::DurableCatalogError::Fence(_)
+                    )
+                ) {
+                    // This writer cannot renew protection. Its cached projection
+                    // may still contain the incarnation, so presence is not evidence
+                    // that the client can continue issuing protected grants.
+                    if let Some(client) = &self.query_client {
+                        client.protection.mark_closed();
+                    }
+                }
+                return Err(error.into());
+            }
+            let ts = catalog.current_upper().await;
+            match catalog
+                .transact(
+                    Some(&mut self.controller.storage_collections),
+                    ts,
+                    None,
+                    vec![op.clone()],
+                )
+                .await
+            {
+                Ok(result) => return Ok(result.created_client_incarnations),
+                Err(AdapterError::Catalog(error))
+                    if matches!(
+                        &error.kind,
+                        mz_catalog::memory::error::ErrorKind::Durable(
+                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                        )
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub(super) async fn initialize_query_client(&mut self) -> Result<(), AdapterError> {
+        if !self.catalog().state().catalog_read_protection_enabled() {
+            return Ok(());
+        }
+        use crate::peek_client::CoordinatorClient;
+        use crate::query_client::QueryClient;
+        use crate::query_client::connections::{
+            QueryReplicaConnections, QueryReplicaConnectionsConfig,
+        };
+        use mz_ore::collections::CollectionExt;
+
+        let incarnation = self
+            .transact_client_protection(Op::CreateClientIncarnation)
+            .await?
+            .into_element();
+        let txns_shard = self.catalog().txn_wal_shard().await?;
+        let connections = std::sync::Arc::new(QueryReplicaConnections::new(
+            QueryReplicaConnectionsConfig {
+                orchestrator: std::sync::Arc::clone(&self.query_orchestrator),
+                deploy_generation: self.query_deploy_generation,
+                build_info: self.catalog().config().build_info,
+            },
+        ));
+        connections.sync_catalog(self.catalog());
+        let client = std::sync::Arc::new(QueryClient::new(
+            incarnation,
+            CoordinatorClient::Background {
+                tx: self.internal_cmd_tx.clone(),
+                metrics: self.metrics.clone(),
+            },
+            self.persist_client.clone(),
+            self.query_persist_location.clone(),
+            txns_shard,
+            connections,
+        ));
+        self.query_client = Some(client);
+
+        // Keep bootstrap constraints until the client has secured its readable
+        // windows. Missing replicas must not block startup or turn installation
+        // into a catalog-write handshake. Their index windows remain pending.
+        let bootstrap_holds: Vec<_> = self
+            .global_timelines
+            .values_mut()
+            .map(|state| {
+                state
+                    .pending_read_holds
+                    .extend(&state.read_holds.id_bundle());
+                std::mem::take(&mut state.read_holds)
+            })
+            .collect();
+        self.acquire_pending_query_timeline_holds().await?;
+        drop(bootstrap_holds);
+        Ok(())
+    }
+
+    /// Establishes client-owned oracle windows for installed, readable collections.
+    /// Called outside installation, and retried by ordinary timeline maintenance.
+    /// Unknown index frontiers remain pending without delaying healthy clusters.
+    pub(super) async fn acquire_pending_query_timeline_holds(
+        &mut self,
+    ) -> Result<(), AdapterError> {
+        let Some(client) = self.query_client.clone() else {
+            return Ok(());
+        };
+        if client.protection.publication_pending() {
+            return Ok(());
+        }
+        fn retain_live(catalog: &crate::catalog::Catalog, ids: &mut crate::CollectionIdBundle) {
+            ids.storage_ids
+                .retain(|id| catalog.try_get_entry_by_global_id(id).is_some());
+            for ids in ids.compute_ids.values_mut() {
+                ids.retain(|id| catalog.try_get_entry_by_global_id(id).is_some());
+            }
+        }
+        // In-flight work is outside TimelineState. A publication can consume
+        // catalog drops, so membership must be rechecked before returning it.
+        let pending: Vec<_> = self
+            .global_timelines
+            .iter_mut()
+            .filter(|(_, state)| !state.pending_read_holds.is_empty())
+            .map(|(timeline, state)| {
+                (
+                    timeline.clone(),
+                    std::mem::take(&mut state.pending_read_holds),
+                    std::sync::Arc::clone(&state.oracle),
+                )
+            })
+            .collect();
+        let mut first_error = None;
+        for (timeline, mut ids, oracle) in pending {
+            retain_live(self.client_read_catalog(), &mut ids);
+            let Some(state) = self.global_timelines.get(&timeline) else {
+                continue;
+            };
+            ids = ids.difference(&state.read_holds.id_bundle());
+            let mut ready = ids.clone();
+            for (cluster, ids) in &mut ready.compute_ids {
+                *ids = client.readable_indexes(*cluster, ids);
+            }
+            if !ready.is_empty() {
+                match self
+                    .acquire_client_read_protection(client.protection.incarnation(), ready.clone())
+                    .await
+                {
+                    Ok((holds, _)) => {
+                        // Publication can consume a peer drop. In-flight IDs were
+                        // not in timeline state for its cleanup, so recheck them
+                        // before installing a window or restoring pending work.
+                        retain_live(self.client_read_catalog(), &mut ready);
+                        // Index tokens keep their derived leaf protection. Do not
+                        // insert a second direct leaf token already in the window.
+                        let mut holds = holds.subset(&ready);
+                        holds.downgrade(oracle.read_ts().await);
+                        if let Some(state) = self.global_timelines.get_mut(&timeline) {
+                            let missing = ready.difference(&state.read_holds.id_bundle());
+                            state.read_holds.extend(holds.subset(&missing));
+                        }
+                        ids = ids.difference(&ready);
+                    }
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            retain_live(self.client_read_catalog(), &mut ids);
+            if let Some(state) = self.global_timelines.get_mut(&timeline) {
+                state.pending_read_holds.extend(&ids);
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) async fn acquire_client_read_protection(
+        &mut self,
+        incarnation: u64,
+        bundle: crate::CollectionIdBundle,
+    ) -> Result<(crate::ReadHolds, Antichain<Timestamp>), AdapterError> {
+        let client = self.query_client.clone().ok_or(AdapterError::ReadOnly)?;
+        if client.protection.incarnation() != incarnation {
+            return Err(AdapterError::internal(
+                "query read protection",
+                "incarnation is no longer active",
+            ));
+        }
+        if !self
+            .client_read_catalog()
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+        {
+            client.protection.mark_closed();
+            return Err(AdapterError::internal(
+                "query read protection",
+                "incarnation is closed",
+            ));
+        }
+        let prepared = client
+            .prepare_read(self.client_read_catalog(), &bundle)
+            .await?;
+        if let Some(holds) = client
+            .protection
+            .try_acquire(
+                &prepared.bundle,
+                &prepared.frontiers,
+                &prepared.index_inputs,
+            )
+            .map_err(|error| AdapterError::Unstructured(error.into()))?
+        {
+            return Ok((holds, prepared.upper));
+        }
+        let extra = self
+            .client_read_catalog()
+            .state()
+            .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
+        let requirements = client.protection.prepare_publication(extra);
+        let result = self
+            .transact_client_protection(Op::PublishClientReadRequirements {
+                incarnation,
+                requirements,
+            })
+            .await;
+        // Catalog transaction errors are definitive. Indeterminate commit errors
+        // terminate before this point rather than releasing a publication barrier.
+        client.protection.finish_publication(result.is_ok());
+        if !self
+            .client_read_catalog()
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+        {
+            client.protection.mark_closed();
+        }
+        result?;
+        client.published();
+        let holds = client
+            .protection
+            .try_acquire(
+                &prepared.bundle,
+                &prepared.frontiers,
+                &prepared.index_inputs,
+            )
+            .map_err(|error| AdapterError::Unstructured(error.into()))?
+            .ok_or_else(|| {
+                AdapterError::internal("query read protection", "published scope was not acquired")
+            })?;
+        Ok((holds, prepared.upper))
+    }
+
+    /// Publishes the client aggregate and heartbeat through the same transaction path.
+    pub(super) async fn publish_client_read_protection(&mut self) -> Result<(), AdapterError> {
+        use crate::query_client::read_protection::CLIENT_PROTECTION_PUBLICATION_INTERVAL;
+        let Some(client) = self.query_client.clone() else {
+            return Ok(());
+        };
+        if client.last_publication().elapsed() < CLIENT_PROTECTION_PUBLICATION_INTERVAL {
+            return Ok(());
+        }
+        let incarnation = client.protection.incarnation();
+        let requirements = client.protection.prepare_publication(BTreeMap::new());
+        let result = self
+            .transact_client_protection(Op::PublishClientReadRequirements {
+                incarnation,
+                requirements,
+            })
+            .await;
+        client.protection.finish_publication(result.is_ok());
+        if !self
+            .client_read_catalog()
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+        {
+            client.protection.mark_closed();
+        }
+        result?;
+        client.published();
+        Ok(())
+    }
+
+    pub(super) async fn reclaim_client_read_protection(&mut self) -> Result<(), AdapterError> {
+        if self.controller.read_only() {
+            return Ok(());
+        }
+        let active: Vec<_> = self
+            .catalog()
+            .state()
+            .client_incarnations()
+            .iter()
+            .map(|(&id, &heartbeat)| (id, heartbeat))
+            .collect();
+        let expired = self
+            .client_protection_reclaimer
+            .observe(active, Instant::now());
+        if !expired.is_empty() {
+            self.catalog_transact_with_context(
+                None,
+                None,
+                expired
+                    .into_iter()
+                    .map(
+                        |(incarnation, expected_heartbeat)| Op::ReclaimClientIncarnation {
+                            incarnation,
+                            expected_heartbeat,
+                        },
+                    )
+                    .collect(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Restores published compute bounds before installing clusters and dataflows.
     pub(super) async fn restore_compute_read_protection(&mut self) -> Result<(), AdapterError> {
         if !self.catalog().state().catalog_read_protection_enabled() {
@@ -159,6 +495,9 @@ impl Coordinator {
                 self.catalog()
                     .state()
                     .maintained_read_frontier(id, excluding)
+                    .into_iter()
+                    .chain(self.catalog().state().client_read_frontier(id))
+                    .min()
             },
         );
         let requirement_updates = candidates.requirements.len();

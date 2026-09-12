@@ -21,6 +21,7 @@ use mz_expr::row::RowCollection;
 use mz_expr::{RowComparator, compare_columns};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_ore::task::AbortOnDropHandle;
 use mz_repr::adt::numeric;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowRef, Timestamp};
 use mz_sql::plan::SubscribeOutput;
@@ -42,6 +43,14 @@ pub enum ActiveComputeSink {
 }
 
 impl ActiveComputeSink {
+    /// The query-owned task, taken before asynchronous sink cleanup to cancel execution.
+    pub fn query_execution_mut(&mut self) -> &mut Option<AbortOnDropHandle<()>> {
+        match self {
+            ActiveComputeSink::Subscribe(subscribe) => &mut subscribe.query_execution,
+            ActiveComputeSink::CopyTo(copy_to) => &mut copy_to.query_execution,
+        }
+    }
+
     /// Reports the ID of the cluster on which the sink is running.
     pub fn cluster_id(&self) -> ClusterId {
         match &self {
@@ -165,6 +174,8 @@ pub enum ActiveSubscribeOwner {
 /// A description of an active subscribe from coord's perspective
 #[derive(Debug)]
 pub struct ActiveSubscribe {
+    /// Owns query-local creation and execution, canceled when the sink is dropped.
+    pub query_execution: Option<AbortOnDropHandle<()>>,
     /// The owner responsible for retiring the subscribe.
     pub owner: ActiveSubscribeOwner,
     /// The ID of the cluster on which the subscribe is running.
@@ -539,6 +550,8 @@ impl ActiveSubscribe {
 /// A description of an active copy to sink from the coordinator's perspective.
 #[derive(Debug)]
 pub struct ActiveCopyTo {
+    /// Owns query-local creation and execution, canceled when the sink is dropped.
+    pub query_execution: Option<AbortOnDropHandle<()>>,
     /// The ID of the connection which created the subscribe.
     pub conn_id: ConnectionId,
     /// The result channel for the `COPY ... TO` statement that created the copy to sink.

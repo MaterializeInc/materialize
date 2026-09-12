@@ -130,6 +130,44 @@ impl CatalogState {
         for updates in groups {
             let mut apply_state = ApplyState::Updates(Vec::new());
             let mut retractions = InProgressRetractions::default();
+            let mut retention_candidates = BTreeSet::new();
+            for update in &updates {
+                match &update.kind {
+                    StateUpdateKind::ClientReadRequirement(requirement) => {
+                        retention_candidates.insert(requirement.id);
+                    }
+                    StateUpdateKind::StorageCollectionMetadata(metadata) => {
+                        retention_candidates.insert(metadata.id);
+                    }
+                    StateUpdateKind::Item(item) => {
+                        retention_candidates.insert(item.global_id);
+                        retention_candidates.extend(item.extra_versions.values().copied());
+                        // Observe durable membership before filtering session-local
+                        // SQL visibility. Retractions precede additions at this timestamp.
+                        for id in std::iter::once(item.global_id)
+                            .chain(item.extra_versions.values().copied())
+                            .unique()
+                        {
+                            match update.diff {
+                                StateDiff::Addition => {
+                                    self.durable_item_ids.entry(id).or_default().insert(item.id);
+                                }
+                                StateDiff::Retraction => {
+                                    let owners = self
+                                        .durable_item_ids
+                                        .get_mut(&id)
+                                        .expect("retracted item must own its durable IDs");
+                                    owners.remove(&item.id);
+                                    if owners.is_empty() {
+                                        self.durable_item_ids.remove(&id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
 
             for update in updates {
                 let (next_apply_state, (builtin_table_update, catalog_update)) = apply_state
@@ -163,6 +201,22 @@ impl CatalogState {
                         dropped_notices.iter(),
                         Diff::MINUS_ONE,
                     );
+                }
+            }
+
+            // SQL lifetime and protected storage lifetime need not end together.
+            // Derive this projection only after the whole timestamp is applied.
+            for id in retention_candidates {
+                let retained = self.storage_metadata.collection_metadata.contains_key(&id)
+                    && self.client_read_frontier(id).is_some()
+                    && !self.contains_live_collection(&id);
+                if retained != self.storage_metadata.retained_collections.contains(&id) {
+                    let metadata = Arc::make_mut(&mut self.storage_metadata);
+                    if retained {
+                        metadata.retained_collections.insert(id);
+                    } else {
+                        metadata.retained_collections.remove(&id);
+                    }
                 }
             }
         }
@@ -423,6 +477,38 @@ impl CatalogState {
                     requirement,
                     diff,
                 );
+            }
+            StateUpdateKind::ClientIncarnation(incarnation) => {
+                apply_inverted_lookup(
+                    &mut self.client_incarnations,
+                    &incarnation.id,
+                    incarnation.heartbeat,
+                    diff,
+                );
+            }
+            StateUpdateKind::ClientReadRequirement(requirement) => {
+                let edge = (
+                    requirement.id,
+                    requirement.frontier,
+                    requirement.incarnation,
+                );
+                match diff {
+                    StateDiff::Addition => {
+                        let prev = self.client_collection_requirements.insert(edge);
+                        assert!(prev.is_none(), "client requirement edge already exists");
+                    }
+                    StateDiff::Retraction => {
+                        let prev = self.client_collection_requirements.remove(&edge);
+                        assert!(prev.is_some(), "client requirement edge does not exist");
+                    }
+                }
+                apply_inverted_lookup(
+                    &mut self.client_read_requirements,
+                    &(requirement.incarnation, requirement.id),
+                    requirement.frontier,
+                    diff,
+                );
+                self.read_protection_changes.insert(requirement.id);
             }
             StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
                 self.apply_unfinalized_shard_update(unfinalized_shard, diff, retractions);
@@ -1560,6 +1646,8 @@ impl CatalogState {
             | StateUpdateKind::NetworkPolicy(_)
             | StateUpdateKind::CollectionCompactionBound(_)
             | StateUpdateKind::MaintainedReadRequirement(_)
+            | StateUpdateKind::ClientIncarnation(_)
+            | StateUpdateKind::ClientReadRequirement(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
@@ -2325,6 +2413,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::AuditLog(_)
             | StateUpdateKind::CollectionCompactionBound(_)
             | StateUpdateKind::MaintainedReadRequirement(_)
+            | StateUpdateKind::ClientIncarnation(_)
+            | StateUpdateKind::ClientReadRequirement(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => push_update(
                 update,
@@ -2561,6 +2651,8 @@ impl ApplyState {
             | AuditLog(_)
             | CollectionCompactionBound(_)
             | MaintainedReadRequirement(_)
+            | ClientIncarnation(_)
+            | ClientReadRequirement(_)
             | StorageCollectionMetadata(_)
             | UnfinalizedShard(_) => Self::Updates(vec![update]),
         }

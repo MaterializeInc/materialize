@@ -213,9 +213,21 @@ pub struct StorageMetadata {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collection_metadata: BTreeMap<GlobalId, ShardId>,
     pub unfinalized_shards: BTreeSet<ShardId>,
-    /// Committed permission to compact each governed collection through this frontier.
-    /// Absence identifies collections not governed by this API, not permission to
-    /// release an existing bound. Callers must supply complete committed metadata.
+    /// IDs with no SQL object but a live client requirement. Derived from catalog
+    /// membership and client requirements, not separately persisted.
+    pub retained_collections: BTreeSet<GlobalId>,
+    /// Committed permission to compact each collection through this frontier.
+    /// In protected environments, writable registration requires a bound for every
+    /// live and retained ID before opening persist handles. Callers supply complete
+    /// committed metadata, including all aliases of each shard. The meet of their bounds authorizes critical since
+    /// advancement, independently of local dependency and execution accounting.
+    /// Bounds are applied monotonically. A lagging publication cannot restore data
+    /// already compacted, so execution must separately acquire a readable persist lease.
+    /// This contract supports fresh protected environments and same-version recovery,
+    /// not conversion of environments compacted under local-controller authority.
+    /// Unprotected environments may omit bounds and retain local-read-capability
+    /// compaction with envd epoch fencing. The environment mode is selected when
+    /// constructing StorageCollections, never inferred from missing bounds.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub compaction_bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
 }
@@ -255,8 +267,9 @@ pub trait StorageTxn {
 
     /// Remove the metadata associated with the identified collections.
     ///
-    /// Subsequent calls to [`StorageTxn::get_collection_metadata`] must not
-    /// include these keys.
+    /// Client-referenced mappings may be preserved. Return only actually removed
+    /// mappings, which subsequent calls to [`StorageTxn::get_collection_metadata`]
+    /// must not include.
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)>;
 
     /// Retrieve the durable set of shards recorded as unfinalized.

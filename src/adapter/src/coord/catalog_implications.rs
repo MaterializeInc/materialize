@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use fail::fail_point;
 use itertools::Itertools;
-use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::compaction::{CompactionWindow, SINCE_GRANULARITY};
 use mz_catalog::expr_cache::GlobalExpressions;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
@@ -55,6 +55,7 @@ use mz_sql::plan::ConnectionDetails;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::connections::inline::{InlinedConnection, IntoInlineConnection};
+use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::StorageSinkConnection;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceDesc, SourceExport, SourceExportDataConfig,
@@ -68,11 +69,10 @@ use crate::coord::catalog_implications::parsed_state_updates::{
     ParsedStateUpdate, ParsedStateUpdateKind,
 };
 use crate::coord::peek::DroppedDependency;
-use crate::coord::timeline::TimelineState;
 use crate::optimize::OptimizerConfig;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
-use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
+use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt, flags};
 
 pub mod parsed_state_updates;
 
@@ -108,10 +108,11 @@ impl Coordinator {
         // only track that a change happened, not the individual rows.
         let mut replica_scoped_config_changed = false;
         // Whether any environment-wide system-parameter changed in this batch.
-        // We re-run all `SystemVars` callbacks against the committed values, so
-        // we only track that a change happened, not the individual vars.
+        // Runtime consumers refresh from the committed configuration once per
+        // batch, so we only track that a change happened, not individual vars.
         let mut system_config_changed = false;
         let mut compaction_bounds = BTreeMap::new();
+        let mut retired_storage_metadata = BTreeSet::new();
 
         // Whether to wake the cluster controller once the implications below are
         // applied. Decided from the committed diff, see the method.
@@ -173,9 +174,8 @@ impl Coordinator {
                     replica_scoped_config_changed = true;
                 }
                 ParsedStateUpdateKind::SystemConfiguration { durable: _ } => {
-                    // Additions and retractions both re-run the callbacks
-                    // against the committed values, so the diff sign does not
-                    // matter here.
+                    // Additions and retractions both refresh consumers from
+                    // the committed values, including defaults after a reset.
                     system_config_changed = true;
                 }
                 ParsedStateUpdateKind::CollectionCompactionBound(bound) => {
@@ -183,6 +183,11 @@ impl Coordinator {
                         compaction_bounds.insert(bound.id, bound.frontier.into_iter().collect());
                     }
                     // Collection drops release installed bounds, not record retractions.
+                }
+                ParsedStateUpdateKind::StorageCollectionMetadata { id } => {
+                    if update.diff == StateDiff::Retraction {
+                        retired_storage_metadata.insert(*id);
+                    }
                 }
             }
         }
@@ -199,6 +204,26 @@ impl Coordinator {
         )
         .await?;
 
+        // A client can release the final reference after the SQL object's drop.
+        // Retire storage from that committed metadata removal as well. Apply this
+        // after ordinary implications, preserving their execution cleanup order.
+        let storage_metadata = self.catalog().state().storage_metadata();
+        retired_storage_metadata
+            .retain(|id| !storage_metadata.collection_metadata.contains_key(id));
+        if !retired_storage_metadata.is_empty() {
+            self.controller
+                .storage_collections
+                .drop_collections_unvalidated(
+                    storage_metadata,
+                    retired_storage_metadata.into_iter().collect(),
+                );
+        }
+        if should_reconcile_now || system_config_changed {
+            if let Some(client) = &self.query_client {
+                client.connections.sync_catalog(self.catalog());
+            }
+        }
+
         if should_reconcile_now {
             // Wake the controller to reconcile immediately rather than waiting
             // out its tick interval. A missed or spurious wake is harmless: the
@@ -207,11 +232,130 @@ impl Coordinator {
             self.reconcile_now.notify_one();
         }
 
+        // Query protection follows the completed installation batch. An
+        // unavailable replica leaves its window pending rather than holding up
+        // installation or substituting controller tokens for client grants.
+        if let Err(error) = Box::pin(self.acquire_pending_query_timeline_holds()).await {
+            tracing::warn!(%error, "unable to establish query timeline windows");
+        }
+
         self.metrics
             .apply_catalog_implications_seconds
             .observe(start.elapsed().as_secs_f64());
 
         Ok(())
+    }
+
+    /// Refreshes runtime consumers from the committed global configuration.
+    /// Called once per changed batch, including retractions that restore defaults.
+    fn apply_current_system_configuration(&mut self) {
+        mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
+        self.update_controller_config();
+        self.update_compute_config();
+        self.update_storage_config();
+        self.update_timestamp_oracle_config();
+        self.update_metrics_retention();
+        self.update_tracing_config();
+        self.update_secrets_caching_config();
+        self.update_cluster_scheduling_config();
+        self.update_http_config();
+
+        // Preserve the pending tick when an unrelated configuration changes.
+        let interval = self.catalog().system_config().default_timestamp_interval();
+        if interval != self.advance_timelines_interval.period() {
+            self.advance_timelines_interval = tokio::time::interval(interval);
+        }
+        let threshold = self
+            .catalog()
+            .system_config()
+            .optimizer_e2e_latency_warning_threshold();
+        self.optimizer_metrics
+            .set_e2e_optimization_time_log_threshold(threshold);
+        self.catalog().system_config().notify_all_callbacks();
+    }
+
+    fn update_cluster_scheduling_config(&self) {
+        let config = flags::orchestrator_scheduling_config(self.catalog.system_config());
+        self.controller
+            .update_orchestrator_scheduling_config(config);
+    }
+
+    fn update_secrets_caching_config(&self) {
+        let config = flags::caching_config(self.catalog.system_config());
+        self.caching_secrets_reader.set_policy(config);
+    }
+
+    fn update_tracing_config(&self) {
+        let tracing = flags::tracing_config(self.catalog().system_config());
+        tracing.apply(&self.tracing_handle);
+    }
+
+    fn update_compute_config(&mut self) {
+        let config_params = flags::compute_config(self.catalog().system_config());
+        self.controller.compute.update_configuration(config_params);
+    }
+
+    fn update_storage_config(&mut self) {
+        let config_params = flags::storage_config(self.catalog().system_config());
+        self.controller.storage.update_parameters(config_params);
+    }
+
+    fn update_timestamp_oracle_config(&self) {
+        let config_params = flags::timestamp_oracle_config(self.catalog().system_config());
+        if let Some(config) = self.timestamp_oracle_config.as_ref() {
+            config.apply_parameters(config_params)
+        }
+    }
+
+    fn update_metrics_retention(&self) {
+        let duration = self.catalog().system_config().metrics_retention();
+        let policy = ReadPolicy::lag_writes_by(
+            Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
+                tracing::error!("Absurd metrics retention duration: {duration:?}.");
+                u64::MAX
+            })),
+            SINCE_GRANULARITY,
+        );
+        let storage_policies = self
+            .catalog()
+            .entries()
+            .filter(|entry| {
+                entry.item().is_retained_metrics_object()
+                    && entry.item().is_compute_object_on_cluster().is_none()
+            })
+            .map(|entry| (entry.id(), policy.clone()))
+            .collect::<Vec<_>>();
+        let compute_policies = self
+            .catalog()
+            .entries()
+            .filter_map(|entry| {
+                if let (true, Some(cluster_id)) = (
+                    entry.item().is_retained_metrics_object(),
+                    entry.item().is_compute_object_on_cluster(),
+                ) {
+                    Some((cluster_id, entry.id(), policy.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        self.update_storage_read_policies(storage_policies);
+        self.update_compute_read_policies(compute_policies);
+    }
+
+    fn update_controller_config(&mut self) {
+        let sys_config = self.catalog().system_config();
+        self.controller
+            .update_configuration(sys_config.dyncfg_updates());
+    }
+
+    fn update_http_config(&mut self) {
+        let webhook_request_limit = self
+            .catalog()
+            .system_config()
+            .webhook_concurrent_request_limit();
+        self.webhook_concurrency_limit
+            .set_limit(webhook_request_limit);
     }
 
     /// Whether a batch of committed catalog updates should wake the cluster
@@ -248,13 +392,10 @@ impl Coordinator {
         system_config_changed: bool,
         compaction_bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
     ) -> Result<(), AdapterError> {
-        // Re-run the `SystemVars` callbacks against the committed values.
-        // Deriving this from the committed diff, rather than the input ops, is
-        // what makes it also fire on a follower `environmentd` that only
-        // replays the catalog changes. The callbacks are order-independent
-        // idempotent reads, so we fire them once, up front.
+        // Install configuration before other implications so newly created
+        // objects use the committed settings, regardless of which node wrote them.
         if system_config_changed {
-            self.catalog().system_config().notify_all_callbacks();
+            self.apply_current_system_configuration();
         }
 
         // Logging indexes are installed with their cluster, so stage compute permission
@@ -1018,16 +1159,21 @@ impl Coordinator {
         // Note: We only apply these changes below.
         let mut timeline_id_bundles = BTreeMap::new();
 
-        for (timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
+        for (timeline, state) in &self.global_timelines {
             let mut id_bundle = CollectionIdBundle::default();
+            let associated = state.id_bundle();
 
-            for storage_id in read_holds.storage_ids() {
+            for storage_id in associated.storage_ids {
                 if storage_gids_to_drop.contains(&storage_id) {
                     id_bundle.storage_ids.insert(storage_id);
                 }
             }
 
-            for (instance_id, id) in read_holds.compute_ids() {
+            for (instance_id, id) in associated
+                .compute_ids
+                .into_iter()
+                .flat_map(|(cluster, ids)| ids.into_iter().map(move |id| (cluster, id)))
+            {
                 if compute_gids_to_drop.contains(&(instance_id, id))
                     || clusters_to_drop.contains(&instance_id)
                 {
@@ -1044,12 +1190,12 @@ impl Coordinator {
 
         let mut timeline_associations = BTreeMap::new();
         for (timeline, id_bundle) in timeline_id_bundles.into_iter() {
-            let TimelineState { read_holds, .. } = self
+            let state = self
                 .global_timelines
                 .get(&timeline)
                 .expect("all timelines have a timestamp oracle");
 
-            let empty = read_holds.id_bundle().difference(&id_bundle).is_empty();
+            let empty = state.id_bundle().difference(&id_bundle).is_empty();
             timeline_associations.insert(timeline, (empty, id_bundle));
         }
 
@@ -1098,9 +1244,7 @@ impl Coordinator {
                         let cancel_reason = PeekResponse::Error(PeekError::unstructured(
                             dep.query_terminated_error(),
                         ));
-                        self.controller
-                            .compute
-                            .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)
+                        self.cancel_compute_peek(pending_peek.cluster_id, uuid, cancel_reason)
                             .unwrap_or_terminate("unable to cancel peek");
                         self.retire_execution(
                             StatementEndedExecutionReason::Canceled,
@@ -2119,6 +2263,9 @@ impl CatalogImplication {
             }
             ParsedStateUpdateKind::CollectionCompactionBound(_) => {
                 unreachable!("CollectionCompactionBound should not be passed to absorb");
+            }
+            ParsedStateUpdateKind::StorageCollectionMetadata { .. } => {
+                unreachable!("StorageCollectionMetadata should not be passed to absorb");
             }
         }
     }

@@ -24,7 +24,6 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
-use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -676,7 +675,7 @@ impl Controller {
     #[instrument(name = "controller::new")]
     pub async fn new(
         config: ControllerConfig,
-        envd_epoch: NonZeroI64,
+        envd_epoch: std::num::NonZeroI64,
         read_only: bool,
         catalog_read_protection_enabled: bool,
         storage_txn: &dyn StorageTxn,
@@ -699,6 +698,7 @@ impl Controller {
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
+            catalog_read_protection_enabled,
             config.connection_context.clone(),
             storage_txn,
         )

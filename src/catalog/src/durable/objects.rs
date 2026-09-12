@@ -1372,6 +1372,94 @@ impl DurableType for MaintainedReadRequirement {
     }
 }
 
+/// A client identity renewed only by publishing its complete read requirements.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientIncarnation {
+    pub id: u64,
+    pub heartbeat: u64,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientIncarnationKey {
+    pub(crate) id: u64,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientIncarnationValue {
+    pub(crate) heartbeat: u64,
+}
+
+impl DurableType for ClientIncarnation {
+    type Key = ClientIncarnationKey;
+    type Value = ClientIncarnationValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ClientIncarnationKey { id: self.id },
+            ClientIncarnationValue {
+                heartbeat: self.heartbeat,
+            },
+        )
+    }
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            heartbeat: value.heartbeat,
+        }
+    }
+    fn key(&self) -> Self::Key {
+        ClientIncarnationKey { id: self.id }
+    }
+}
+
+/// A client's direct collection hold. Absence, rather than an empty frontier,
+/// releases protection. Storage metadata owns the collection's shard identity.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientReadRequirement {
+    pub incarnation: u64,
+    pub id: GlobalId,
+    pub frontier: Timestamp,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientReadRequirementKey {
+    pub(crate) incarnation: u64,
+    pub(crate) id: GlobalId,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClientReadRequirementValue {
+    pub(crate) frontier: Timestamp,
+}
+
+impl DurableType for ClientReadRequirement {
+    type Key = ClientReadRequirementKey;
+    type Value = ClientReadRequirementValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ClientReadRequirementKey {
+                incarnation: self.incarnation,
+                id: self.id,
+            },
+            ClientReadRequirementValue {
+                frontier: self.frontier,
+            },
+        )
+    }
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            incarnation: key.incarnation,
+            id: key.id,
+            frontier: value.frontier,
+        }
+    }
+    fn key(&self) -> Self::Key {
+        ClientReadRequirementKey {
+            incarnation: self.incarnation,
+            id: self.id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct UnfinalizedShard {
     pub shard: ShardId,
@@ -1403,6 +1491,8 @@ impl DurableType for UnfinalizedShard {
 pub struct ReadProtectionIndex {
     pub(crate) index_identity_counts: imbl::OrdMap<GlobalId, i64>,
     pub(crate) active_consumers: imbl::OrdMap<GlobalId, imbl::OrdMap<GlobalId, i64>>,
+    pub(crate) client_consumers: imbl::OrdMap<GlobalId, imbl::OrdMap<u64, i64>>,
+    pub(crate) client_targets: imbl::OrdMap<u64, imbl::OrdMap<GlobalId, i64>>,
 }
 
 impl ReadProtectionIndex {
@@ -1437,8 +1527,38 @@ impl ReadProtectionIndex {
                     .expect("valid requirement");
                 self.update_requirement(key.id, &value, diff);
             }
+            StateUpdateKind::ClientReadRequirement(key, _) => {
+                let key = ClientReadRequirementKey::from_proto(key.clone())
+                    .expect("valid client requirement key");
+                self.update_client_requirement(&key, diff);
+            }
             _ => {}
         }
+    }
+
+    pub(crate) fn update_client_requirement(&mut self, key: &ClientReadRequirementKey, diff: i64) {
+        fn update<K: Ord + Clone, V: Ord + Clone>(
+            map: &mut imbl::OrdMap<K, imbl::OrdMap<V, i64>>,
+            key: K,
+            value: V,
+            diff: i64,
+        ) {
+            let mut values = map.get(&key).cloned().unwrap_or_default();
+            let count = values.get(&value).copied().unwrap_or(0) + diff;
+            if count == 0 {
+                values.remove(&value);
+            } else {
+                values.insert(value, count);
+            }
+            if values.is_empty() {
+                map.remove(&key);
+            } else {
+                map.insert(key, values);
+            }
+        }
+        // Counts permit replacement additions and retractions in either replay order.
+        update(&mut self.client_consumers, key.id, key.incarnation, diff);
+        update(&mut self.client_targets, key.incarnation, key.id, diff);
     }
 
     pub(crate) fn update_identity(&mut self, id: GlobalId, diff: i64) {
@@ -1523,6 +1643,9 @@ pub struct Snapshot {
         BTreeMap<proto::CollectionCompactionBoundKey, proto::CollectionCompactionBoundValue>,
     pub maintained_read_requirements:
         BTreeMap<proto::MaintainedReadRequirementKey, proto::MaintainedReadRequirementValue>,
+    pub client_incarnations: BTreeMap<proto::ClientIncarnationKey, proto::ClientIncarnationValue>,
+    pub client_read_requirements:
+        BTreeMap<proto::ClientReadRequirementKey, proto::ClientReadRequirementValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
     pub txn_wal_shard: BTreeMap<(), proto::TxnWalShardValue>,
 }
@@ -1535,8 +1658,9 @@ impl Snapshot {
 
 /// Token used to fence out other processes.
 ///
-/// Every time a new process takes over, the `epoch` should be incremented.
-/// Every time a new version is deployed, the `deploy` generation should be incremented.
+/// Protected catalogs compare deployment generations only, allowing components
+/// in the same generation to cooperate. Unprotected catalogs also compare epochs
+/// to give each ordinary writable opener exclusive ownership.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct FenceToken {

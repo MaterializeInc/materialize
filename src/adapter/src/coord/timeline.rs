@@ -67,17 +67,30 @@ impl TimelineContext {
 /// Global state for a single timeline.
 ///
 /// For each timeline we maintain a timestamp oracle, which is responsible for
-/// providing read (and sometimes write) timestamps, and a set of read holds which
-/// guarantee that those read timestamps are valid.
+/// providing read (and sometimes write) timestamps, and read holds retaining its
+/// readable window. Protected indexes join that window once replicas report
+/// actual readability, independently of catalog installation.
 pub(crate) struct TimelineState {
     pub(crate) oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
     pub(crate) read_holds: ReadHolds,
+    /// Installed collections whose query-readable window is not yet protected.
+    /// In particular, an index need not have a readable replica at installation.
+    pub(crate) pending_read_holds: CollectionIdBundle,
+}
+
+impl TimelineState {
+    pub(crate) fn id_bundle(&self) -> CollectionIdBundle {
+        let mut ids = self.read_holds.id_bundle();
+        ids.extend(&self.pending_read_holds);
+        ids
+    }
 }
 
 impl fmt::Debug for TimelineState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimelineState")
             .field("read_holds", &self.read_holds)
+            .field("pending_read_holds", &self.pending_read_holds)
             .finish()
     }
 }
@@ -239,6 +252,7 @@ impl Coordinator {
                 TimelineState {
                     oracle,
                     read_holds: ReadHolds::new(),
+                    pending_read_holds: CollectionIdBundle::default(),
                 },
             );
         }
@@ -252,11 +266,16 @@ impl Coordinator {
         timeline: Timeline,
         ids: CollectionIdBundle,
     ) -> bool {
-        let TimelineState { read_holds, .. } = self
+        let TimelineState {
+            read_holds,
+            pending_read_holds,
+            ..
+        } = self
             .global_timelines
             .get_mut(&timeline)
             .expect("all timeslines have a timestamp oracle");
 
+        *pending_read_holds = pending_read_holds.difference(&ids);
         // Remove all of the underlying resources.
         for id in ids.storage_ids {
             read_holds.remove_storage_collection(id);
@@ -266,7 +285,7 @@ impl Coordinator {
                 read_holds.remove_compute_collection(compute_id, id);
             }
         }
-        let became_empty = read_holds.is_empty();
+        let became_empty = read_holds.is_empty() && pending_read_holds.is_empty();
 
         became_empty
     }
@@ -304,19 +323,12 @@ impl Coordinator {
 
         // Take the map so we can call `&self` methods while mutating the timeline states.
         let global_timelines = std::mem::take(&mut self.global_timelines);
-        for (
-            timeline,
-            TimelineState {
-                oracle,
-                mut read_holds,
-            },
-        ) in global_timelines
-        {
+        for (timeline, mut state) in global_timelines {
             if timeline == Timeline::EpochMilliseconds {
-                self.global_timelines
-                    .insert(timeline, TimelineState { oracle, read_holds });
+                self.global_timelines.insert(timeline, state);
                 continue;
             }
+            let oracle = &state.oracle;
             if !self.read_only_controllers {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
@@ -327,7 +339,20 @@ impl Coordinator {
                 // Otherwise we'd advance to the empty frontier, meaning we
                 // close it off for ever.
                 if !id_bundle.is_empty() {
-                    let least_valid_write = self.least_valid_write(&id_bundle);
+                    let least_valid_write = if let Some(client) = &self.query_client {
+                        match client.write_frontier(self.catalog(), &id_bundle).await {
+                            Ok(upper) => upper,
+                            Err(error) => {
+                                error!(?timeline, %error, "could not observe timeline write frontier");
+                                // Retain both established and pending protection
+                                // unchanged until observation succeeds.
+                                self.global_timelines.insert(timeline, state);
+                                continue;
+                            }
+                        }
+                    } else {
+                        self.least_valid_write(&id_bundle)
+                    };
                     let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
                     oracle.apply_write(now).await;
                     debug!(
@@ -340,9 +365,8 @@ impl Coordinator {
                 }
             }
             let read_ts = oracle.read_ts().await;
-            read_holds.downgrade(read_ts);
-            self.global_timelines
-                .insert(timeline, TimelineState { oracle, read_holds });
+            state.read_holds.downgrade(read_ts);
+            self.global_timelines.insert(timeline, state);
         }
     }
 }

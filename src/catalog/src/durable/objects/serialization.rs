@@ -14,19 +14,21 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
-    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CollectionCompactionBoundKey,
-    CollectionCompactionBoundValue, CommentKey, CommentValue, ConfigKey, ConfigValue, DatabaseKey,
-    DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue,
-    IdAllocKey, IdAllocValue, IntrospectionSourceIndexCatalogItemId,
-    IntrospectionSourceIndexGlobalId, ItemKey, ItemValue, MaintainedReadRequirementKey,
-    MaintainedReadRequirementValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey,
-    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
-    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
-    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    AuditLogKey, ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
+    ClientReadRequirementValue, ClusterIntrospectionSourceIndexKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplicaKey, ClusterReplicaValue,
+    ClusterSystemConfigurationKey, ClusterSystemConfigurationValue, ClusterValue,
+    CollectionCompactionBoundKey, CollectionCompactionBoundValue, CommentKey, CommentValue,
+    ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
+    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
+    MaintainedReadRequirementKey, MaintainedReadRequirementValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey,
+    RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
+    SettingKey, SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemCatalogItemId,
+    SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -829,6 +831,56 @@ impl RustType<proto::MaintainedReadRequirementValue> for MaintainedReadRequireme
         Ok(Self {
             inputs: proto.inputs.into_rust()?,
             frontier: proto.frontier.map(mz_repr::Timestamp::new),
+        })
+    }
+}
+
+impl RustType<proto::ClientIncarnationKey> for ClientIncarnationKey {
+    fn into_proto(&self) -> proto::ClientIncarnationKey {
+        proto::ClientIncarnationKey { id: self.id }
+    }
+    fn from_proto(proto: proto::ClientIncarnationKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self { id: proto.id })
+    }
+}
+
+impl RustType<proto::ClientIncarnationValue> for ClientIncarnationValue {
+    fn into_proto(&self) -> proto::ClientIncarnationValue {
+        proto::ClientIncarnationValue {
+            heartbeat: self.heartbeat,
+        }
+    }
+    fn from_proto(proto: proto::ClientIncarnationValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            heartbeat: proto.heartbeat,
+        })
+    }
+}
+
+impl RustType<proto::ClientReadRequirementKey> for ClientReadRequirementKey {
+    fn into_proto(&self) -> proto::ClientReadRequirementKey {
+        proto::ClientReadRequirementKey {
+            incarnation: self.incarnation,
+            id: self.id.into_proto(),
+        }
+    }
+    fn from_proto(proto: proto::ClientReadRequirementKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            incarnation: proto.incarnation,
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClientReadRequirementValue> for ClientReadRequirementValue {
+    fn into_proto(&self) -> proto::ClientReadRequirementValue {
+        proto::ClientReadRequirementValue {
+            frontier: u64::from(self.frontier),
+        }
+    }
+    fn from_proto(proto: proto::ClientReadRequirementValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            frontier: mz_repr::Timestamp::new(proto.frontier),
         })
     }
 }

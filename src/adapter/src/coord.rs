@@ -70,7 +70,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::net::IpAddr;
-use std::num::NonZeroI64;
 use std::ops::Neg;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -255,6 +254,7 @@ mod introspection;
 mod message_handler;
 mod metric_sink;
 mod privatelink_status;
+mod query_execution;
 mod sql;
 mod storage_bootstrap;
 mod validity;
@@ -357,6 +357,7 @@ pub struct ArrangementSizeRecord {
 #[derive(Debug)]
 pub enum Message {
     Command(OpenTelemetryContext, Command),
+    QueryDataflowResponse(crate::query_client::compute::DataflowResponse),
     ControllerReady {
         controller: ControllerReadiness,
     },
@@ -518,6 +519,7 @@ impl Message {
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
                 Command::CheckRoleCanLogin { .. } => "command-check_role_can_login",
                 Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
+                Command::AcquireClientReadProtection { .. } => "acquire-client-read-protection",
                 Command::GetOracle { .. } => "get-oracle",
                 Command::DetermineRealTimeRecentTimestamp { .. } => {
                     "determine-real-time-recent-timestamp"
@@ -555,6 +557,7 @@ impl Message {
             Message::ControllerReady {
                 controller: ControllerReadiness::Internal,
             } => "controller_ready(internal)",
+            Message::QueryDataflowResponse(_) => "query_dataflow_response",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
@@ -1321,8 +1324,9 @@ impl StagedContext for () {
 /// Configures a coordinator.
 pub struct Config {
     pub controller_config: ControllerConfig,
-    pub controller_envd_epoch: NonZeroI64,
+    pub controller_envd_epoch: std::num::NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub client_protection_storage: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
     pub compaction_bound_subscriber: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
     pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
@@ -2071,6 +2075,12 @@ pub struct Coordinator {
     compaction_bound_subscriber: Option<CompactionBoundSubscriber>,
     /// Changed records retained until publication succeeds, including failed attempts.
     read_protection_pending: BTreeSet<GlobalId>,
+    query_client: Option<Arc<crate::query_client::QueryClient>>,
+    client_protection_catalog: Option<Catalog>,
+    client_protection_reclaimer: crate::query_client::read_protection::ClientProtectionReclaimer,
+    query_persist_location: mz_persist_types::PersistLocation,
+    query_orchestrator: Arc<dyn mz_orchestrator::NamespacedOrchestrator>,
+    query_deploy_generation: u64,
 
     /// A client for persist. Initially, this is only used for reading stashed
     /// peek responses out of batches.
@@ -4259,6 +4269,10 @@ impl Coordinator {
             tokio::pin!(publication_timer);
             let subscription_timer = tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL);
             tokio::pin!(subscription_timer);
+            let client_publication_delay =
+                crate::query_client::read_protection::CLIENT_PROTECTION_PUBLICATION_INTERVAL;
+            let client_publication_timer = tokio::time::sleep(client_publication_delay);
+            tokio::pin!(client_publication_timer);
 
             loop {
                 let delay = self
@@ -4278,6 +4292,18 @@ impl Coordinator {
                     // a command generates internal commands, we will work through the current batch
                     // before receiving a new batch of commands.
                     biased;
+
+                    // Polling the pinned timer is cancel-safe. Renewal and requirement
+                    // publication share one transaction before checking abandoned clients.
+                    _ = client_publication_timer.as_mut() => {
+                        if let Err(error) = self.publish_client_read_protection().await {
+                            warn!(%error, "unable to publish query client protection");
+                        }
+                        if let Err(error) = self.reclaim_client_read_protection().await {
+                            warn!(%error, "unable to reclaim query client protection");
+                        }
+                        client_publication_timer.set(tokio::time::sleep(client_publication_delay));
+                    }
 
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
                     // does not depend on the savepoint's publication setting.
@@ -5151,6 +5177,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         mut storage,
+        client_protection_storage,
         compaction_bound_subscriber,
         timestamp_oracle_url,
         unsafe_mode,
@@ -5518,6 +5545,9 @@ pub fn serve(
         );
 
         let (group_commit_tx, group_commit_rx) = appends::notifier();
+        let query_orchestrator = controller_config.orchestrator.namespace("cluster");
+        let query_deploy_generation = controller_config.deploy_generation;
+        let query_persist_location = controller_config.persist_location.clone();
 
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()
@@ -5529,6 +5559,10 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
 
+                let client_protection_catalog = client_protection_storage.map(|storage| {
+                    handle.block_on(catalog.writer_projection(storage))
+                        .unwrap_or_terminate("failed to acquire client protection projection")
+                });
                 let controller = handle
                     .block_on({
                         catalog.initialize_controller(
@@ -5567,6 +5601,12 @@ pub fn serve(
                     compaction_bound_subscriber: compaction_bound_subscriber
                         .map(CompactionBoundSubscriber::new),
                     read_protection_pending: BTreeSet::new(),
+                    query_client: None,
+                    client_protection_catalog,
+                    client_protection_reclaimer: Default::default(),
+                    query_persist_location,
+                    query_orchestrator,
+                    query_deploy_generation,
                     internal_cmd_tx,
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),
@@ -5663,6 +5703,7 @@ pub fn serve(
                     }
 
                     coord.prune_arrangement_sizes_history_on_startup().await;
+                    coord.initialize_query_client().await?;
 
                     Ok(())
                 });

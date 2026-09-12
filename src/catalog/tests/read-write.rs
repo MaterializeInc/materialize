@@ -126,6 +126,65 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_same_generation_rejects_stale_transaction() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut first = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    first.sync_to_current_updates().await.unwrap();
+    let mut txn = first.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+        .unwrap();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let mut second = builder.unwrap_build().await.join().await.unwrap();
+    first.sync_to_current_updates().await.unwrap();
+    second.sync_to_current_updates().await.unwrap();
+
+    let initial_id = first.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap();
+    let mut first_txn = first.transaction().await.unwrap();
+    let mut stale_txn = second.transaction().await.unwrap();
+    for txn in [&mut first_txn, &mut stale_txn] {
+        assert_eq!(
+            txn.get_and_increment_id_by(USER_ITEM_ALLOC_KEY.into(), 1)
+                .unwrap(),
+            vec![initial_id]
+        );
+        let _ = txn.get_and_commit_op_updates();
+    }
+    let ts = first_txn.upper();
+    first_txn.commit(ts).await.unwrap();
+    assert!(matches!(
+        stale_txn.commit(ts).await.unwrap_err(),
+        CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })
+    ));
+    assert_eq!(
+        second.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap(),
+        initial_id + 1
+    );
+    // Rebuilding is allowed, but replaying the rejected batch would duplicate the ID.
+    assert_eq!(
+        second
+            .allocate_id(USER_ITEM_ALLOC_KEY, 1, ts)
+            .await
+            .unwrap(),
+        vec![initial_id + 1]
+    );
+    assert_eq!(
+        first.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap(),
+        initial_id + 2
+    );
+    first.expire().await;
+    second.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_transaction_rejects_pending_catalog_content() {
     let persist_client = PersistClient::new_for_tests().await;

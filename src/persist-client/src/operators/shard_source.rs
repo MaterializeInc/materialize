@@ -97,6 +97,17 @@ pub enum ErrorHandler {
     Halt(&'static str),
     /// Signal an error to a higher-level supervisor.
     Signal(Rc<dyn Fn(anyhow::Error) + 'static>),
+    /// Notify a query supervisor about read admission and subsequent failures.
+    Query {
+        /// Called on the part-distributing worker after acquiring a reader whose
+        /// since is less than or equal to the requested as_of, before waiting for
+        /// either the start signal or snapshot upper. Not called on other workers.
+        /// The reader remains leased while the source is suspended.
+        ready: Rc<dyn Fn()>,
+        /// Admission and asynchronous read failures freeze the source and are
+        /// reported here. The supervisor must fail the owning query's exports.
+        error: Rc<dyn Fn(anyhow::Error)>,
+    },
 }
 
 impl Debug for ErrorHandler {
@@ -104,6 +115,7 @@ impl Debug for ErrorHandler {
         match self {
             ErrorHandler::Halt(name) => f.debug_tuple("ErrorHandler::Halt").field(name).finish(),
             ErrorHandler::Signal(_) => f.write_str("ErrorHandler::Signal"),
+            ErrorHandler::Query { .. } => f.write_str("ErrorHandler::Query"),
         }
     }
 }
@@ -122,7 +134,10 @@ impl ErrorHandler {
             ErrorHandler::Halt(name) => {
                 mz_ore::halt!("unhandled error in {name}: {error:#}")
             }
-            ErrorHandler::Signal(callback) => {
+            ErrorHandler::Signal(callback)
+            | ErrorHandler::Query {
+                error: callback, ..
+            } => {
                 let () = callback(error);
                 std::future::pending().await
             }
@@ -406,6 +421,21 @@ where
         })
         .await
         .expect("could not open persist shard");
+
+        if let ErrorHandler::Query { ready, .. } = &error_handler {
+            let requested_as_of = as_of.as_ref().unwrap_or_else(|| read.since());
+            if !PartialOrder::less_equal(read.since(), requested_as_of) {
+                error_handler
+                    .report_and_stop(anyhow!(
+                        "{name_owned}: {shard_id} cannot serve requested as_of {requested_as_of:?}: since {:?}",
+                        read.since()
+                    ))
+                    .await;
+            }
+            // A query caller can release its creation grants on admission. Keep
+            // this reader alive across both waits so that handoff has no gap.
+            ready();
+        }
 
         // Wait for the start signal only after we have obtained a read handle. This makes "cannot
         // serve requested as_of" panics caused by (database-issues#8729) significantly less
@@ -1303,6 +1333,91 @@ mod tests {
         });
     }
 
+    /// Query admission must finish without Schedule, even when the snapshot
+    /// upper has not advanced. An unreadable as_of must fail at that same
+    /// boundary without announcing readiness or making output progress.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_query_source_admission_before_start() {
+        for readable in [true, false] {
+            let persist_client = PersistClient::new_for_tests().await;
+            let shard_id = ShardId::new();
+            let mut write = persist_client
+                .open_writer::<String, String, u64, u64>(
+                    shard_id,
+                    Arc::new(StringSchema),
+                    Arc::new(StringSchema),
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .expect("invalid usage");
+            if !readable {
+                write.expect_compare_and_append(&[], 0, 5).await;
+                initialize_shard(&persist_client, shard_id, Antichain::from_elem(3)).await;
+            }
+
+            timely::execute::execute_directly(move |worker| {
+                let ready = Rc::new(std::cell::Cell::new(0));
+                let errors = Rc::new(RefCell::new(Vec::new()));
+                let handler = ErrorHandler::Query {
+                    ready: Rc::new({
+                        let ready = Rc::clone(&ready);
+                        move || ready.set(ready.get() + 1)
+                    }),
+                    error: Rc::new({
+                        let errors = Rc::clone(&errors);
+                        move |error| errors.borrow_mut().push(error.to_string())
+                    }),
+                };
+                let (probe, _tokens) = worker.dataflow::<u64, _, _>(|outer| {
+                    let (stream, tokens) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                        let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                            outer,
+                            scope,
+                            "query_source",
+                            move || std::future::ready(persist_client.clone()),
+                            shard_id,
+                            Some(Antichain::from_elem(1)),
+                            SnapshotMode::Include,
+                            Antichain::new(),
+                            Some(move |_, descs, _| (descs, vec![])),
+                            Arc::new(StringSchema),
+                            Arc::new(StringSchema),
+                            FilterResult::keep_all,
+                            false.then_some(|| unreachable!()),
+                            std::future::pending(),
+                            handler,
+                        );
+                        (stream.leave(outer), tokens)
+                    });
+                    let probe = ProbeHandle::new();
+                    let _stream = stream.probe_with(&probe);
+                    (probe, tokens)
+                });
+
+                let deadline = Instant::now() + std::time::Duration::from_secs(60);
+                while ready.get() == 0 && errors.borrow().is_empty() {
+                    assert!(Instant::now() < deadline, "timed out waiting for admission");
+                    worker.step();
+                }
+                for _ in 0..100 {
+                    worker.step();
+                }
+                assert_eq!(ready.get(), usize::from(readable));
+                if readable {
+                    assert!(errors.borrow().is_empty());
+                } else {
+                    let errors = errors.borrow();
+                    assert_eq!(errors.len(), 1);
+                    assert!(errors[0].contains("cannot serve requested as_of"));
+                }
+                probe.with_frontier(|frontier| {
+                    assert_eq!(frontier, Antichain::from_elem(0).borrow());
+                });
+            });
+        }
+    }
+
     /// Verifies that an unserveable `as_of` (the listing path) reports an error
     /// through the `ErrorHandler` and freezes the source: the output frontier
     /// stays at the requested `as_of` and the worker does not panic.
@@ -1453,11 +1568,24 @@ mod tests {
         }
 
         let frontier = timely::execute::execute_directly(move |worker| {
+            let ready = Rc::new(std::cell::Cell::new(false));
             let errored = Rc::new(std::cell::Cell::new(false));
-            let error_handler = ErrorHandler::signal({
-                let errored = Rc::clone(&errored);
-                move |_err| errored.set(true)
-            });
+            let error_handler = ErrorHandler::Query {
+                ready: Rc::new({
+                    let ready = Rc::clone(&ready);
+                    move || {
+                        assert!(!ready.replace(true), "admitted more than once");
+                    }
+                }),
+                error: Rc::new({
+                    let errored = Rc::clone(&errored);
+                    let ready = Rc::clone(&ready);
+                    move |_err| {
+                        assert!(ready.get(), "fetch started before admission");
+                        errored.set(true);
+                    }
+                }),
+            };
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
                 let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {

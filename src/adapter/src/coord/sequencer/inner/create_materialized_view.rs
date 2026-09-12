@@ -676,29 +676,28 @@ impl Coordinator {
                 .chain(raw_expr.depends_on()),
         )?;
 
-        let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(ctx.session().conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
             // stages will already have acquired ReadHolds, we can re-use those.
 
-            txn_reads
+            txn_reads.clone()
         } else {
             // No one has acquired holds, make sure we can determine an as_of
             // and render our dataflow below.
-            read_holds_owned = self.acquire_read_holds(&id_bundle);
-            &read_holds_owned
+            self.acquire_query_read_holds(&id_bundle).await?
         };
 
         // Reuse purification's holds, whose timestamps may already be named by
         // REFRESH AT. Planning can introduce reads absent from name resolution.
         let mut additional_inputs = id_bundle.clone();
         additional_inputs.extend(&logical_inputs);
-        let additional_read_holds =
-            self.acquire_read_holds(&additional_inputs.difference(&read_holds.id_bundle()));
+        let additional_read_holds = self
+            .acquire_query_read_holds(&additional_inputs.difference(&read_holds.id_bundle()))
+            .await?;
         let (dataflow_as_of, storage_as_of, until) = self.select_timestamps(
             id_bundle,
             refresh_schedule.as_ref(),
-            read_holds,
+            &read_holds,
             &additional_read_holds,
             &logical_inputs,
         )?;
@@ -1064,7 +1063,7 @@ impl Coordinator {
     }
 
     pub(crate) async fn explain_pushdown_materialized_view(
-        &self,
+        &mut self,
         ctx: ExecuteContext,
         item_id: CatalogItemId,
     ) {
@@ -1093,7 +1092,13 @@ impl Coordinator {
             storage_ids: plan.source_imports.keys().copied().collect(),
             compute_ids: BTreeMap::new(),
         };
-        let read_holds = Some(self.acquire_read_holds(&id_bundle));
+        let read_holds = match self.acquire_query_read_holds(&id_bundle).await {
+            Ok(holds) => Some(holds),
+            Err(error) => {
+                ctx.retire(Err(error));
+                return;
+            }
+        };
 
         let frontiers = self
             .controller

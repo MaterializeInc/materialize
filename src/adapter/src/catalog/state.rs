@@ -156,10 +156,20 @@ pub struct CatalogState {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) source_references: imbl::OrdMap<CatalogItemId, SourceReferences>,
     pub(super) storage_metadata: Arc<StorageMetadata>,
+    /// Durable Item membership, including versions and foreign temporary items
+    /// omitted from the session-visible entries. Multiple items can alias an ID.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) durable_item_ids: imbl::OrdMap<GlobalId, imbl::OrdSet<CatalogItemId>>,
     #[serde(serialize_with = "serialize_collection_compaction_bounds")]
     pub(super) collection_compaction_bounds: imbl::OrdMap<GlobalId, Antichain<Timestamp>>,
     #[serde(serialize_with = "serialize_maintained_read_requirements")]
     pub(super) maintained_read_requirements: imbl::OrdMap<GlobalId, MaintainedReadRequirement>,
+    pub(super) client_incarnations: imbl::OrdMap<u64, u64>,
+    #[serde(serialize_with = "serialize_client_read_requirements")]
+    pub(super) client_read_requirements: imbl::OrdMap<(u64, GlobalId), Timestamp>,
+    /// Client requirements ordered by collection, frontier, and incarnation.
+    #[serde(skip)]
+    pub(super) client_collection_requirements: imbl::OrdSet<(GlobalId, Timestamp, u64)>,
     /// Non-completed requirement edges, ordered by input, frontier, and owner.
     #[serde(skip)]
     pub(super) maintained_input_requirements: imbl::OrdSet<(GlobalId, Timestamp, GlobalId)>,
@@ -453,6 +463,7 @@ impl CatalogState {
             database_by_id: Default::default(),
             entry_by_id: Default::default(),
             entry_by_global_id: Default::default(),
+            durable_item_ids: Default::default(),
             notices_by_dep_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
@@ -493,6 +504,9 @@ impl CatalogState {
             storage_metadata: Arc::new(StorageMetadata::default()),
             collection_compaction_bounds: Default::default(),
             maintained_read_requirements: Default::default(),
+            client_incarnations: Default::default(),
+            client_read_requirements: Default::default(),
+            client_collection_requirements: Default::default(),
             maintained_input_requirements: Default::default(),
             read_protection_changes: Default::default(),
             catalog_read_protection_enabled: false,
@@ -1160,6 +1174,11 @@ impl CatalogState {
 
     pub fn try_get_entry(&self, id: &CatalogItemId) -> Option<&CatalogEntry> {
         self.entry_by_id.get(id)
+    }
+
+    /// Whether SQL still owns this ID, including nonlocal items and local builtins.
+    pub(super) fn contains_live_collection(&self, id: &GlobalId) -> bool {
+        self.durable_item_ids.contains_key(id) || self.entry_by_global_id.contains_key(id)
     }
 
     pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
@@ -2642,8 +2661,8 @@ impl CatalogState {
         }
         // Remove GlobalIds for temporary objects from the mapping.
         //
-        // Post-test consistency checks with the durable catalog don't know about temporary items
-        // since they're kept entirely in memory.
+        // Durable reconstruction has no local sessions, so temporary SQL entries
+        // are omitted. Their durable membership remains in durable_item_ids.
         let temporary_gids: Vec<_> = self
             .entry_by_global_id
             .iter()
@@ -2925,6 +2944,32 @@ impl CatalogState {
         &self.maintained_read_requirements
     }
 
+    /// Returns the durable client incarnations and their heartbeat sequences.
+    pub fn client_incarnations(&self) -> &imbl::OrdMap<u64, u64> {
+        &self.client_incarnations
+    }
+
+    /// Returns durable client requirements, keyed by incarnation and collection.
+    pub fn client_read_requirements(&self) -> &imbl::OrdMap<(u64, GlobalId), Timestamp> {
+        &self.client_read_requirements
+    }
+
+    /// Returns the earliest committed client requirement for a collection.
+    pub fn client_read_frontier(&self, id: GlobalId) -> Option<Timestamp> {
+        self.client_collection_requirements
+            .range((id, Timestamp::MIN, 0)..)
+            .next()
+            .and_then(|(collection, frontier, _)| (*collection == id).then_some(*frontier))
+    }
+
+    /// Iterates over distinct collections with committed client requirements.
+    pub fn client_required_collections(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.client_collection_requirements
+            .iter()
+            .map(|(id, _, _)| *id)
+            .dedup()
+    }
+
     /// Returns the earliest committed requirement for an input, excluding the given owners.
     pub fn maintained_read_frontier(
         &self,
@@ -3179,9 +3224,140 @@ fn serialize_maintained_read_requirements<S: serde::Serializer>(
     serializer.collect_map(entries)
 }
 
+fn serialize_client_read_requirements<S: serde::Serializer>(
+    requirements: &imbl::OrdMap<(u64, GlobalId), Timestamp>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(
+        requirements
+            .iter()
+            .map(|((incarnation, id), frontier)| (incarnation, id, frontier)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn client_requirements_replay_preserves_other_clients() {
+        use mz_catalog::durable::objects::{ClientIncarnation, ClientReadRequirement};
+        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+
+        let id = GlobalId::User(2);
+        let other = GlobalId::User(4);
+        let incarnation =
+            |id, heartbeat| StateUpdateKind::ClientIncarnation(ClientIncarnation { id, heartbeat });
+        let requirement = |incarnation, id, frontier| {
+            StateUpdateKind::ClientReadRequirement(ClientReadRequirement {
+                incarnation,
+                id,
+                frontier: Timestamp::from(frontier),
+            })
+        };
+        let mut state = CatalogState::empty_test();
+        let mut snapshot = None;
+        let batches = [
+            (
+                vec![],
+                vec![
+                    incarnation(1, 0),
+                    incarnation(2, 0),
+                    requirement(1, id, 10),
+                    requirement(2, id, 10),
+                    requirement(2, other, 30),
+                ],
+                Some(10),
+            ),
+            (
+                vec![incarnation(1, 0), requirement(1, id, 10)],
+                vec![incarnation(1, 1), requirement(1, id, 20)],
+                Some(10),
+            ),
+            (
+                vec![
+                    incarnation(2, 0),
+                    requirement(2, id, 10),
+                    requirement(2, other, 30),
+                ],
+                vec![],
+                Some(20),
+            ),
+            (
+                vec![incarnation(1, 1), requirement(1, id, 20)],
+                vec![],
+                None,
+            ),
+        ];
+        for (retractions, additions, expected) in batches {
+            let updates = additions
+                .into_iter()
+                .map(|kind| (kind, StateDiff::Addition))
+                .chain(
+                    retractions
+                        .into_iter()
+                        .map(|kind| (kind, StateDiff::Retraction)),
+                )
+                .map(|(kind, diff)| StateUpdate {
+                    kind,
+                    ts: Timestamp::MIN,
+                    diff,
+                })
+                .collect();
+            let (builtin_updates, implications) = state
+                .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                .await;
+            assert!(builtin_updates.is_empty());
+            assert!(implications.is_empty());
+            assert_eq!(
+                state.client_read_frontier(id),
+                expected.map(Timestamp::from)
+            );
+            assert_eq!(state.client_read_frontier(GlobalId::User(1)), None);
+            assert_eq!(state.client_read_frontier(GlobalId::User(3)), None);
+            assert_eq!(state.client_read_frontier(GlobalId::User(5)), None);
+            assert_eq!(
+                state.client_required_collections().collect::<Vec<_>>(),
+                state
+                    .client_read_requirements()
+                    .keys()
+                    .map(|(_, id)| *id)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            );
+            if snapshot.is_none() {
+                snapshot = Some(state.clone());
+            }
+        }
+        assert!(state.client_incarnations().is_empty());
+        assert!(state.client_read_requirements().is_empty());
+        let snapshot = snapshot.expect("initial state captured");
+        assert_eq!(snapshot.client_read_frontier(id), Some(Timestamp::from(10)));
+        assert_eq!(
+            snapshot.client_read_frontier(other),
+            Some(Timestamp::from(30))
+        );
+        assert_eq!(
+            snapshot.client_incarnations(),
+            &imbl::OrdMap::from_iter([(1u64, 0u64), (2u64, 0u64)])
+        );
+        let dump = serde_json::to_value(&snapshot).expect("can serialize catalog state");
+        assert_eq!(
+            dump["client_incarnations"],
+            serde_json::json!({"1": 0, "2": 0})
+        );
+        assert_eq!(
+            dump["client_read_requirements"],
+            serde_json::to_value([
+                (1, id, Timestamp::from(10)),
+                (2, id, Timestamp::from(10)),
+                (2, other, Timestamp::from(30)),
+            ])
+            .expect("can serialize client requirements")
+        );
+        assert!(dump.get("client_collection_requirements").is_none());
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn storage_permission_projects_only_shard_backed_bounds() {

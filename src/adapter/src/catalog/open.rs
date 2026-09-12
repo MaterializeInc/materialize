@@ -240,6 +240,7 @@ impl Catalog {
             database_by_id: imbl::OrdMap::new(),
             entry_by_id: imbl::OrdMap::new(),
             entry_by_global_id: imbl::OrdMap::new(),
+            durable_item_ids: Default::default(),
             notices_by_dep_id: imbl::OrdMap::new(),
             ambient_schemas_by_name: imbl::OrdMap::new(),
             ambient_schemas_by_id: imbl::OrdMap::new(),
@@ -259,6 +260,9 @@ impl Catalog {
             storage_metadata: Arc::new(StorageMetadata::default()),
             collection_compaction_bounds: Default::default(),
             maintained_read_requirements: Default::default(),
+            client_incarnations: Default::default(),
+            client_read_requirements: Default::default(),
+            client_collection_requirements: Default::default(),
             maintained_input_requirements: Default::default(),
             read_protection_changes: Default::default(),
             catalog_read_protection_enabled: false,
@@ -430,6 +434,8 @@ impl Catalog {
                 StateUpdateKind::Comment(_)
                 | StateUpdateKind::CollectionCompactionBound(_)
                 | StateUpdateKind::MaintainedReadRequirement(_)
+                | StateUpdateKind::ClientIncarnation(_)
+                | StateUpdateKind::ClientReadRequirement(_)
                 | StateUpdateKind::StorageCollectionMetadata(_)
                 | StateUpdateKind::SourceReferences(_)
                 | StateUpdateKind::UnfinalizedShard(_) => {
@@ -801,7 +807,7 @@ impl Catalog {
         &mut self,
         storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
-        let collections = self
+        let mut collections: BTreeSet<_> = self
             .entries()
             .filter(|entry| entry.item().is_storage_collection())
             .flat_map(|entry| entry.global_ids())
@@ -815,6 +821,14 @@ impl Catalog {
         let shard_id = storage.shard_id();
         let mut txn = storage.transaction().await?;
         let existing_collections = txn.get_collection_metadata();
+
+        // Client grants retain storage metadata even after the catalog item is
+        // dropped. Index requirements have no storage metadata of their own.
+        collections.extend(
+            state
+                .client_required_collections()
+                .filter(|id| existing_collections.contains_key(id)),
+        );
 
         // Ensure the storage controller knows about the catalog shard and associates it with the
         // `MZ_CATALOG_RAW` builtin source.

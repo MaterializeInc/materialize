@@ -3438,7 +3438,13 @@ impl Coordinator {
             storage_ids: BTreeSet::from_iter([plan.sink.from]),
             compute_ids: BTreeMap::new(),
         };
-        let mut read_hold = self.acquire_read_holds(&id_bundle);
+        let mut read_hold = match self.acquire_query_read_holds(&id_bundle).await {
+            Ok(holds) => holds,
+            Err(error) => {
+                ctx.retire(Err(error));
+                return;
+            }
+        };
         let mut threshold = read_hold.least_valid_read();
         if self.catalog().state().catalog_read_protection_enabled() {
             let metadata = self.catalog().state().storage_metadata();

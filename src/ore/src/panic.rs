@@ -298,7 +298,7 @@ where
 /// message string, which it almost always is.
 ///
 /// See: <https://doc.rust-lang.org/stable/std/panic/struct.PanicHookInfo.html#method.payload>
-fn downcast_panic_message(payload: &(dyn Any + Send)) -> Cow<'static, str> {
+pub fn downcast_panic_message(payload: &(dyn Any + Send)) -> Cow<'static, str> {
     match payload.downcast_ref::<&'static str>() {
         Some(s) => Cow::Borrowed(*s),
         None => match payload.downcast_ref::<String>() {

@@ -31,16 +31,16 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
-    AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
-    ClusterReplicaCollection, ClusterSystemConfigurationCollection, Collection,
-    CollectionCompactionBoundCollection, CollectionTrace, CollectionType, CommentCollection,
-    ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, MaintainedReadRequirementCollection,
-    NetworkPolicyCollection, ReplicaSystemConfigurationCollection, RoleAuthCollection,
-    RoleCollection, SchemaCollection, SettingCollection, SourceReferencesCollection,
-    StorageCollectionMetadataCollection, SystemConfigurationCollection,
-    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
-    UnfinalizedShardsCollection,
+    AuditLogCollection, ClientIncarnationCollection, ClientReadRequirementCollection,
+    ClusterCollection, ClusterIntrospectionSourceIndexCollection, ClusterReplicaCollection,
+    ClusterSystemConfigurationCollection, Collection, CollectionCompactionBoundCollection,
+    CollectionTrace, CollectionType, CommentCollection, ConfigCollection, DatabaseCollection,
+    DebugCatalogState, DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection,
+    MaintainedReadRequirementCollection, NetworkPolicyCollection,
+    ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
+    SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
+    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
+    TxnWalShardCollection, UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
@@ -141,6 +141,8 @@ enum Action {
         target: Option<PathBuf>,
     },
     /// Edits a single item in a collection in the catalog.
+    /// Uses cooperative compare-and-set without an exclusive open or automatic promotion.
+    /// Refuses with a reason if client heartbeats or recent publication indicate a live environment.
     Edit {
         /// The name of the catalog collection to edit.
         collection: String,
@@ -150,14 +152,24 @@ enum Action {
         /// The new JSON-encoded value for the item.
         #[clap(value_parser = parse_json)]
         value: serde_json::Value,
+        /// Override advisory liveness safety, without fencing writers or promoting.
+        /// Live writers apply foreign changes or halt and rebuild if they cannot.
+        #[clap(long)]
+        force: bool,
     },
     /// Deletes a single item in a collection in the catalog
+    /// Uses cooperative compare-and-set without an exclusive open or automatic promotion.
+    /// Refuses with a reason if client heartbeats or recent publication indicate a live environment.
     Delete {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to delete.
         #[clap(value_parser = parse_json)]
         key: serde_json::Value,
+        /// Override advisory liveness safety, without fencing writers or promoting.
+        /// Live writers apply foreign changes or halt and rebuild if they cannot.
+        #[clap(long)]
+        force: bool,
     },
     /// Checks if the specified catalog could be upgraded from its state to the
     /// adapter catalog at the version of this binary. Prints a success message
@@ -261,8 +273,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             collection,
             key,
             value,
-        } => edit(openable_state, collection, key, value).await,
-        Action::Delete { collection, key } => delete(openable_state, collection, key).await,
+            force,
+        } => edit(openable_state, collection, key, value, force).await,
+        Action::Delete {
+            collection,
+            key,
+            force,
+        } => delete(openable_state, collection, key, force).await,
         Action::UpgradeCheck {
             secrets,
             cluster_replica_sizes,
@@ -329,6 +346,12 @@ macro_rules! for_collection {
             CollectionType::MaintainedReadRequirement => {
                 $fn::<MaintainedReadRequirementCollection>($($arg),*).await?
             }
+            CollectionType::ClientIncarnation => {
+                $fn::<ClientIncarnationCollection>($($arg),*).await?
+            }
+            CollectionType::ClientReadRequirement => {
+                $fn::<ClientReadRequirementCollection>($($arg),*).await?
+            }
             CollectionType::StorageCollectionMetadata => {
                 $fn::<StorageCollectionMetadataCollection>($($arg),*).await?
             }
@@ -345,11 +368,13 @@ async fn edit(
     collection: String,
     key: serde_json::Value,
     value: serde_json::Value,
+    force: bool,
 ) -> Result<(), anyhow::Error> {
     async fn edit_col<T: Collection>(
         mut debug_state: DebugCatalogState,
         key: serde_json::Value,
         value: serde_json::Value,
+        force: bool,
     ) -> Result<serde_json::Value, anyhow::Error>
     where
         for<'a> T::Key: PartialEq + Eq + Debug + Clone + Deserialize<'a>,
@@ -357,13 +382,15 @@ async fn edit(
     {
         let key: T::Key = serde_json::from_value(key)?;
         let value: T::Value = serde_json::from_value(value)?;
-        let prev = debug_state.edit::<T>(key.clone(), value.clone()).await?;
+        let prev = debug_state
+            .edit::<T>(key.clone(), value.clone(), force)
+            .await?;
         Ok(serde_json::to_value(prev)?)
     }
 
     let collection_type: CollectionType = collection.parse()?;
     let debug_state = openable_state.open_debug().await?;
-    let prev = for_collection!(collection_type, edit_col, debug_state, key, value);
+    let prev = for_collection!(collection_type, edit_col, debug_state, key, value, force);
     println!("previous value: {prev:?}");
     Ok(())
 }
@@ -372,23 +399,25 @@ async fn delete(
     openable_state: Box<dyn OpenableDurableCatalogState>,
     collection: String,
     key: serde_json::Value,
+    force: bool,
 ) -> Result<(), anyhow::Error> {
     async fn delete_col<T: Collection>(
         mut debug_state: DebugCatalogState,
         key: serde_json::Value,
+        force: bool,
     ) -> Result<(), anyhow::Error>
     where
         for<'a> T::Key: PartialEq + Eq + Debug + Clone + Deserialize<'a>,
         T::Value: Debug,
     {
         let key: T::Key = serde_json::from_value(key)?;
-        debug_state.delete::<T>(key.clone()).await?;
+        debug_state.delete::<T>(key.clone(), force).await?;
         Ok(())
     }
 
     let collection_type: CollectionType = collection.parse()?;
     let debug_state = openable_state.open_debug().await?;
-    for_collection!(collection_type, delete_col, debug_state, key);
+    for_collection!(collection_type, delete_col, debug_state, key, force);
     Ok(())
 }
 
@@ -483,6 +512,8 @@ async fn dump(
         system_privileges,
         collection_compaction_bounds,
         maintained_read_requirements,
+        client_incarnations,
+        client_read_requirements,
         storage_collection_metadata,
         unfinalized_shards,
         txn_wal_shard,
@@ -585,6 +616,20 @@ async fn dump(
     dump_col(
         &mut data,
         maintained_read_requirements,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        client_incarnations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        client_read_requirements,
         &ignore,
         stats_only,
         consolidate,
@@ -865,5 +910,39 @@ struct UnescapedDebug(String);
 impl std::fmt::Debug for UnescapedDebug {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "'{}'", self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Action;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Command {
+        #[clap(subcommand)]
+        action: Action,
+    }
+
+    #[mz_ore::test]
+    fn mutations_require_explicit_force() {
+        for mutation in ["edit", "delete"] {
+            for force in [false, true] {
+                let mut args = vec!["catalog-debug", mutation, "config", "{}"];
+                if mutation == "edit" {
+                    args.push("{}");
+                }
+                if force {
+                    args.push("--force");
+                }
+                let command = Command::try_parse_from(args).expect("valid mutation command");
+                match command.action {
+                    Action::Edit { force: actual, .. } | Action::Delete { force: actual, .. } => {
+                        assert_eq!(actual, force);
+                    }
+                    action => panic!("unexpected action: {action:?}"),
+                }
+            }
+        }
     }
 }

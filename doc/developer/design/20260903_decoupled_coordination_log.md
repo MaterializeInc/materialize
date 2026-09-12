@@ -583,3 +583,171 @@ Readability is enforced where the read happens, so a reclaimed client's late rea
 is served correctly or refused, and compute learns nothing about incarnations.
 
 Milestone 2 remains active. Next: build the query client in-process on this basis.
+
+### 2026-09-10: Query-client integration and connection review
+
+The uncommitted implementation adds the two client records, catalog-derived index
+input requirements, retained storage metadata, local grant aggregation, and
+heartbeat reclamation. The query client observes Persist frontiers and actual
+compute read frontiers. Request timestamp selection and fast peeks are being
+integrated with that client. Query-local creation and replicated sink-response
+merging are implemented but not yet connected to SQL slow SELECT, SUBSCRIBE, or
+COPY TO execution.
+
+Independent connection review found five concrete issues: missing transitive
+producer retention, query servicing blocked by incomplete lifecycle initialization,
+unresolved pre-admission cancellation, starvation between query connections, and
+unbounded response-routing history. Fixes and regressions are in the worktree.
+Routing uses ordered connection-open and retirement events, not catalog incarnation
+knowledge. Scheduling guards follow maintained import chains as well as direct
+query imports.
+
+The adapter and compute test targets compile. The normal compute test command was
+killed twice during code generation, with kernel OOM evidence. A compute-only
+test profile override is being tried without changing assertions. These checks
+do not establish SQL integration or milestone acceptance. Query dataflow time
+dependence, timeline hold issuers, and instrumentation still need integration
+attention before removing the controller bundle from the adapter.
+
+Proposed to Aljoscha, awaiting approval: cooperating handles join the active
+deployment fence, with promotion still fencing the old deployment. Persist
+compare-and-append remains the commit authority. Writers refresh and revalidate
+on contention, retry metadata-only conflicts, and reject invalidated planned DDL
+rather than merge stale definitions. Each writer follows committed state directly.
+Read-only SQL savepoints require a live client-protection writer. No cooperating
+writer implementation has been started on this proposal.
+
+The reduced-optimization run exposed invalid arrangement fixtures, then a real
+maintained-alias retention bug. Corrected fixture lowering and producer-token
+retention yielded 13 query tests and 16 peek-sweep tests passing. Review found
+the same retention condition in iterative alias exports, which is now corrected
+too. The combined rerun passes formatting, whitespace, adapter test-target
+compilation, all 13 query tests, and all 16 peek-sweep tests.
+
+Query-client review also found a replica-publication race in the terminal
+unreadable decision and creation sent before imported indexes were observed.
+Selection now compares desired and ready counts from the same selection pass,
+and query creation waits for readable imports while retaining creation holds.
+Their wire-level regression coverage remains outstanding. Baseline comparison
+rejects target-local upper selection as a required fix: existing timestamp
+selection uses cluster-wide uppers, then honors the target during execution.
+Waiting on a slower target preserves that behavior. Replica since/readability
+rejection remains a separate concern requiring a concrete baseline comparison,
+not a change to freshness semantics merely to satisfy a target-local test.
+
+### 2026-09-10: Cooperating writers approved, committed-only critical since
+
+Aljoscha relayed approval of generation-scoped writers, CAS with metadata retry
+and DDL revalidation or planning conflict, independent projections, and no DDL
+forwarding. Critical since handles follow committed bounds only, without local
+capability authority or an envd process epoch. Prewarming protection joins the
+active generation, not its pending deployment generation. Concrete enactment
+conflicts between same-generation lifecycle instances must be raised separately.
+The designer's decision commit is preserved as parent `75c83e93`. Include the
+uncommitted log updates with the implementation commits.
+
+Implementation is underway at the durable join, adapter contention/projection,
+and storage critical-since boundaries. Joining must not run bootstrap migrations
+or remove live ephemeral objects. A definite CAS loss is recoverable, but a fence
+observed after a successful append still requires recovery rather than replay.
+
+The committed-only storage contract rejects writable collections without bounds.
+Fresh catalog protection defaults on, and unprotected catalogs receive an explicit
+unsupported-mode error rather than conversion or a local-capability fallback.
+The forced builtin-MV migration tests deliberately use unprotected mode and are
+incompatible with this scope. Their assertions remain intact. SQL query-client
+integration, prewarming writer wiring, and system verification remain incomplete.
+
+### 2026-09-10: Resumed after disk recovery
+
+Generation-scoped catalog admission and metadata primitives pass the open and
+read-write suites. Committed-only storage advancement passes the collection suite,
+including real leased readability after critical advancement and finalization
+after lease release. The unused critical-since epoch argument is removed through
+controller and environmentd construction.
+
+SQL SUBSCRIBE and COPY now own cancellable query-creation tasks in their active
+sink state. Slow SELECT and legacy-sequenced fast peeks route through QueryClient.
+Creation waits for readable imports, and transient peeks use only connections
+that acknowledged their own dataflow. Coordinator execution bookkeeping is shared
+across the query paths. This wiring still needs production system verification.
+
+Prewarming now acquires a joined writer under the active durable generation and
+reconstructs a separate committed projection. Its entry point permits only client
+creation and publication, leaving the SQL savepoint unchanged. A synchronization
+fence closes cached client grants. The adapter projection test also distinguishes
+planning-visible peer DDL from client metadata and checks generation promotion.
+
+Independent review identified a manual-debug mutation conflict: debug edits and
+deletes relied on epoch fencing, which same-generation admission does not provide.
+Raised to Aljoscha for an explicit offline or promotion policy, with offline-only
+recommended. The fencing test remains unchanged. Promotion cleanup and crashed
+ephemeral-owner recovery also retain explicit limitations, not a general epoch.
+
+Remaining integration includes runtime timeline hold issuers, maintained DDL
+readability assumptions, query time dependence and instrumentation, then the
+independent lifecycle process and production demonstration. The worktree and log
+updates are uncommitted, with the designer's parent commit preserved.
+
+### 2026-09-10: Protected-mode scope and administrative writes clarified
+
+Aljoscha relayed the designer's correction: committed-bound-only critical since
+and cooperative writer admission apply to protected environments. Unprotected
+environments retain capability-driven compaction, epoch-fenced normal opens, and
+their migration behavior. The unsupported-mode error and changed default are
+reverted. Prewarming acquires a protection writer only in protected mode. The
+builtin-MV migration tests remain unchanged, not skipped or weakened.
+
+Administrative edits use cooperative CAS without exclusive admission or promotion
+in either mode. Registered client heartbeats and recent catalog publication provide
+an advisory liveness check. Edits and deletes refuse with a reason unless forced.
+The check is repeated against each CAS snapshot after contention. Heartbeats are
+counters, so unreclaimed clients are conservatively treated as live. Publication
+uses a five-minute recency window, conservative under timestamp compaction.
+`--force` bypasses only this check, not CAS or deployment fencing.
+
+Writers that cannot decode, apply, or enact committed foreign changes halt for
+durable-state recovery rather than continue with a stale or partial projection.
+This applies to all foreign writes, not only administration. Tests cover ordinary
+legacy epoch fencing separately from non-fencing administrative mutations and
+protected-generation cooperation.
+
+Review found valid foreign changes that bypassed projection errors. Runtime identity
+validation now reports recovery for post-bootstrap changes to the protection latch,
+transaction WAL identity, or bootstrap-only settings. It preserves generation/epoch
+fence precedence and permits initialization and effective no-ops. Joined serving
+projections mark bootstrap completion after reconstruction. Global system-parameter
+effects now run from committed implications, including the timeline timer, instead
+of a separate input-Op path. Subprocess coverage distinguishes process termination
+from an ordinary test panic for invalid SQL and a protection-mode change.
+
+### 2026-09-10: Query-owned timeline windows
+
+Protected timeline windows use client grants after installation, deferring indexes
+without observed readable replicas. Bootstrap uses the same acquisition path,
+without requiring initial index-bound publication. Pending acquisition defers
+during another client publication and rechecks collection membership after it.
+Unprotected timelines keep controller holds. Next: exercise this in draft PR CI,
+then finish maintained installation and remaining query-side controller dependencies
+before moving the lifecycle process.
+
+Logging sources have no storage access path. Planning must include their
+catalog-owned indexes before query-wire observations arrive, while execution
+still waits for actual trace readiness. Unpublished protected logging indexes
+retain their MIN initialization permission. Historical-read admission and retained
+storage projection agreement remain separate follow-ups.
+
+### 2026-09-10: Milestone 2 pause handoff
+
+Temporary SQL visibility is not durable lifetime membership. Track committed Item
+global IDs and versions even when their owning session is absent locally, so a
+joined projection cannot retire a live foreign temporary table on client release.
+
+Next: fix historical-read acquisition. A cached client grant at G covers reads from
+G onward but does not make older retained history unavailable. Use query timestamp
+constraints and current permission to expand coverage when needed, preserving local
+reuse and ordinary nonblocking reads rather than republishing MIN per query.
+Restarted index permission, final shard retirement, and targeted SUBSCRIBE behavior
+remain separate investigations. Maintained installation and the lifecycle process
+move are still outstanding. Preserve the designer commits and keep this checkpoint
+as WIP while continuing the draft PR loop.

@@ -325,6 +325,19 @@ impl NamespacedProcessOrchestrator {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
+    fn service_addresses(
+        &self,
+        id: &str,
+        scale: NonZero<u16>,
+        port: &ServicePort,
+    ) -> Result<Vec<String>, anyhow::Error> {
+        Ok(ProcessService {
+            run_dir: self.config.service_run_dir(id),
+            scale,
+        }
+        .addresses(&port.name))
+    }
+
     fn ensure_service(
         &self,
         id: &str,
@@ -1239,5 +1252,98 @@ impl Service for ProcessService {
         (0..self.scale.get())
             .map(|i| socket_path(&self.run_dir, port, i))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn service_addresses_parity() {
+        for metadata_dir in [
+            PathBuf::from("/tmp/discovery"),
+            PathBuf::from("/tmp").join("x".repeat(200)),
+        ] {
+            let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+            let (_, service_event_rx) = broadcast::channel(16);
+            let orchestrator = NamespacedProcessOrchestrator {
+                config: Arc::new(NamespacedProcessOrchestratorConfig {
+                    namespace: "compute".into(),
+                    image_dir: PathBuf::new(),
+                    suppress_output: true,
+                    metadata_dir,
+                    command_wrapper: Vec::new(),
+                    propagate_crashes: false,
+                    tcp_proxy: None,
+                    scratch_directory: PathBuf::new(),
+                    launch_spec: LaunchSpec::Direct,
+                }),
+                services: Default::default(),
+                service_event_rx,
+                command_tx,
+                scheduling_config: Default::default(),
+                // Keep lifecycle commands observable without running any processes.
+                _worker: mz_ore::task::spawn(|| "discovery-test", std::future::pending())
+                    .abort_on_drop(),
+            };
+            for scale in [1, 3, 12] {
+                let scale = NonZero::new(scale).unwrap();
+                let id = "u1-replica-1";
+                let port = ServicePort {
+                    name: "compute".into(),
+                    port_hint: 2100,
+                };
+                let addresses = orchestrator.service_addresses(id, scale, &port).unwrap();
+                assert!(command_rx.try_recv().is_err());
+                assert!(orchestrator.services.lock().unwrap().is_empty());
+                let config = ServiceConfig {
+                    app_name: "discovery-test".into(),
+                    image: "unused".into(),
+                    init_container_image: None,
+                    args: Box::new(|_| Vec::new()),
+                    ports: vec![port.clone()],
+                    memory_limit: None,
+                    memory_request: None,
+                    cpu_limit: None,
+                    cpu_request: None,
+                    scale,
+                    labels: BTreeMap::new(),
+                    annotations: BTreeMap::new(),
+                    availability_zones: None,
+                    other_replicas_selector: Vec::new(),
+                    replicas_selector: Vec::new(),
+                    disk_limit: Some(DiskLimit::ZERO),
+                    node_selector: BTreeMap::new(),
+                };
+                let service = orchestrator.ensure_service(id, config).unwrap();
+                assert_eq!(addresses, service.addresses(&port.name));
+                assert!(matches!(
+                    command_rx.try_recv(),
+                    Ok(WorkerCommand::EnsureService { .. })
+                ));
+                assert_eq!(addresses.len(), usize::from(scale.get()));
+                for (i, address) in (0..scale.get()).zip_eq(&addresses) {
+                    let desired = orchestrator
+                        .config
+                        .service_run_dir(id)
+                        .join(format!("{}-{i}", port.name));
+                    if UnixSocketAddr::from_pathname(desired.to_string_lossy()).is_ok() {
+                        assert_eq!(address, &desired.display().to_string());
+                    } else {
+                        assert_eq!(
+                            address,
+                            &env::temp_dir()
+                                .join(hex::encode(Sha1::digest(
+                                    desired.to_string_lossy().as_bytes()
+                                )))
+                                .display()
+                                .to_string()
+                        );
+                    }
+                    assert!(UnixSocketAddr::from_pathname(address).is_ok());
+                }
+            }
+        }
     }
 }

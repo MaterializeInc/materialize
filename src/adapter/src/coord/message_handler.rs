@@ -73,6 +73,36 @@ impl Coordinator {
                 span.in_scope(|| otel_ctx.attach_as_parent());
                 self.message_command(cmd).instrument(span).await
             }
+            Message::QueryDataflowResponse(response) => {
+                use crate::query_client::compute::DataflowResponse;
+                use mz_compute_client::protocol::response::{
+                    CopyToResponse, SubscribeBatch, SubscribeResponse,
+                };
+                let response = match response {
+                    DataflowResponse::Subscribe(id, response) => {
+                        let batch = match response {
+                            SubscribeResponse::Batch(batch) => batch,
+                            SubscribeResponse::DroppedAt(lower) => SubscribeBatch {
+                                lower,
+                                upper: timely::progress::Antichain::new(),
+                                updates: Err("query subscription dataflow was dropped".into()),
+                            },
+                        };
+                        ControllerResponse::SubscribeResponse(id, batch)
+                    }
+                    DataflowResponse::CopyTo(id, response) => {
+                        let result = match response {
+                            CopyToResponse::RowCount(count) => Ok(count),
+                            CopyToResponse::Error(error) => Err(anyhow::anyhow!(error)),
+                            CopyToResponse::Dropped => {
+                                Err(anyhow::anyhow!("query COPY dataflow was dropped"))
+                            }
+                        };
+                        ControllerResponse::CopyToResponse(id, result)
+                    }
+                };
+                self.message_controller(response).boxed_local().await;
+            }
             Message::ControllerReady { controller: _ } => {
                 let Coordinator {
                     controller,
@@ -131,6 +161,13 @@ impl Coordinator {
                 // that and we can downgrade the local read holds without an oracle round trip.
                 self.downgrade_local_read_holds(write_ts);
                 self.advance_custom_timelines().boxed_local().await;
+                if let Err(error) = self
+                    .acquire_pending_query_timeline_holds()
+                    .boxed_local()
+                    .await
+                {
+                    tracing::warn!(%error, "unable to establish query timeline windows");
+                }
                 for result in internal_results {
                     result.send(crate::coord::appends::WriteResult::Success {
                         timestamp: write_ts,
@@ -144,6 +181,13 @@ impl Coordinator {
                 let read_ts = self.get_local_read_ts().await;
                 self.downgrade_local_read_holds(read_ts);
                 self.advance_custom_timelines().boxed_local().await;
+                if let Err(error) = self
+                    .acquire_pending_query_timeline_holds()
+                    .boxed_local()
+                    .await
+                {
+                    tracing::warn!(%error, "unable to establish query timeline windows");
+                }
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {

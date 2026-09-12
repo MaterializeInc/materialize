@@ -478,8 +478,13 @@ impl PeekClient {
 
         // # From peek_validate
 
-        let compute_instance_snapshot =
-            ComputeInstanceSnapshot::new_without_collections(cluster.id());
+        let compute_instance_snapshot = if let Some(client) = &self.query_client
+            && explain_ctx.needs_cluster()
+        {
+            client.instance_snapshot(&catalog, cluster.id())
+        } else {
+            ComputeInstanceSnapshot::new_without_collections(cluster.id())
+        };
 
         let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
             .override_from(&catalog.get_cluster(cluster.id()).config.features())
