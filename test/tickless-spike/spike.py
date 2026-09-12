@@ -58,7 +58,9 @@ def pg_setup() -> None:
 
 def mz_system(sql: str) -> None:
     with psycopg.connect(MZ_SYSTEM_DSN, autocommit=True) as conn:
-        conn.execute(sql)
+        # Encoded to bytes so the dynamically built command satisfies
+        # psycopg's LiteralString-typed query parameter.
+        conn.execute(sql.encode())
 
 
 def mz_setup(mode: Mode) -> None:
@@ -75,14 +77,34 @@ def mz_setup(mode: Mode) -> None:
         conn.execute(
             "CREATE CONNECTION pg TO POSTGRES (HOST 'localhost', PORT 5434, USER postgres, PASSWORD SECRET pgpass, DATABASE postgres)"
         )
-        conn.execute("CREATE SOURCE pg_src FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_pub')")
+        conn.execute(
+            "CREATE SOURCE pg_src FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_pub')"
+        )
         conn.execute("CREATE TABLE t FROM SOURCE pg_src (REFERENCE t)")
         deadline = time.monotonic() + 60
+        last_status = None
         while time.monotonic() < deadline:
-            row = conn.execute("SELECT count(*) FROM t").fetchone()
-            if row is not None:
+            row = conn.execute(
+                "SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'pg_src'"
+            ).fetchone()
+            last_status = row[0] if row is not None else None
+            if last_status == "running":
                 break
             time.sleep(0.5)
+        else:
+            raise RuntimeError(
+                f"pg_src did not reach running, last status: {last_status}"
+            )
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                conn.execute("SELECT count(*) FROM t").fetchone()
+                break
+            except psycopg.Error as e:
+                last_error = str(e)
+                time.sleep(0.5)
+        else:
+            raise RuntimeError(f"table t not queryable, last error: {last_error}")
     # Set after CREATE SOURCE so the source keeps a 1s TIMESTAMP INTERVAL and
     # only the coordinator keepalive speeds up.
     mz_system(f"ALTER SYSTEM SET default_timestamp_interval = '{mode.keepalive_ms}ms'")
@@ -118,7 +140,6 @@ def reader(stop: threading.Event, samples: Samples) -> None:
 def binding_counter(stop: threading.Event, samples: Samples) -> None:
     with psycopg.connect(MZ_DSN, autocommit=False) as conn:
         cur = conn.cursor()
-        cur.execute("BEGIN")
         cur.execute("DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM pg_src_progress)")
         while not stop.is_set():
             rows = cur.execute("FETCH ALL c WITH (timeout = '1s')").fetchall()
@@ -134,7 +155,9 @@ def pct(values: list[float], p: float) -> float:
     return values[idx]
 
 
-def run_mode(mode: Mode, duration_s: float, rate_hz: float) -> tuple[Mode, Samples, float]:
+def run_mode(
+    mode: Mode, duration_s: float, rate_hz: float
+) -> tuple[Mode, Samples, float]:
     mz_setup(mode)
     samples = Samples()
     stop = threading.Event()
@@ -162,12 +185,19 @@ def main() -> None:
 
     pg_setup()
     results = []
-    for mode in MODES:
-        if mode.name not in args.modes:
-            continue
-        results.append(run_mode(mode, args.duration, args.rate))
+    try:
+        for mode in MODES:
+            if mode.name not in args.modes:
+                continue
+            results.append(run_mode(mode, args.duration, args.rate))
+    finally:
+        mz_system("ALTER SYSTEM RESET default_timestamp_interval")
+        mz_system("ALTER SYSTEM RESET storage_event_driven_bindings")
+        mz_system("ALTER SYSTEM RESET storage_binding_lead")
 
-    print("| mode | staleness p50 ms | staleness p95 ms | read p50 ms | read p95 ms | bindings/s | reads | errors |")
+    print(
+        "| mode | staleness p50 ms | staleness p95 ms | read p50 ms | read p95 ms | bindings/s | reads | errors |"
+    )
     print("|---|---|---|---|---|---|---|---|")
     for mode, s, elapsed in results:
         print(
@@ -175,9 +205,6 @@ def main() -> None:
             f"| {pct(s.latency_ms, 0.5):.1f} | {pct(s.latency_ms, 0.95):.1f} "
             f"| {len(s.binding_timestamps) / elapsed:.2f} | {len(s.latency_ms)} | {s.errors} |"
         )
-    mz_system("ALTER SYSTEM RESET default_timestamp_interval")
-    mz_system("ALTER SYSTEM RESET storage_event_driven_bindings")
-    mz_system("ALTER SYSTEM RESET storage_binding_lead")
 
 
 if __name__ == "__main__":
