@@ -18,12 +18,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::{GlobalId, Timestamp};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
-use timely::Container;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::CapabilitySet;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::{Stream, StreamVec};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::trace;
 
@@ -137,31 +134,6 @@ pub(super) fn floor_to_grid(ts: Timestamp, grid: Duration) -> Timestamp {
     Timestamp::from(ms - (ms % grid_ms))
 }
 
-/// Forwards only the frontier of `stream`, dropping every record.
-pub(super) fn progress_only<'scope, T, C>(
-    stream: &Stream<'scope, T, C>,
-) -> StreamVec<'scope, T, Infallible>
-where
-    T: TimelyTimestamp,
-    C: Container + Clone + 'static,
-{
-    let mut builder = OperatorBuilderRc::new("progress_only".into(), stream.scope());
-    let (_output, progress) = builder.new_output::<Vec<Infallible>>();
-    let mut input = builder.new_input(stream.clone(), Pipeline);
-
-    builder.build(move |caps| {
-        let mut cap_set =
-            CapabilitySet::from_elem(caps.into_iter().next().expect("one capability per output"));
-        move |frontiers| {
-            // Records must be consumed for the input frontier to advance.
-            input.for_each(|_cap, _data| {});
-            cap_set.downgrade(frontiers[0].frontier().iter());
-        }
-    });
-
-    progress
-}
-
 /// Emits a probe whenever the frontier of `progress` advances, at most once per `min_interval`.
 ///
 /// Runs on one worker chosen by `source_id`. Never emits the minimum frontier, so the first
@@ -269,6 +241,7 @@ mod tests {
         assert_eq!(floor_to_grid(ts(1000), grid), ts(1000));
         assert_eq!(floor_to_grid(ts(1249), grid), ts(1000));
         assert_eq!(floor_to_grid(ts(1250), grid), ts(1250));
+        assert_eq!(floor_to_grid(ts(7), grid), ts(0));
         assert_eq!(floor_to_grid(ts(7), Duration::ZERO), ts(7));
     }
 }

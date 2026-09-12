@@ -25,6 +25,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
+use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -307,6 +308,11 @@ where
 
     let mut health_streams = vec![];
 
+    // Whether arrival probes exist is decided here, once, so that the rendered graph with the
+    // flag off is the graph we have today.
+    let event_driven = STORAGE_EVENT_DRIVEN_BINDINGS.get(config.config.config_set());
+    let mut progress_streams = vec![];
+
     for (id, export) in exports {
         let name = format!("SourceGenericStats({})", id);
         let mut builder = OperatorBuilderRc::new(name, scope.clone());
@@ -319,6 +325,14 @@ where
         let (output, new_export) = builder.new_output();
         let mut output = OutputBuilder::<_, CapacityContainerBuilder<_>>::from(output);
 
+        // Republishing the export's frontier here rather than tapping the data stream keeps the
+        // export single-consumer, so its `Tee` never clones a batch of source records.
+        let _progress_output = event_driven.then(|| {
+            let (output, progress) = builder.new_output::<Vec<Infallible>>();
+            progress_streams.push(progress);
+            output
+        });
+
         let mut input = builder.new_input(export.inner, Pipeline);
         export_collections.insert(id, new_export.as_collection());
 
@@ -330,9 +344,15 @@ where
             .clone();
 
         builder.build(move |mut caps| {
+            let mut progress_cap_set = event_driven
+                .then(|| CapabilitySet::from_elem(caps.pop().expect("one capability per output")));
             let mut health_cap = Some(caps.remove(0));
 
             move |frontiers| {
+                if let Some(cap_set) = &mut progress_cap_set {
+                    cap_set.downgrade(frontiers[0].frontier().iter());
+                }
+
                 let mut last_status = None;
                 let mut health_output = health_output.activate();
 
@@ -387,12 +407,8 @@ where
 
     // Event-driven bindings add a second probe source, driven by the frontier of the data the
     // source has already produced rather than by a poll of the upstream system.
-    let probe_stream = if STORAGE_EVENT_DRIVEN_BINDINGS.get(config.config.config_set()) {
+    let probe_stream = if event_driven {
         let min_interval = STORAGE_MIN_BINDING_INTERVAL.get(config.config.config_set());
-        let progress_streams: Vec<_> = export_collections
-            .values()
-            .map(|collection| probe::progress_only(&collection.inner))
-            .collect();
         let progress = scope.concatenate(progress_streams);
         let arrival =
             probe::arrival_probes(source_id, progress, min_interval, config.now_fn.clone());
@@ -467,6 +483,10 @@ where
     } = config;
 
     let config_set = Arc::clone(storage_config.config_set());
+    // Whether arrival probes exist is decided once, when the dataflow is rendered, so the binding
+    // rule is fixed at the same moment. A flip that reached only one of the two would mint
+    // ungridded bindings at the arrival probe rate.
+    let event_driven = STORAGE_EVENT_DRIVEN_BINDINGS.get(&config_set);
 
     let read_only_rx = storage_state.read_only_rx.clone();
     let error_handler = storage_state.error_handler("remap_operator", id);
@@ -532,10 +552,6 @@ where
         let mut prev_probe: Option<Probe<FromTime>> = None;
 
         while !cap_set.is_empty() {
-            // Both the wake condition and the binding timestamp depend on the flag, so it is read
-            // once per iteration to keep the two coherent across a flip.
-            let event_driven = STORAGE_EVENT_DRIVEN_BINDINGS.get(&config_set);
-
             // We only mint bindings after a successful probe.
             let new_probe = probed_upper
                 .wait_for(|new_probe| match (&prev_probe, new_probe) {
