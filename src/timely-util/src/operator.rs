@@ -98,6 +98,25 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
+    /// Routes each record to one of two output streams by a per-record predicate.
+    ///
+    /// Records for which `predicate` returns `true` go to the first output and all
+    /// others to the second. Both outputs are sent under the input capability. That
+    /// capability is only a lower bound on the times of the records it carries, so a
+    /// split that depends on a record's time must inspect the record, and cannot be
+    /// decided once per container.
+    fn partition_by<CB, L>(
+        self,
+        name: &str,
+        predicate: L,
+    ) -> (
+        Stream<'scope, T, CB::Container>,
+        Stream<'scope, T, CB::Container>,
+    )
+    where
+        CB: ContainerBuilder + for<'a> PushInto<C1::Item<'a>>,
+        L: for<'a> FnMut(&C1::Item<'a>) -> bool + 'static;
+
     /// Block progress of the frontier at `expiration` time
     fn expire_stream_at(self, name: &str, expiration: T) -> Stream<'scope, T, C1>;
 }
@@ -295,6 +314,35 @@ where
                         match r {
                             Ok(d2) => ok_session.give(d2),
                             Err(e) => err_session.give(e),
+                        }
+                    }
+                })
+            })
+        })
+    }
+
+    fn partition_by<CB, L>(
+        self,
+        name: &str,
+        mut predicate: L,
+    ) -> (
+        Stream<'scope, T, CB::Container>,
+        Stream<'scope, T, CB::Container>,
+    )
+    where
+        CB: ContainerBuilder + for<'a> PushInto<C1::Item<'a>>,
+        L: for<'a> FnMut(&C1::Item<'a>) -> bool + 'static,
+    {
+        self.unary_fallible::<CB, CB, _, _>(Pipeline, name, move |_, _| {
+            Box::new(move |input, matching_output, rest_output| {
+                input.for_each_time(|time, data| {
+                    let mut matching = matching_output.session_with_builder(&time);
+                    let mut rest = rest_output.session_with_builder(&time);
+                    for item in data.flat_map(DrainContainer::drain) {
+                        if predicate(&item) {
+                            matching.give(item);
+                        } else {
+                            rest.give(item);
                         }
                     }
                 })
@@ -724,5 +772,81 @@ pub trait ClearContainer {
 impl<T> ClearContainer for Vec<T> {
     fn clear(&mut self) {
         Vec::clear(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use timely::container::CapacityContainerBuilder;
+    use timely::dataflow::operators::Capture;
+    use timely::dataflow::operators::capture::Extract;
+    use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
+    use timely::dataflow::operators::vec::ToStream;
+
+    use crate::columnar::Column;
+    use crate::columnar::builder::ColumnBuilder;
+
+    use super::*;
+
+    /// Updates whose own times straddle `SPLIT`, all carried under the single input
+    /// capability at time zero. A split decided per container would route them together.
+    const UPDATES: [(u64, u64, i64); 4] = [(0, 0, 1), (1, 3, 1), (2, 5, -1), (3, 7, 1)];
+    const SPLIT: u64 = 5;
+    const MATCHING: [(u64, u64, i64); 2] = [(2, 5, -1), (3, 7, 1)];
+    const REST: [(u64, u64, i64); 2] = [(0, 0, 1), (1, 3, 1)];
+
+    #[mz_ore::test]
+    fn partition_by_routes_vec_records_by_their_own_time() {
+        let (matching, rest) = timely::execute_directly(|worker| {
+            worker.dataflow::<u64, _, _>(|scope| {
+                let (matching, rest) = UPDATES
+                    .to_vec()
+                    .to_stream(scope)
+                    .partition_by::<CapacityContainerBuilder<Vec<_>>, _>("Test", |(_, time, _)| {
+                        *time >= SPLIT
+                    });
+                (matching.capture(), rest.capture())
+            })
+        });
+        let flatten = |captured: Vec<(u64, Vec<(u64, u64, i64)>)>| {
+            captured
+                .into_iter()
+                .flat_map(|(capability, updates)| {
+                    assert_eq!(capability, 0, "outputs keep the input capability");
+                    updates
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(flatten(matching.extract()), MATCHING);
+        assert_eq!(flatten(rest.extract()), REST);
+    }
+
+    #[mz_ore::test]
+    fn partition_by_routes_columnar_records_by_their_own_time() {
+        let (matching, rest) = timely::execute_directly(|worker| {
+            worker.dataflow::<u64, _, _>(|scope| {
+                let (matching, rest) = UPDATES
+                    .to_vec()
+                    .to_stream_with_builder::<_, ColumnBuilder<(u64, u64, i64)>>(scope)
+                    .partition_by::<ColumnBuilder<(u64, u64, i64)>, _>("Test", |(_, time, _)| {
+                        **time >= SPLIT
+                    });
+                (matching.capture(), rest.capture())
+            })
+        });
+        let flatten = |captured: Vec<(u64, Column<(u64, u64, i64)>)>| {
+            captured
+                .into_iter()
+                .flat_map(|(capability, mut column)| {
+                    assert_eq!(capability, 0, "outputs keep the input capability");
+                    column
+                        .drain()
+                        .map(|(data, time, diff)| (*data, *time, *diff))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(flatten(matching.extract()), MATCHING);
+        assert_eq!(flatten(rest.extract()), REST);
     }
 }
