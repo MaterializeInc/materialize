@@ -3134,8 +3134,9 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
-        # Pinned off: the interactive runtime cannot serve index peeks yet.
-        self.flags_with_values["enable_compute_interactive_runtime"] = ["FALSE"]
+        self.flags_with_values["enable_compute_interactive_runtime"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_any_all_null_array_semantics"] = (
             BOOLEAN_FLAG_VALUES
