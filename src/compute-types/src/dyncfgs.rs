@@ -90,6 +90,22 @@ pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Store the accumulable reduce's accumulators in columnar form.
+///
+/// The accumulable reduce keeps one accumulator per aggregate in the diff of its
+/// input arrangement. When `true`, that arrangement holds its diffs in a columnar
+/// container, which lays the accumulators out by variant so each pays only for its
+/// own fields. When `false` (the default), the diffs live in a columnation stack at
+/// the width of the largest variant. Read at operator construction time, so flips
+/// take effect on dataflows created after the change.
+pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
+    "enable_columnar_accumulable_diff",
+    false,
+    "Store the accumulable reduce's accumulators in a columnar arrangement diff, laid out by \
+     variant, instead of a columnation stack of fixed-width accumulator enums.",
+    ParameterScope::Replica,
+);
+
 /// Allow the column-paged batcher's pager to evict chunks under memory
 /// pressure. Only meaningful when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
 /// With the spill flag off the pager keeps every chunk resident regardless of
@@ -516,14 +532,6 @@ pub const COMPUTE_FLAT_MAP_FUEL: Config<usize> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Whether to render `as_specific_collection` using a fueled flat-map operator.
-pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Config::new(
-    "enable_compute_render_fueled_as_specific_collection",
-    true,
-    "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
-    ParameterScope::Environment,
-);
-
 /// Whether to apply logical backpressure in compute dataflows.
 pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
     "enable_compute_logical_backpressure",
@@ -821,7 +829,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
         .add(&COMPUTE_FLAT_MAP_FUEL)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
-        .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
@@ -844,6 +851,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMNAR_MERGE_BATCHER)
+        .add(&ENABLE_COLUMNAR_ACCUMULABLE_DIFF)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)

@@ -3141,6 +3141,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_columnar_merge_batcher"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_columnar_accumulable_diff"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3271,7 +3272,6 @@ class FlipFlagsAction(Action):
             "enable_compute_replica_expiration",
             "compute_mv_sink_advance_persist_frontiers",
             "compute_replica_expiration_offset",
-            "enable_compute_render_fueled_as_specific_collection",
             "compute_temporal_bucketing_summary",
             "enable_compute_logical_backpressure",
             "enable_replica_targeted_materialized_views",

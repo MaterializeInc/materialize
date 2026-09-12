@@ -559,6 +559,7 @@ impl OrchestratorWorker {
                 disk_bytes: None,
                 heap_bytes: None,
                 heap_limit: None,
+                swap_bytes: None,
             });
         }
         Ok(metrics)

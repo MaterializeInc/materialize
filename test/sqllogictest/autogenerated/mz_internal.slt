@@ -149,6 +149,7 @@ memory_bytes  uint8  Approximate␠RAM␠usage,␠in␠bytes.
 disk_bytes  uint8  Approximate␠disk␠usage,␠in␠bytes.
 heap_bytes  uint8  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠bytes.
 heap_limit  uint8  Available␠heap␠(RAM␠+␠swap)␠space,␠in␠bytes.
+swap_bytes  uint8  Approximate␠swap␠usage,␠in␠bytes.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics_history' ORDER BY position
@@ -161,6 +162,7 @@ disk_bytes  uint8  Approximate␠disk␠usage,␠in␠bytes.
 occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
 heap_bytes  uint8  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠bytes.
 heap_limit  uint8  Available␠heap␠(RAM␠+␠swap)␠space,␠in␠bytes.
+swap_bytes  uint8  Approximate␠swap␠usage,␠in␠bytes.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
@@ -189,6 +191,7 @@ cpu_percent  double␠precision  Approximate␠CPU␠usage,␠in␠percent␠of�
 memory_percent  double␠precision  Approximate␠RAM␠usage,␠in␠percent␠of␠the␠total␠allocation.
 disk_percent  double␠precision  Approximate␠disk␠usage,␠in␠percent␠of␠the␠total␠allocation.
 heap_percent  double␠precision  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠percent␠of␠the␠total␠allocation.
+swap_percent  double␠precision  Approximate␠swap␠usage,␠in␠percent␠of␠the␠total␠heap␠allocation.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_utilization_history' ORDER BY position
@@ -199,6 +202,7 @@ cpu_percent  double␠precision  Approximate␠CPU␠usage,␠in␠percent␠of�
 memory_percent  double␠precision  Approximate␠RAM␠usage,␠in␠percent␠of␠the␠total␠allocation.
 disk_percent  double␠precision  Approximate␠disk␠usage,␠in␠percent␠of␠the␠total␠allocation.
 heap_percent  double␠precision  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠percent␠of␠the␠total␠allocation.
+swap_percent  double␠precision  Approximate␠swap␠usage,␠in␠percent␠of␠the␠total␠heap␠allocation.
 occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
 
 query TTT

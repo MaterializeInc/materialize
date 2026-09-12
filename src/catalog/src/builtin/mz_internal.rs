@@ -2734,6 +2734,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
                 "Approximate heap (RAM + swap) usage, in bytes.",
             ),
             ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
+            ("swap_bytes", "Approximate swap usage, in bytes."),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -2752,6 +2753,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| 
         .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
+        .with_column("swap_bytes", SqlScalarType::UInt64.nullable(true))
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -2768,6 +2770,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| 
             "Approximate heap (RAM + swap) usage, in bytes.",
         ),
         ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
+        ("swap_bytes", "Approximate swap usage, in bytes."),
     ]),
     sql: "
 SELECT
@@ -2778,7 +2781,8 @@ SELECT
     memory_bytes,
     disk_bytes,
     heap_bytes,
-    heap_limit
+    heap_limit,
+    swap_bytes
 FROM mz_internal.mz_cluster_replica_metrics_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 ORDER BY replica_id, process_id, occurred_at DESC",
@@ -2805,6 +2809,7 @@ ORDER BY replica_id, process_id, occurred_at DESC",
                 ("disk_bytes", SemanticType::ByteCount),
                 ("heap_bytes", SemanticType::ByteCount),
                 ("heap_limit", SemanticType::ByteCount),
+                ("swap_bytes", SemanticType::ByteCount),
             ]
         },
     }),
@@ -5421,6 +5426,7 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
         .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
         .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
         .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("swap_percent", SqlScalarType::Float64.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("replica_id", "The ID of a cluster replica."),
@@ -5441,6 +5447,10 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
             "heap_percent",
             "Approximate heap (RAM + swap) usage, in percent of the total allocation.",
         ),
+        (
+            "swap_percent",
+            "Approximate swap usage, in percent of the total heap allocation.",
+        ),
     ]),
     sql: "
 SELECT
@@ -5449,7 +5459,8 @@ SELECT
     m.cpu_nano_cores::float8 / NULLIF(s.cpu_nano_cores, 0) * 100 AS cpu_percent,
     m.memory_bytes::float8 / NULLIF(s.memory_bytes, 0) * 100 AS memory_percent,
     m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent,
-    m.heap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS heap_percent
+    m.heap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS heap_percent,
+    m.swap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS swap_percent
 FROM
     mz_catalog.mz_cluster_replicas AS r
         JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
@@ -5486,6 +5497,7 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
             .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
             .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
             .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
+            .with_column("swap_percent", SqlScalarType::Float64.nullable(true))
             .with_column(
                 "occurred_at",
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
@@ -5511,6 +5523,10 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
                 "Approximate heap (RAM + swap) usage, in percent of the total allocation.",
             ),
             (
+                "swap_percent",
+                "Approximate swap usage, in percent of the total heap allocation.",
+            ),
+            (
                 "occurred_at",
                 "Wall-clock timestamp at which the event occurred.",
             ),
@@ -5523,6 +5539,7 @@ SELECT
     m.memory_bytes::float8 / NULLIF(s.memory_bytes, 0) * 100 AS memory_percent,
     m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent,
     m.heap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS heap_percent,
+    m.swap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS swap_percent,
     m.occurred_at
 FROM
     mz_catalog.mz_cluster_replicas AS r

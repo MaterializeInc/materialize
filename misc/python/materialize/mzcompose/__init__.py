@@ -284,6 +284,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_columnar_merge_batcher", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the columnar accumulable diff layout, which
+        # is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_columnar_accumulable_diff", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value
@@ -695,7 +700,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_mv_sink_advance_persist_frontiers",
     "compute_prometheus_introspection_scrape_interval",
     "enable_compute_replica_expiration",
-    "enable_compute_render_fueled_as_specific_collection",
     "compute_logical_backpressure_max_retained_capabilities",
     "compute_logical_backpressure_inflight_slack",
     "persist_fetch_semaphore_cost_adjustment",

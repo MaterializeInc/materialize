@@ -110,6 +110,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
+use ::columnar::{Columnar as ColumnarData, Index as ColumnarIndex, Push as ColumnarPush};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -117,7 +118,7 @@ use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchKey, BatchVal};
 use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
-use differential_dataflow::{AsCollection, Data, VecCollection};
+use differential_dataflow::{AsCollection, Collection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use itertools::Itertools;
@@ -140,13 +141,14 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, RowArena, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::columnar::Column;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
 use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::vec::{BranchWhen, Filter};
 use timely::dataflow::operators::{Capability, Operator, Probe, probe};
@@ -165,11 +167,14 @@ use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
-use crate::render::columnar::CollectionEdge;
+use crate::render::columnar::{
+    columnar_consolidate, columnar_negate, columnar_to_vec, concat_many, vec_to_columnar,
+};
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
+use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
 pub(crate) mod columnar;
 pub mod context;
@@ -288,22 +293,24 @@ pub fn build_compute_dataflow(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) =
-                        persist_source::persist_source::<DataflowErrorSer>(
-                            inner,
-                            *source_id,
-                            Arc::clone(&compute_state.persist_clients),
-                            &compute_state.txns_ctx,
-                            import.desc.storage_metadata.clone(),
-                            read_schema,
-                            dataflow.as_of.clone(),
-                            snapshot_mode,
-                            until.clone(),
-                            mfp.as_mut(),
-                            compute_state.dataflow_max_inflight_bytes(),
-                            start_signal.clone().into_send_future(),
-                            ErrorHandler::Halt("compute_import"),
-                        );
+                    let (mut ok_stream, err_stream, token) = persist_source::persist_source::<
+                        DataflowErrorSer,
+                        ConsolidatingColumnBuilder<Row, mz_repr::Timestamp, Diff>,
+                    >(
+                        inner,
+                        *source_id,
+                        Arc::clone(&compute_state.persist_clients),
+                        &compute_state.txns_ctx,
+                        import.desc.storage_metadata.clone(),
+                        read_schema,
+                        dataflow.as_of.clone(),
+                        snapshot_mode,
+                        until.clone(),
+                        mfp.as_mut(),
+                        compute_state.dataflow_max_inflight_bytes(),
+                        start_signal.clone().into_send_future(),
+                        ErrorHandler::Halt("compute_import"),
+                    );
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -373,7 +380,7 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
+                    let bundle = crate::render::CollectionBundle::from_edge(
                         oks.enter(region),
                         errs.enter(region),
                     );
@@ -473,7 +480,7 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
+                    let bundle = crate::render::CollectionBundle::from_edge(
                         oks.enter_region(region),
                         errs.enter_region(region),
                     );
@@ -666,7 +673,9 @@ where
                         start_signal,
                         |e, _| e.clone(),
                     );
-                    CollectionBundle::from_collections(oks, errs)
+                    // The filtered index collection is row-shaped and already
+                    // consolidated, so the encode here is non-consolidating.
+                    CollectionBundle::from_edge(vec_to_columnar(oks), errs)
                 }
             };
             self.update_id(Id::Global(idx.on_id), bundle);
@@ -924,6 +933,21 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
 
             let rec_ids: Vec<_> = recs.iter().map(|r| r.id).collect();
 
+            // A binding's `Variable` serves the `Get`s rendered before the rec
+            // loop binds the real value, which are exactly the values of
+            // `recs[0..=i]`. A binding no such value reads has no use for a
+            // `Variable`-backed bundle, and installing one would build a
+            // re-encode that repacks the whole collection once per iteration
+            // with nothing to consume it.
+            let mut variable_read = BTreeSet::new();
+            let mut read_so_far = BTreeSet::new();
+            for rec in recs.iter() {
+                read_so_far.extend(rec.value.depends());
+                if read_so_far.contains(&Id::Local(rec.id)) {
+                    variable_read.insert(rec.id);
+                }
+            }
+
             // Define variables for rec bindings.
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
@@ -936,13 +960,25 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (err_v, err_collection) =
                     Variable::new(self.scope, Product::new(Default::default(), inner));
 
-                self.insert_id(
-                    Id::Local(*id),
-                    CollectionBundle::from_collections(oks_collection, err_collection),
-                );
+                if variable_read.contains(id) {
+                    // The feedback `Variable` stays `Vec`, so each iteration crosses
+                    // the container boundary twice, encoded here for the readers and
+                    // decoded where the value is fed back. The encode is a stateless,
+                    // timestamp-agnostic pass-through, so it leaves the iterative
+                    // frontier and the fixpoint alone.
+                    self.insert_id(
+                        Id::Local(*id),
+                        CollectionBundle::from_edge(
+                            vec_to_columnar(oks_collection),
+                            err_collection,
+                        ),
+                    );
+                }
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
-            // Now render each of the rec bindings.
+            // The decoded value is kept so the extraction below reuses it rather than
+            // decoding the same stream twice.
+            let mut decoded_oks = BTreeMap::new();
             let mut rec_iter = recs.into_iter().peekable();
             while let Some(RecBind { id, value, limit }) = rec_iter.next() {
                 let last = rec_iter.peek().is_none();
@@ -951,7 +987,8 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
-                let oks = oks.into_vec();
+                let oks = columnar_to_vec(oks);
+                decoded_oks.insert(id, oks.clone());
                 // Collapses what forward reads see. `err_v` below feeds reads rendered before this
                 // binding and is collapsed separately; without this, a `Get` in a later rec binding
                 // or in the body resolves to the bundle stored here and compounds level over level,
@@ -1011,12 +1048,16 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
             // Now extract each of the rec bindings into the outer scope.
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
-                let (oks, err) = bundle.collection.unwrap();
-                let oks = oks.into_vec();
+                let (_, err) = bundle.collection.unwrap();
+                let oks = decoded_oks
+                    .remove(&id)
+                    .expect("rec binding decoded while rendering above");
+                // `leave_dynamic` has already stripped the iteration coordinate, so
+                // this encode runs in the parent scope.
                 self.insert_id(
                     Id::Local(id),
-                    CollectionBundle::from_collections(
-                        oks.leave_dynamic(level + 1),
+                    CollectionBundle::from_edge(
+                        vec_to_columnar(oks.leave_dynamic(level + 1)),
                         err.leave_dynamic(level + 1),
                     ),
                 );
@@ -1215,6 +1256,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 // We should advance times in constant collections to start from `as_of`.
                 let as_of_frontier = self.as_of_frontier.clone();
                 let until = self.until.clone();
+                // Advancing times to `as_of` can collapse distinct times onto one, so
+                // rows the planner left distinct can become duplicates. The
+                // `ConsolidatingColumnBuilder` folds those within the batch.
                 let ok_collection = rows
                     .into_iter()
                     .filter_map(move |(row, mut time, diff)| {
@@ -1229,7 +1273,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             None
                         }
                     })
-                    .to_stream(self.scope)
+                    .to_stream_with_builder::<_, ConsolidatingColumnBuilder<Row, T, Diff>>(
+                        self.scope,
+                    )
                     .as_collection();
 
                 let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
@@ -1246,7 +1292,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .to_stream(self.scope)
                     .as_collection();
 
-                CollectionBundle::from_collections(ok_collection, err_collection)
+                CollectionBundle::from_edge(ok_collection, err_collection)
             }
             Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
@@ -1274,18 +1320,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
-                            &self.config_set,
                         );
-                        CollectionBundle::from_collections(oks, errs)
+                        CollectionBundle::from_edge(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) = collection.as_collection_core(
-                            mfp,
-                            None,
-                            self.until.clone(),
-                            &self.config_set,
-                        );
-                        CollectionBundle::from_collections(oks, errs)
+                        let (oks, errs) =
+                            collection.as_collection_core(mfp, None, self.until.clone());
+                        CollectionBundle::from_edge(oks, errs)
                     }
                 }
             }
@@ -1299,13 +1340,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(
-                        mfp,
-                        input_key_val,
-                        self.until.clone(),
-                        &self.config_set,
-                    );
-                    CollectionBundle::from_collections(oks, errs)
+                    let (oks, errs) =
+                        input.as_collection_core(mfp, input_key_val, self.until.clone());
+                    CollectionBundle::from_edge(oks, errs)
                 }
             }
             FlatMap {
@@ -1362,7 +1399,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .collection
                     .clone()
                     .expect("Negate input must be an unarranged collection");
-                CollectionBundle::from_edge(oks.negate(), errs)
+                CollectionBundle::from_edge(columnar_negate(oks), errs)
             }
             Threshold {
                 input,
@@ -1393,21 +1430,20 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             .get(&self.config_set)
                             .try_into()
                             .expect("must fit");
-                        let os = os.into_vec();
-                        CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+                        T::maybe_apply_temporal_bucketing(
                             os.inner,
                             self.as_of_frontier.clone(),
                             summary,
-                        ))
+                        )
                     } else {
                         os
                     };
                     oks.push(os);
                     errs.push(es);
                 }
-                let oks = CollectionEdge::concat_many(self.scope, oks);
+                let oks = concat_many(self.scope, oks);
                 let oks = if consolidate_output {
-                    oks.consolidate_named("UnionConsolidation")
+                    columnar_consolidate(oks, "UnionConsolidation")
                 } else {
                     oks
                 };
@@ -1488,16 +1524,8 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                match oks {
-                    CollectionEdge::Vec(c) => {
-                        let stream = self.log_operator_hydration_inner(c.inner.clone(), lir_id);
-                        *c = stream.as_collection();
-                    }
-                    CollectionEdge::Columnar(c) => {
-                        let stream = self.log_operator_hydration_inner(c.inner.clone(), lir_id);
-                        *c = stream.as_collection();
-                    }
-                }
+                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
+                *oks = stream.as_collection();
             }
         }
     }
@@ -1595,8 +1623,30 @@ pub trait RenderTimestamp: MzTimestamp + Default + Refines<mz_repr::Timestamp> {
 /// general property of a render timestamp, so the dispatch lives in its own trait.
 /// Total-ordered timestamps perform real bucketing; partially-ordered timestamps
 /// (e.g. `Product<…>` in iterative scopes) implement this as a no-op.
-pub trait MaybeBucketByTime: Timestamp {
+pub trait MaybeBucketByTime: Timestamp + ColumnarData {
+    /// Buckets a columnar dataflow edge, keeping it columnar.
     fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>;
+
+    /// Buckets a `Vec` stream, keeping it `Vec`.
+    ///
+    /// For a consumer that re-encodes what it reads, where a `Vec` hands it moved
+    /// allocations rather than copied bytes. The reduce key-value path is the one
+    /// such caller, since its bucketed output feeds an arrangement.
+    fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
@@ -1604,7 +1654,13 @@ pub trait MaybeBucketByTime: Timestamp {
     where
         D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + differential_dataflow::Hashable;
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1630,6 +1686,25 @@ impl RenderTimestamp for mz_repr::Timestamp {
 
 impl MaybeBucketByTime for mz_repr::Timestamp {
     fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
+    {
+        stream.bucket(as_of, summary).as_collection()
+    }
+
+    fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
@@ -1637,11 +1712,15 @@ impl MaybeBucketByTime for mz_repr::Timestamp {
     where
         D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + differential_dataflow::Hashable,
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
     {
-        stream
-            .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
-            .as_collection()
+        stream.bucket(as_of, summary).as_collection()
     }
 }
 
@@ -1676,6 +1755,26 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
 
 impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
+        _as_of: Antichain<mz_repr::Timestamp>,
+        _summary: mz_repr::Timestamp,
+    ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
+    {
+        // TODO: Implement bucketing on outer timestamp for iterative scopes.
+        stream.as_collection()
+    }
+
+    fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         _as_of: Antichain<mz_repr::Timestamp>,
         _summary: mz_repr::Timestamp,
@@ -1683,7 +1782,13 @@ impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     where
         D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + differential_dataflow::Hashable,
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
     {
         // TODO: Implement bucketing on outer timestamp for iterative scopes.
         stream.as_collection()
@@ -1833,7 +1938,7 @@ fn suppress_early_progress<'scope, T: Timestamp, D>(
     as_of: Antichain<T>,
 ) -> Stream<'scope, T, D>
 where
-    D: Data + timely::Container,
+    D: timely::Container + Clone,
 {
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
@@ -1900,13 +2005,44 @@ trait LimitProgress<T: Timestamp> {
     ) -> Self;
 }
 
+/// Reads the times of the records a container holds, for [`LimitProgress`].
+trait RecordTimes {
+    /// Call `f` once per record, with that record's time.
+    fn for_each_time(&self, f: impl FnMut(mz_repr::Timestamp));
+}
+
+impl<D, R> RecordTimes for Vec<(D, mz_repr::Timestamp, R)> {
+    fn for_each_time(&self, mut f: impl FnMut(mz_repr::Timestamp)) {
+        for (_, time, _) in self {
+            f(*time);
+        }
+    }
+}
+
+impl<D, R> RecordTimes for Column<(D, mz_repr::Timestamp, R)>
+where
+    D: ColumnarData,
+    R: ColumnarData,
+    (D, mz_repr::Timestamp, R): ColumnarData<
+        Container = (
+            D::Container,
+            <mz_repr::Timestamp as ColumnarData>::Container,
+            R::Container,
+        ),
+    >,
+{
+    fn for_each_time(&self, mut f: impl FnMut(mz_repr::Timestamp)) {
+        for time in self.borrow().1.into_index_iter() {
+            f(time);
+        }
+    }
+}
+
 // TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
 // number.
-impl<'scope, D, R> LimitProgress<mz_repr::Timestamp>
-    for StreamVec<'scope, mz_repr::Timestamp, (D, mz_repr::Timestamp, R)>
+impl<'scope, C> LimitProgress<mz_repr::Timestamp> for Stream<'scope, mz_repr::Timestamp, C>
 where
-    D: Clone + 'static,
-    R: Clone + 'static,
+    C: timely::Container + Clone + RecordTimes,
 {
     fn limit_progress(
         self,
@@ -1929,10 +2065,10 @@ where
 
                 move |(input, frontier), output| {
                     input.for_each(|cap, data| {
-                        for time in data
-                            .iter()
-                            .flat_map(|(_, time, _)| u64::from(time).checked_add(slack_ms))
-                        {
+                        data.for_each_time(|time| {
+                            let Some(time) = u64::from(time).checked_add(slack_ms) else {
+                                return;
+                            };
                             // `slack_ms == 0` means no rounding; otherwise round up to the next
                             // multiple of `slack_ms`. Avoids a divide-by-zero panic when the
                             // operator is configured without slack.
@@ -1944,7 +2080,7 @@ where
                             if !upper.less_than(&rounded_time.into()) {
                                 pending_times.insert(rounded_time.into());
                             }
-                        }
+                        });
                         output.session(&cap).give_container(data);
                         if retained_cap.as_ref().is_none_or(|c| {
                             !c.time().less_than(cap.time()) && !upper.less_than(cap.time())

@@ -6,7 +6,7 @@ menu:
     parent: ingest-data
     name: "Performance and scaling"
     identifier: performance
-    weight: 91
+    weight: 92
 aliases:
   - /reference/performance/
 ---

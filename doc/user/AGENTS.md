@@ -177,6 +177,15 @@ Diátaxis mode per section:
 * When revising existing documentation, identify mixed modes and separate them
   into the appropriate Diátaxis categories.
 
+## Writing release notes
+
+Release notes live in `content/releases/_index.md`, one section per version.
+
+In the `Guides` section, use one bullet per guide containing only a link to
+that guide. Do not summarize or explain what the guide covers; the guide's own
+page does that. Notes about docs-wide changes, such as a reorganization, may
+carry a short sentence of context.
+
 ## Draft documentation from PRDs or engineering designs
 
 When asked to draft documentation from a PRD or engineering specification, do
@@ -195,7 +204,7 @@ When changing templates or shortcodes, inspect both the HTML and Markdown
 outputs. A successful HTML render does not prove that the `skill` output is
 valid.
 
-### Test syntax documentation
+## Test syntax as you write the documentation
 
 When documentation adds or changes SQL syntax, test each example using the
 Materialize emulator. Documentation is often written ahead of a public release,
@@ -203,14 +212,11 @@ so use a release candidate version of the emulator when the latest stable
 version does not support the syntax yet. Wherever possible, include sample
 output in the documentation and verify that it matches the emulator output.
 
+Don't try to build Materialize from source; just use the latest emulator verison.
+
 ## Deployments
 
-- Changes merged to `main` deploy immediately to `materialize.com/docs` through
-  `ci/deploy_website/website.sh`.
-- Pull requests publish previews through `ci/test/preview-docs.sh` at
-  `preview.materialize.com/materialize/$PR`.
-- Branches named `self-managed-docs/*` publish a versioned snapshot under
-  `/docs/self-managed/$VERSION` instead of the main site.
+Docs changes are deployed via CI/CD. Don't deploy manually.
 
 ## Reviewing Documentation Changes
 
@@ -222,9 +228,13 @@ and broken include references.
 
 ## Commits and Pull Requests
 
-Recent commits use a concise `<component>: <imperative summary>` format, often
-with the GitHub PR number, for example `docs: clarify source configuration
-(#12345)`. Keep commits focused. PRs should explain the user impact, identify
-affected pages or data files, link relevant issues, and include screenshots or
-preview details for visual changes. Coordinate substantial feature or API
-documentation with a technical writer and add release notes when required.
+### PR body
+Your PR body should be very concise, and provide a link to the pages
+relevant for review. For instance
+
+--
+Adds a new hydration visibility guide
+- https://preview.materialize.com/materialize/38758/clusters/operational-guidelines/
+
+### Commits
+- Keep commits concise, with a concise `<component>: <imperative summary>` format

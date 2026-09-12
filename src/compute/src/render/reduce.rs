@@ -13,10 +13,11 @@
 
 use std::collections::BTreeMap;
 
+use columnar::Columnar;
 use columnation::{Columnation, CopyRegion};
-use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
+use differential_dataflow::columnar::layout::Coltainer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
@@ -26,7 +27,9 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::{
+    ENABLE_COLUMNAR_ACCUMULABLE_DIFF, ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
@@ -35,7 +38,7 @@ use mz_compute_types::plan::reduce::{
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_expr::{AggregateFunc, EvalError, SafeMfpPlan};
 use mz_ore::cast::CastLossy;
-use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
+use mz_repr::adt::numeric::{self, Numeric, NumericAgg, OrderedNumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnation::ColumnationChunker;
@@ -54,8 +57,8 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
-    RowRowSpine, RowSpine, RowValSpine,
+    ErrBatcher, ErrBuilder, KeyBatcher, RowAgent, RowErrBuilder, RowErrSpine, RowRowAgent,
+    RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 use mz_row_spine::{
     DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher,
@@ -108,7 +111,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
             let (key_val_input, err) = input
                 .enter_region(inner)
-                .flat_map::<_, ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
+                .flat_map::<ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
                     input_key.map(|k| (k, None)),
                     max_demand,
                     move |row_datums, time, diff, ok_session, err_session| {
@@ -173,7 +176,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .get(&self.config_set)
                     .try_into()
                     .expect("must fit");
-                T::maybe_apply_temporal_bucketing(
+                T::maybe_apply_temporal_bucketing_vec(
                     key_val_collection.inner,
                     self.as_of_frontier.clone(),
                     summary,
@@ -1473,6 +1476,50 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             differential_dataflow::collection::concatenate(collection_scope, to_aggregate)
         };
 
+        // The accumulators travel in the arrangement's diffs. A columnar diff container
+        // lays each `Accum` out by variant, so it occupies only its own variant's
+        // columns rather than the footprint of the largest variant. Both layouts feed
+        // the same reduce operators.
+        if ENABLE_COLUMNAR_ACCUMULABLE_DIFF.get(&self.config_set) {
+            let arranged = collection
+                .mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowBatcher<_, _>,
+                    RowBuilder<_, _, Coltainer<_>>,
+                    RowSpine<_, (Vec<Accum>, Diff), Coltainer<_>>,
+                >(
+                    "ArrangeAccumulable [val: empty]",
+                );
+            self.reduce_accumulable(arranged, full_aggrs, mfp_after)
+        } else {
+            let arranged = collection
+                .mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowBatcher<_, _>,
+                    RowBuilder<_, _>,
+                    RowSpine<_, (Vec<Accum>, Diff)>,
+                >(
+                    "ArrangeAccumulable [val: empty]",
+                );
+            self.reduce_accumulable(arranged, full_aggrs, mfp_after)
+        }
+    }
+
+    /// Reduces arranged accumulators to output rows, and to the errors the accumulated
+    /// values can reveal. Generic over the container holding the diffs, so both diff
+    /// layouts share one rendering of the reduce operators.
+    fn reduce_accumulable<'s, DC>(
+        &self,
+        arranged: Arranged<'s, RowAgent<T, (Vec<Accum>, Diff), DC>>,
+        full_aggrs: Vec<LirAggregateExpr>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
+    ) -> (
+        RowRowArrangement<'s, T>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
+    )
+    where
+        DC: BatchContainer<Owned = (Vec<Accum>, Diff)>,
+    {
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
@@ -1482,15 +1529,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
-        let arranged = collection
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, (Vec<Accum>, Diff)>,
-            >(
-                "ArrangeAccumulable [val: empty]",
-            );
         let arranged_output = arranged
             .clone()
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
@@ -1622,7 +1660,7 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
             non_nulls: Diff::ZERO,
         },
         AggregateFunc::SumNumeric => Accum::Numeric {
-            accum: OrderedDecimal(NumericAgg::zero()),
+            accum: OrderedNumericAgg(NumericAgg::zero()),
             pos_infs: Diff::ZERO,
             neg_infs: Diff::ZERO,
             nans: Diff::ZERO,
@@ -1778,7 +1816,7 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 };
 
                 Accum::Numeric {
-                    accum: OrderedDecimal(accum),
+                    accum: OrderedNumericAgg(accum),
                     pos_infs,
                     neg_infs,
                     nans,
@@ -1786,7 +1824,7 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 }
             }
             Datum::Null => Accum::Numeric {
-                accum: OrderedDecimal(NumericAgg::zero()),
+                accum: OrderedNumericAgg(NumericAgg::zero()),
                 pos_infs: Diff::ZERO,
                 neg_infs: Diff::ZERO,
                 nans: Diff::ZERO,
@@ -2018,8 +2056,12 @@ type AccumCount = mz_ore::Overflowing<i128>;
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize
+    Deserialize,
+    Columnar
 )]
+// The columnar container orders references with this derived `Ord`, which must agree with
+// the owned `Ord`. It does because every field's reference type is its owned type.
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 enum Accum {
     /// Accumulates boolean values.
     Bool {
@@ -2052,7 +2094,7 @@ enum Accum {
     /// Accumulates arbitrary precision decimals.
     Numeric {
         /// Accumulates non-special values
-        accum: OrderedDecimal<NumericAgg>,
+        accum: OrderedNumericAgg,
         /// Counts +inf
         pos_infs: Diff,
         /// Counts -inf
@@ -2254,7 +2296,7 @@ impl Multiply<Diff> for Accum {
                 // http://speleotrove.com/decimal/dncont.html
                 assert!(!cx.status().rounded(), "Accum::Numeric multiply overflow");
                 Accum::Numeric {
-                    accum: OrderedDecimal(f),
+                    accum: OrderedNumericAgg(f),
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
                     nans: nans * factor,
@@ -2265,6 +2307,8 @@ impl Multiply<Diff> for Accum {
     }
 }
 
+// The batcher stages updates in columnation chunks before they reach the arrangement,
+// which stores `Accum` in its columnar form.
 impl Columnation for Accum {
     type InnerRegion = CopyRegion<Self>;
 }
@@ -2721,5 +2765,111 @@ mod tests {
         acc.plus_equals(&datum_to_accumulator(&func, Datum::from(-1.1e31_f64)));
         let datum = finalize_accum(&func, &acc, Diff::from(2_i64));
         assert_eq!(datum, Datum::from(0.0_f64));
+    }
+
+    /// Accumulators of every variant, in zero, accumulated, and negated states.
+    fn sample_accums() -> Vec<Accum> {
+        let mut cx = numeric::cx_datum();
+        let mut numeric = |s: &str| Datum::from(cx.parse(s).unwrap());
+        let cases: Vec<(AggregateFunc, Vec<Datum>)> = vec![
+            (AggregateFunc::Count, vec![Datum::Null, Datum::Int64(5)]),
+            (
+                AggregateFunc::SumInt64,
+                vec![Datum::Int64(-7), Datum::Int64(i64::MAX)],
+            ),
+            (
+                AggregateFunc::SumUInt16,
+                vec![Datum::UInt16(3), Datum::Null],
+            ),
+            (
+                AggregateFunc::Any,
+                vec![Datum::True, Datum::False, Datum::Null],
+            ),
+            (
+                AggregateFunc::SumFloat64,
+                vec![
+                    Datum::from(1.5_f64),
+                    Datum::from(f64::NAN),
+                    Datum::from(f64::NEG_INFINITY),
+                ],
+            ),
+            (
+                AggregateFunc::SumNumeric,
+                vec![
+                    numeric("-12345.678"),
+                    numeric("9e39"),
+                    numeric("NaN"),
+                    numeric("Infinity"),
+                    Datum::Null,
+                ],
+            ),
+        ];
+        let mut accums = Vec::new();
+        for (func, datums) in cases {
+            let mut sum = accumulable_zero(&func);
+            accums.push(sum);
+            for datum in datums {
+                let accum = datum_to_accumulator(&func, datum);
+                sum.plus_equals(&accum);
+                accums.push(accum);
+                accums.push(accum.multiply(&Diff::from(-1_i64)));
+            }
+            accums.push(sum);
+        }
+        accums
+    }
+
+    #[mz_ore::test]
+    fn accum_columnar_round_trip() {
+        use columnar::bytes::indexed::{DecodedStore, encode};
+        use columnar::{AsBytes, Borrow, BorrowedOf, FromBytes, Index, Len};
+        use differential_dataflow::trace::implementations::BatchContainer;
+
+        let accums = sample_accums();
+        let container = Accum::as_columns(accums.iter());
+        assert_eq!(container.len(), accums.len());
+        let borrowed = container.borrow();
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(borrowed.get(index)), *accum);
+        }
+        for (i, a) in accums.iter().enumerate() {
+            for (j, b) in accums.iter().enumerate() {
+                assert_eq!(borrowed.get(i).cmp(&borrowed.get(j)), a.cmp(b));
+            }
+        }
+
+        let bytes: Vec<&[u8]> = borrowed.as_bytes().map(|(_align, bytes)| bytes).collect();
+        let decoded = BorrowedOf::<Accum>::from_bytes(&mut bytes.into_iter());
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(decoded.get(index)), *accum);
+        }
+        // NOTE: the `i128` columns cannot be `validate`d, see the `Overflowing<i128>` test in
+        // `mz_ore`, so this only decodes.
+        let mut words = Vec::new();
+        encode(&mut words, &borrowed);
+        let decoded = BorrowedOf::<Accum>::from_store(&DecodedStore::new(&words), &mut 0);
+        for (index, accum) in accums.iter().enumerate() {
+            assert_eq!(Accum::into_owned(decoded.get(index)), *accum);
+        }
+
+        // The arrangement's diff container, holding whole `(Vec<Accum>, Diff)` diffs.
+        let diffs: Vec<(Vec<Accum>, Diff)> = accums
+            .chunks(3)
+            .map(|chunk| (chunk.to_vec(), Diff::ONE))
+            .collect();
+        let mut coltainer = Coltainer::<(Vec<Accum>, Diff)>::default();
+        for diff in &diffs {
+            coltainer.push_own(diff);
+        }
+        assert_eq!(coltainer.len(), diffs.len());
+        for (index, diff) in diffs.iter().enumerate() {
+            assert_eq!(
+                <Coltainer<(Vec<Accum>, Diff)>>::into_owned(coltainer.index(index)),
+                *diff
+            );
+        }
+        let mut sum = <Coltainer<(Vec<Accum>, Diff)>>::into_owned(coltainer.index(0));
+        sum.plus_equals(&sum.clone().multiply(&Diff::from(-1_i64)));
+        assert!(sum.is_zero());
     }
 }

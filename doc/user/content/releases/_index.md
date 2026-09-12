@@ -20,6 +20,33 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.41.0
+*Released to Materialize Cloud: 2026-09-10* <br>
+*Released to Materialize Self-Managed: 2026-09-11* <br>
+
+### Improvements {#v26.41-improvements}
+- **Improved Clusters Page on console**: The Clusters Page now shows you per-replica usage, including CPU, memory, disk, and heap usage. Use the filters on the page to quickly identify unhealthy clusters. We've also sped up the page; page-loads which previously took ~600ms now take 25-50ms on environments with 2,000 objects.
+- **MySQL snapshot parallelism enabled by default**: In v26.39, we launched [parallelized snapshots](/ingest-data/mysql/snapshot-parallelism/) for [MySQL sources](/ingest-data/mysql/) on tables which have a `CHAR` or `VARCHAR` primary key using the `utf8mb4` character set with the `utf8mb4_bin` collation. In our tests, we saw snapshot speedups of up to 80%. This behavior is now enabled by default.
+- **Pre-flight reference checks in `mz-deploy`**: `mz-deploy apply`, `apply tables`, and their `--dry-run` forms now check every `CREATE TABLE ... FROM SOURCE` reference against what the source can actually expose before creating anything, and report the mismatches grouped by source with close-name suggestions instead of failing partway through the batch with a raw server error.
+
+### Guides {#v26.41-guides}
+- **Reorganized documentation**: The docs are now grouped by what you are trying to do, with [Fundamentals](/fundamentals/), [Clusters](/clusters/), [Developer tools](/developer-tools/), and [Export data](/export-data/). Every moved page redirects from its previous URL.
+- [Export data to Snowflake on AWS, using the Iceberg Sink to AWS S3 Tables](/export-data/iceberg-aws-snowflake/)
+- [Query History for Self-Managed](/self-managed-deployments/query-history/)
+- [ADBC (Arrow Database Connectivity)](/serve-results/adbc/)
+- [Understand the lifecycle of a source](/ingest-data/lifecycle-of-a-source/)
+- [Upgrade the major version of your PostgreSQL source](/ingest-data/postgres/major-version-upgrade/)
+
+### Bug Fixes {#v26.41-bug-fixes}
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
+- Fixed `EXPLAIN TIMESTAMP AS DOT` aborting `environmentd`, which let any role that can run SQL take an environment down with a single statement; the statement now returns an unsupported-format error.
+- Fixed `environmentd` entering a crash loop that restarting could not clear, after an `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` was followed by dropping the old definition's dependencies.
+- Fixed a coordinator panic during `ALTER TABLE ... ADD COLUMN` when the schema change committed but its response was lost, so the retry now recognizes the evolution as already applied instead of reporting a mismatch.
+- Fixed Iceberg sinks panicking during Parquet writes when the sink's schema no longer matched that of an existing table, which could recur on every sink restart or zero-downtime upgrade; the sink now reports the mismatch instead.
+- Fixed MCP clients built on the official SDK failing the handshake, because Materialize answered `notifications/initialized` with `200` rather than the `202` the Streamable HTTP transport requires for a message that carries no reply.
+- `ALTER CLUSTER ... WITH (WAIT FOR ...)` now rolls back when its timeout is processed while the target replicas are still unhydrated, matching `WAIT UNTIL READY`'s safe default instead of forcing a cut-over that can cause downtime; request the previous behavior explicitly with `WAIT UNTIL READY (..., ON TIMEOUT = 'COMMIT')`.
+- Fixed the Console showing the previous region's clusters and Object Explorer contents after a region switch, until a full page refresh.
+
 ## v26.40.2
 *Released to Materialize Cloud: 2026-09-07* <br>
 *Released to Materialize Self-Managed: 2026-09-08* <br>
