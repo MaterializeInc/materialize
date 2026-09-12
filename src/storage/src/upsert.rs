@@ -492,6 +492,40 @@ pub fn rehydration_finished<'scope, T: Timestamp>(
     });
 }
 
+/// Keys this operator's previous output, read back from persist, for retraction.
+///
+/// Only [`UpsertError`] survives the error side. It is the one error this operator can have
+/// written, and therefore the one it can retract; anything else entered the shard from
+/// elsewhere and is not ours to take back.
+pub(crate) fn key_persist_feedback<'scope, T>(
+    ok: VecCollection<'scope, T, Row, Diff>,
+    err: VecCollection<'scope, T, DataflowError, Diff>,
+    key_indices: Vec<usize>,
+) -> VecCollection<'scope, T, (UpsertKey, UpsertValue), Diff>
+where
+    T: Timestamp,
+{
+    let keyed_ok = {
+        let key_indices = key_indices.clone();
+        ok.map(move |row| {
+            let key = UpsertKey::from_value(Ok(&row), &key_indices);
+            (key, Ok(row))
+        })
+    };
+    let keyed_err = err.flat_map(move |err| {
+        let err = match err {
+            DataflowError::EnvelopeError(err) => match *err {
+                EnvelopeError::Upsert(err) => Box::new(err),
+                EnvelopeError::Flat(_) => return None,
+            },
+            _ => return None,
+        };
+        let key = UpsertKey::from_value(Err(&err), &key_indices);
+        Some((key, Err(err)))
+    });
+    keyed_ok.concat(keyed_err)
+}
+
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
 /// Returns a tuple of
@@ -501,7 +535,8 @@ pub(crate) fn upsert<'scope, T, FromTime>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<T>,
-    previous: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    previous_ok: VecCollection<'scope, T, Row, Diff>,
+    previous_err: VecCollection<'scope, T, DataflowError, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     instance_context: &StorageInstanceContext,
@@ -615,7 +650,8 @@ where
         thin_input,
         upsert_envelope.key_indices,
         resume_upper,
-        previous,
+        previous_ok,
+        previous_err,
         previous_token,
         upsert_metrics,
         source_config,
@@ -637,7 +673,8 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<T>,
-    previous: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    previous_ok: VecCollection<'scope, T, Row, Diff>,
+    previous_err: VecCollection<'scope, T, DataflowError, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     backpressure_metrics: Option<UpsertBackpressureMetrics>,
@@ -677,7 +714,8 @@ where
         thin_input,
         upsert_envelope.key_indices,
         resume_upper,
-        previous,
+        previous_ok,
+        previous_err,
         previous_token,
         upsert_metrics,
         source_config,
@@ -690,7 +728,8 @@ fn upsert_operator<'scope, T, FromTime, F, Fut, US>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<T>,
-    persist_input: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    persist_ok: VecCollection<'scope, T, Row, Diff>,
+    persist_err: VecCollection<'scope, T, DataflowError, Diff>,
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -725,7 +764,8 @@ where
             input,
             key_indices,
             resume_upper,
-            persist_input,
+            persist_ok,
+            persist_err,
             persist_token,
             upsert_metrics,
             source_config,
@@ -739,7 +779,8 @@ where
             input,
             key_indices,
             resume_upper,
-            persist_input,
+            persist_ok,
+            persist_err,
             persist_token,
             upsert_metrics,
             source_config,
@@ -1076,7 +1117,8 @@ fn upsert_classic<'scope, T, FromTime, F, Fut, US>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<T>,
-    previous: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    previous_ok: VecCollection<'scope, T, Row, Diff>,
+    previous_err: VecCollection<'scope, T, DataflowError, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -1099,22 +1141,7 @@ where
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
-    // We only care about UpsertValueError since this is the only error that we can retract
-    let previous = previous.flat_map(move |result| {
-        let value = match result {
-            Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(Box::new(err)),
-                EnvelopeError::Flat(_) => return None,
-            },
-            Err(_) => return None,
-        };
-        let value_ref = match value {
-            Ok(ref row) => Ok(row),
-            Err(ref err) => Err(&**err),
-        };
-        Some((UpsertKey::from_value(value_ref, &key_indices), value))
-    });
+    let previous = key_persist_feedback(previous_ok, previous_err, key_indices);
     let (output_handle, output) = builder.new_output();
 
     // An output that just reports progress of the snapshot consolidation process upstream to the

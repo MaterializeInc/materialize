@@ -103,7 +103,8 @@ pub fn upsert_inner<'scope, T, FromTime, F, Fut, US>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<T>,
-    persist_input: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    persist_ok: VecCollection<'scope, T, Row, Diff>,
+    persist_err: VecCollection<'scope, T, DataflowError, Diff>,
     mut persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -126,22 +127,7 @@ where
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
-    // We only care about UpsertValueError since this is the only error that we can retract
-    let persist_input = persist_input.flat_map(move |result| {
-        let value = match result {
-            Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(Box::new(err)),
-                EnvelopeError::Flat(_) => return None,
-            },
-            Err(_) => return None,
-        };
-        let value_ref = match value {
-            Ok(ref row) => Ok(row),
-            Err(ref err) => Err(&**err),
-        };
-        Some((UpsertKey::from_value(value_ref, &key_indices), value))
-    });
+    let persist_input = crate::upsert::key_persist_feedback(persist_ok, persist_err, key_indices);
     let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // An output that just reports progress of the snapshot consolidation process upstream to the
@@ -977,6 +963,9 @@ mod test {
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
                         let (input_handle, input) = scope.new_input();
                         let (persist_handle, persist_input) = scope.new_input();
+                        // No test drives errors through the feedback, so the error side is an
+                        // input whose handle closes it without producing anything.
+                        let (_persist_err_handle, persist_err_input) = scope.new_input();
                         let upsert_config = UpsertConfig {
                             shrink_upsert_unused_buffers_by_ratio: 0,
                         };
@@ -1020,6 +1009,7 @@ mod test {
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
+                            persist_err_input.as_collection(),
                             None,
                             upsert_metrics,
                             source_config,
@@ -1063,7 +1053,7 @@ mod test {
 
             // We assume this worker succesfully CAAs the update to the shard so we send it back
             // through the persist_input
-            persist_handle.send((Ok(value1), new_ts(0), Diff::ONE));
+            persist_handle.send((value1, new_ts(0), Diff::ONE));
             persist_handle.advance_to(new_ts(1));
             worker.step();
 
@@ -1131,6 +1121,9 @@ mod test {
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
                         let (input_handle, input) = scope.new_input();
                         let (persist_handle, persist_input) = scope.new_input();
+                        // No test drives errors through the feedback, so the error side is an
+                        // input whose handle closes it without producing anything.
+                        let (_persist_err_handle, persist_err_input) = scope.new_input();
                         let upsert_config = UpsertConfig {
                             shrink_upsert_unused_buffers_by_ratio: 0,
                         };
@@ -1215,6 +1208,7 @@ mod test {
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
+                            persist_err_input.as_collection(),
                             None,
                             upsert_metrics,
                             source_config,
@@ -1255,7 +1249,7 @@ mod test {
                 worker.step_or_park(None);
             }
             // Feedback the produced output..
-            persist_handle.send((Ok(value1.clone()), mz_ts(0), Diff::ONE));
+            persist_handle.send((value1.clone(), mz_ts(0), Diff::ONE));
             persist_handle.advance_to(mz_ts(1));
             // ..and send the next upsert command that deletes the key.
             input_handle.send(msg2);
@@ -1265,7 +1259,7 @@ mod test {
             }
 
             // Feedback the produced output..
-            persist_handle.send((Ok(value1), mz_ts(1), Diff::MINUS_ONE));
+            persist_handle.send((value1, mz_ts(1), Diff::MINUS_ONE));
             persist_handle.advance_to(mz_ts(2));
             // ..and send the next *out of order* upsert command that deletes the key. Here msg4
             // happens at offset 4 and the operator should rememeber that.
@@ -1334,6 +1328,9 @@ mod test {
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
                         let (input_handle, input) = scope.new_input();
                         let (persist_handle, persist_input) = scope.new_input();
+                        // No test drives errors through the feedback, so the error side is an
+                        // input whose handle closes it without producing anything.
+                        let (_persist_err_handle, persist_err_input) = scope.new_input();
                         let upsert_config = UpsertConfig {
                             shrink_upsert_unused_buffers_by_ratio: 0,
                         };
@@ -1415,6 +1412,7 @@ mod test {
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
+                            persist_err_input.as_collection(),
                             None,
                             upsert_metrics,
                             source_config,

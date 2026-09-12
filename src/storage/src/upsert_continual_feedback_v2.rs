@@ -414,7 +414,8 @@ pub fn upsert_inner<'scope, T, FromTime>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<T>,
-    persist_input: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    persist_ok: VecCollection<'scope, T, Row, Diff>,
+    persist_err: VecCollection<'scope, T, DataflowError, Diff>,
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -437,7 +438,8 @@ where
     // arrangement they feed is not, so each arm names its own arrange types
     // and hands the arrangement to the shared operator loop.
     let encoded = encode_feedback(
-        persist_input,
+        persist_ok,
+        persist_err,
         key_indices,
         source_config.source_statistics.clone(),
     );
@@ -495,7 +497,8 @@ where
 /// `Pipeline` downstream of an `UpsertKey::hashed` exchange, so the
 /// arrangement keeps that locality.
 fn encode_feedback<'scope, T>(
-    persist_input: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    persist_ok: VecCollection<'scope, T, Row, Diff>,
+    persist_err: VecCollection<'scope, T, DataflowError, Diff>,
     key_indices: Vec<usize>,
     source_statistics: SourceStatistics,
 ) -> Stream<'scope, T, Column<((UpsertKey, Row), T, Diff)>>
@@ -506,22 +509,7 @@ where
     T: columnar::Columnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
 {
-    // Extract (UpsertKey, UpsertValue) from the persist feedback collection.
-    let persist_keyed = persist_input.flat_map(move |result| {
-        let value = match result {
-            Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(Box::new(err)),
-                EnvelopeError::Flat(_) => return None,
-            },
-            Err(_) => return None,
-        };
-        let value_ref = match value {
-            Ok(ref row) => Ok(row),
-            Err(ref err) => Err(&**err),
-        };
-        Some((UpsertKey::from_value(value_ref, &key_indices), value))
-    });
+    let persist_keyed = crate::upsert::key_persist_feedback(persist_ok, persist_err, key_indices);
     let persist_keyed = persist_keyed
         .inner
         // The arrangement already implicitly exchanges by key, so this is redundant, but we want to
@@ -1512,6 +1500,9 @@ mod test {
                             scope.scoped::<Ts, _, _>("upsert", |scope| {
                                 let (input_handle, input) = scope.new_input();
                                 let (persist_handle, persist_input) = scope.new_input();
+                                // No test drives errors through the feedback, so the error side is an
+                                // input whose handle closes it without producing anything.
+                                let (_persist_err_handle, persist_err_input) = scope.new_input();
                                 let source_id = GlobalId::User(0);
 
                                 let reg = MetricsRegistry::new();
@@ -1547,6 +1538,7 @@ mod test {
                                     vec![0],
                                     Antichain::from_elem(Timestamp::minimum()),
                                     persist_input.as_collection(),
+                                    persist_err_input.as_collection(),
                                     None,
                                     upsert_metrics,
                                     source_config,
@@ -1591,7 +1583,7 @@ mod test {
             input.advance_to(new_ts(2));
             worker.step();
 
-            persist.send((Ok(value1), new_ts(0), Diff::ONE));
+            persist.send((value1, new_ts(0), Diff::ONE));
             persist.advance_to(new_ts(1));
             worker.step();
 
@@ -1634,14 +1626,14 @@ mod test {
             input.send(((key_high, Some(Ok(val_a.clone())), 1), new_ts(0), Diff::ONE));
             input.advance_to(new_ts(1));
             worker.step();
-            persist.send((Ok(val_a.clone()), new_ts(0), Diff::ONE));
+            persist.send((val_a.clone(), new_ts(0), Diff::ONE));
             persist.advance_to(new_ts(1));
             worker.step();
 
             input.send(((key_low, Some(Ok(val_b.clone())), 2), new_ts(1), Diff::ONE));
             input.advance_to(new_ts(2));
             worker.step();
-            persist.send((Ok(val_b.clone()), new_ts(1), Diff::ONE));
+            persist.send((val_b.clone(), new_ts(1), Diff::ONE));
             persist.advance_to(new_ts(2));
             worker.step();
 
@@ -1688,7 +1680,7 @@ mod test {
             let old_val = row(42, 100);
             let new_val = row(42, 200);
 
-            persist.send((Ok(old_val), new_ts(0), Diff::ONE));
+            persist.send((old_val, new_ts(0), Diff::ONE));
             persist.advance_to(new_ts(1));
             worker.step();
 
@@ -1718,7 +1710,7 @@ mod test {
         const KEYS: i64 = 1500;
         let actual = upsert_test!(|input, persist, worker| {
             for k in 0..KEYS {
-                persist.send((Ok(row(k, k)), new_ts(0), Diff::ONE));
+                persist.send((row(k, k), new_ts(0), Diff::ONE));
             }
             persist.advance_to(new_ts(1));
             worker.step();
@@ -1763,7 +1755,7 @@ mod test {
         const KEYS: i64 = 1500;
         let actual = upsert_test!(|input, persist, worker| {
             for k in 0..KEYS {
-                persist.send((Ok(row(k, k)), new_ts(0), Diff::ONE));
+                persist.send((row(k, k), new_ts(0), Diff::ONE));
             }
             persist.advance_to(new_ts(1));
             worker.step();
@@ -1804,7 +1796,7 @@ mod test {
             input.send(((k, Some(Ok(val.clone())), 1), new_ts(0), Diff::ONE));
             input.advance_to(new_ts(1));
             worker.step();
-            persist.send((Ok(val), new_ts(0), Diff::ONE));
+            persist.send((val, new_ts(0), Diff::ONE));
             persist.advance_to(new_ts(1));
             worker.step();
 
@@ -1832,9 +1824,9 @@ mod test {
             let new_val = row(5, 20);
             let updated_val = row(5, 30);
 
-            persist.send((Ok(old_val.clone()), new_ts(0), Diff::ONE));
-            persist.send((Ok(old_val), new_ts(0), Diff::MINUS_ONE));
-            persist.send((Ok(new_val), new_ts(0), Diff::ONE));
+            persist.send((old_val.clone(), new_ts(0), Diff::ONE));
+            persist.send((old_val, new_ts(0), Diff::MINUS_ONE));
+            persist.send((new_val, new_ts(0), Diff::ONE));
             persist.advance_to(new_ts(1));
             worker.step();
 
@@ -1884,14 +1876,14 @@ mod test {
             input.send(((k, Some(Ok(val_a.clone())), 1), new_ts(0), Diff::ONE));
             input.advance_to(new_ts(1));
             worker.step();
-            persist.send((Ok(val_a.clone()), new_ts(0), Diff::ONE));
+            persist.send((val_a.clone(), new_ts(0), Diff::ONE));
             persist.advance_to(new_ts(1));
             worker.step();
 
             input.send(((k, None, 2), new_ts(1), Diff::ONE));
             input.advance_to(new_ts(2));
             worker.step();
-            persist.send((Ok(val_a), new_ts(1), Diff::MINUS_ONE));
+            persist.send((val_a, new_ts(1), Diff::MINUS_ONE));
             persist.advance_to(new_ts(2));
             worker.step();
 
@@ -1925,7 +1917,7 @@ mod test {
             input.send(((k, Some(Ok(val.clone())), 1), new_ts(0), Diff::ONE));
             input.advance_to(new_ts(1));
             worker.step();
-            persist.send((Ok(val.clone()), new_ts(0), Diff::ONE));
+            persist.send((val.clone(), new_ts(0), Diff::ONE));
             persist.advance_to(new_ts(1));
             worker.step();
 
@@ -1998,6 +1990,9 @@ mod test {
                     scope.scoped::<Ts, _, _>("upsert", |scope| {
                         let (input_handle, input) = scope.new_input();
                         let (persist_handle, persist_input) = scope.new_input();
+                        // No test drives errors through the feedback, so the error side is an
+                        // input whose handle closes it without producing anything.
+                        let (_persist_err_handle, persist_err_input) = scope.new_input();
                         let source_id = GlobalId::User(0);
 
                         let reg = MetricsRegistry::new();
@@ -2036,6 +2031,7 @@ mod test {
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
+                            persist_err_input.as_collection(),
                             None,
                             upsert_metrics,
                             source_config,
