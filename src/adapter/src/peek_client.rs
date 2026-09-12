@@ -307,11 +307,12 @@ impl PeekClient {
     pub async fn acquire_read_holds_and_least_valid_write(
         &mut self,
         id_bundle: &CollectionIdBundle,
+        timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
     ) -> Result<(ReadHolds, Antichain<Timestamp>), CollectionLookupError> {
         if let Some(client) = self.query_client.clone() {
             let catalog = self.catalog_snapshot("query read protection").await;
             return client
-                .acquire_read_holds_and_upper(&catalog, id_bundle)
+                .acquire_read_holds_and_upper(&catalog, id_bundle, timestamp)
                 .await
                 .map_err(|error| CollectionLookupError::ReadProtection(Box::new(error)));
         }

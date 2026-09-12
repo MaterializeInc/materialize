@@ -996,6 +996,44 @@ impl Coordinator {
         id: GlobalId,
         sink: &Sink,
     ) -> Result<(), AdapterError> {
+        let (desc, read_holds) = self.storage_export_description(id, sink)?;
+        let collection_desc = CollectionDescription {
+            // TODO(sinks): make generic once we have more than one sink type.
+            desc: KAFKA_PROGRESS_DESC.clone(),
+            data_source: DataSource::Sink { desc },
+            since: None,
+            timeline: None,
+            primary: None,
+        };
+        let storage_metadata = self.catalog.state().storage_metadata();
+        let res = self
+            .controller
+            .storage
+            .create_collections(storage_metadata, None, vec![(id, collection_desc)])
+            .await;
+        // The controller owns dependency protection after installation.
+        drop(read_holds);
+        Ok(res?)
+    }
+
+    pub(crate) async fn alter_storage_export(&mut self, sink: &Sink) -> Result<(), AdapterError> {
+        let (desc, read_holds) = self.storage_export_description(sink.global_id(), sink)?;
+        let res = self
+            .controller
+            .storage
+            .alter_export(sink.global_id(), desc)
+            .await;
+        drop(read_holds);
+        Ok(res?)
+    }
+
+    /// Reconstructs an export from committed state and protects its inputs until
+    /// the controller takes over their protection during installation.
+    fn storage_export_description(
+        &self,
+        id: GlobalId,
+        sink: &Sink,
+    ) -> Result<(ExportDescription, crate::ReadHolds), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.check_exists(sink.from)?;
 
@@ -1007,13 +1045,8 @@ impl Coordinator {
             compute_ids: btreemap! {},
         };
 
-        // We're putting in place read holds, such that create_exports, below,
-        // which calls update_read_capabilities, can successfully do so.
-        // Otherwise, the since of dependencies might move along concurrently,
-        // pulling the rug from under us!
-        //
-        // TODO: Maybe in the future, pass those holds on to storage, to hold on
-        // to them and downgrade when possible?
+        // Keep dependencies readable while constructing the description and
+        // until the controller acquires its own dependency holds.
         let read_holds = self.acquire_read_holds(&id_bundle);
         let mut as_of = read_holds.least_valid_read();
         if self.catalog().state().catalog_read_protection_enabled() {
@@ -1044,34 +1077,13 @@ impl Coordinator {
             commit_interval: sink.commit_interval,
         };
 
-        let collection_desc = CollectionDescription {
-            // TODO(sinks): make generic once we have more than one sink type.
-            desc: KAFKA_PROGRESS_DESC.clone(),
-            data_source: DataSource::Sink {
-                desc: ExportDescription {
-                    sink: storage_sink_desc,
-                    instance_id: sink.cluster_id,
-                },
+        Ok((
+            ExportDescription {
+                sink: storage_sink_desc,
+                instance_id: sink.cluster_id,
             },
-            since: None,
-            timeline: None,
-            primary: None,
-        };
-        let collections = vec![(id, collection_desc)];
-
-        // Create the collections.
-        let storage_metadata = self.catalog.state().storage_metadata();
-        let res = self
-            .controller
-            .storage
-            .create_collections(storage_metadata, None, collections)
-            .await;
-
-        // Drop read holds after the export has been created, at which point
-        // storage will have put in its own read holds.
-        drop(read_holds);
-
-        Ok(res?)
+            read_holds,
+        ))
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is

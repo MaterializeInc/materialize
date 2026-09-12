@@ -104,6 +104,19 @@ impl ClientReadProtection {
         }
     }
 
+    /// A grant can supply the acquisition floor only if it covers the desired
+    /// timestamp. A later grant says nothing about older retained history, which
+    /// the caller must observe and protect through a committed publication.
+    /// With no timestamp preference, reuse the established window.
+    pub(crate) fn reusable_frontier(
+        &self,
+        id: GlobalId,
+        read_ts: Option<Timestamp>,
+    ) -> Option<Timestamp> {
+        self.granted_frontier(id)
+            .filter(|grant| read_ts.is_none_or(|time| *grant <= time))
+    }
+
     /// Acquire the bundle at the requested finite frontiers.
     /// Every bundle ID must have a requested frontier. Entries outside the
     /// bundle are ignored. Every compute index must have an explicit, immutable
@@ -317,6 +330,48 @@ mod tests {
     fn publish(client: &ClientReadProtection, extra: BTreeMap<GlobalId, Timestamp>) {
         client.prepare_publication(extra);
         client.finish_publication(true);
+    }
+
+    #[mz_ore::test]
+    fn historical_grant_expansion_requires_commit() {
+        let client = ClientReadProtection::new(1);
+        publish(&client, requirements(&[(1, 100), (2, 100)]));
+        let ordinary = acquire(&client, 120);
+        for id in bundle().iter() {
+            for target in [None, Some(Timestamp::from(100)), Some(Timestamp::from(120))] {
+                assert_eq!(
+                    client.reusable_frontier(id, target),
+                    Some(Timestamp::from(100))
+                );
+            }
+            assert_eq!(
+                client.reusable_frontier(id, Some(Timestamp::from(50))),
+                None
+            );
+        }
+
+        let historical = requirements(&[(1, 50), (2, 50)]);
+        let try_historical = || {
+            client
+                .try_acquire(&bundle(), &historical, &dependencies())
+                .expect("client remains open")
+        };
+        assert!(try_historical().is_none());
+        client.prepare_publication(historical.clone());
+        assert!(try_historical().is_none());
+        // An expansion must not interrupt reads already covered by both grants.
+        drop(acquire(&client, 120));
+        client.finish_publication(false);
+        assert!(try_historical().is_none());
+        publish(&client, historical.clone());
+        let held = try_historical().expect("committed historical coverage");
+        assert_eq!(
+            held.least_valid_read(),
+            Antichain::from_elem(Timestamp::from(50))
+        );
+        assert_eq!(client.prepare_publication(BTreeMap::new()), historical);
+        client.finish_publication(true);
+        drop((ordinary, held));
     }
 
     #[mz_ore::test]

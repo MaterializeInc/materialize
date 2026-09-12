@@ -61,7 +61,7 @@ struct Connection {
     commands: mpsc::UnboundedSender<Request>,
     observations: Arc<Mutex<Observations>>,
     changes: watch::Receiver<()>,
-    _task: mz_ore::task::AbortOnDropHandle<()>,
+    task: Mutex<Option<mz_ore::task::AbortOnDropHandle<()>>>,
 }
 
 impl Drop for Connection {
@@ -117,10 +117,24 @@ impl ReplicaQueryClient {
             commands,
             observations,
             changes,
-            _task: task.abort_on_drop(),
+            task: Mutex::new(Some(task.abort_on_drop())),
         }));
         handle.receive(waiting).await?;
         Ok(handle)
+    }
+
+    /// Invalidate every clone and terminate pending requests and installed routes.
+    /// Aborting the actor also interrupts blocked transport sends. Its drop path
+    /// fans out the connection failure without waiting for the replica to respond.
+    pub(crate) fn disconnect(&self) {
+        {
+            let mut state = self.0.observations.lock().expect("lock poisoned");
+            state.frontiers.clear();
+            state
+                .error
+                .get_or_insert_with(|| QueryError::Disconnected("query replica removed".into()));
+        }
+        drop(self.0.task.lock().expect("lock poisoned").take());
     }
 
     fn error(&self) -> QueryError {
@@ -134,6 +148,9 @@ impl ReplicaQueryClient {
     }
 
     fn send(&self, request: Request) -> Result<(), QueryError> {
+        if !self.is_connected() {
+            return Err(self.error());
+        }
         self.0.commands.send(request).map_err(|_| self.error())
     }
 
@@ -505,11 +522,11 @@ impl Actor {
     }
 
     fn fail(&mut self, error: QueryError) {
-        {
+        let error = {
             let mut state = self.observations.lock().expect("lock poisoned");
             state.frontiers.clear();
-            state.error.get_or_insert_with(|| error.clone());
-        }
+            state.error.get_or_insert(error).clone()
+        };
         self.changed.send_replace(());
         self.requests.close();
         if let Some(ready) = self.ready.take() {
@@ -928,6 +945,62 @@ mod tests {
         assert!(matches!(
             bounded(second_dataflow.recv()).await,
             Some(Err(QueryError::Disconnected(_)))
+        ));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn invalidation_fails_held_clones_and_pending_routes_only_on_its_connection() {
+        let (client, mut peer) = connect().await;
+        let held = client.clone();
+        let (sibling, mut sibling_peer) = connect().await;
+        let mut creating = Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(1))));
+        assert!(futures::poll!(&mut creating).is_pending());
+        let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await else {
+            panic!("expected creation");
+        };
+        peer.respond(ComputeResponse::QueryDataflowResponse {
+            request_id,
+            error: None,
+        });
+        let mut installed = bounded(creating).await.expect("creation ACK");
+        assert!(matches!(peer.command().await, ComputeCommand::Schedule(_)));
+
+        let mut pending = Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(2))));
+        assert!(futures::poll!(&mut pending).is_pending());
+        assert!(matches!(
+            peer.command().await,
+            ComputeCommand::CreateQueryDataflow { .. }
+        ));
+        client.disconnect();
+        drop(client);
+        assert!(!held.is_connected());
+        assert!(matches!(held.frontiers(), Err(QueryError::Disconnected(_))));
+        assert!(matches!(
+            bounded(pending).await,
+            Err(QueryError::Disconnected(_))
+        ));
+        assert!(matches!(
+            bounded(installed.recv()).await,
+            Some(Err(QueryError::Disconnected(_)))
+        ));
+        assert!(bounded(installed.recv()).await.is_none());
+        bounded(peer.responses.closed()).await;
+
+        let uuid = Uuid::new_v4();
+        let mut result = Box::pin(sibling.peek(peek(uuid)));
+        assert!(futures::poll!(&mut result).is_pending());
+        assert!(matches!(
+            sibling_peer.command().await,
+            ComputeCommand::Peek(_)
+        ));
+        sibling_peer.respond(ComputeResponse::PeekResponse(
+            uuid,
+            PeekResponse::Canceled,
+            OpenTelemetryContext::empty(),
+        ));
+        assert!(matches!(
+            bounded(result).await,
+            Ok((PeekResponse::Canceled, _))
         ));
     }
 

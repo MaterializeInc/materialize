@@ -30,6 +30,7 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_transform::notice::OptimizerNoticeApi;
 use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
@@ -683,7 +684,7 @@ impl Coordinator {
             txn_reads.clone()
         } else {
             // No one has acquired holds, make sure we can determine an as_of
-            // and render our dataflow below.
+            // and commit a readable creation frontier.
             self.acquire_query_read_holds(&id_bundle).await?
         };
 
@@ -799,7 +800,7 @@ impl Coordinator {
         // here, so that if the catalog transaction below fails the user
         // isn't shown confusing notices about an item that wasn't actually
         // created.
-        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
             let full_name = self.catalog().resolve_full_name(&name, None);
@@ -835,37 +836,7 @@ impl Coordinator {
             .await;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
-
-                    df_desc.set_as_of(dataflow_as_of.clone());
-                    df_desc.set_initial_as_of(initial_as_of);
-                    df_desc.until = until;
-
-                    coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                            target_replica,
-                        )
-                        .await;
-
-                    if replacement_target.is_none() {
-                        coord.allow_writes(cluster_id, global_id);
-                    }
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {
@@ -874,6 +845,12 @@ impl Coordinator {
                 // catalog transaction has succeeded. If the transaction had
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
+                // A cache rejection may reflect an optimizer-only dependency dropped in this batch.
+                raw_df_meta.optimizer_notices.retain(|notice| {
+                    notice.dependencies().iter().all(|id| {
+                        self.catalog().try_get_entry_by_global_id(id).is_some()
+                    })
+                });
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }

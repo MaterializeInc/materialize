@@ -30,10 +30,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, SINCE_GRANULARITY};
-use mz_catalog::expr_cache::GlobalExpressions;
+use mz_catalog::expr_cache::{GlobalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
     MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
@@ -60,6 +61,7 @@ use mz_storage_types::sinks::StorageSinkConnection;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceDesc, SourceExport, SourceExportDataConfig,
 };
+use timely::PartialOrder;
 use timely::progress::Antichain;
 use tracing::{Instrument, info_span, warn};
 
@@ -69,8 +71,9 @@ use crate::coord::catalog_implications::parsed_state_updates::{
     ParsedStateUpdate, ParsedStateUpdateKind,
 };
 use crate::coord::peek::DroppedDependency;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::optimize::OptimizerConfig;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
+use crate::optimize::dataflows::{ComputeInstanceSnapshot, dataflow_import_id_bundle};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt, flags};
 
@@ -436,7 +439,8 @@ impl Coordinator {
         let mut table_collections_to_create = BTreeMap::new();
         let mut source_collections_to_create = BTreeMap::new();
         let mut sinks_to_create = Vec::new();
-        let mut indexes_to_create = Vec::new();
+        let mut sinks_to_alter = Vec::new();
+        let mut compute_items_to_create = BTreeSet::new();
         let mut storage_policies_to_initialize = BTreeMap::new();
         let mut execution_timestamps_to_set = BTreeSet::new();
         let mut vpc_endpoints_to_create: Vec<(CatalogItemId, VpcEndpointConfig)> = vec![];
@@ -592,14 +596,18 @@ impl Coordinator {
                     prev: prev_sink,
                     new: new_sink,
                 }) => {
-                    tracing::debug!(?prev_sink, ?new_sink, "not handling AlterSink in here yet");
+                    // Renames and privilege changes do not change the export.
+                    // ALTER SINK commits a new version of its definition.
+                    if prev_sink.version != new_sink.version {
+                        sinks_to_alter.push(new_sink);
+                    }
                 }
                 CatalogImplication::Sink(CatalogImplicationKind::Dropped(sink, full_name)) => {
                     storage_sink_gids_to_drop.push(sink.global_id());
                     dropped_item_names.insert(sink.global_id(), full_name);
                 }
-                CatalogImplication::Index(CatalogImplicationKind::Added(index)) => {
-                    indexes_to_create.push((catalog_id, index));
+                CatalogImplication::Index(CatalogImplicationKind::Added(_index)) => {
+                    compute_items_to_create.insert(catalog_id);
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Altered {
                     prev: prev_index,
@@ -623,9 +631,7 @@ impl Coordinator {
                     dropped_item_names.insert(index.global_id(), full_name);
                 }
                 CatalogImplication::MetricSink(CatalogImplicationKind::Added(_metric_sink)) => {
-                    // Nothing to do: shipping the dataflow at create time is
-                    // the sequencer's job (`create_metric_sink_finish`), and re-rendering it after
-                    // a restart happens during bootstrap (`bootstrap_dataflow_plans`).
+                    compute_items_to_create.insert(catalog_id);
                 }
                 CatalogImplication::MetricSink(CatalogImplicationKind::Altered { .. }) => {
                     // Nothing to do: owner, privilege, and rename changes are catalog-only.
@@ -649,7 +655,7 @@ impl Coordinator {
                         )
                         .or_default()
                         .extend(mv.global_ids());
-                    // TODO: Derive compute installation from the committed MV as well.
+                    compute_items_to_create.insert(catalog_id);
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Altered {
                     prev: prev_mv,
@@ -991,9 +997,43 @@ impl Coordinator {
         for sink in sinks_to_create {
             self.create_storage_export(sink.global_id(), &sink).await?;
         }
-        // Index imports need the cluster and storage collections from this batch.
-        for (catalog_id, index) in indexes_to_create {
-            self.create_index_from_catalog(catalog_id, &index).await?;
+        for sink in sinks_to_alter {
+            self.alter_storage_export(&sink).await?;
+        }
+        // Storage exists before compute imports it. Within compute, install indexes
+        // immediately after their input so downstream plans can use same-batch indexes.
+        if !compute_items_to_create.is_empty() {
+            // Traverse only these additions' dependencies rather than sorting the entire
+            // catalog on each DDL. Views between maintained objects matter to ordering.
+            let mut pending = compute_items_to_create.clone();
+            let mut entries = BTreeMap::new();
+            while let Some(id) = pending.pop_first() {
+                if entries.contains_key(&id) {
+                    continue;
+                }
+                let entry = self.catalog().get_entry(&id).clone();
+                pending.extend(entry.uses());
+                entries.insert(id, entry);
+            }
+            for entry in self.sort_catalog_entries(entries.into_values()) {
+                if !compute_items_to_create.contains(&entry.id()) {
+                    continue;
+                }
+                match entry.item() {
+                    CatalogItem::Index(index) => {
+                        self.create_index_from_catalog(entry.id(), index).await?;
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        self.create_materialized_view_from_catalog(entry.id(), mv)
+                            .await?;
+                    }
+                    CatalogItem::MetricSink(sink) => {
+                        self.create_metric_sink_from_catalog(entry.id(), sink)
+                            .await?;
+                    }
+                    _ => unreachable!("only maintained compute additions are queued"),
+                }
+            }
         }
         // It is _very_ important that we only initialize read policies after we
         // have created all the sources/collections. Some of the sources created
@@ -1380,6 +1420,35 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Cached plans are optional. Imports must belong to the committed catalog and
+    /// to the installation snapshot, not merely to compute's not-yet-dropped state.
+    async fn cached_installation_plan(
+        &self,
+        global_id: GlobalId,
+        item_version: RelationVersion,
+        compute_instance: &ComputeInstanceSnapshot,
+        optimizer_config: &OptimizerConfig,
+    ) -> Option<GlobalExpressions> {
+        let cached = self.catalog().cached_global_expressions(global_id).await;
+        cached.filter(|expressions| {
+            expressions.item_version == item_version
+                && expressions.optimizer_features == optimizer_config.features
+                // A dropped index can still be in compute until this batch's drops run.
+                // Conversely, a committed index may not have been installed yet.
+                && expressions.global_mir.index_imports.keys()
+                    .chain(expressions.physical_plan.index_imports.keys())
+                    .all(|id| {
+                        self.catalog().try_get_entry_by_global_id(id).is_some()
+                            && compute_instance.contains_collection(id)
+                    })
+                && expressions.dataflow_metainfos.optimizer_notices.iter().all(|notice| {
+                    notice.dependencies.iter().all(|id| {
+                        self.catalog().try_get_entry_by_global_id(id).is_some()
+                    })
+                })
+        })
+    }
+
     async fn create_index_from_catalog(
         &mut self,
         catalog_id: CatalogItemId,
@@ -1398,24 +1467,14 @@ impl Coordinator {
                     .features(),
             )
             .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id));
-        let cached = self.catalog().cached_global_expressions(global_id).await;
-        let cached = cached.filter(|expressions| {
-            expressions.item_version == RelationVersion::root()
-                && expressions.optimizer_features == optimizer_config.features
-                // A dropped index can still be in compute until this batch's drops run.
-                // Conversely, a committed index may not have been installed yet.
-                && expressions.global_mir.index_imports.keys()
-                    .chain(expressions.physical_plan.index_imports.keys())
-                    .all(|id| {
-                        self.catalog().try_get_entry_by_global_id(id).is_some()
-                            && compute_instance.contains_collection(id)
-                    })
-                && expressions.dataflow_metainfos.optimizer_notices.iter().all(|notice| {
-                    notice.dependencies.iter().all(|id| {
-                        self.catalog().try_get_entry_by_global_id(id).is_some()
-                    })
-                })
-        });
+        let cached = self
+            .cached_installation_plan(
+                global_id,
+                RelationVersion::root(),
+                &compute_instance,
+                &optimizer_config,
+            )
+            .await;
         let expressions = match cached {
             Some(expressions) => expressions,
             None => {
@@ -1444,6 +1503,160 @@ impl Coordinator {
                 .unwrap_or_default()
                 .into(),
         );
+        Ok(())
+    }
+
+    async fn create_metric_sink_from_catalog(
+        &mut self,
+        catalog_id: CatalogItemId,
+        sink: &MetricSink,
+    ) -> Result<(), AdapterError> {
+        let snapshot = self
+            .instance_snapshot(sink.cluster_id)
+            .expect("metric sink cluster exists before installation");
+        let config = OptimizerConfig::from(self.catalog().system_config())
+            .override_from(
+                &self
+                    .catalog()
+                    .get_cluster(sink.cluster_id)
+                    .config
+                    .features(),
+            )
+            .override_from(&self.cluster_scoped_optimizer_overrides(sink.cluster_id));
+        let expressions = match self
+            .cached_installation_plan(sink.global_id, RelationVersion::root(), &snapshot, &config)
+            .await
+        {
+            Some(expressions) => expressions,
+            None => self.build_metric_sink_dataflow_plan(
+                self.catalog().get_entry(&catalog_id).name(),
+                sink,
+                snapshot,
+                config,
+            )?,
+        };
+        let GlobalExpressions {
+            global_mir,
+            physical_plan,
+            dataflow_metainfos,
+            ..
+        } = expressions;
+        let imports = dataflow_import_id_bundle(&physical_plan, sink.cluster_id);
+        self.catalog_mut()
+            .set_optimized_plan(sink.global_id, global_mir);
+        self.catalog_mut()
+            .set_physical_plan(sink.global_id, physical_plan.clone());
+        let notices = self.persist_dataflow_metainfo(dataflow_metainfos, sink.global_id);
+        // Metric exports are process-local and need neither historical recovery nor allow_writes.
+        self.ship_new_dataflow(&imports, physical_plan, sink.cluster_id, notices)
+            .await;
+        Ok(())
+    }
+
+    async fn create_materialized_view_from_catalog(
+        &mut self,
+        catalog_id: CatalogItemId,
+        mv: &MaterializedView,
+    ) -> Result<(), AdapterError> {
+        let global_id = mv.global_id_writes();
+        let output = self
+            .controller
+            .storage_collections
+            .collection_frontiers(global_id)
+            .expect("MV storage exists before compute installation");
+        // A pending replacement does not own output writes yet. Its creation promise
+        // is independent of the target's progress on their shared shard.
+        // An existing writer instead recovers from durable output progress, not its
+        // initial visibility frontier.
+        let upper = if mv.replacement_target.is_some() {
+            mv.initial_as_of
+                .clone()
+                .expect("pending replacement has an initial visibility frontier")
+        } else if PartialOrder::less_equal(&output.write_frontier, &output.read_capabilities) {
+            output.read_capabilities
+        } else {
+            output
+                .write_frontier
+                .iter()
+                .map(|t| t.step_back().unwrap_or(Timestamp::MIN))
+                .collect()
+        };
+        // Equivalent indexes need not retain equivalent history. Restrict both cached
+        // and reconstructed plans to installed paths that can satisfy the output promise.
+        let indexes = self
+            .controller
+            .compute
+            .collection_ids(mv.cluster_id)
+            .expect("MV cluster exists before installation")
+            .filter(|id| self.catalog().try_get_entry_by_global_id(id).is_some())
+            .filter(|id| {
+                self.controller
+                    .compute
+                    .collection_frontiers(*id, Some(mv.cluster_id))
+                    .is_ok_and(|f| PartialOrder::less_equal(&f.read_frontier, &upper))
+            })
+            .collect();
+        let snapshot = ComputeInstanceSnapshot::new_from_parts(mv.cluster_id, indexes);
+        let config = OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog().get_cluster(mv.cluster_id).config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(mv.cluster_id));
+        let expressions = match self
+            .cached_installation_plan(
+                global_id,
+                latest_item_version(&mv.collections),
+                &snapshot,
+                &config,
+            )
+            .await
+        {
+            Some(expressions) => expressions,
+            None => self.build_materialized_view_dataflow_plan(
+                self.catalog().get_entry(&catalog_id).name(),
+                mv,
+                snapshot,
+                config,
+            )?,
+        };
+        let GlobalExpressions {
+            global_mir,
+            mut physical_plan,
+            dataflow_metainfos,
+            ..
+        } = expressions;
+        let imports = dataflow_import_id_bundle(&physical_plan, mv.cluster_id);
+        // Installation owns these holds, independently of DDL or its chosen plan.
+        // Keep them until compute has established its transitive execution protection.
+        let holds = self.acquire_read_holds(&imports);
+        let mut as_of = holds.least_valid_read();
+        if !PartialOrder::less_equal(&as_of, &upper) {
+            return Err(AdapterError::internal(
+                "install materialized view",
+                format!("inputs are readable from {as_of:?}, beyond recovery frontier {upper:?}"),
+            ));
+        }
+        if mv.refresh_schedule.is_some() {
+            // Permit warmup before the first refresh without skipping historical output.
+            as_of.join_assign(&self.greatest_available_read(&imports).meet(&upper));
+        } else {
+            as_of = upper;
+        }
+        self.catalog_mut().set_optimized_plan(global_id, global_mir);
+        self.catalog_mut()
+            .set_physical_plan(global_id, physical_plan.clone());
+        let notices = self.persist_dataflow_metainfo(dataflow_metainfos, global_id);
+        physical_plan.set_as_of(as_of);
+        Self::set_materialized_view_dataflow_bounds(&mut physical_plan, mv);
+        self.ship_dataflow_and_notice_builtin_table_updates(
+            physical_plan,
+            mv.cluster_id,
+            notices,
+            mv.target_replica,
+        )
+        .await;
+        if mv.replacement_target.is_none() {
+            self.allow_writes(mv.cluster_id, global_id);
+        }
+        drop(holds);
         Ok(())
     }
 

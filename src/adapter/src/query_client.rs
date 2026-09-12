@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use mz_catalog::memory::objects::{CatalogItem, TableDataSource};
 use mz_compute_client::protocol::command::Peek;
-use mz_compute_client::protocol::response::PeekResponse;
+use mz_compute_client::protocol::response::{PeekError, PeekResponse};
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ReplicaId;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -42,7 +42,7 @@ pub(crate) mod connections;
 pub(crate) mod dataflows;
 pub(crate) mod read_protection;
 
-use compute::ReplicaQueryClient;
+use compute::{QueryError, ReplicaQueryClient};
 use connections::QueryReplicaConnections;
 use read_protection::ClientReadProtection;
 
@@ -52,6 +52,7 @@ pub(crate) struct PreparedRead {
     pub(crate) frontiers: BTreeMap<GlobalId, Timestamp>,
     pub(crate) index_inputs: BTreeMap<GlobalId, BTreeSet<GlobalId>>,
     pub(crate) upper: Antichain<Timestamp>,
+    pub(crate) read_ts: Option<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -271,11 +272,19 @@ impl QueryClient {
     }
 
     /// Observes candidate frontiers. This method grants no protection.
+    /// `timestamp` chooses a desired read time from the observed upper, or None
+    /// to reuse an established window without a timestamp preference. Grants
+    /// later than that time require fresh readability and permission observations.
+    /// The returned floor can exceed the desired time, so callers must validate
+    /// timestamp constraints against the acquired holds before reading.
     pub(crate) async fn prepare_read(
         &self,
         catalog: &Catalog,
         bundle: &CollectionIdBundle,
+        timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
     ) -> Result<PreparedRead, AdapterError> {
+        let upper = self.write_frontier(catalog, bundle).await?;
+        let read_ts = timestamp(&upper)?;
         let mut index_inputs = BTreeMap::new();
         let mut storage = bundle.storage_ids.clone();
         for id in bundle.compute_ids.values().flatten() {
@@ -301,7 +310,7 @@ impl QueryClient {
         }
         let mut frontiers = BTreeMap::new();
         for id in storage {
-            let frontier = if let Some(granted) = self.protection.granted_frontier(id) {
+            let frontier = if let Some(granted) = self.protection.reusable_frontier(id, read_ts) {
                 granted
             } else {
                 let shard = catalog
@@ -317,18 +326,20 @@ impl QueryClient {
                     use differential_dataflow::lattice::Lattice;
                     since.join_assign(bound);
                 }
-                since.into_option().ok_or_else(|| unavailable(id))?
+                since
+                    .into_option()
+                    .ok_or_else(|| unavailable(id))?
+                    .max(read_ts.unwrap_or(Timestamp::MIN))
             };
             frontiers.insert(id, frontier);
         }
-        let upper = self.write_frontier(catalog, bundle).await?;
         for (cluster, ids) in &bundle.compute_ids {
             let replicas = self.replica_clients(*cluster, None);
             for id in ids {
                 let mut since = self
                     .protection
-                    .granted_frontier(*id)
-                    .unwrap_or(Timestamp::MIN);
+                    .reusable_frontier(*id, read_ts)
+                    .unwrap_or_else(|| read_ts.unwrap_or(Timestamp::MIN));
                 let bound = catalog.state().collection_compaction_bounds().get(id);
                 let observed = replicas
                     .iter()
@@ -368,6 +379,7 @@ impl QueryClient {
             frontiers,
             index_inputs,
             upper,
+            read_ts,
         })
     }
 
@@ -375,8 +387,9 @@ impl QueryClient {
         &self,
         catalog: &Catalog,
         bundle: &CollectionIdBundle,
+        timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
     ) -> Result<(ReadHolds, Antichain<Timestamp>), AdapterError> {
-        let prepared = self.prepare_read(catalog, bundle).await?;
+        let prepared = self.prepare_read(catalog, bundle, timestamp).await?;
         if let Some(holds) = self
             .protection
             .try_acquire(
@@ -394,10 +407,15 @@ impl QueryClient {
         self.coordinator.send(Command::AcquireClientReadProtection {
             incarnation: self.protection.incarnation(),
             bundle: bundle.clone(),
+            read_ts: prepared.read_ts,
             tx,
         });
-        rx.await
-            .map_err(|error| AdapterError::Unstructured(error.into()))?
+        let (holds, _) = rx
+            .await
+            .map_err(|error| AdapterError::Unstructured(error.into()))??;
+        // Keep the upper used to choose the acquisition target. Replica changes
+        // during publication must not substitute a different timestamp preference.
+        Ok((holds, prepared.upper))
     }
 
     pub(crate) async fn peek(
@@ -454,7 +472,7 @@ impl QueryClient {
         tokio::select! {
             biased;
             response = canceled => Ok((response, OpenTelemetryContext::obtain())),
-            result = execute => result,
+            result = execute => finish_peek(result, target),
         }
     }
 
@@ -536,7 +554,7 @@ impl QueryClient {
         tokio::select! {
             biased;
             response = canceled => Ok((response, OpenTelemetryContext::obtain())),
-            result = execute => result,
+            result = execute => finish_peek(result, target),
         }
     }
 
@@ -654,4 +672,358 @@ fn diagnostics(id: GlobalId) -> Diagnostics {
 
 fn unavailable(id: GlobalId) -> AdapterError {
     AdapterError::CollectionUnreadable { id: id.to_string() }
+}
+
+pub(crate) fn is_target_replica_failure(error: &AdapterError, target: Option<ReplicaId>) -> bool {
+    target.is_some()
+        && matches!(
+            error,
+            AdapterError::Unstructured(error)
+                if matches!(error.downcast_ref::<QueryError>(), Some(QueryError::Disconnected(_)))
+        )
+}
+
+fn finish_peek(
+    result: Result<(PeekResponse, OpenTelemetryContext), AdapterError>,
+    target: Option<ReplicaId>,
+) -> Result<(PeekResponse, OpenTelemetryContext), AdapterError> {
+    // Match controller peeks: losing the selected replica is a terminal execution
+    // response, not a failure to plan or admit the query.
+    match result {
+        Err(error) if is_target_replica_failure(&error, target) => Ok((
+            PeekResponse::Error(PeekError::unstructured(
+                mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED,
+            )),
+            OpenTelemetryContext::obtain(),
+        )),
+        result => result,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::Op;
+    use crate::coord::Message;
+    use crate::metrics::Metrics;
+    use connections::QueryReplicaConnectionsConfig;
+    use futures::stream::BoxStream;
+    use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_repr::CatalogItemId;
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_storage_client::controller::StorageTxn;
+
+    #[mz_ore::test]
+    fn targeted_peek_disconnect_is_an_execution_error() {
+        let disconnected = || {
+            Err(AdapterError::Unstructured(
+                compute::QueryError::Disconnected("removed".into()).into(),
+            ))
+        };
+        let (response, _) = finish_peek(disconnected(), Some(ReplicaId::User(1)))
+            .expect("target loss is a terminal peek response");
+        assert!(
+            matches!(response, PeekResponse::Error(PeekError::Unstructured(error))
+            if error == mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED)
+        );
+        assert!(finish_peek(disconnected(), None).is_err());
+    }
+
+    // Storage-only acquisition must not consult replica lifecycle services.
+    #[derive(Debug)]
+    struct NoReplicas;
+
+    #[async_trait::async_trait]
+    impl mz_orchestrator::NamespacedOrchestrator for NoReplicas {
+        fn service_addresses(
+            &self,
+            _: &str,
+            _: std::num::NonZero<u16>,
+            _: &mz_orchestrator::ServicePort,
+        ) -> Result<Vec<String>, anyhow::Error> {
+            unreachable!("storage-only read")
+        }
+        fn ensure_service(
+            &self,
+            _: &str,
+            _: mz_orchestrator::ServiceConfig,
+        ) -> Result<Box<dyn mz_orchestrator::Service>, anyhow::Error> {
+            unreachable!("storage-only read")
+        }
+        fn drop_service(&self, _: &str) -> Result<(), anyhow::Error> {
+            unreachable!("storage-only read")
+        }
+        async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
+            unreachable!("storage-only read")
+        }
+        fn watch_services(
+            &self,
+        ) -> BoxStream<'static, Result<mz_orchestrator::ServiceEvent, anyhow::Error>> {
+            unreachable!("storage-only read")
+        }
+        async fn fetch_service_metrics(
+            &self,
+            _: &str,
+        ) -> Result<Vec<mz_orchestrator::ServiceProcessMetrics>, anyhow::Error> {
+            unreachable!("storage-only read")
+        }
+        fn update_scheduling_config(
+            &self,
+            _: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+        ) {
+            unreachable!("storage-only read")
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn historical_acquisition_publishes_before_returning_and_preserves_upper() {
+        let persist = PersistClient::new_for_tests().await;
+        let bootstrap = test_bootstrap_args();
+        let organization = Uuid::new_v4();
+        let mut storage = TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("can open test catalog");
+        // The adapter projection is reconstructed below. Drain initialization
+        // updates before opening another transaction on the durable writer.
+        storage
+            .sync_to_current_updates()
+            .await
+            .expect("can consume catalog initialization");
+        let id = GlobalId::User(100_000);
+        let shard = ShardId::new();
+        let incarnation = {
+            let mut tx = storage
+                .transaction()
+                .await
+                .expect("can start creation transaction");
+            let schema = tx
+                .get_schemas()
+                .find(|s| s.name == "public")
+                .expect("public schema exists");
+            tx.insert_item(
+                CatalogItemId::User(100_000),
+                mz_pgrepr::oid::FIRST_USER_OID,
+                id,
+                schema.id,
+                "history",
+                "CREATE MATERIALIZED VIEW materialize.public.history IN CLUSTER quickstart AS SELECT 1 AS a".into(),
+                MZ_SYSTEM_ROLE_ID,
+                vec![],
+                BTreeMap::new(),
+                None,
+            ).expect("can insert test MV");
+            // The native catalog harness does not provision storage. Install the
+            // shard identity and its initial permission in the same transaction.
+            tx.insert_collection_metadata(BTreeMap::from([(id, shard)]))
+                .expect("can install shard metadata");
+            tx.set_collection_compaction_bound(id, Some(Timestamp::from(40)))
+                .expect("can set initial permission");
+            let incarnation = tx
+                .create_client_incarnation()
+                .expect("can create client incarnation");
+            tx.publish_client_read_requirements(
+                incarnation,
+                BTreeMap::from([(id, Timestamp::from(100))]),
+            )
+            .expect("can publish initial grant");
+            let _ = tx.get_and_commit_op_updates();
+            let ts = tx.upper();
+            tx.commit(ts).await.expect("can commit creation");
+            incarnation
+        };
+        storage.expire().await;
+        let storage = TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("can reopen seeded catalog");
+        let mut catalog = Box::pin(Catalog::open_debug_catalog_inner(
+            persist.clone(),
+            storage,
+            SYSTEM_TIME.clone(),
+            Some(
+                format!("local-az1-{organization}-0")
+                    .parse()
+                    .expect("valid test environment ID"),
+            ),
+            &mz_build_info::DUMMY_BUILD_INFO,
+            BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+            &bootstrap,
+            None,
+            None,
+        ))
+        .await
+        .expect("can reconstruct debug catalog");
+        let (tx, mut commands) = tokio::sync::mpsc::unbounded_channel();
+        let client = QueryClient::new(
+            incarnation,
+            CoordinatorClient::Background {
+                tx,
+                metrics: Metrics::register_into(&MetricsRegistry::new()),
+            },
+            persist.clone(),
+            PersistLocation {
+                blob_uri: "mem://".parse().expect("valid memory blob URL"),
+                consensus_uri: "mem://".parse().expect("valid memory consensus URL"),
+            },
+            ShardId::new(),
+            Arc::new(QueryReplicaConnections::new(
+                QueryReplicaConnectionsConfig {
+                    orchestrator: Arc::new(NoReplicas),
+                    deploy_generation: 0,
+                    build_info: &mz_build_info::DUMMY_BUILD_INFO,
+                },
+            )),
+        );
+        let metadata = client
+            .collection_metadata(&catalog, id)
+            .expect("collection metadata exists");
+        assert!(metadata.txns_shard.is_none());
+        let (mut writer, mut reader) = persist
+            .open::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(metadata.relation_desc),
+                Arc::new(mz_persist_types::codec_impls::UnitSchema),
+                diagnostics(id),
+                false,
+            )
+            .await
+            .expect("can open Persist shard");
+        let frontier = |t| Antichain::from_elem(Timestamp::from(t));
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(0),
+                frontier(80),
+            )
+            .await
+            .expect("valid append usage")
+            .expect("initial upper matches");
+        reader.downgrade_since(&frontier(40)).await;
+        assert_eq!(
+            persist
+                .recent_since::<SourceData, (), Timestamp, StorageDiff>(shard, diagnostics(id))
+                .await
+                .expect("can observe Persist since"),
+            frontier(40)
+        );
+        assert_eq!(
+            catalog.state().collection_compaction_bounds()[&id],
+            frontier(40)
+        );
+        client
+            .protection
+            .prepare_publication(BTreeMap::from([(id, Timestamp::from(100))]));
+        client.protection.finish_publication(true);
+        let bundle = CollectionIdBundle {
+            storage_ids: BTreeSet::from([id]),
+            compute_ids: BTreeMap::new(),
+        };
+        let snapshot = catalog.clone();
+        let read = client.acquire_read_holds_and_upper(&snapshot, &bundle, |upper| {
+            assert_eq!(upper, &frontier(80));
+            Ok(Some(Timestamp::from(50)))
+        });
+        tokio::pin!(read);
+        let command = tokio::select! {
+            result = &mut read => panic!("historical read bypassed publication: {result:?}"),
+            command = commands.recv() => command.expect("coordinator receives acquisition"),
+        };
+        let Message::Command(
+            _,
+            Command::AcquireClientReadProtection {
+                incarnation: requested_incarnation,
+                bundle: requested_bundle,
+                read_ts,
+                tx,
+            },
+        ) = command
+        else {
+            panic!("expected acquisition miss")
+        };
+        assert_eq!(requested_incarnation, incarnation);
+        assert_eq!(requested_bundle.storage_ids, bundle.storage_ids);
+        assert_eq!(requested_bundle.compute_ids, bundle.compute_ids);
+        assert_eq!(read_ts, Some(Timestamp::from(50)));
+
+        // Service the miss with a real catalog commit, without controller workers.
+        // The writer re-observes readability and permission, not the cached G=100.
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(80),
+                frontier(90),
+            )
+            .await
+            .expect("valid append usage")
+            .expect("upper matches before advancing");
+        let prepared = client
+            .prepare_read(&catalog, &requested_bundle, |_| Ok(read_ts))
+            .await
+            .expect("can prepare historical acquisition");
+        assert_eq!(prepared.frontiers[&id], Timestamp::from(50));
+        assert_eq!(prepared.upper, frontier(90));
+        let requirements = client
+            .protection
+            .prepare_publication(prepared.frontiers.clone());
+        assert!(
+            client
+                .protection
+                .try_acquire(&bundle, &prepared.frontiers, &prepared.index_inputs)
+                .expect("client remains open")
+                .is_none()
+        );
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements,
+                }],
+            )
+            .await
+            .expect("can commit historical grant");
+        client.protection.finish_publication(true);
+        let holds = client
+            .protection
+            .try_acquire(&bundle, &prepared.frontiers, &prepared.index_inputs)
+            .expect("client remains open")
+            .expect("committed grant covers the read");
+        tx.send(Ok((holds, prepared.upper)))
+            .expect("read still awaits publication");
+        let (holds, upper) = read.await.expect("historical acquisition succeeds");
+        assert_eq!(holds.since(&id), frontier(50));
+        assert_eq!(upper, frontier(80));
+        drop(holds);
+
+        let ordinary = client
+            .acquire_read_holds_and_upper(&catalog, &bundle, |_| Ok(Some(Timestamp::from(120))));
+        tokio::pin!(ordinary);
+        let (holds, upper) = tokio::select! {
+            biased;
+            command = commands.recv() => panic!("covered read published: {command:?}"),
+            result = &mut ordinary => result.expect("covered acquisition succeeds"),
+        };
+        assert_eq!(holds.since(&id), frontier(50));
+        assert_eq!(upper, frontier(90));
+        assert!(matches!(
+            commands.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        reader.expire().await;
+        writer.expire().await;
+    }
 }

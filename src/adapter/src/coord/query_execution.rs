@@ -104,7 +104,7 @@ impl Coordinator {
                                 SubscribeResponse::Batch(SubscribeBatch {
                                     lower,
                                     upper: Antichain::new(),
-                                    updates: Err(error.to_string()),
+                                    updates: Err(subscribe_error(error, target)),
                                 }),
                             )
                         } else {
@@ -118,5 +118,42 @@ impl Coordinator {
             .abort_on_drop(),
         );
         Ok(())
+    }
+}
+
+fn subscribe_error(error: AdapterError, target: Option<ReplicaId>) -> String {
+    if crate::query_client::is_target_replica_failure(&error, target) {
+        mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED.into()
+    } else {
+        error.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query_client::compute::QueryError;
+
+    #[mz_ore::test]
+    fn targeted_subscribe_only_relabels_connection_failures() {
+        let target = Some(ReplicaId::User(1));
+        let disconnected =
+            || AdapterError::Unstructured(QueryError::Disconnected("removed".into()).into());
+        assert_eq!(
+            subscribe_error(disconnected(), target),
+            mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED
+        );
+        assert_eq!(
+            subscribe_error(disconnected(), None),
+            disconnected().to_string()
+        );
+        for error in [
+            AdapterError::Unstructured(QueryError::Rejected("admission failed".into()).into()),
+            AdapterError::Unstructured(anyhow::anyhow!("execution failed")),
+            AdapterError::CollectionUnreadable { id: "u1".into() },
+        ] {
+            let expected = error.to_string();
+            assert_eq!(subscribe_error(error, target), expected);
+        }
     }
 }

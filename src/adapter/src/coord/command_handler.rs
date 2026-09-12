@@ -383,10 +383,11 @@ impl Coordinator {
                 Command::AcquireClientReadProtection {
                     incarnation,
                     bundle,
+                    read_ts,
                     tx,
                 } => {
                     let result = self
-                        .acquire_client_read_protection(incarnation, bundle)
+                        .acquire_client_read_protection(incarnation, bundle, |_| Ok(read_ts))
                         .await;
                     let _ = tx.send(result);
                 }

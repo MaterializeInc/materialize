@@ -261,6 +261,7 @@ pub enum Command {
     AcquireClientReadProtection {
         incarnation: u64,
         bundle: CollectionIdBundle,
+        read_ts: Option<mz_repr::Timestamp>,
         tx: oneshot::Sender<
             Result<(ReadHolds, timely::progress::Antichain<mz_repr::Timestamp>), AdapterError>,
         >,

@@ -353,7 +353,7 @@ impl crate::coord::Coordinator {
         if let Some(client) = &self.query_client {
             let incarnation = client.protection.incarnation();
             let (holds, _) = self
-                .acquire_client_read_protection(incarnation, id_bundle.clone())
+                .acquire_client_read_protection(incarnation, id_bundle.clone(), |_| Ok(None))
                 .await?;
             Ok(holds)
         } else if self.catalog().state().catalog_read_protection_enabled() && !id_bundle.is_empty()

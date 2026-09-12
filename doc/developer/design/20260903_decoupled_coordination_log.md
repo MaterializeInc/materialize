@@ -751,3 +751,24 @@ Restarted index permission, final shard retirement, and targeted SUBSCRIBE behav
 remain separate investigations. Maintained installation and the lifecycle process
 move are still outstanding. Preserve the designer commits and keep this checkpoint
 as WIP while continuing the draft PR loop.
+
+### 2026-09-12: Table-time ownership question
+
+Empty adapter group commits advance transaction-WAL time for registered tables.
+Moving only the controller bundle leaves that progress dependent on adapter life,
+so maintained source/table joins can stall after adapter loss. Proposed to Aljoscha:
+lifecycle advances WAL time without row writes or membership changes, while the
+adapter retains DDL, registration/forgetting, and row appends. This is not yet an
+agreed decision. Pause that extraction boundary pending guidance and continue the
+in-process query and maintained-installation work.
+
+Unpublished indexes can have durable client grants. Recovery must not choose a
+later soft timestamp preference just because no index bound has been published.
+The design's least-readable reconstruction rule also covers grants admitted after
+the recovering process's snapshot, without adding a grant subscriber or startup
+catalog write.
+
+A pending MV replacement's creation frontier is independent of the target's shared
+output progress. Runtime installation respects that distinction. Restarting with
+the target still suspended remains a separate investigation: bootstrap still
+applies the shared output's recovery constraint to the pending replacement.

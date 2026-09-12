@@ -1515,7 +1515,16 @@ impl PeekClient {
         let isolation_level = session.vars().transaction_isolation();
 
         let (read_holds, upper) = self
-            .acquire_read_holds_and_least_valid_write(id_bundle)
+            .acquire_read_holds_and_least_valid_write(id_bundle, |upper| {
+                Coordinator::read_protection_timestamp(
+                    session,
+                    when,
+                    timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                    upper,
+                )
+            })
             .await
             .map_err(|err| {
                 AdapterError::concurrent_dependency_drop_from_collection_lookup_error(

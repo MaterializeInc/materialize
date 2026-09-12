@@ -27,7 +27,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_service::transport::{Client, NoopMetrics};
 use tokio::sync::watch;
 
-use super::compute::ReplicaQueryClient;
+use super::compute::{QueryError, ReplicaQueryClient};
 use crate::AdapterError;
 use crate::catalog::Catalog;
 
@@ -63,6 +63,16 @@ struct ReplicaState {
     client: Option<ReplicaQueryClient>,
 }
 
+impl Drop for ReplicaState {
+    fn drop(&mut self) {
+        // Execution-owned clones may outlive the catalog slot, but must not keep
+        // its connection valid. The monitor holds the slot only while publishing.
+        if let Some(client) = &self.client {
+            client.disconnect();
+        }
+    }
+}
+
 impl std::fmt::Debug for ReplicaState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReplicaState")
@@ -83,6 +93,7 @@ struct Replica {
 /// A desired replica remains in the pool while it is connecting or reconnecting.
 /// Tasks hold only weak references to their slots. Removing a slot or dropping
 /// the pool aborts its task, including an incomplete transport handshake.
+/// The slot also invalidates its published connection, even if queries retain it.
 #[derive(Debug)]
 pub(crate) struct QueryReplicaConnections {
     config: Arc<QueryReplicaConnectionsConfig>,
@@ -201,9 +212,12 @@ impl QueryReplicaConnections {
         loop {
             let (desired, clients) = self.ready_snapshot(cluster, target);
             if desired == 0 {
-                return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                    "no desired query replica for cluster {cluster}, target {target:?}"
-                )));
+                return Err(AdapterError::Unstructured(
+                    QueryError::Disconnected(format!(
+                        "no desired query replica for cluster {cluster}, target {target:?}"
+                    ))
+                    .into(),
+                ));
             }
             if !clients.is_empty() {
                 return Ok(clients);

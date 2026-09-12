@@ -188,7 +188,11 @@ impl Coordinator {
             }
             if !ready.is_empty() {
                 match self
-                    .acquire_client_read_protection(client.protection.incarnation(), ready.clone())
+                    .acquire_client_read_protection(
+                        client.protection.incarnation(),
+                        ready.clone(),
+                        |_| Ok(None),
+                    )
                     .await
                 {
                     Ok((holds, _)) => {
@@ -226,6 +230,7 @@ impl Coordinator {
         &mut self,
         incarnation: u64,
         bundle: crate::CollectionIdBundle,
+        timestamp: impl FnOnce(&Antichain<Timestamp>) -> Result<Option<Timestamp>, AdapterError>,
     ) -> Result<(crate::ReadHolds, Antichain<Timestamp>), AdapterError> {
         let client = self.query_client.clone().ok_or(AdapterError::ReadOnly)?;
         if client.protection.incarnation() != incarnation {
@@ -247,7 +252,7 @@ impl Coordinator {
             ));
         }
         let prepared = client
-            .prepare_read(self.client_read_catalog(), &bundle)
+            .prepare_read(self.client_read_catalog(), &bundle, timestamp)
             .await?;
         if let Some(holds) = client
             .protection

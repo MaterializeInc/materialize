@@ -2907,10 +2907,19 @@ mod tests {
         use mz_storage_client::controller::StorageTxn;
 
         async fn check(catalog: &Catalog) {
-            let reader = catalog.open_diagnostic_reader().await.unwrap();
+            let reader = catalog
+                .open_diagnostic_reader()
+                .await
+                .expect("can open diagnostic catalog reader");
             let upper = catalog.current_upper().await;
-            let snapshot = reader.into_snapshot_at(upper).await.unwrap();
-            catalog.check_durable_consistency(snapshot).await.unwrap();
+            let snapshot = reader
+                .into_snapshot_at(upper)
+                .await
+                .expect("can extract catalog snapshot");
+            catalog
+                .check_durable_consistency(snapshot)
+                .await
+                .expect("durable catalog state is consistent");
         }
 
         let persist = PersistClient::new_for_tests().await;
@@ -2923,12 +2932,16 @@ mod tests {
             .await
             .open(SYSTEM_TIME().into(), &bootstrap)
             .await
-            .unwrap();
+            .expect("can open durable catalog storage");
         let mut catalog = Catalog::open_debug_catalog_inner(
             persist,
             storage,
             SYSTEM_TIME.clone(),
-            Some(format!("local-az1-{organization}-0").parse().unwrap()),
+            Some(
+                format!("local-az1-{organization}-0")
+                    .parse()
+                    .expect("valid test environment ID"),
+            ),
             &mz_build_info::DUMMY_BUILD_INFO,
             BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
             &bootstrap,
@@ -2936,7 +2949,7 @@ mod tests {
             None,
         )
         .await
-        .unwrap();
+        .expect("can open debug catalog");
         assert!(catalog.state().catalog_read_protection_enabled());
 
         let local_owner = Uuid::new_v4();
@@ -2954,7 +2967,10 @@ mod tests {
         let ids = [local, foreign, version];
         let (updates, incarnation) = {
             let mut storage = catalog.storage().await;
-            let mut tx = storage.transaction().await.unwrap();
+            let mut tx = storage
+                .transaction()
+                .await
+                .expect("can start temporary table creation transaction");
             // Same SQL name in distinct sessions must not collide or become visible
             // locally. The foreign table's extra version also has a live alias.
             for (offset, (item, id, name, owner, versions)) in [
@@ -2973,7 +2989,7 @@ mod tests {
             {
                 tx.insert_item(
                     item,
-                    FIRST_USER_OID + u32::try_from(offset).unwrap(),
+                    FIRST_USER_OID + u32::try_from(offset).expect("test item offset fits in u32"),
                     id,
                     SchemaSpecifier::Temporary.into(),
                     name,
@@ -2983,7 +2999,7 @@ mod tests {
                     versions,
                     Some(owner),
                 )
-                .unwrap();
+                .expect("can insert temporary catalog item");
             }
             // The native catalog harness has no storage controller. Allocate the
             // metadata and initial permission together, as storage preparation does.
@@ -2993,20 +3009,24 @@ mod tests {
                 (foreign, foreign_shard),
                 (version, foreign_shard),
             ]))
-            .unwrap();
+            .expect("can insert collection metadata");
             for id in ids {
                 tx.set_collection_compaction_bound(id, Some(Timestamp::MIN))
-                    .unwrap();
+                    .expect("can set initial collection compaction bound");
             }
-            let incarnation = tx.create_client_incarnation().unwrap();
+            let incarnation = tx
+                .create_client_incarnation()
+                .expect("can create client incarnation");
             tx.publish_client_read_requirements(
                 incarnation,
                 ids.into_iter().map(|id| (id, Timestamp::MIN)).collect(),
             )
-            .unwrap();
+            .expect("can publish initial client read requirements");
             let updates = tx.get_and_commit_op_updates();
             let ts = tx.upper();
-            tx.commit(ts).await.unwrap();
+            tx.commit(ts)
+                .await
+                .expect("can commit temporary table creation");
             (updates, incarnation)
         };
         let _ = catalog
@@ -3034,7 +3054,7 @@ mod tests {
         let (released, _) = catalog
             .transact_incremental_dry_run(catalog.state(), vec![release.clone()], None, None, ts)
             .await
-            .unwrap();
+            .expect("can dry-run client read requirement release");
         for id in ids {
             assert!(
                 released
@@ -3051,11 +3071,17 @@ mod tests {
         for item in [alias_item, foreign_item] {
             let updates = {
                 let mut storage = catalog.storage().await;
-                let mut tx = storage.transaction().await.unwrap();
-                tx.remove_item(item).unwrap();
+                let mut tx = storage
+                    .transaction()
+                    .await
+                    .expect("can start temporary item removal transaction");
+                tx.remove_item(item)
+                    .expect("can remove temporary catalog item");
                 let updates = tx.get_and_commit_op_updates();
                 let ts = tx.upper();
-                tx.commit(ts).await.unwrap();
+                tx.commit(ts)
+                    .await
+                    .expect("can commit temporary item removal");
                 updates
             };
             let _ = catalog
@@ -3091,7 +3117,7 @@ mod tests {
                     ts,
                 )
                 .await
-                .unwrap();
+                .expect("can dry-run client read requirement release after item removal");
             assert!(
                 released
                     .storage_metadata()
