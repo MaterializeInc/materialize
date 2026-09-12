@@ -202,12 +202,18 @@ where
 
     let timestamp_desc = source_connection.timestamp_desc();
 
+    // The flag is read once per dataflow, so the operator that emits arrival probes and the
+    // operator that turns them into bindings always agree. A flip that reached only one of the two
+    // would mint bindings off the grid at the arrival probe rate.
+    let event_driven = STORAGE_EVENT_DRIVEN_BINDINGS.get(config.config.config_set());
+
     let (remap_collection, remap_token) = remap_operator(
         scope,
         storage_state,
         config.clone(),
         probed_upper_rx,
         timestamp_desc,
+        event_driven,
     );
     // Need to broadcast the remap changes to all workers.
     let remap_collection = remap_collection.inner.broadcast().as_collection();
@@ -232,6 +238,7 @@ where
             probed_upper_tx,
             committed_upper,
             start_signal,
+            event_driven,
         );
 
         for (id, export) in exports {
@@ -272,6 +279,7 @@ fn source_render_operator<'scope, C>(
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
+    event_driven: bool,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<'scope, C::Time, Result<SourceMessage, DataflowError>>>,
     StreamVec<'scope, C::Time, HealthStatusMessage>,
@@ -308,9 +316,6 @@ where
 
     let mut health_streams = vec![];
 
-    // Whether arrival probes exist is decided here, once, so that the rendered graph with the
-    // flag off is the graph we have today.
-    let event_driven = STORAGE_EVENT_DRIVEN_BINDINGS.get(config.config.config_set());
     let mut progress_streams = vec![];
 
     for (id, export) in exports {
@@ -327,6 +332,9 @@ where
 
         // Republishing the export's frontier here rather than tapping the data stream keeps the
         // export single-consumer, so its `Tee` never clones a batch of source records.
+        //
+        // The output handle stays unused because the operator only downgrades this output's
+        // capability and never pushes a record onto it.
         let _progress_output = event_driven.then(|| {
             let (output, progress) = builder.new_output::<Vec<Infallible>>();
             progress_streams.push(progress);
@@ -454,6 +462,7 @@ fn remap_operator<'scope, FromTime>(
     config: RawSourceCreationConfig,
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
     remap_relation_desc: RelationDesc,
+    event_driven: bool,
 ) -> (
     VecCollection<'scope, mz_repr::Timestamp, FromTime, Diff>,
     PressOnDropButton,
@@ -472,7 +481,7 @@ where
         as_of,
         resume_uppers: _,
         source_resume_uppers: _,
-        metrics: _,
+        metrics,
         now_fn,
         persist_clients,
         statistics: _,
@@ -483,10 +492,6 @@ where
     } = config;
 
     let config_set = Arc::clone(storage_config.config_set());
-    // Whether arrival probes exist is decided once, when the dataflow is rendered, so the binding
-    // rule is fixed at the same moment. A flip that reached only one of the two would mint
-    // ungridded bindings at the arrival probe rate.
-    let event_driven = STORAGE_EVENT_DRIVEN_BINDINGS.get(&config_set);
 
     let read_only_rx = storage_state.read_only_rx.clone();
     let error_handler = storage_state.error_handler("remap_operator", id);
@@ -549,36 +554,88 @@ where
         let mut remap_upper = initial_batch.upper.clone();
         cap_set.downgrade(initial_batch.upper);
 
+        let source_metrics = metrics.get_source_metrics(id, worker_id);
+
         let mut prev_probe: Option<Probe<FromTime>> = None;
+        // A proposal whose grid cell the remap upper has already passed is held here until that
+        // cell ends, rather than dropped. An explicit probe can land in a cell an arrival probe
+        // already used, and dropping it would lose the guarantee that an explicit probe mints a
+        // binding at least every `X_max`.
+        let mut deferred: Option<Probe<FromTime>> = None;
+
+        // We only mint bindings after a successful probe. Under event-driven minting probes
+        // arrive from two producers, so a probe with an unchanged timestamp but an advanced
+        // frontier is new information. `less_than` is that "new information" test and, unlike
+        // inequality, does not depend on the order in which a partitioned frontier lists its
+        // elements.
+        let is_fresh =
+            |prev: &Option<Probe<FromTime>>, new: &Option<Probe<FromTime>>| match (prev, new) {
+                (None, Some(_)) => true,
+                (Some(prev), Some(new)) => {
+                    prev.probe_ts < new.probe_ts
+                        || (event_driven
+                            && PartialOrder::less_than(
+                                &prev.upstream_frontier,
+                                &new.upstream_frontier,
+                            ))
+                }
+                _ => false,
+            };
+        // The watch sender is dropped when the source shuts down. The empty frontier stands in
+        // for it and makes `mint` close the remap shard.
+        let shutdown_probe = || Probe {
+            probe_ts: now_fn().into(),
+            upstream_frontier: Antichain::new(),
+        };
 
         while !cap_set.is_empty() {
-            // We only mint bindings after a successful probe.
-            let new_probe = probed_upper
-                .wait_for(|new_probe| match (&prev_probe, new_probe) {
-                    (None, Some(_)) => true,
-                    (Some(prev), Some(new)) => {
-                        // Under event-driven minting probes arrive from two producers, so a probe
-                        // with an unchanged timestamp but an advanced frontier is new information.
-                        prev.probe_ts < new.probe_ts
-                            || (event_driven && prev.upstream_frontier != new.upstream_frontier)
+            let probe = match deferred.take() {
+                None => probed_upper
+                    .wait_for(|new_probe| is_fresh(&prev_probe, new_probe))
+                    .await
+                    .map(|probe| (*probe).clone())
+                    .unwrap_or_else(|_| Some(shutdown_probe()))
+                    .expect("known to be Some"),
+                Some(held) => {
+                    let grid = STORAGE_MIN_BINDING_INTERVAL.get(&config_set);
+                    let cell_start = remap_upper
+                        .as_option()
+                        .map_or(mz_repr::Timestamp::MIN, |upper| {
+                            probe::ceil_to_grid(*upper, grid)
+                        });
+                    let wait =
+                        Duration::from_millis(u64::from(cell_start).saturating_sub(now_fn()));
+                    let fresh_probe =
+                        probed_upper.wait_for(|new_probe| is_fresh(&prev_probe, new_probe));
+                    tokio::select! {
+                        result = fresh_probe => {
+                            // A newer probe carries a frontier at least as advanced as the held
+                            // one, so it replaces it.
+                            result
+                                .map(|probe| (*probe).clone())
+                                .unwrap_or_else(|_| Some(shutdown_probe()))
+                                .expect("known to be Some")
+                        }
+                        _ = tokio::time::sleep(wait) => Probe {
+                            probe_ts: now_fn().into(),
+                            upstream_frontier: held.upstream_frontier,
+                        },
                     }
-                    _ => false,
-                })
-                .await
-                .map(|probe| (*probe).clone())
-                .unwrap_or_else(|_| {
-                    Some(Probe {
-                        probe_ts: now_fn().into(),
-                        upstream_frontier: Antichain::new(),
-                    })
-                });
+                }
+            };
 
-            let probe = new_probe.expect("known to be Some");
             prev_probe = Some(probe.clone());
 
-            // The empty frontier signals source shutdown, which mints its final binding at the
-            // probe timestamp regardless of the grid.
-            let binding_ts = if event_driven && !probe.upstream_frontier.is_empty() {
+            let binding_ts = if probe.upstream_frontier.is_empty() {
+                // The empty frontier signals source shutdown. Its binding has to be at or beyond
+                // the remap upper, else `mint` refuses it and the shard never closes. With
+                // event-driven bindings off the upper never leads `now`, so the maximum is a
+                // no-op there.
+                let now = probe.probe_ts;
+                remap_upper
+                    .as_option()
+                    .map_or(now, |upper| std::cmp::max(now, *upper))
+            } else if event_driven {
                 let lead = STORAGE_BINDING_LEAD.get(&config_set);
                 let grid = STORAGE_MIN_BINDING_INTERVAL.get(&config_set);
                 let lead_ms = u64::try_from(lead.as_millis()).unwrap_or(u64::MAX);
@@ -586,14 +643,17 @@ where
                     mz_repr::Timestamp::from(u64::from(probe.probe_ts).saturating_add(lead_ms));
                 let binding_ts = probe::floor_to_grid(led, grid);
                 // A proposal inside the grid cell of the current upper would be rejected by
-                // `mint` without a diagnostic. Skipping it here keeps bindings on the grid and
-                // bounds the compare-and-append rate.
+                // `mint` without a diagnostic. Deferring it to the next cell keeps bindings on
+                // the grid and bounds the compare-and-append rate, where taking the maximum with
+                // the upper instead would mint off the grid at the arrival rate.
                 if !remap_upper.less_equal(&binding_ts) {
                     trace!(
-                        "timely-{worker_id} remap({id}) skipping proposal at {binding_ts}: \
+                        "timely-{worker_id} remap({id}) deferring proposal at {binding_ts}: \
                         remap upper {} is beyond it",
                         remap_upper.pretty()
                     );
+                    source_metrics.remap_proposals_deferred_total.inc();
+                    deferred = Some(probe);
                     continue;
                 }
                 binding_ts
@@ -607,6 +667,13 @@ where
             let mut remap_trace_batch = timestamper
                 .mint(binding_ts, new_into_upper, cur_source_upper.borrow())
                 .await;
+
+            // Under event-driven minting a rejection is the normal case while ingestion catches
+            // up with the last explicit probe, so it needs a counter to stay distinguishable from
+            // a source that is stuck.
+            if !cur_source_upper.is_empty() && remap_trace_batch.upper == remap_upper {
+                source_metrics.remap_proposals_rejected_total.inc();
+            }
 
             trace!(
                 "timely-{worker_id} remap({id}) minted new bindings: \

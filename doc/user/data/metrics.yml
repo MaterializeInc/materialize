@@ -3516,6 +3516,20 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: internal
+- name: mz_source_remap_proposals_deferred_total
+  help: Remap binding proposals deferred to the next grid cell because the remap upper was already beyond them
+  labels:
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source.rs
+  visibility: internal
+- name: mz_source_remap_proposals_rejected_total
+  help: Remap binding proposals that `mint` did not append because the proposed source frontier was behind the recorded one
+  labels:
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/source.rs
+  visibility: internal
 - name: mz_source_row_inserts
   help: A counter representing the actual number of rows being inserted to the data shard
   labels:

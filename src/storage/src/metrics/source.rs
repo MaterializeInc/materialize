@@ -37,6 +37,8 @@ pub(crate) struct GeneralSourceMetricDefs {
     pub(crate) resume_upper: IntGaugeVec,
     pub(crate) commit_upper_ready_times: UIntGaugeVec,
     pub(crate) commit_upper_accepted_times: UIntGaugeVec,
+    pub(crate) remap_proposals_deferred: IntCounterVec,
+    pub(crate) remap_proposals_rejected: IntCounterVec,
 
     // OffsetCommitMetrics
     pub(crate) offset_commit_failures: IntCounterVec,
@@ -71,6 +73,16 @@ impl GeneralSourceMetricDefs {
             commit_upper_accepted_times: registry.register(metric!(
                 name: "mz_source_commit_upper_accepted_times",
                 help: "The number of accepted remap bindings that are held in the reclock commit upper operator.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            remap_proposals_deferred: registry.register(metric!(
+                name: "mz_source_remap_proposals_deferred_total",
+                help: "Remap binding proposals deferred to the next grid cell because the remap upper was already beyond them",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            remap_proposals_rejected: registry.register(metric!(
+                name: "mz_source_remap_proposals_rejected_total",
+                help: "Remap binding proposals that `mint` did not append because the proposed source frontier was behind the recorded one",
                 var_labels: ["source_id", "worker_id"],
             )),
             offset_commit_failures: registry.register(metric!(
@@ -123,6 +135,12 @@ pub(crate) struct SourceMetrics {
     pub(crate) commit_upper_ready_times: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The number of accepted remap bindings that are held in the reclock commit upper operator.
     pub(crate) commit_upper_accepted_times: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    /// Remap binding proposals deferred to the next grid cell because the remap upper was already
+    /// beyond them.
+    pub(crate) remap_proposals_deferred_total: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    /// Remap binding proposals that `mint` did not append because the proposed source frontier was
+    /// behind the recorded one.
+    pub(crate) remap_proposals_rejected_total: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl SourceMetrics {
@@ -141,6 +159,12 @@ impl SourceMetrics {
                 .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
             commit_upper_accepted_times: defs
                 .commit_upper_accepted_times
+                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
+            remap_proposals_deferred_total: defs
+                .remap_proposals_deferred
+                .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
+            remap_proposals_rejected_total: defs
+                .remap_proposals_rejected
                 .get_delete_on_drop_metric(vec![source_id.to_string(), worker_id.to_string()]),
         }
     }

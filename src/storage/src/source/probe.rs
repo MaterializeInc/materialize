@@ -126,12 +126,28 @@ impl<G: Fn() -> Duration> Ticker<G> {
 ///
 /// A zero grid leaves `ts` unchanged.
 pub(super) fn floor_to_grid(ts: Timestamp, grid: Duration) -> Timestamp {
-    let grid_ms = u64::try_from(grid.as_millis()).unwrap_or(u64::MAX);
+    let ms = u64::from(ts);
+    let Ok(grid_ms) = u64::try_from(grid.as_millis()) else {
+        // A grid wider than the timestamp domain puts every timestamp in the first cell, which
+        // starts at the minimum timestamp.
+        return Timestamp::MIN;
+    };
     if grid_ms == 0 {
         return ts;
     }
-    let ms = u64::from(ts);
     Timestamp::from(ms - (ms % grid_ms))
+}
+
+/// Returns the start of the first multiple of `grid` that is not less than `ts`.
+///
+/// A zero grid leaves `ts` unchanged.
+pub(super) fn ceil_to_grid(ts: Timestamp, grid: Duration) -> Timestamp {
+    let floored = floor_to_grid(ts, grid);
+    if floored == ts {
+        return ts;
+    }
+    let grid_ms = u64::try_from(grid.as_millis()).unwrap_or(u64::MAX);
+    Timestamp::from(u64::from(floored).saturating_add(grid_ms))
 }
 
 /// Emits a probe whenever the frontier of `progress` advances, at most once per `min_interval`.
@@ -204,7 +220,9 @@ pub(super) fn arrival_probes<'scope, T: TimelyTimestamp>(
                             pending = true;
                         }
                     }
-                    Some(AsyncEvent::Data(..)) => unreachable!("progress-only stream"),
+                    // The upstream operator pushes no records, but an empty batch is still a
+                    // constructible event and carries no information.
+                    Some(AsyncEvent::Data(..)) => (),
                     None => return,
                 },
                 _ = tokio::time::sleep(wait), if pending => {
@@ -232,7 +250,7 @@ mod tests {
 
     use mz_repr::Timestamp;
 
-    use super::floor_to_grid;
+    use super::{ceil_to_grid, floor_to_grid};
 
     #[mz_ore::test]
     fn floor_to_grid_rounds_down_to_multiples() {
@@ -243,5 +261,16 @@ mod tests {
         assert_eq!(floor_to_grid(ts(1250), grid), ts(1250));
         assert_eq!(floor_to_grid(ts(7), grid), ts(0));
         assert_eq!(floor_to_grid(ts(7), Duration::ZERO), ts(7));
+        assert_eq!(floor_to_grid(ts(1000), Duration::MAX), ts(0));
+    }
+
+    #[mz_ore::test]
+    fn ceil_to_grid_rounds_up_to_multiples() {
+        let grid = Duration::from_millis(250);
+        let ts = Timestamp::from;
+        assert_eq!(ceil_to_grid(ts(1000), grid), ts(1000));
+        assert_eq!(ceil_to_grid(ts(1001), grid), ts(1250));
+        assert_eq!(ceil_to_grid(ts(7), grid), ts(250));
+        assert_eq!(ceil_to_grid(ts(7), Duration::ZERO), ts(7));
     }
 }
