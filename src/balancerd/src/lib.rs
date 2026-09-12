@@ -24,6 +24,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -46,7 +47,7 @@ use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
-use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
+use mz_ore::metrics::{ComputedGauge, ComputedUIntGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::task::{JoinSetExt, spawn};
@@ -72,13 +73,13 @@ use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 use tower::Service;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
-    has_tracing_config_update, tracing_config,
+    INJECT_PROXY_PROTOCOL_HEADER_HTTP, MAX_CONNECTIONS, SIGTERM_CONNECTION_WAIT,
+    SIGTERM_LISTEN_WAIT, has_tracing_config_update, tracing_config,
 };
 
 /// Balancer build information.
@@ -315,6 +316,7 @@ impl BalancerService {
         };
 
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
+        let limiter = ConnectionLimiter::new(&self.cfg.metrics_registry, self.configs.clone());
 
         let mut set = JoinSet::new();
         let mut server_handles = Vec::new();
@@ -338,6 +340,7 @@ impl BalancerService {
                 tls: pgwire_tls,
                 internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
+                limiter: Arc::clone(&limiter),
                 now: SYSTEM_TIME.clone(),
             };
             let (handle, stream) = self.pgwire;
@@ -370,6 +373,7 @@ impl BalancerService {
                 resolve_template: Arc::from(addr),
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
+                limiter,
                 configs: self.configs.clone(),
                 internal_tls: self.cfg.internal_tls,
             };
@@ -613,6 +617,91 @@ impl ServerMetrics {
     }
 }
 
+/// Ceiling on the number of client connections proxied at once, shared by the pgwire and HTTPS
+/// listeners.
+///
+/// balancerd's memory use scales with the number of connections it proxies. Without a ceiling it
+/// keeps accepting until the container is OOM killed, which drops every established connection.
+/// Refusing new connections instead sheds only the load we cannot serve.
+#[derive(Debug)]
+struct ConnectionLimiter {
+    configs: ConfigSet,
+    active: AtomicU32,
+    /// Whether connections are currently being refused, so that reaching and clearing the limit
+    /// are logged once each rather than once per connection.
+    limited: AtomicBool,
+    rejected: IntCounter,
+    _limit: ComputedUIntGauge,
+}
+
+impl ConnectionLimiter {
+    fn new(registry: &MetricsRegistry, configs: ConfigSet) -> Arc<Self> {
+        let rejected = registry.register(metric!(
+            name: "mz_balancer_connection_rejected_total",
+            help: "Count of connections refused because the connection limit was reached.",
+        ));
+        let limit = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_limit",
+                help: "Maximum number of connections proxied at once, 0 if unlimited.",
+            ),
+            {
+                let configs = configs.clone();
+                move || u64::from(MAX_CONNECTIONS.get(&configs))
+            },
+        );
+        Arc::new(ConnectionLimiter {
+            configs,
+            active: AtomicU32::new(0),
+            limited: AtomicBool::new(false),
+            rejected,
+            _limit: limit,
+        })
+    }
+
+    /// Reserves capacity for one connection, or returns `None` if the limit has been reached, in
+    /// which case the caller must refuse the connection.
+    fn acquire(self: &Arc<Self>) -> Option<ConnectionGuard> {
+        let limit = MAX_CONNECTIONS.get(&self.configs);
+        let unlimited = limit == 0;
+        match self
+            .active
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                (unlimited || active < limit).then(|| active + 1)
+            }) {
+            Ok(prev) => {
+                // Only clear the limited state once comfortably below the limit, so that
+                // connections churning at the ceiling do not flap the log lines.
+                if unlimited || prev + 1 <= limit - limit / 10 {
+                    if self.limited.swap(false, Ordering::Relaxed) {
+                        info!("accepting new connections again, limit is {limit}");
+                    }
+                }
+                Some(ConnectionGuard(Arc::clone(self)))
+            }
+            Err(active) => {
+                self.rejected.inc();
+                if !self.limited.swap(true, Ordering::Relaxed) {
+                    warn!(
+                        "refusing new connections: at the limit of {limit} connections \
+                        ({active} active)"
+                    );
+                }
+                None
+            }
+        }
+    }
+}
+
+/// Releases the connection reserved by [`ConnectionLimiter::acquire`] when dropped.
+struct ConnectionGuard(Arc<ConnectionLimiter>);
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 pub enum CancellationResolver {
     Directory(PathBuf),
     Static(String),
@@ -624,6 +713,7 @@ struct PgwireBalancer {
     cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<BalancerResolver>,
     metrics: ServerMetrics,
+    limiter: Arc<ConnectionLimiter>,
     now: NowFn,
 }
 
@@ -637,6 +727,7 @@ impl PgwireBalancer {
         tls_mode: Option<TlsMode>,
         internal_tls: bool,
         metrics: &ServerMetrics,
+        limiter: &Arc<ConnectionLimiter>,
     ) -> Result<(), io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -662,6 +753,15 @@ impl PgwireBalancer {
         if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
             return conn.send(err).await;
         }
+
+        let Some(_conn_guard) = limiter.acquire() else {
+            return conn
+                .send(ErrorResponse::fatal(
+                    SqlState::TOO_MANY_CONNECTIONS,
+                    "balancer is at its connection limit",
+                ))
+                .await;
+        };
 
         let resolved = match resolver.resolve(conn, user, metrics).await {
             Ok(v) => v,
@@ -837,6 +937,7 @@ impl mz_server_core::Server for PgwireBalancer {
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
+        let limiter = Arc::clone(&self.limiter);
         let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
         let conn_uuid = epoch_to_uuid_v7(&(self.now)());
         let peer_addr = conn.peer_addr();
@@ -910,6 +1011,7 @@ impl mz_server_core::Server for PgwireBalancer {
                                 tls.map(|tls| tls.mode),
                                 internal_tls,
                                 &inner_metrics,
+                                &limiter,
                             )
                             .await?;
                             conn.flush().await?;
@@ -1107,12 +1209,31 @@ async fn cancel_request(
     }
 }
 
+/// Writes an HTTP error response to a client and closes the connection.
+///
+/// The proxied connections are raw TCP streams, so the HTTP framing has to be written by hand.
+/// Errors are ignored: the connection is going away regardless.
+async fn send_http_error(client_stream: &mut Box<dyn ClientStream>, status: &str, body: &str) {
+    let response = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: text/plain\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        body.len(),
+    );
+    let _ = client_stream.write_all(response.as_bytes()).await;
+    let _ = client_stream.shutdown().await;
+}
+
 struct HttpsBalancer {
     resolver: Arc<TenantDnsResolver>,
     tls: Option<ReloadingSslContext>,
     resolve_template: Arc<str>,
     port: u16,
     metrics: Arc<ServerMetrics>,
+    limiter: Arc<ConnectionLimiter>,
     configs: ConfigSet,
     internal_tls: bool,
 }
@@ -1203,6 +1324,7 @@ impl mz_server_core::Server for HttpsBalancer {
         let port = self.port;
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
+        let limiter = Arc::clone(&self.limiter);
         let peer_addr = conn.peer_addr();
         let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
@@ -1231,6 +1353,16 @@ impl mz_server_core::Server for HttpsBalancer {
                         }
                         _ => (Box::new(conn), None),
                     };
+                let Some(_conn_guard) = limiter.acquire() else {
+                    send_http_error(
+                        &mut client_stream,
+                        "503 Service Unavailable",
+                        "balancer is at its connection limit",
+                    )
+                    .await;
+                    return Ok(());
+                };
+
                 let resolved =
                     Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
                         .await?;
@@ -1242,24 +1374,12 @@ impl mz_server_core::Server for HttpsBalancer {
                     Ok(stream) => stream,
                     Err(e) => {
                         error!("failed to connect to upstream server: {e}");
-                        let body = "upstream server not available";
-                        // We know this is an HTTPs stream (see name
-                        // HttpsBalancer), but we actually don't care what type
-                        // of traffic it is and we only use raw tcp streams.In
-                        // order to respond with HTTP we have to write this as a
-                        // raw http message.
-                        let response = format!(
-                            "HTTP/1.1 502 Bad Gateway\r\n\
-                             Content-Type: text/plain\r\n\
-                             Content-Length: {}\r\n\
-                             Connection: close\r\n\
-                             \r\n\
-                             {}",
-                            body.len(),
-                            body
-                        );
-                        let _ = client_stream.write_all(response.as_bytes()).await;
-                        let _ = client_stream.shutdown().await;
+                        send_http_error(
+                            &mut client_stream,
+                            "502 Bad Gateway",
+                            "upstream server not available",
+                        )
+                        .await;
                         return Ok(());
                     }
                 };
@@ -1654,6 +1774,8 @@ struct ResolvedAddr {
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
+
     use super::*;
 
     #[mz_ore::test]
@@ -1725,5 +1847,36 @@ mod tests {
         assert_eq!(strip_ipv6_brackets("host.example.com"), "host.example.com");
         assert_eq!(strip_ipv6_brackets("[unclosed"), "[unclosed");
         assert_eq!(strip_ipv6_brackets("unopened]"), "unopened]");
+    }
+
+    #[mz_ore::test]
+    fn test_connection_limiter() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let set_max = |max: u32| {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&MAX_CONNECTIONS, max);
+            updates.apply(&configs);
+        };
+
+        set_max(2);
+        let limiter = ConnectionLimiter::new(&MetricsRegistry::new(), configs.clone());
+        let first = limiter.acquire().expect("under the limit");
+        let second = limiter.acquire().expect("at the limit");
+        assert!(limiter.acquire().is_none());
+        assert_eq!(limiter.rejected.get(), 1);
+
+        // A connection closing frees capacity for a new one.
+        drop(second);
+        let _third = limiter.acquire().expect("capacity freed");
+        drop(first);
+
+        // Lowering the limit below the current count refuses new connections but leaves the
+        // established ones alone.
+        set_max(1);
+        assert!(limiter.acquire().is_none());
+
+        // Zero disables the limit.
+        set_max(0);
+        assert!(limiter.acquire().is_some());
     }
 }

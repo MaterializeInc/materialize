@@ -762,6 +762,56 @@ def workflow_user(c: Composition) -> None:
         assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
 
 
+def workflow_max_connections(c: Composition) -> None:
+    """Test that connections beyond balancerd's limit are refused with a clear error."""
+    with c.override(
+        Balancerd(
+            command=[
+                "--startup-log-filter=debug",
+                "service",
+                "--pgwire-listen-addr=0.0.0.0:6875",
+                "--https-listen-addr=0.0.0.0:6876",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--frontegg-resolver-template=materialized:6875",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--https-sni-resolver-template=materialized:6876",
+                "--pgwire-sni-resolver-template=sni.test:6875",
+                "--tls-key=/secrets/balancerd.key",
+                "--tls-cert=/secrets/balancerd.crt",
+                "--internal-tls",
+                "--tls-mode=require",
+                "--default-config=balancerd_max_connections=1",
+                # Nonsensical but we don't need cancellations here
+                "--cancellation-resolver-dir=/secrets/",
+            ],
+            depends_on=["test-certs"],
+            volumes=[
+                "secrets:/secrets",
+            ],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
+            dns=[STATIC_IPS["dnsmasq"]],
+        ),
+    ):
+        c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
+        cursor = sql_cursor(c)
+        with contextlib.closing(cursor.connection):
+            try:
+                sql_cursor(c)
+                raise RuntimeError("connect() expected to fail")
+            except OperationalError as e:
+                assert "balancer is at its connection limit" in str(e), e
+
+            # The established connection is unaffected by the rejection.
+            cursor.execute("SELECT 'abc'")
+            assert cursor.fetchall() == [("abc",)]
+
+        # Match the line ending so that a larger count does not satisfy the assert.
+        assert_metrics(c, "mz_balancer_connection_rejected_total 1\n")
+        assert_metrics(c, "mz_balancer_connection_limit 1\n")
+
+
 def workflow_many_connections(c: Composition) -> None:
     c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
     cursors = []
