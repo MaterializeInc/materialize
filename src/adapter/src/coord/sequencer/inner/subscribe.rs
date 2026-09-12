@@ -398,15 +398,17 @@ impl Coordinator {
         // Timestamp selection. The linearized read timestamp was already
         // obtained off the coordinator loop in the preceding stage.
         let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
-        let (determination, read_holds) = self.determine_timestamp(
-            ctx.session(),
-            bundle,
-            when,
-            optimizer.cluster_id(),
-            &timeline,
-            oracle_read_ts,
-            None,
-        )?;
+        let (determination, read_holds) = self
+            .determine_timestamp(
+                ctx.session(),
+                bundle,
+                when,
+                optimizer.cluster_id(),
+                &timeline,
+                oracle_read_ts,
+                None,
+            )
+            .await?;
 
         let as_of = determination.timestamp_context.timestamp_or_default();
 
@@ -559,6 +561,7 @@ impl Coordinator {
         let max_buffered_bytes =
             SUBSCRIBE_MAX_BUFFERED_BYTES.get(self.catalog().system_config().dyncfgs());
         let active_subscribe = ActiveSubscribe {
+            query_execution: None,
             owner: ActiveSubscribeOwner::Session {
                 conn_id: conn_id.clone(),
                 session_uuid,
@@ -600,21 +603,25 @@ impl Coordinator {
         // sequencing, a dependency can be dropped between sequencing (on the session
         // task) and here. The read holds acquired during sequencing don't prevent that:
         // they hold back compaction, not drops.
-        if let Err(e) = self
-            .try_ship_dataflow(df_desc, cluster_id, replica_id)
-            .await
-        {
+        let result = if self.query_client.is_some() {
+            self.start_query_sink(df_desc, cluster_id, replica_id, read_holds)
+        } else {
+            let result = self
+                .try_ship_dataflow(df_desc, cluster_id, replica_id)
+                .await
+                .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error);
+            drop(read_holds);
+            result
+        };
+        if let Err(e) = result {
             // Clean up the active compute sink that was added above, since the dataflow
             // was never created. If we don't do this, the sink_id remains in
             // `drop_sinks` but no collection exists in the compute controller, causing
             // a panic when the connection terminates. This also retracts the deferred
             // `mz_subscriptions` write, so `write_notify` can be dropped.
             self.remove_active_compute_sink(sink_id).await;
-            return Err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(e));
+            return Err(e);
         }
-
-        // Explicitly drop read holds, just to make it obvious what's happening.
-        drop(read_holds);
 
         // Wrap the receiver so draining a message releases its footprint from the
         // shared accounting. FIFO delivery keeps the queue aligned with the

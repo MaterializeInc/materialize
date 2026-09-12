@@ -99,6 +99,11 @@ use tracing::{info, warn};
 /// Assigns the selected as-of to the provided dataflow descriptions and returns a set of
 /// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
 /// with the compute controller.
+///
+/// With `catalog_read_protection` enabled, reconstructed indexes start at their least readable
+/// frontier, regardless of whether they have a published compaction bound. Durable index read
+/// requirements can be admitted independently of selection, so soft preferences must not skip
+/// readable history. Published bounds still govern compaction through the controller.
 pub fn run(
     dataflows: &mut [DataflowDescription<LirRelationExpr, ()>],
     read_policies: &BTreeMap<GlobalId, ReadPolicy>,
@@ -106,6 +111,7 @@ pub fn run(
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
+    catalog_read_protection: bool,
 ) -> BTreeMap<GlobalId, ReadHold> {
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
@@ -141,6 +147,9 @@ pub fn run(
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
     ctx.apply_downstream_storage_constraints();
     ctx.apply_committed_index_bounds(committed_index_bounds);
+    if catalog_read_protection {
+        ctx.apply_index_readability_constraints();
+    }
 
     // At this point all collections have as-of bounds that reflect what is required for
     // correctness. The current state isn't very usable though. In particular, most of the upper
@@ -523,6 +532,26 @@ impl<'a> Context<'a> {
                     bound_type: BoundType::Upper,
                     frontier: &upper,
                     reason: "committed index compaction bound",
+                },
+            );
+        }
+        self.propagate_bounds_upstream(BoundType::Upper);
+    }
+
+    /// Keep all protected indexes at their propagated readable lower bound.
+    fn apply_index_readability_constraints(&self) {
+        for (id, collection) in &self.collections {
+            if !collection.is_index {
+                continue;
+            }
+            let lower = collection.bounds.borrow().lower.clone();
+            self.apply_constraint(
+                *id,
+                Constraint {
+                    type_: ConstraintType::Hard,
+                    bound_type: BoundType::Upper,
+                    frontier: &lower,
+                    reason: "catalog-protected index readability",
                 },
             );
         }
@@ -1213,6 +1242,7 @@ mod tests {
             $( read_policies: { $( $policy_id:literal: $policy:expr, )* }, )?
             $( committed_bounds: { $( $bound_id:literal: $bound:expr, )* }, )?
             $( read_only: $read_only:expr, )?
+            $( catalog_read_protection: $catalog_read_protection:expr, )?
         }) => {
             #[mz_ore::test]
             fn $name() {
@@ -1241,6 +1271,10 @@ mod tests {
                 let read_only = false;
                 $( let read_only = $read_only; )?
 
+                #[allow(unused_variables)]
+                let catalog_read_protection = false;
+                $( let catalog_read_protection = $catalog_read_protection; )?
+
                 super::run(
                     &mut dataflows,
                     &read_policies,
@@ -1250,6 +1284,7 @@ mod tests {
                     &storage_frontiers,
                     $current_time.into(),
                     read_only,
+                    catalog_read_protection,
                 );
 
                 let actual_as_ofs: Vec<_> = dataflows
@@ -1262,6 +1297,40 @@ mod tests {
             }
         };
     }
+
+    // Publication does not enumerate durable index read requirements. Even an unpublished
+    // index must retain readable history rather than select the soft preference at 90.
+    testcase!(protected_index_readability, {
+        storage: { "s1": (10, 100), },
+        dataflows: [
+            "u1" <- ["s1"] => 10,
+            "u2" <- ["s1"] => 10,
+            "u3" <- ["s1"] => 10,
+        ],
+        current_time: 90,
+        committed_bounds: { "u2": 30, "u3": 5, },
+        catalog_read_protection: true,
+    });
+
+    // Reverse ID order requires fixed-point lower propagation. The downstream storage
+    // export retains its hard cutoff rather than being pinned like an index.
+    testcase!(protected_index_chain, {
+        storage: {
+            "s1": (10, 100),
+            "s2": (20, 100),
+            "u4": (20, 26),
+        },
+        dataflows: [
+            "u1" <- ["u2"] => 20,
+            "u2" <- ["u3", "s2"] => 20,
+            "u3" <- ["s1"] => 10,
+            "u4" <- ["u1"] => 25,
+        ],
+        current_time: 90,
+        committed_bounds: { "u1": 30, },
+        read_only: true,
+        catalog_read_protection: true,
+    });
 
     testcase!(committed_index_caps, {
         storage: { "s1": (10, 100), },

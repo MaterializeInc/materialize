@@ -882,6 +882,7 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
             additional_system_parameter_defaults={
                 "enable_expression_cache": "false",
                 "enable_mz_notices": "true",
+                "enable_metric_sink": "true",
             },
         )
     ):
@@ -896,6 +897,14 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
                 > CREATE INDEX IF NOT EXISTS uncached_arrangement ON uncached_index_v (b);
                 > CREATE MATERIALIZED VIEW uncached_mv AS SELECT sum(b) AS total FROM uncached_index_v;
                 > CREATE DEFAULT INDEX ON uncached_mv;
+
+                # The leaf must reconstruct and maintain its input without a cached creator plan.
+                > CREATE VIEW uncached_metrics AS
+                  SELECT 'total'::text AS metric_name, 'gauge'::text AS metric_type,
+                         '{}'::map[text=>text] AS labels, total::double AS value,
+                         'uncached maintained total'::text AS help FROM uncached_mv;
+                > CREATE METRIC SINK uncached_metric_sink FROM uncached_metrics
+                  WITH (PREFIX = 'mz_uncached_');
 
                 # Keep the first refresh pending until after catalog reconstruction.
                 > CREATE CLUSTER uncached_refresh SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
@@ -923,6 +932,11 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
 
                     > SELECT total FROM uncached_mv;
                     5
+
+                    > SET cluster_replica = r1;
+                    > SELECT value = 5 FROM mz_introspection.mz_cluster_prometheus_metrics
+                      WHERE metric_name = 'mz_uncached_total';
+                    true
                     """),
             )
             notices = c.sql_query(
@@ -958,6 +972,12 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
                 > INSERT INTO uncached_index_t VALUES (3);
                 > SELECT total FROM uncached_mv;
                 9
+
+                > SET cluster_replica = r1;
+                > SELECT value = 9 FROM mz_introspection.mz_cluster_prometheus_metrics
+                  WHERE metric_name = 'mz_uncached_total';
+                true
+                > RESET cluster_replica;
 
                 > ALTER CLUSTER uncached_refresh SET (REPLICATION FACTOR 1);
                 > SELECT a FROM uncached_refresh_t;

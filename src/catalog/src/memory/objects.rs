@@ -4334,6 +4334,8 @@ pub enum StateUpdateKind {
     // Storage updates.
     CollectionCompactionBound(durable::objects::CollectionCompactionBound),
     MaintainedReadRequirement(durable::objects::MaintainedReadRequirement),
+    ClientIncarnation(durable::objects::ClientIncarnation),
+    ClientReadRequirement(durable::objects::ClientReadRequirement),
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
 }

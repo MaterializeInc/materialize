@@ -70,7 +70,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::net::IpAddr;
-use std::num::NonZeroI64;
 use std::ops::Neg;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -103,7 +102,7 @@ use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Index,
-    MaterializedView, ReconfigurationTarget, Table, TableDataSource,
+    MaterializedView, MetricSink, ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -251,6 +250,7 @@ mod introspection;
 mod message_handler;
 mod metric_sink;
 mod privatelink_status;
+mod query_execution;
 mod sql;
 mod storage_bootstrap;
 mod validity;
@@ -353,6 +353,7 @@ pub struct ArrangementSizeRecord {
 #[derive(Debug)]
 pub enum Message {
     Command(OpenTelemetryContext, Command),
+    QueryDataflowResponse(crate::query_client::compute::DataflowResponse),
     ControllerReady {
         controller: ControllerReadiness,
     },
@@ -502,6 +503,7 @@ impl Message {
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
                 Command::CheckRoleCanLogin { .. } => "command-check_role_can_login",
                 Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
+                Command::AcquireClientReadProtection { .. } => "acquire-client-read-protection",
                 Command::GetOracle { .. } => "get-oracle",
                 Command::DetermineRealTimeRecentTimestamp { .. } => {
                     "determine-real-time-recent-timestamp"
@@ -539,6 +541,7 @@ impl Message {
             Message::ControllerReady {
                 controller: ControllerReadiness::Internal,
             } => "controller_ready(internal)",
+            Message::QueryDataflowResponse(_) => "query_dataflow_response",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::DeferredPlanReady { .. } => "deferred_plan_ready",
@@ -1305,8 +1308,9 @@ impl StagedContext for () {
 /// Configures a coordinator.
 pub struct Config {
     pub controller_config: ControllerConfig,
-    pub controller_envd_epoch: NonZeroI64,
+    pub controller_envd_epoch: std::num::NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub client_protection_storage: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
     pub compaction_bound_subscriber: Option<Box<dyn mz_catalog::durable::DurableCatalogState>>,
     pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
@@ -2000,6 +2004,12 @@ pub struct Coordinator {
     compaction_bound_subscriber: Option<CompactionBoundSubscriber>,
     /// Changed records retained until publication succeeds, including failed attempts.
     read_protection_pending: BTreeSet<GlobalId>,
+    query_client: Option<Arc<crate::query_client::QueryClient>>,
+    client_protection_catalog: Option<Catalog>,
+    client_protection_reclaimer: crate::query_client::read_protection::ClientProtectionReclaimer,
+    query_persist_location: mz_persist_types::PersistLocation,
+    query_orchestrator: Arc<dyn mz_orchestrator::NamespacedOrchestrator>,
+    query_deploy_generation: u64,
 
     /// A client for persist. Initially, this is only used for reading stashed
     /// peek responses out of batches.
@@ -2780,19 +2790,7 @@ impl Coordinator {
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
-                    if let Some(initial_as_of) = mview.initial_as_of.clone() {
-                        df_desc.set_initial_as_of(initial_as_of);
-                    }
-
-                    // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
-                    let until = mview
-                        .refresh_schedule
-                        .as_ref()
-                        .and_then(|s| s.last_refresh())
-                        .and_then(|r| r.try_step_forward());
-                    if let Some(until) = until {
-                        df_desc.until.meet_assign(&Antichain::from_elem(until));
-                    }
+                    Self::set_materialized_view_dataflow_bounds(&mut df_desc, mview);
 
                     let df_meta = self
                         .catalog()
@@ -3606,9 +3604,17 @@ impl Coordinator {
     /// objects they index, to ensure that all dependants of these indexed objects can make use of
     /// the respective indexes.
     fn bootstrap_sort_catalog_entries(&self) -> Vec<CatalogEntry> {
+        self.sort_catalog_entries(self.catalog().entries().cloned())
+    }
+
+    /// Orders a dependency-closed set of entries, placing indexes directly after their inputs.
+    fn sort_catalog_entries(
+        &self,
+        entries: impl IntoIterator<Item = CatalogEntry>,
+    ) -> Vec<CatalogEntry> {
         let mut indexes_on = BTreeMap::<_, Vec<_>>::new();
         let mut non_indexes = Vec::new();
-        for entry in self.catalog().entries().cloned() {
+        for entry in entries {
             if let Some(index) = entry.index() {
                 let on = self.catalog().get_entry_by_global_id(&index.on);
                 indexes_on.entry(on.id()).or_default().push(entry);
@@ -3678,6 +3684,24 @@ impl Coordinator {
         })
     }
 
+    /// Applies visibility and finite-refresh bounds independently of installation as_of.
+    fn set_materialized_view_dataflow_bounds(
+        dataflow: &mut DataflowDescription<LirRelationExpr>,
+        mv: &MaterializedView,
+    ) {
+        if let Some(initial_as_of) = &mv.initial_as_of {
+            dataflow.set_initial_as_of(initial_as_of.clone());
+        }
+        if let Some(until) = mv
+            .refresh_schedule
+            .as_ref()
+            .and_then(|s| s.last_refresh())
+            .and_then(|r| r.try_step_forward())
+        {
+            dataflow.until.meet_assign(&Antichain::from_elem(until));
+        }
+    }
+
     /// Builds a materialized view plan and rendered notices from its catalog definition.
     ///
     /// The snapshot must contain the compute collections available for imports.
@@ -3726,6 +3750,69 @@ impl Coordinator {
             dataflow_metainfos,
             optimizer_features: optimizer_config.features,
             item_version: latest_item_version(&mv.collections),
+        })
+    }
+
+    /// Builds a metric sink from its committed definition without selecting a timestamp or installing it.
+    fn build_metric_sink_dataflow_plan(
+        &self,
+        name: &QualifiedItemName,
+        metric_sink: &MetricSink,
+        compute_instance: ComputeInstanceSnapshot,
+        optimizer_config: OptimizerConfig,
+    ) -> Result<GlobalExpressions, AdapterError> {
+        let global_id = metric_sink.global_id;
+        // A transient id for the view the optimizer builds over `from` to
+        // shape its rows (see `optimize::metric_sink::shape_metric_sink_source`).
+        // The id only needs to be unique within this dataflow, so a cached plan
+        // reusing a transient id from a previous boot is safe: build ids are
+        // dataflow-local on the worker and never registered in the controller's
+        // instance-global collections (only export ids are).
+        let (_, view_id) = self.allocate_transient_id();
+
+        let (optimized_plan, global_lir_plan) = {
+            let mut optimizer = optimize::metric_sink::Optimizer::new(
+                self.owned_catalog(),
+                compute_instance,
+                view_id,
+                global_id,
+                optimizer_config.clone(),
+                self.optimizer_metrics(),
+            );
+
+            // MIR ⇒ MIR optimization (global)
+            let metric_sink_plan = optimize::metric_sink::MetricSink::new(
+                self.catalog().resolve_full_name(name, None).to_string(),
+                optimize::metric_sink::MetricSinkFrom::Id(metric_sink.from),
+                metric_sink.prefix.clone(),
+                None,
+            );
+            let global_mir_plan = optimizer.optimize(metric_sink_plan)?;
+            let optimized_plan = global_mir_plan.df_desc().clone();
+
+            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+            (optimized_plan, global_lir_plan)
+        };
+
+        let (physical_plan, metainfo) = global_lir_plan.unapply();
+        let metainfo = {
+            // Pre-allocate a vector of transient GlobalIds for each notice.
+            let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+                .map(|(_item_id, gid)| gid)
+                .take(metainfo.optimizer_notices.len())
+                .collect::<Vec<_>>();
+            // Return a metainfo with rendered notices.
+            self.catalog()
+                .render_notices(metainfo, notice_ids, Some(global_id))
+        };
+        Ok(GlobalExpressions {
+            global_mir: optimized_plan,
+            physical_plan,
+            dataflow_metainfos: metainfo,
+            optimizer_features: optimizer_config.features,
+            item_version: RelationVersion::root(),
         })
     }
 
@@ -3880,82 +3967,34 @@ impl Coordinator {
                     let global_id = metric_sink.global_id;
                     let optimizer_config = optimizer_config(&self.catalog, metric_sink.cluster_id);
 
-                    let (optimized_plan, physical_plan, metainfo) = match cached_global_exprs
-                        .remove(&global_id)
-                    {
-                        Some(global_expressions)
-                            if global_expressions.optimizer_features
-                                == optimizer_config.features =>
-                        {
-                            debug!("global expression cache hit for {global_id:?}");
-                            (
-                                global_expressions.global_mir,
-                                global_expressions.physical_plan,
-                                global_expressions.dataflow_metainfos,
-                            )
-                        }
-                        Some(_) | None => {
-                            // A transient id for the view the optimizer builds over `from` to
-                            // shape its rows (see `optimize::metric_sink::shape_metric_sink_source`).
-                            // The id only needs to be unique within this dataflow, so a cached plan
-                            // reusing a transient id from a previous boot is safe: build ids are
-                            // dataflow-local on the worker and never registered in the controller's
-                            // instance-global collections (only export ids are).
-                            let (_, view_id) = self.allocate_transient_id();
-
-                            let (optimized_plan, global_lir_plan) = {
-                                let mut optimizer = optimize::metric_sink::Optimizer::new(
-                                    self.owned_catalog(),
+                    let (optimized_plan, physical_plan, metainfo) =
+                        match cached_global_exprs.remove(&global_id) {
+                            Some(global_expressions)
+                                if global_expressions.optimizer_features
+                                    == optimizer_config.features =>
+                            {
+                                debug!("global expression cache hit for {global_id:?}");
+                                (
+                                    global_expressions.global_mir,
+                                    global_expressions.physical_plan,
+                                    global_expressions.dataflow_metainfos,
+                                )
+                            }
+                            Some(_) | None => {
+                                let expressions = self.build_metric_sink_dataflow_plan(
+                                    entry.name(),
+                                    metric_sink,
                                     compute_instance.clone(),
-                                    view_id,
-                                    global_id,
-                                    optimizer_config.clone(),
-                                    self.optimizer_metrics(),
-                                );
-
-                                // MIR ⇒ MIR optimization (global)
-                                let metric_sink_plan = optimize::metric_sink::MetricSink::new(
-                                    self.catalog()
-                                        .resolve_full_name(entry.name(), None)
-                                        .to_string(),
-                                    optimize::metric_sink::MetricSinkFrom::Id(metric_sink.from),
-                                    metric_sink.prefix.clone(),
-                                    None,
-                                );
-                                let global_mir_plan = optimizer.optimize(metric_sink_plan)?;
-                                let optimized_plan = global_mir_plan.df_desc().clone();
-
-                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                                let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-
-                                (optimized_plan, global_lir_plan)
-                            };
-
-                            let (physical_plan, metainfo) = global_lir_plan.unapply();
-                            let metainfo = {
-                                // Pre-allocate a vector of transient GlobalIds for each notice.
-                                let notice_ids =
-                                    std::iter::repeat_with(|| self.allocate_transient_id())
-                                        .map(|(_item_id, gid)| gid)
-                                        .take(metainfo.optimizer_notices.len())
-                                        .collect::<Vec<_>>();
-                                // Return a metainfo with rendered notices.
-                                self.catalog()
-                                    .render_notices(metainfo, notice_ids, Some(global_id))
-                            };
-                            uncached_expressions.insert(
-                                global_id,
-                                GlobalExpressions {
-                                    global_mir: optimized_plan.clone(),
-                                    physical_plan: physical_plan.clone(),
-                                    dataflow_metainfos: metainfo.clone(),
-                                    optimizer_features: optimizer_config.features.clone(),
-                                    item_version: RelationVersion::root(),
-                                },
-                            );
-                            (optimized_plan, physical_plan, metainfo)
-                        }
-                    };
+                                    optimizer_config,
+                                )?;
+                                uncached_expressions.insert(global_id, expressions.clone());
+                                (
+                                    expressions.global_mir,
+                                    expressions.physical_plan,
+                                    expressions.dataflow_metainfos,
+                                )
+                            }
+                        };
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(global_id, optimized_plan);
@@ -4045,6 +4084,7 @@ impl Coordinator {
             &*self.controller.storage_collections,
             read_ts,
             self.controller.read_only(),
+            self.catalog().state().catalog_read_protection_enabled(),
         );
 
         let catalog = self.catalog_mut();
@@ -4173,6 +4213,10 @@ impl Coordinator {
             tokio::pin!(publication_timer);
             let subscription_timer = tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL);
             tokio::pin!(subscription_timer);
+            let client_publication_delay =
+                crate::query_client::read_protection::CLIENT_PROTECTION_PUBLICATION_INTERVAL;
+            let client_publication_timer = tokio::time::sleep(client_publication_delay);
+            tokio::pin!(client_publication_timer);
 
             loop {
                 let delay = self
@@ -4192,6 +4236,18 @@ impl Coordinator {
                     // a command generates internal commands, we will work through the current batch
                     // before receiving a new batch of commands.
                     biased;
+
+                    // Polling the pinned timer is cancel-safe. Renewal and requirement
+                    // publication share one transaction before checking abandoned clients.
+                    _ = client_publication_timer.as_mut() => {
+                        if let Err(error) = self.publish_client_read_protection().await {
+                            warn!(%error, "unable to publish query client protection");
+                        }
+                        if let Err(error) = self.reclaim_client_read_protection().await {
+                            warn!(%error, "unable to reclaim query client protection");
+                        }
+                        client_publication_timer.set(tokio::time::sleep(client_publication_delay));
+                    }
 
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
                     // does not depend on the savepoint's publication setting.
@@ -5053,6 +5109,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         mut storage,
+        client_protection_storage,
         compaction_bound_subscriber,
         timestamp_oracle_url,
         unsafe_mode,
@@ -5399,6 +5456,9 @@ pub fn serve(
         );
 
         let (group_commit_tx, group_commit_rx) = appends::notifier();
+        let query_orchestrator = controller_config.orchestrator.namespace("cluster");
+        let query_deploy_generation = controller_config.deploy_generation;
+        let query_persist_location = controller_config.persist_location.clone();
 
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()
@@ -5410,6 +5470,10 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
 
+                let client_protection_catalog = client_protection_storage.map(|storage| {
+                    handle.block_on(catalog.writer_projection(storage))
+                        .unwrap_or_terminate("failed to acquire client protection projection")
+                });
                 let controller = handle
                     .block_on({
                         catalog.initialize_controller(
@@ -5443,6 +5507,12 @@ pub fn serve(
                     compaction_bound_subscriber: compaction_bound_subscriber
                         .map(CompactionBoundSubscriber::new),
                     read_protection_pending: BTreeSet::new(),
+                    query_client: None,
+                    client_protection_catalog,
+                    client_protection_reclaimer: Default::default(),
+                    query_persist_location,
+                    query_orchestrator,
+                    query_deploy_generation,
                     internal_cmd_tx,
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),
@@ -5536,6 +5606,7 @@ pub fn serve(
                     }
 
                     coord.prune_arrangement_sizes_history_on_startup().await;
+                    coord.initialize_query_client().await?;
 
                     Ok(())
                 });

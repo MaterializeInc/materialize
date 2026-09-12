@@ -154,6 +154,8 @@ impl StateUpdate {
             system_privileges,
             collection_compaction_bounds,
             maintained_read_requirements,
+            client_incarnations,
+            client_read_requirements,
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
@@ -200,6 +202,12 @@ impl StateUpdate {
             maintained_read_requirements,
             StateUpdateKind::MaintainedReadRequirement,
         );
+        let client_incarnations =
+            from_batch(client_incarnations, StateUpdateKind::ClientIncarnation);
+        let client_read_requirements = from_batch(
+            client_read_requirements,
+            StateUpdateKind::ClientReadRequirement,
+        );
         let storage_collection_metadata = from_batch(
             storage_collection_metadata,
             StateUpdateKind::StorageCollectionMetadata,
@@ -230,6 +238,8 @@ impl StateUpdate {
             .chain(system_privileges)
             .chain(collection_compaction_bounds)
             .chain(maintained_read_requirements)
+            .chain(client_incarnations)
+            .chain(client_read_requirements)
             .chain(storage_collection_metadata)
             .chain(unfinalized_shards)
             .chain(txn_wal_shard)
@@ -286,6 +296,11 @@ pub enum StateUpdateKind {
         proto::MaintainedReadRequirementKey,
         proto::MaintainedReadRequirementValue,
     ),
+    ClientIncarnation(proto::ClientIncarnationKey, proto::ClientIncarnationValue),
+    ClientReadRequirement(
+        proto::ClientReadRequirementKey,
+        proto::ClientReadRequirementValue,
+    ),
     StorageCollectionMetadata(
         proto::StorageCollectionMetadataKey,
         proto::StorageCollectionMetadataValue,
@@ -330,6 +345,10 @@ impl StateUpdateKind {
             }
             StateUpdateKind::MaintainedReadRequirement(_, _) => {
                 Some(CollectionType::MaintainedReadRequirement)
+            }
+            StateUpdateKind::ClientIncarnation(_, _) => Some(CollectionType::ClientIncarnation),
+            StateUpdateKind::ClientReadRequirement(_, _) => {
+                Some(CollectionType::ClientReadRequirement)
             }
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
                 Some(CollectionType::StorageCollectionMetadata)
@@ -551,6 +570,18 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     maintained_read_requirements,
                 ))
             }
+            StateUpdateKind::ClientIncarnation(key, value) => {
+                let client_incarnations = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClientIncarnation(
+                    client_incarnations,
+                ))
+            }
+            StateUpdateKind::ClientReadRequirement(key, value) => {
+                let client_read_requirements = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClientReadRequirement(
+                    client_read_requirements,
+                ))
+            }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 let storage_collection_metadata = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
@@ -743,6 +774,15 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     proto::MaintainedReadRequirement { key, value },
                 )
             }
+            StateUpdateKind::ClientIncarnation(key, value) => {
+                proto::StateUpdateKind::ClientIncarnation(proto::ClientIncarnation { key, value })
+            }
+            StateUpdateKind::ClientReadRequirement(key, value) => {
+                proto::StateUpdateKind::ClientReadRequirement(proto::ClientReadRequirement {
+                    key,
+                    value,
+                })
+            }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 proto::StateUpdateKind::StorageCollectionMetadata(
                     proto::StorageCollectionMetadata { key, value },
@@ -832,6 +872,13 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::MaintainedReadRequirement(
                 proto::MaintainedReadRequirement { key, value },
             ) => StateUpdateKind::MaintainedReadRequirement(key, value),
+            proto::StateUpdateKind::ClientIncarnation(proto::ClientIncarnation { key, value }) => {
+                StateUpdateKind::ClientIncarnation(key, value)
+            }
+            proto::StateUpdateKind::ClientReadRequirement(proto::ClientReadRequirement {
+                key,
+                value,
+            }) => StateUpdateKind::ClientReadRequirement(key, value),
             proto::StateUpdateKind::StorageCollectionMetadata(
                 proto::StorageCollectionMetadata { key, value },
             ) => StateUpdateKind::StorageCollectionMetadata(key, value),

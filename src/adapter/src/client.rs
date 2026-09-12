@@ -301,6 +301,7 @@ impl Client {
             session_defaults,
             catalog,
             storage_collections,
+            query_client,
             transient_id_gen,
             optimizer_metrics,
             persist_client,
@@ -315,6 +316,7 @@ impl Client {
             CoordinatorClient::Session(self.clone()),
             &catalog,
             storage_collections,
+            query_client,
             transient_id_gen,
             optimizer_metrics,
             persist_client,
@@ -1392,6 +1394,7 @@ impl SessionClient {
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. }
                 | Command::GetComputeInstanceClient { .. }
+                | Command::AcquireClientReadProtection { .. }
                 | Command::GetOracle { .. }
                 | Command::DetermineRealTimeRecentTimestamp { .. }
                 | Command::GetTransactionReadHoldsBundle { .. }

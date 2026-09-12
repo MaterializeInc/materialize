@@ -53,13 +53,70 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Box<dyn ComputeClient> {
     }
 }
 
+/// Validates a compute connection's role before connecting it to the cluster.
+/// Query handshakes become an inner Hello followed by a worker-visible role marker.
+#[derive(Debug)]
+pub struct RoleClient<C> {
+    inner: C,
+    query: Option<bool>,
+    query_configured: bool,
+}
+
+impl<C> RoleClient<C> {
+    /// Wrap a fresh, unconnected cluster client.
+    pub fn new(inner: C) -> Self {
+        Self {
+            inner,
+            query: None,
+            query_configured: false,
+        }
+    }
+}
+
+#[async_trait]
+impl<C: ComputeClient> GenericClient<ComputeCommand, ComputeResponse> for RoleClient<C> {
+    async fn send(&mut self, command: ComputeCommand) -> anyhow::Result<()> {
+        use ComputeCommand::*;
+        match (self.query, &command) {
+            (None, Hello { .. }) => self.query = Some(false),
+            (None, HelloQuery { nonce }) => {
+                self.inner.send(Hello { nonce: *nonce }).await?;
+                self.query = Some(true);
+            }
+            (None, _) => anyhow::bail!("first compute command must be Hello or HelloQuery"),
+            (Some(_), Hello { .. } | HelloQuery { .. }) => {
+                anyhow::bail!("duplicate compute handshake")
+            }
+            (Some(true), SetQueryMaxResultSize { .. }) => self.query_configured = true,
+            (
+                Some(true),
+                CreateQueryDataflow { .. }
+                | Peek(_)
+                | CancelPeek { .. }
+                | Schedule(_)
+                | AllowCompaction { .. },
+            ) if self.query_configured => (),
+            (Some(true), _) => anyhow::bail!("command is not allowed on this query connection"),
+            (Some(false), SetQueryMaxResultSize { .. } | CreateQueryDataflow { .. }) => {
+                anyhow::bail!("query command on lifecycle connection")
+            }
+            (Some(false), _) => (),
+        }
+        self.inner.send(command).await
+    }
+
+    async fn recv(&mut self) -> anyhow::Result<Option<ComputeResponse>> {
+        self.inner.recv().await
+    }
+}
+
 /// Maintained state for partitioned compute clients.
 ///
 /// This helper type unifies the responses of multiple partitioned workers in order to present as a
 /// single worker:
 ///
-///   * It emits `Frontiers` responses reporting the minimum/meet of frontiers reported by the
-///     individual workers.
+///   * It emits `Frontiers` responses reporting the minimum/meet of progress frontiers and the
+///     maximum/join of read frontiers reported by the individual workers.
 ///   * It emits `PeekResponse`s and `SubscribeResponse`s reporting the union of the responses
 ///     received from the workers.
 ///
@@ -68,20 +125,24 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Box<dyn ComputeClient> {
 ///   * One instance on the controller side, dispatching between cluster processes.
 ///   * One instance in each cluster process, dispatching between timely worker threads.
 ///
-/// Note that because compute commands, except `Hello` and `UpdateConfiguration`, are only
+/// Note that because compute commands, except handshakes and configuration updates, are only
 /// sent to the first process, the cluster-side instances of `PartitionedComputeState` are not
 /// guaranteed to see all compute commands. Or more specifically: The instance running inside
 /// process 0 sees all commands, whereas the instances running inside the other processes only see
-/// `Hello` and `UpdateConfiguration`. The `PartitionedComputeState` implementation must be
+/// handshakes and configuration updates. The `PartitionedComputeState` implementation must be
 /// able to cope with this limited visibility. It does so by performing most of its state management
 /// based on observed compute responses rather than commands.
 #[derive(Debug)]
 pub struct PartitionedComputeState {
     /// Number of partitions the state machine represents.
     parts: usize,
+    /// Partitions that acknowledged the query handshake.
+    query_ready: BTreeSet<usize>,
+    /// Creation responses aggregate lazily, including on non-leader processes.
+    query_creations: BTreeMap<Uuid, (Option<String>, BTreeSet<usize>)>,
     /// The maximum result size this state machine can return.
     ///
-    /// This is updated upon receiving [`ComputeCommand::UpdateConfiguration`]s.
+    /// Lifecycle configuration and query-local result bounds update this value.
     max_result_size: u64,
     /// Tracked frontiers for indexes and sinks.
     ///
@@ -150,6 +211,8 @@ impl Partitionable<ComputeCommand, ComputeResponse> for (ComputeCommand, Compute
     fn new(parts: usize) -> PartitionedComputeState {
         PartitionedComputeState {
             parts,
+            query_ready: BTreeSet::new(),
+            query_creations: BTreeMap::new(),
             max_result_size: u64::MAX,
             frontiers: BTreeMap::new(),
             peek_responses: BTreeMap::new(),
@@ -163,6 +226,10 @@ impl PartitionedComputeState {
     /// Observes commands that move past.
     pub fn observe_command(&mut self, command: &ComputeCommand) {
         match command {
+            ComputeCommand::HelloQuery { .. } => self.max_result_size = 0,
+            ComputeCommand::SetQueryMaxResultSize { max_result_size } => {
+                self.max_result_size = *max_result_size;
+            }
             ComputeCommand::UpdateConfiguration(config) => {
                 if let Some(max_result_size) = config.max_result_size {
                     self.max_result_size = max_result_size;
@@ -196,11 +263,15 @@ impl PartitionedComputeState {
         let output_frontier = frontiers
             .output_frontier
             .and_then(|f| tracked.update_output_frontier(shard_id, &f));
+        let read_frontier = frontiers
+            .read_frontier
+            .and_then(|f| tracked.update_read_frontier(shard_id, &f));
 
         let frontiers = FrontiersResponse {
             write_frontier,
             input_frontier,
             output_frontier,
+            read_frontier,
         };
         let result = frontiers
             .has_updates()
@@ -361,10 +432,12 @@ impl PartitionedState<ComputeCommand, ComputeResponse> for PartitionedComputeSta
         self.observe_command(&command);
 
         // As specified by the compute protocol:
-        //  * Forward `Hello` and `UpdateConfiguration` commands to all shards.
+        //  * Forward handshakes and configuration updates to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
             command @ ComputeCommand::Hello { .. }
+            | command @ ComputeCommand::HelloQuery { .. }
+            | command @ ComputeCommand::SetQueryMaxResultSize { .. }
             | command @ ComputeCommand::UpdateConfiguration(_) => {
                 vec![Some(command); self.parts]
             }
@@ -382,6 +455,26 @@ impl PartitionedState<ComputeCommand, ComputeResponse> for PartitionedComputeSta
         message: ComputeResponse,
     ) -> Option<Result<ComputeResponse, anyhow::Error>> {
         let response = match message {
+            ComputeResponse::QueryReady => {
+                assert!(
+                    self.query_ready.insert(shard_id),
+                    "duplicate query readiness"
+                );
+                (self.query_ready.len() == self.parts).then_some(ComputeResponse::QueryReady)
+            }
+            ComputeResponse::QueryDataflowResponse { request_id, error } => {
+                let (merged, ready) = self.query_creations.entry(request_id).or_default();
+                assert!(ready.insert(shard_id), "duplicate query creation response");
+                if merged.is_none() {
+                    *merged = error;
+                }
+                if ready.len() == self.parts {
+                    let (error, _) = self.query_creations.remove(&request_id).unwrap();
+                    Some(ComputeResponse::QueryDataflowResponse { request_id, error })
+                } else {
+                    None
+                }
+            }
             ComputeResponse::Frontiers(id, frontiers) => {
                 self.absorb_frontiers(shard_id, id, frontiers)
             }
@@ -406,8 +499,8 @@ impl PartitionedState<ComputeCommand, ComputeResponse> for PartitionedComputeSta
 
 /// Tracked frontiers for an index or a sink collection.
 ///
-/// Each frontier is maintained both as a `MutableAntichain` across all partitions and individually
-/// for each partition.
+/// Progress frontiers use a `MutableAntichain` to compute their meet. Read frontiers track
+/// unknown partitions explicitly, because a readable timestamp must be readable on every part.
 #[derive(Debug)]
 struct TrackedFrontiers {
     /// The tracked write frontier.
@@ -416,6 +509,11 @@ struct TrackedFrontiers {
     input_frontier: (MutableAntichain<Timestamp>, Vec<Antichain<Timestamp>>),
     /// The tracked output frontier.
     output_frontier: (MutableAntichain<Timestamp>, Vec<Antichain<Timestamp>>),
+    /// The reported join and each partition's observed since.
+    read_frontier: (
+        Option<Antichain<Timestamp>>,
+        Vec<Option<Antichain<Timestamp>>>,
+    ),
 }
 
 impl TrackedFrontiers {
@@ -434,6 +532,7 @@ impl TrackedFrontiers {
             write_frontier: frontier_entry.clone(),
             input_frontier: frontier_entry.clone(),
             output_frontier: frontier_entry,
+            read_frontier: (None, vec![None; parts]),
         }
     }
 
@@ -442,6 +541,34 @@ impl TrackedFrontiers {
         self.write_frontier.0.frontier().is_empty()
             && self.input_frontier.0.frontier().is_empty()
             && self.output_frontier.0.frontier().is_empty()
+            && self
+                .read_frontier
+                .1
+                .iter()
+                .all(|f| f.as_ref().is_some_and(|f| f.is_empty()))
+    }
+
+    /// Report the join only after every part has supplied its actual since.
+    fn update_read_frontier(
+        &mut self,
+        shard_id: usize,
+        new_shard_frontier: &Antichain<Timestamp>,
+    ) -> Option<Antichain<Timestamp>> {
+        let (reported, parts) = &mut self.read_frontier;
+        match &mut parts[shard_id] {
+            Some(frontier) => frontier.join_assign(new_shard_frontier),
+            frontier @ None => *frontier = Some(new_shard_frontier.clone()),
+        }
+        let mut joined = Antichain::from_elem(Timestamp::MIN);
+        for part in parts {
+            joined.join_assign(part.as_ref()?);
+        }
+        if reported.as_ref() == Some(&joined) {
+            None
+        } else {
+            *reported = Some(joined.clone());
+            Some(joined)
+        }
     }
 
     /// Updates write frontier tracking with a new shard frontier.
@@ -700,3 +827,271 @@ fn merge_peek_errors(error1: PeekError, error2: PeekError) -> PeekError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod read_frontier_tests {
+    use super::*;
+
+    fn frontier(time: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(Timestamp::from(time))
+    }
+
+    fn absorb(
+        state: &mut PartitionedComputeState,
+        part: usize,
+        update: FrontiersResponse,
+    ) -> Option<FrontiersResponse> {
+        state
+            .absorb_response(part, ComputeResponse::Frontiers(GlobalId::User(1), update))
+            .map(|response| match response.unwrap() {
+                ComputeResponse::Frontiers(_, frontiers) => frontiers,
+                other => panic!("unexpected response: {other:?}"),
+            })
+    }
+
+    #[mz_ore::test]
+    fn read_frontiers_wait_for_all_parts_and_join() {
+        for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
+            let mut state = <(ComputeCommand, ComputeResponse)>::new(3);
+            let sinces = [0, 7, 3];
+            let uppers = [20, 30, 40];
+            for (position, part) in order.into_iter().enumerate() {
+                let result = absorb(
+                    &mut state,
+                    part,
+                    FrontiersResponse {
+                        read_frontier: Some(frontier(sinces[part])),
+                        write_frontier: Some(frontier(uppers[part])),
+                        ..Default::default()
+                    },
+                );
+                if position < 2 {
+                    assert_eq!(result, None);
+                } else {
+                    let result = result.unwrap();
+                    assert_eq!(result.read_frontier, Some(frontier(7)));
+                    assert_eq!(result.write_frontier, Some(frontier(20)));
+                }
+            }
+            for (part, since, expected) in [(0, 5, None), (2, 9, Some(9)), (1, 8, None)] {
+                let result = absorb(
+                    &mut state,
+                    part,
+                    FrontiersResponse {
+                        read_frontier: Some(frontier(since)),
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(result.and_then(|f| f.read_frontier), expected.map(frontier));
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn completion_keeps_readable_traces_until_all_parts_retire() {
+        let mut state = <(ComputeCommand, ComputeResponse)>::new(2);
+        for part in 0..2 {
+            absorb(
+                &mut state,
+                part,
+                FrontiersResponse {
+                    write_frontier: Some(Antichain::new()),
+                    input_frontier: Some(Antichain::new()),
+                    output_frontier: Some(Antichain::new()),
+                    ..Default::default()
+                },
+            );
+        }
+        // Even completed progress says nothing about the as-yet unknown since.
+        assert_eq!(
+            absorb(
+                &mut state,
+                0,
+                FrontiersResponse {
+                    read_frontier: Some(frontier(0)),
+                    ..Default::default()
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            absorb(
+                &mut state,
+                1,
+                FrontiersResponse {
+                    read_frontier: Some(frontier(0)),
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .read_frontier,
+            Some(frontier(0))
+        );
+        assert_eq!(
+            absorb(
+                &mut state,
+                0,
+                FrontiersResponse {
+                    read_frontier: Some(Antichain::new()),
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .read_frontier,
+            Some(Antichain::new())
+        );
+        // An empty join means unreadable, not that every part has retired. Late updates
+        // must still be absorbed without resurrecting readability or repeating completion.
+        for since in [frontier(5), Antichain::new()] {
+            assert_eq!(
+                absorb(
+                    &mut state,
+                    1,
+                    FrontiersResponse {
+                        read_frontier: Some(since),
+                        ..Default::default()
+                    }
+                ),
+                None
+            );
+        }
+        assert!(state.frontiers.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod query_wire_tests {
+    use super::*;
+    use futures::FutureExt;
+    use mz_service::client::Partitioned;
+    use mz_service::local::LocalClient;
+    use tokio::sync::mpsc;
+
+    #[mz_ore::test(tokio::test)]
+    async fn role_validation_at_channel_boundary() {
+        let (commands, mut received) = mpsc::unbounded_channel();
+        let (_responses, response_rx) = mpsc::unbounded_channel();
+        let mut client = RoleClient::new(LocalClient::new(
+            response_rx,
+            commands,
+            std::thread::current(),
+        ));
+        let nonce = Uuid::new_v4();
+        client
+            .send(ComputeCommand::HelloQuery { nonce })
+            .await
+            .unwrap();
+        assert_eq!(received.recv().await, Some(ComputeCommand::Hello { nonce }));
+        assert_eq!(
+            received.recv().await,
+            Some(ComputeCommand::HelloQuery { nonce })
+        );
+        for command in [
+            ComputeCommand::InitializationComplete,
+            ComputeCommand::UpdateConfiguration(Default::default()),
+            ComputeCommand::AllowWrites(GlobalId::User(1)),
+            ComputeCommand::Schedule(GlobalId::User(1)),
+            ComputeCommand::Hello { nonce },
+        ] {
+            assert!(client.send(command).await.is_err());
+            assert!(received.try_recv().is_err());
+        }
+        let limit = ComputeCommand::SetQueryMaxResultSize {
+            max_result_size: 42,
+        };
+        client.send(limit.clone()).await.unwrap();
+        assert_eq!(received.recv().await, Some(limit));
+        let schedule = ComputeCommand::Schedule(GlobalId::User(1));
+        client.send(schedule.clone()).await.unwrap();
+        assert_eq!(received.recv().await, Some(schedule));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn query_acknowledgments_wait_for_all_partitions() {
+        let mut clients = Vec::new();
+        let mut senders = Vec::new();
+        let mut receivers = Vec::new();
+        for _ in 0..3 {
+            let (command_tx, command_rx) = mpsc::unbounded_channel();
+            let (response_tx, response_rx) = mpsc::unbounded_channel();
+            clients.push(LocalClient::new(
+                response_rx,
+                command_tx,
+                std::thread::current(),
+            ));
+            senders.push(response_tx);
+            receivers.push(command_rx);
+        }
+        let mut client = Partitioned::new(clients);
+        let hello = ComputeCommand::HelloQuery {
+            nonce: Uuid::new_v4(),
+        };
+        client.send(hello.clone()).await.unwrap();
+        let limit = ComputeCommand::SetQueryMaxResultSize {
+            max_result_size: 100,
+        };
+        client.send(limit.clone()).await.unwrap();
+        for receiver in &mut receivers {
+            assert_eq!(receiver.recv().await, Some(hello.clone()));
+            assert_eq!(receiver.recv().await, Some(limit.clone()));
+        }
+        for sender in &senders[..2] {
+            sender.send(ComputeResponse::QueryReady).unwrap();
+        }
+        assert!(client.recv().now_or_never().is_none());
+        senders[2].send(ComputeResponse::QueryReady).unwrap();
+        assert_eq!(
+            client.recv().await.unwrap(),
+            Some(ComputeResponse::QueryReady)
+        );
+        // Each worker's rows fit individually, but their union exceeds the bound.
+        let rows = RowCollection::new(
+            vec![(
+                mz_repr::Row::pack_slice(&[mz_repr::Datum::String("result")]),
+                1.try_into().unwrap(),
+            )],
+            &[],
+        );
+        let max_result_size = u64::try_from(rows.byte_len()).unwrap() * 2;
+        client
+            .send(ComputeCommand::SetQueryMaxResultSize { max_result_size })
+            .await
+            .unwrap();
+        let peek_id = Uuid::new_v4();
+        for sender in &senders {
+            sender
+                .send(ComputeResponse::PeekResponse(
+                    peek_id,
+                    PeekResponse::Rows(vec![rows.clone()]),
+                    OpenTelemetryContext::empty(),
+                ))
+                .unwrap();
+        }
+        assert!(
+            matches!(client.recv().await.unwrap(), Some(ComputeResponse::PeekResponse(
+            id, PeekResponse::Error(PeekError::ResultExceedsMaxSize { .. }), _
+        )) if id == peek_id)
+        );
+        for error_part in 0..=3 {
+            let request_id = Uuid::new_v4();
+            for (part, sender) in senders.iter().enumerate() {
+                sender
+                    .send(ComputeResponse::QueryDataflowResponse {
+                        request_id,
+                        error: (part == error_part).then(|| "unreadable".into()),
+                    })
+                    .unwrap();
+                if part < 2 {
+                    assert!(client.recv().now_or_never().is_none());
+                }
+            }
+            assert_eq!(
+                client.recv().await.unwrap(),
+                Some(ComputeResponse::QueryDataflowResponse {
+                    request_id,
+                    error: (error_part < 3).then(|| "unreadable".into()),
+                })
+            );
+        }
+    }
+}

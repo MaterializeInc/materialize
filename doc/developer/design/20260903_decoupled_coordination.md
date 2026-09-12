@@ -267,6 +267,10 @@ controller access API or volatile hold forwarding is introduced as a bridge.
 
 ### Cooperating catalog writers
 
+The following rules apply to protected environments. Unprotected environments
+retain local-capability-driven compaction and epoch-fenced normal writer opens,
+including their existing migration behavior.
+
 The deployment generation is the catalog fence. Components of the active
 generation write without fencing each other, and promotion fences the whole old
 generation. Persist compare-and-append is the commit authority: metadata-only
@@ -283,6 +287,13 @@ process that needs client protection writes under the active generation, since a
 writer opened under its own pending generation would fence the leader before
 promotion. Where an enactment proves unsafe under two same-generation lifecycle
 instances, that case gets a narrow fence of its own, not a general epoch.
+
+Administrative edits use cooperative compare-and-append in either mode, without
+exclusive admission or promotion. Client heartbeats and recent publication provide
+an advisory live-environment check. `catalog-debug` refuses a live mutation with a
+reason unless `--force` is supplied. A serving writer that cannot apply a committed
+foreign change halts and rebuilds from durable state. This is the general rule for
+foreign writes, not an administrative exception.
 
 ## Alternatives
 

@@ -36,6 +36,24 @@ use crate::logging::LoggingConfig;
 /// [Protocol Stages]: super#protocol-stages
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand {
+    /// Opens an independent query connection. The nonce must be unique across connections.
+    HelloQuery {
+        /// Connection identity used for response routing and query ownership.
+        nonce: Uuid,
+    },
+    /// Sets the connection-local aggregation and execution result bound.
+    /// Required after HelloQuery and before query work. Does not change global configuration.
+    SetQueryMaxResultSize {
+        /// Maximum result bytes, including aggregation across partitions.
+        max_result_size: u64,
+    },
+    /// Creates a query-owned dataflow and acknowledges admission on every worker.
+    CreateQueryDataflow {
+        /// Unique creation request within this connection.
+        request_id: Uuid,
+        /// Dataflow to admit and render.
+        dataflow: Box<DataflowDescription<RenderPlan, CollectionMetadata>>,
+    },
     /// `Hello` is the first command sent to a replica after a connection was established. It
     /// provides the replica with meta information about the connection.
     ///

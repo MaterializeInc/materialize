@@ -180,6 +180,8 @@ pub(crate) async fn migrate(
                 StateUpdateKind::StorageCollectionMetadata(_)
                     | StateUpdateKind::CollectionCompactionBound(_)
                     | StateUpdateKind::MaintainedReadRequirement(_)
+                    | StateUpdateKind::ClientIncarnation(_)
+                    | StateUpdateKind::ClientReadRequirement(_)
             )
         });
 

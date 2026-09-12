@@ -63,7 +63,9 @@ impl Staged for ExplainTimestampStage {
                     .await
             }
             ExplainTimestampStage::Finish(stage) => {
-                coord.explain_timestamp_finish(ctx.session_mut(), stage)
+                coord
+                    .explain_timestamp_finish(ctx.session_mut(), stage)
+                    .await
             }
         }
     }
@@ -342,7 +344,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    fn explain_timestamp_finish(
+    async fn explain_timestamp_finish(
         &mut self,
         session: &mut Session,
         ExplainTimestampFinish {
@@ -368,17 +370,19 @@ impl Coordinator {
             }
         };
 
-        let determination = self.sequence_peek_timestamp(
-            session,
-            &when,
-            cluster_id,
-            timeline_context,
-            oracle_read_ts,
-            &id_bundle,
-            &source_ids,
-            real_time_recency_ts,
-            RequireLinearization::NotRequired,
-        )?;
+        let determination = self
+            .sequence_peek_timestamp(
+                session,
+                &when,
+                cluster_id,
+                timeline_context,
+                oracle_read_ts,
+                &id_bundle,
+                &source_ids,
+                real_time_recency_ts,
+                RequireLinearization::NotRequired,
+            )
+            .await?;
         let explanation = self.explain_timestamp(
             session.conn_id(),
             session.pcx().wall_time,

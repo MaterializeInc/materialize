@@ -63,7 +63,6 @@ use mz_sql::plan::{
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
-use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
@@ -85,7 +84,6 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::AwsPrivatelinkConnection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -116,7 +114,7 @@ use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
-use crate::util::{ResultExt, viewable_variables};
+use crate::util::viewable_variables;
 use crate::ReadHolds;
 
 /// A future that resolves to a real-time recency timestamp.
@@ -2832,7 +2830,13 @@ impl Coordinator {
             storage_ids: BTreeSet::from_iter([plan.sink.from]),
             compute_ids: BTreeMap::new(),
         };
-        let mut read_hold = self.acquire_read_holds(&id_bundle);
+        let mut read_hold = match self.acquire_query_read_holds(&id_bundle).await {
+            Ok(holds) => holds,
+            Err(error) => {
+                ctx.retire(Err(error));
+                return;
+            }
+        };
         let mut threshold = read_hold.least_valid_read();
         if self.catalog().state().catalog_read_protection_enabled() {
             let metadata = self.catalog().state().storage_metadata();
@@ -3051,37 +3055,6 @@ impl Coordinator {
                 return;
             }
         }
-
-        let storage_sink_desc = StorageSinkDesc {
-            from: sink_plan.from,
-            from_desc: from_entry
-                .relation_desc()
-                .expect("sinks can only be built on items with descs")
-                .into_owned(),
-            connection: sink_plan
-                .connection
-                .clone()
-                .into_inline_connection(self.catalog().state()),
-            envelope: sink_plan.envelope,
-            as_of,
-            with_snapshot,
-            version: sink_plan.version,
-            from_storage_metadata: (),
-            to_storage_metadata: (),
-            commit_interval: sink_plan.commit_interval,
-        };
-
-        self.controller
-            .storage
-            .alter_export(
-                global_id,
-                ExportDescription {
-                    sink: storage_sink_desc,
-                    instance_id: in_cluster,
-                },
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to alter source desc");
 
         ctx.retire(Ok(ExecuteResponse::AlteredObject(ObjectType::Sink)));
     }

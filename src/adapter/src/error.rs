@@ -1138,6 +1138,7 @@ impl AdapterError {
         compute_instance: ComputeInstanceId,
     ) -> Self {
         match e {
+            CollectionLookupError::ReadProtection(error) => *error,
             CollectionLookupError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "cluster",
                 dependency_id: id.to_string(),

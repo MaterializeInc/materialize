@@ -4161,8 +4161,6 @@ fn swap_updates(
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroI64;
-
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
@@ -4250,8 +4248,9 @@ mod tests {
                 &registry,
                 SYSTEM_TIME.clone(),
                 Arc::clone(&txns_metrics),
-                NonZeroI64::new(1).unwrap(),
+                std::num::NonZeroI64::new(1).unwrap(),
                 false,
+                true,
                 context.clone(),
                 &txn,
             )
@@ -4321,14 +4320,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn run_export_uses_held_readability() {
-        for input_governed in [false, true] {
-            for sink_governed in [false, true] {
-                check_export_readability(input_governed, sink_governed).await;
-            }
-        }
-    }
-
-    async fn check_export_readability(input_governed: bool, sink_governed: bool) {
         let (mut controller, collections, persist) = export_test_controller().await;
         let input = GlobalId::User(1);
         let sink = GlobalId::User(2);
@@ -4337,10 +4328,7 @@ mod tests {
         let data_source = DataSource::Sink { desc: description };
         let metadata = StorageMetadata {
             collection_metadata: BTreeMap::from([(input, ShardId::new()), (sink, ShardId::new())]),
-            compaction_bounds: [(input, input_governed), (sink, sink_governed)]
-                .into_iter()
-                .filter_map(|(id, governed)| governed.then(|| (id, frontier(20))))
-                .collect(),
+            compaction_bounds: BTreeMap::from([(input, frontier(5)), (sink, frontier(5))]),
             ..Default::default()
         };
         let mut sink_collection = CollectionDescription::for_other(RelationDesc::empty(), None);
@@ -4365,17 +4353,23 @@ mod tests {
             .unwrap()
             .try_into()
             .expect("two holds");
+        collections
+            .apply_compaction_bounds(BTreeMap::from([
+                (input, frontier(20)),
+                (sink, frontier(20)),
+            ]))
+            .unwrap();
         collections.set_read_policies(vec![
             (input, ReadPolicy::ValidFrom(frontier(20))),
             (sink, ReadPolicy::ValidFrom(frontier(20))),
         ]);
-        for (id, governed) in [(input, input_governed), (sink, sink_governed)] {
+        for id in [input, sink] {
             let state = collections.collection_frontiers(id).unwrap();
             assert_eq!(state.implied_capability, frontier(20));
             assert_eq!(state.read_capabilities, frontier(5));
             assert_eq!(
                 collections.compaction_bound(id).unwrap(),
-                governed.then(|| frontier(20))
+                Some(frontier(20))
             );
         }
         controller.create_instance(instance, None);
@@ -4434,11 +4428,7 @@ mod tests {
             let command = controller.instances[&instance]
                 .get_export_description(&sink)
                 .unwrap();
-            assert_eq!(
-                command.as_of,
-                frontier(since),
-                "input_governed={input_governed}, sink_governed={sink_governed}, upper={upper}"
-            );
+            assert_eq!(command.as_of, frontier(since), "upper={upper}");
             assert_eq!(command.with_snapshot, snapshot);
             assert_eq!(
                 command.from_storage_metadata,

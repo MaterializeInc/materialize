@@ -26,22 +26,23 @@ design's Lifecycle placement and Query client decisions and the re-cut milestone
 Order the work so each step lands and is verified in-process before the process
 boundary moves:
 
-1. Query client inside the adapter, replacing the adapter's direct use of
-   controller frontiers and holds: storage frontiers from persist, compute
+The query connection split and generation-scoped cooperating catalog writers are
+implemented in-process. MV and metric-sink compute installation and sink alteration
+derive from committed state. These are implementation checkpoints, not milestone
+acceptance. Remaining work:
+
+1. Finish replacing the adapter's direct use of controller frontiers and holds
+   with the query client: storage frontiers from persist, compute
    frontiers from fast-protocol `Frontiers` responses, peeks and query-local
-   dataflows through it, durable client protection as its only protection. Bring
-   the client protection record shape and the incarnation expiry and reclamation
-   rule to Aljoscha before building them. No remote controller access API.
-2. Cluster-side connection split: a cluster accepts one lifecycle connection and
-   query connections at once. A new query connection must not replace desired
-   state or reset maintained dataflows.
-3. Cooperating catalog writers: adapter DDL and lifecycle publication commit
-   independently. Bring the smallest mechanism to Aljoscha first. Do not route
-   DDL through the lifecycle process.
-4. Move the controller bundle out: MV and metric-sink compute installation and
-   sink alteration from committed state, then the bundle in its own process with
-   catalog following, enactment, and publication as its interface. Table appends
-   stay with the adapter.
+   dataflows through it, durable client protection as its only protection. The
+   client records and reclamation rule are agreed. No remote controller access API.
+2. Verify committed maintained installation, including cache rejection, same-batch
+   dependencies, and pending replacements. Suspended-target replacement recovery
+   remains an explicit investigation in the log.
+3. Move the controller bundle out with catalog following, enactment, and publication
+   as its interface. DDL and table appends stay with the adapter. The ownership of
+   transaction-WAL time advancement during adapter loss is an open question raised
+   to Aljoscha in the latest handoff. Pause that extraction boundary pending guidance.
 
 Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
 shared-view index topology and diagnostics. Larger-scale work and the known
@@ -136,14 +137,14 @@ upstream or other branches without asking.
 ## Code navigation
 
 - [Catalog implications](../../../src/adapter/src/coord/catalog_implications.rs)
-  derive effects from committed changes. MV and metric-sink compute installation
-  still have sequencer-side paths.
-- [Compute protocol](../../../src/compute-client/src/protocol/command.rs) mixes
-  lifecycle and query commands. [Transport](../../../src/service/src/transport.rs)
-  replaces the active client on a new connection.
+  derive effects from committed changes, including maintained compute installation
+  and sink alteration.
+- [Compute protocol](../../../src/compute-client/src/protocol/command.rs) carries
+  separate lifecycle and query connections through
+  [transport](../../../src/service/src/transport.rs).
 - [StorageCollections](../../../src/storage-client/src/storage_collections.rs)
-  owns storage capability accounting and critical since handles. The fixed
-  critical-reader identity and epoch fencing support handover, not independent
-  owners aggregating their local holds.
+  owns storage capability accounting and critical since handles. Protected
+  handles follow committed bounds. Unprotected handles retain local capability
+  accounting and epoch fencing.
 
 Re-read this prompt when compaction happens!

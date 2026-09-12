@@ -30,6 +30,7 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_transform::notice::OptimizerNoticeApi;
 use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
@@ -676,29 +677,28 @@ impl Coordinator {
                 .chain(raw_expr.depends_on()),
         )?;
 
-        let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(ctx.session().conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
             // stages will already have acquired ReadHolds, we can re-use those.
 
-            txn_reads
+            txn_reads.clone()
         } else {
             // No one has acquired holds, make sure we can determine an as_of
-            // and render our dataflow below.
-            read_holds_owned = self.acquire_read_holds(&id_bundle);
-            &read_holds_owned
+            // and commit a readable creation frontier.
+            self.acquire_query_read_holds(&id_bundle).await?
         };
 
         // Reuse purification's holds, whose timestamps may already be named by
         // REFRESH AT. Planning can introduce reads absent from name resolution.
         let mut additional_inputs = id_bundle.clone();
         additional_inputs.extend(&logical_inputs);
-        let additional_read_holds =
-            self.acquire_read_holds(&additional_inputs.difference(&read_holds.id_bundle()));
+        let additional_read_holds = self
+            .acquire_query_read_holds(&additional_inputs.difference(&read_holds.id_bundle()))
+            .await?;
         let (dataflow_as_of, storage_as_of, until) = self.select_timestamps(
             id_bundle,
             refresh_schedule.as_ref(),
-            read_holds,
+            &read_holds,
             &additional_read_holds,
             &logical_inputs,
         )?;
@@ -800,7 +800,7 @@ impl Coordinator {
         // here, so that if the catalog transaction below fails the user
         // isn't shown confusing notices about an item that wasn't actually
         // created.
-        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
             let full_name = self.catalog().resolve_full_name(&name, None);
@@ -836,37 +836,7 @@ impl Coordinator {
             .await;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
-
-                    df_desc.set_as_of(dataflow_as_of.clone());
-                    df_desc.set_initial_as_of(initial_as_of);
-                    df_desc.until = until;
-
-                    coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                            target_replica,
-                        )
-                        .await;
-
-                    if replacement_target.is_none() {
-                        coord.allow_writes(cluster_id, global_id);
-                    }
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {
@@ -875,6 +845,12 @@ impl Coordinator {
                 // catalog transaction has succeeded. If the transaction had
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
+                // A cache rejection may reflect an optimizer-only dependency dropped in this batch.
+                raw_df_meta.optimizer_notices.retain(|notice| {
+                    notice.dependencies().iter().all(|id| {
+                        self.catalog().try_get_entry_by_global_id(id).is_some()
+                    })
+                });
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1064,7 +1040,7 @@ impl Coordinator {
     }
 
     pub(crate) async fn explain_pushdown_materialized_view(
-        &self,
+        &mut self,
         ctx: ExecuteContext,
         item_id: CatalogItemId,
     ) {
@@ -1093,7 +1069,13 @@ impl Coordinator {
             storage_ids: plan.source_imports.keys().copied().collect(),
             compute_ids: BTreeMap::new(),
         };
-        let read_holds = Some(self.acquire_read_holds(&id_bundle));
+        let read_holds = match self.acquire_query_read_holds(&id_bundle).await {
+            Ok(holds) => Some(holds),
+            Err(error) => {
+                ctx.retire(Err(error));
+                return;
+            }
+        };
 
         let frontiers = self
             .controller

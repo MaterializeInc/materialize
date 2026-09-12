@@ -35,13 +35,15 @@ use mz_audit_log::{
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
-use mz_catalog::durable::{DryRunTransaction, NetworkPolicy, Snapshot, Transaction};
+use mz_catalog::durable::{
+    CatalogError, DryRunTransaction, DurableCatalogError, NetworkPolicy, Snapshot, Transaction,
+};
 use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
     MaterializedView, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
-    SourceReferences, StateUpdateKind, TableDataSource,
+    SourceReferences, StateDiff, StateUpdateKind, TableDataSource,
 };
 use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
@@ -286,6 +288,18 @@ pub enum Op {
         requirements: Vec<MaintainedReadRequirement>,
         bounds: Vec<CollectionCompactionBound>,
     },
+    /// Allocates a fresh query-client incarnation. Returned only after commit.
+    CreateClientIncarnation,
+    /// Replaces a client's aggregate requirements and renews its heartbeat atomically.
+    PublishClientReadRequirements {
+        incarnation: u64,
+        requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
+    },
+    /// Closes an unchanged incarnation after the caller's observation window.
+    ReclaimClientIncarnation {
+        incarnation: u64,
+        expected_heartbeat: u64,
+    },
     /// Injects audit events into the catalog.
     ///
     /// This is a nonstandard path used for manually appending audit events at the current time.
@@ -446,11 +460,13 @@ pub struct TransactionResult {
     /// Parsed catalog updates from which we will derive catalog implications.
     pub catalog_updates: Vec<ParsedStateUpdate>,
     pub audit_events: Vec<VersionedEvent>,
+    pub created_client_incarnations: Vec<u64>,
 }
 
 struct TransactInnerResult {
     state: CatalogState,
     planning_changed: bool,
+    created_client_incarnations: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -754,10 +770,12 @@ impl Catalog {
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
-        let mut tx = storage
-            .transaction()
-            .await
-            .unwrap_or_terminate("starting catalog transaction");
+        let mut tx = match storage.transaction().await {
+            Err(error @ CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                return Err(error.into());
+            }
+            result => result.unwrap_or_terminate("starting catalog transaction"),
+        };
         // Empty progress may have overtaken the timestamp chosen before opening the transaction.
         let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
 
@@ -776,20 +794,26 @@ impl Catalog {
         )
         .await?;
 
-        // The user closure was successful, apply the updates. Terminate the
-        // process if this fails, because we have to restart envd due to
-        // indeterminate catalog state, which we only reconcile during catalog
-        // init.
-        tx.commit(commit_ts)
-            .await
-            .unwrap_or_terminate("catalog storage transaction commit must succeed");
+        // A definite CAS loss leaves the candidate unpublished. The caller must
+        // refresh its projection and revalidate before retrying. Other failures
+        // can follow a successful append, so they still require recovery.
+        match tx.commit(commit_ts).await {
+            Err(error @ CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                return Err(error.into());
+            }
+            result => {
+                result.unwrap_or_terminate("catalog storage transaction commit must succeed");
+            }
+        }
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
+        let mut created_clients = Vec::new();
         if let Some(TransactInnerResult {
             state,
             planning_changed,
+            created_client_incarnations,
         }) = new_state
         {
             if planning_changed {
@@ -801,12 +825,14 @@ impl Catalog {
                     .store(self.transient_revision, atomic::Ordering::SeqCst);
             }
             self.state = state;
+            created_clients = created_client_incarnations;
         }
 
         Ok(TransactionResult {
             builtin_table_updates,
             catalog_updates,
             audit_events,
+            created_client_incarnations: created_clients,
         })
     }
 
@@ -1003,6 +1029,7 @@ impl Catalog {
         let mut updates = Vec::new();
         let mut born_mvs = BTreeSet::new();
         let mut updated_requirements = BTreeSet::new();
+        let mut created_client_incarnations = Vec::new();
 
         for op in ops {
             if preliminary_state.catalog_read_protection_enabled() {
@@ -1031,6 +1058,7 @@ impl Catalog {
                 &mut storage_collections_to_create,
                 &mut storage_collections_to_drop,
                 &mut storage_collections_to_register,
+                &mut created_client_incarnations,
             )
             .await?;
 
@@ -1080,20 +1108,43 @@ impl Catalog {
             }
         }
 
+        // The last client release can retire metadata after its SQL object is gone.
+        // Visit changed requirement targets, not every collection on each heartbeat.
+        for update in &updates {
+            if let StateUpdateKind::ClientReadRequirement(requirement) = &update.kind
+                && update.diff == StateDiff::Retraction
+                && preliminary_state
+                    .client_read_frontier(requirement.id)
+                    .is_none()
+                && !preliminary_state.contains_live_collection(&requirement.id)
+                && preliminary_state
+                    .storage_metadata()
+                    .collection_metadata
+                    .contains_key(&requirement.id)
+            {
+                storage_collections_to_drop.insert(requirement.id);
+            }
+        }
+
         match mode {
             TransactInnerMode::Commit => {
                 // `storage_collections` can be `None` in tests.
                 if let Some(c) = storage_collections {
-                    let live_collection_ids = if storage_collections_to_drop.is_empty() {
-                        BTreeSet::new()
-                    } else {
-                        preliminary_state
-                            .get_entries()
-                            .map(|(_, entry)| entry)
-                            .filter(|entry| entry.item().is_storage_collection())
-                            .flat_map(|entry| entry.global_ids())
-                            .collect()
-                    };
+                    let mut live_collection_ids: BTreeSet<_> =
+                        if storage_collections_to_drop.is_empty() {
+                            BTreeSet::new()
+                        } else {
+                            preliminary_state
+                                .get_entries()
+                                .map(|(_, entry)| entry)
+                                .filter(|entry| entry.item().is_storage_collection())
+                                .flat_map(|entry| entry.global_ids())
+                                .chain(preliminary_state.durable_item_ids.keys().copied())
+                                .collect()
+                        };
+                    if !storage_collections_to_drop.is_empty() {
+                        live_collection_ids.extend(preliminary_state.client_required_collections());
+                    }
                     c.prepare_state(
                         tx,
                         storage_collections_to_create,
@@ -1133,15 +1184,9 @@ impl Catalog {
         updates.extend(tx.get_and_commit_op_updates());
         // Classify raw updates, not parsed implications, which omit
         // planning-visible changes.
-        let planning_changed = updates.iter().any(|update| {
-            !matches!(
-                &update.kind,
-                StateUpdateKind::CollectionCompactionBound(_)
-                    | StateUpdateKind::MaintainedReadRequirement(_)
-                    | StateUpdateKind::UnfinalizedShard(_)
-                    | StateUpdateKind::AuditLog(_)
-            )
-        });
+        let planning_changed = updates
+            .iter()
+            .any(|update| Self::update_affects_planning(&update.kind));
         if !updates.is_empty() {
             let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
             let (op_builtin_table_updates, op_catalog_updates) = state
@@ -1159,6 +1204,7 @@ impl Catalog {
             Cow::Owned(state) => Ok(Some(TransactInnerResult {
                 state,
                 planning_changed,
+                created_client_incarnations,
             })),
             Cow::Borrowed(_) => Ok(None),
         }
@@ -1179,8 +1225,32 @@ impl Catalog {
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
+        created_client_incarnations: &mut Vec<u64>,
     ) -> Result<(), AdapterError> {
         match op {
+            Op::CreateClientIncarnation => {
+                if !state.catalog_read_protection_enabled() {
+                    return Err(AdapterError::internal(
+                        "create query client",
+                        "catalog read protection is not enabled",
+                    ));
+                }
+                created_client_incarnations.push(tx.create_client_incarnation()?);
+            }
+            Op::PublishClientReadRequirements {
+                incarnation,
+                requirements,
+            } => {
+                let requirements =
+                    state.expand_client_read_requirements(incarnation, requirements)?;
+                tx.publish_client_read_requirements(incarnation, requirements)?;
+            }
+            Op::ReclaimClientIncarnation {
+                incarnation,
+                expected_heartbeat,
+            } => {
+                tx.reclaim_client_incarnation(incarnation, expected_heartbeat)?;
+            }
             Op::CheckClusterState {
                 cluster_id,
                 expected,
@@ -3428,6 +3498,68 @@ impl Catalog {
         }
 
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
+    }
+}
+
+impl CatalogState {
+    /// Includes persisted recovery inputs for every protected index.
+    ///
+    /// Inputs are independent collection requirements, not bindings stored on an
+    /// index grant. They retain their metadata and history if the index is dropped.
+    /// A retired identity can retain or advance an existing grant, but
+    /// cannot be used to introduce protection for a new reader.
+    pub(crate) fn expand_client_read_requirements(
+        &self,
+        incarnation: u64,
+        mut requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
+    ) -> Result<BTreeMap<GlobalId, mz_repr::Timestamp>, AdapterError> {
+        if !self.client_incarnations().contains_key(&incarnation) {
+            return Err(AdapterError::internal(
+                "publish client read protection",
+                format!("client incarnation {incarnation} is closed"),
+            ));
+        }
+        let requested = requirements.clone();
+        for (id, frontier) in requested {
+            let Some(entry) = self.try_get_entry_by_global_id(&id) else {
+                // An index can be gone while its local tokens still retain their
+                // independent storage requirements. This does not recreate it or
+                // authorize a new or stronger grant on its retired identity.
+                let retained = self
+                    .client_read_requirements()
+                    .get(&(incarnation, id))
+                    .is_some_and(|held| *held <= frontier);
+                if retained {
+                    continue;
+                }
+                return Err(AdapterError::internal(
+                    "publish client read protection",
+                    format!("collection {id} is not available"),
+                ));
+            };
+            if let CatalogItem::Index(index) = entry.item() {
+                for input in self.logical_collection_inputs([index.on]) {
+                    // Logging inputs are compute-local. Their index's permission
+                    // protects its trace, not a nonexistent Persist collection.
+                    if matches!(
+                        self.get_entry_by_global_id(&input).item(),
+                        CatalogItem::Log(_)
+                    ) {
+                        continue;
+                    }
+                    requirements
+                        .entry(input)
+                        .and_modify(|held| *held = (*held).min(frontier))
+                        .or_insert(frontier);
+                }
+            } else if !entry.item().is_storage_collection() {
+                return Err(AdapterError::internal(
+                    "publish client read protection",
+                    format!("collection {id} is not readable"),
+                ));
+            }
+        }
+        Ok(requirements)
     }
 }
 

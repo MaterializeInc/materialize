@@ -1633,6 +1633,12 @@ Trace {
     maintained_read_requirements: CollectionTrace {
         values: [],
     },
+    client_incarnations: CollectionTrace {
+        values: [],
+    },
+    client_read_requirements: CollectionTrace {
+        values: [],
+    },
     unfinalized_shards: CollectionTrace {
         values: [],
     },

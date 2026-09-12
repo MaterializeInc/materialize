@@ -86,6 +86,7 @@ mod peek_offload;
 mod peek_result_iterator;
 mod peek_scan;
 mod peek_stash;
+mod query_execution;
 
 /// Cheap handles on the dyncfgs that bound how many rows a peek may examine.
 ///
@@ -175,6 +176,14 @@ fn peek_row_iteration_limit(config: &ConfigSet) -> Option<usize> {
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
 pub struct ComputeState {
+    queries: BTreeMap<Uuid, query_execution::QueryState>,
+    active_query: Option<Uuid>,
+    /// First busy query served in the last sweep. Its successor gets first turn next.
+    last_query_served: Option<Uuid>,
+    /// Dataflows whose remaining export, import, or peek guards defer retirement.
+    retiring_dataflows: BTreeMap<usize, std::rc::Weak<usize>>,
+    /// Source-event observer installed only while rendering a query dataflow.
+    pub(crate) query_admission: Option<Rc<RefCell<query_execution::Admission>>>,
     /// State kept for each installed compute collection.
     ///
     /// Each collection has exactly one frontier.
@@ -321,6 +330,11 @@ impl ComputeState {
         let peek_budget = InlineBudget::new(&worker_config);
 
         Self {
+            queries: Default::default(),
+            active_query: None,
+            last_query_served: None,
+            retiring_dataflows: Default::default(),
+            query_admission: None,
             collections: Default::default(),
             traces,
             subscribe_response_buffer: Default::default(),
@@ -680,6 +694,9 @@ impl<'a> ActiveComputeState<'a> {
             .start_timer();
 
         match cmd {
+            HelloQuery { .. } | SetQueryMaxResultSize { .. } | CreateQueryDataflow { .. } => {
+                panic!("query command on lifecycle connection")
+            }
             Hello { .. } => panic!("Hello must be captured before"),
             CreateInstance(instance_config) => self.handle_create_instance(*instance_config),
             InitializationComplete => (),
@@ -917,6 +934,17 @@ impl<'a> ActiveComputeState<'a> {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
+                let trace_bundle = if self.compute_state.active_query.is_some() {
+                    let producer = self
+                        .compute_state
+                        .collections
+                        .get(id)
+                        .map(|c| Rc::clone(&c.dataflow_index));
+                    let retained = trace_bundle.to_drop().clone();
+                    trace_bundle.with_drop((retained, producer))
+                } else {
+                    trace_bundle
+                };
                 PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
@@ -985,9 +1013,16 @@ impl<'a> ActiveComputeState<'a> {
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
-        // Drop the dataflow, if all its exports have been dropped.
-        if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
+        // Importers and peeks retain the producer's scheduling guard as well as
+        // its trace. Retire only when both exports and readers have released it.
+        let index = *collection.dataflow_index;
+        if Rc::strong_count(&collection.dataflow_index) == 1 {
             self.timely_worker.drop_dataflow(index);
+            self.compute_state.retiring_dataflows.remove(&index);
+        } else {
+            self.compute_state
+                .retiring_dataflows
+                .insert(index, Rc::downgrade(&collection.dataflow_index));
         }
 
         // The compute protocol requires us to send a `Frontiers` response with empty frontiers
@@ -999,11 +1034,13 @@ impl<'a> ActiveComputeState<'a> {
             let write_frontier = (!reported.write_frontier.is_empty()).then(Antichain::new);
             let input_frontier = (!reported.input_frontier.is_empty()).then(Antichain::new);
             let output_frontier = (!reported.output_frontier.is_empty()).then(Antichain::new);
+            let read_frontier = (!reported.read_frontier.is_empty()).then(Antichain::new);
 
             let frontiers = FrontiersResponse {
                 write_frontier,
                 input_frontier,
                 output_frontier,
+                read_frontier,
             };
             if frontiers.has_updates() {
                 self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
@@ -1085,6 +1122,9 @@ impl<'a> ActiveComputeState<'a> {
         let mut new_frontier = Antichain::new();
 
         for (&id, collection) in self.compute_state.collections.iter_mut() {
+            if self.compute_state.active_query.is_some() && !id.is_transient() {
+                continue;
+            }
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
             // collections (database-issues#4701).
             if collection.is_subscribe_or_copy {
@@ -1092,6 +1132,17 @@ impl<'a> ActiveComputeState<'a> {
             }
 
             let reported = collection.reported_frontiers();
+
+            let read_frontier = self
+                .compute_state
+                .traces
+                .get_mut(&id)
+                .map(|trace| collection.read_frontier(trace))
+                .unwrap_or_default();
+            let new_read_frontier = reported
+                .read_frontier
+                .allows_reporting(&read_frontier)
+                .then_some(read_frontier);
 
             // Collect the write frontier and check for progress.
             new_frontier.clear();
@@ -1145,6 +1196,10 @@ impl<'a> ActiveComputeState<'a> {
                 .allows_reporting(&new_frontier)
                 .then(|| new_frontier.clone());
 
+            if let Some(frontier) = &new_read_frontier {
+                collection.reported_frontiers.read_frontier =
+                    ReportedFrontier::Reported(frontier.clone());
+            }
             if let Some(frontier) = &new_write_frontier {
                 collection
                     .set_reported_write_frontier(ReportedFrontier::Reported(frontier.clone()));
@@ -1162,6 +1217,7 @@ impl<'a> ActiveComputeState<'a> {
                 write_frontier: new_write_frontier,
                 input_frontier: new_input_frontier,
                 output_frontier: new_output_frontier,
+                read_frontier: new_read_frontier,
             };
             if response.has_updates() {
                 responses.push((id, response));
@@ -1383,7 +1439,9 @@ impl<'a> ActiveComputeState<'a> {
         // Above the early return because this is the only place an activation begins. A replica
         // whose peeks all answer inline leaves none pending, and beginning an activation only
         // where there is work would let the aggregate drain across its arrivals.
-        self.compute_state.peek_budget.start_activation();
+        if self.compute_state.active_query.is_none() {
+            self.compute_state.peek_budget.start_activation();
+        }
 
         // Says what this sweep found, so it is cleared before the sweep rather than carried in
         // from the last one. A peek cancelled or dropped between two sweeps would otherwise leave
@@ -1496,7 +1554,19 @@ impl<'a> ActiveComputeState<'a> {
     fn send_compute_response(&self, response: ComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
-        let _ = self.response_tx.send(response);
+        if let Some(nonce) = self.compute_state.active_query {
+            let _ = self.response_tx.send_query(nonce, response);
+        } else {
+            if matches!(
+                &response,
+                ComputeResponse::Frontiers(id, _) if id.is_user() || id.is_system()
+            ) {
+                for nonce in self.compute_state.queries.keys() {
+                    let _ = self.response_tx.send_query(*nonce, response.clone());
+                }
+            }
+            let _ = self.response_tx.send(response);
+        }
     }
 
     /// Checks for dataflow expiration. Panics if we're past the replica expiration time.
@@ -1985,6 +2055,8 @@ enum PeekStatus {
 /// The frontiers we have reported to the controller for a collection.
 #[derive(Debug)]
 struct ReportedFrontiers {
+    /// The reported readable trace since.
+    read_frontier: ReportedFrontier,
     /// The reported write frontier.
     write_frontier: ReportedFrontier,
     /// The reported input frontier.
@@ -1997,6 +2069,7 @@ impl ReportedFrontiers {
     /// Creates a new `ReportedFrontiers` instance.
     fn new() -> Self {
         Self {
+            read_frontier: ReportedFrontier::new(),
             write_frontier: ReportedFrontier::new(),
             input_frontier: ReportedFrontier::new(),
             output_frontier: ReportedFrontier::new(),
@@ -2050,10 +2123,9 @@ pub struct CollectionState {
     reported_frontiers: ReportedFrontiers,
     /// The index of the dataflow computing this collection.
     ///
-    /// Used for dropping the dataflow when the collection is dropped.
-    /// The Dataflow index is wrapped in an `Rc`s and can be shared between collections, to reflect
-    /// the possibility that a single dataflow can export multiple collections.
-    dataflow_index: Rc<usize>,
+    /// Shared by all exports and by query readers that still need the producer to run.
+    /// Dropping the final guard permits the worker to retire the dataflow.
+    pub(crate) dataflow_index: Rc<usize>,
     /// Whether this collection is a subscribe or copy-to.
     ///
     /// The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
@@ -2133,8 +2205,18 @@ impl CollectionState {
         &self.reported_frontiers
     }
 
+    /// The earliest readable times, respecting both trace compaction and installation.
+    fn read_frontier(&self, trace: &mut TraceBundle) -> Antichain<Timestamp> {
+        // A new trace handle can report MIN even though the dataflow only represents
+        // the collection from its as-of onward.
+        let mut frontier = trace.compaction_frontier();
+        frontier.join_assign(&self.as_of);
+        frontier
+    }
+
     /// Reset all reported frontiers to the given value.
     pub fn reset_reported_frontiers(&mut self, frontier: ReportedFrontier) {
+        self.reported_frontiers.read_frontier = frontier.clone();
         self.reported_frontiers.write_frontier = frontier.clone();
         self.reported_frontiers.input_frontier = frontier.clone();
         self.reported_frontiers.output_frontier = frontier;
