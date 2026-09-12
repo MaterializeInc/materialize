@@ -228,8 +228,9 @@ def workflow_storage_query_connections(c: Composition) -> None:
         c.testdrive(dedent("""
             > CREATE CLUSTER storage_query SIZE 'scale=2,workers=1', REPLICATION FACTOR 1;
             > SET cluster = storage_query;
-            > CREATE SOURCE storage_query_counter IN CLUSTER storage_query
+            > CREATE SOURCE storage_query_generator IN CLUSTER storage_query
               FROM LOAD GENERATOR COUNTER;
+            > CREATE TABLE storage_query_counter FROM SOURCE storage_query_generator;
             > SELECT count(*) > 0 FROM storage_query_counter;
             true
             $ set-from-sql var=counter-before
