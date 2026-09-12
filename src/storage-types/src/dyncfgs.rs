@@ -303,6 +303,21 @@ pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
+/// default behavior is to emit a definite error, forcing source recreation.  In cases of Always
+/// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
+/// Changing this flag puts the onus on the customer to recreate the source if the upstream DB
+/// changes in a way that introduces data loss.
+/// Environment-scoped because it decides whether a definite error is emitted.
+/// Replicas of one cluster disagreeing would write different collection
+/// contents, so the value has to be coherent across them.
+pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::new(
+    "sql_server_source_validate_restore_history",
+    true,
+    "Whether to treat a restore history change as a definite error",
+    ParameterScope::Environment,
+);
+
 // Reclocking
 
 /// Whether sources mint remap bindings when their data frontier advances, in
@@ -332,21 +347,6 @@ pub const STORAGE_BINDING_LEAD: Config<Duration> = Config::new(
     "storage_binding_lead",
     Duration::ZERO,
     "Lead added to event-driven remap binding timestamps.",
-    ParameterScope::Environment,
-);
-
-/// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
-/// default behavior is to emit a definite error, forcing source recreation.  In cases of Always
-/// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
-/// Changing this flag puts the onus on the customer to recreate the source if the upstream DB
-/// changes in a way that introduces data loss.
-/// Environment-scoped because it decides whether a definite error is emitted.
-/// Replicas of one cluster disagreeing would write different collection
-/// contents, so the value has to be coherent across them.
-pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::new(
-    "sql_server_source_validate_restore_history",
-    true,
-    "Whether to treat a restore history change as a definite error",
     ParameterScope::Environment,
 );
 
