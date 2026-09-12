@@ -27,11 +27,15 @@ class Mode:
     event_driven: bool
     lead_ms: int
     keepalive_ms: int
+    # The source's TIMESTAMP INTERVAL, which is X_max under the flag and the
+    # plain tick without it.
+    source_interval_ms: int = 1000
 
 
 MODES = [
     Mode("baseline", False, 0, 1000),
     Mode("baseline+keepalive250", False, 0, 250),
+    Mode("tick250", False, 0, 250, 250),
     Mode("event-driven lead0", True, 0, 250),
     Mode("event-driven lead400", True, 400, 250),
 ]
@@ -65,6 +69,7 @@ def mz_system(sql: str) -> None:
 
 def mz_setup(mode: Mode) -> None:
     mz_system("ALTER SYSTEM SET default_timestamp_interval = '1s'")
+    mz_system("ALTER SYSTEM SET min_timestamp_interval = '100ms'")
     mz_system(
         f"ALTER SYSTEM SET storage_event_driven_bindings = {'true' if mode.event_driven else 'false'}"
     )
@@ -79,7 +84,8 @@ def mz_setup(mode: Mode) -> None:
         )
         conn.execute(
             "CREATE SOURCE pg_src FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_pub') "
-            "EXPOSE PROGRESS AS pg_src_progress"
+            "EXPOSE PROGRESS AS pg_src_progress "
+            f"WITH (TIMESTAMP INTERVAL '{mode.source_interval_ms}ms')".encode()
         )
         conn.execute("CREATE TABLE t FROM SOURCE pg_src (REFERENCE t)")
         deadline = time.monotonic() + 60
@@ -139,6 +145,10 @@ def reader(stop: threading.Event, samples: Samples) -> None:
 
 
 def binding_counter(stop: threading.Event, samples: Samples) -> None:
+    # Counts bindings that move the upstream frontier. A binding that repeats
+    # the frontier at a new time consolidates away in the progress collection,
+    # and mz_internal.mz_frontiers only refreshes once per second, so idle
+    # bindings are not observable from SQL.
     with psycopg.connect(MZ_DSN, autocommit=False) as conn:
         cur = conn.cursor()
         cur.execute("DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM pg_src_progress)")
@@ -195,6 +205,7 @@ def main() -> None:
         mz_system("ALTER SYSTEM RESET default_timestamp_interval")
         mz_system("ALTER SYSTEM RESET storage_event_driven_bindings")
         mz_system("ALTER SYSTEM RESET storage_binding_lead")
+        mz_system("ALTER SYSTEM RESET min_timestamp_interval")
 
     print(
         "| mode | staleness p50 ms | staleness p95 ms | read p50 ms | read p95 ms | bindings/s | reads | errors |"
