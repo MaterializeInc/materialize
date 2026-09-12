@@ -637,6 +637,69 @@ fn handle_at_mints_at_as_of_or_refuses() {
     });
 }
 
+/// A point reports both the frontier its writer was told to compact to and the one the holds let
+/// it apply.
+///
+/// The two differ by exactly what the importing runtime is withholding, which is the coupling this
+/// publication introduces, and the pair is the only place that coupling is observable.
+#[mz_ore::test]
+fn logical_frontiers_report_what_the_holds_withhold() {
+    timely::execute_directly(move |worker| {
+        let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged = collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("gap oks");
+            let writer = arranged.trace.clone();
+            let published = adopt_fresh(&arranged);
+            (writer, published, input)
+        });
+        for t in 0..5 {
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+        }
+
+        // The importing runtime is four behind the controller's request, so the writer applies
+        // four and reports ten.
+        let held = Antichain::from_elem(Timestamp::from(4_u64));
+        let target = Antichain::from_elem(Timestamp::from(10_u64));
+        published.note_standing_hold(&held);
+        writer.set_logical_compaction(target.borrow());
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(10_u64),
+            Timestamp::from(11_u64),
+        );
+        assert_eq!(
+            published.logical_frontiers(),
+            (held, target.clone()),
+            "the applied frontier must report the hold and the requested one the controller"
+        );
+
+        // The importing runtime catches up and the gap closes.
+        published.note_standing_hold(&target);
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(11_u64),
+            Timestamp::from(12_u64),
+        );
+        assert_eq!(
+            published.logical_frontiers(),
+            (target.clone(), target),
+            "a caught-up importer must leave no gap"
+        );
+    });
+}
+
 /// A consumer forwarding an empty input frontier releases its hold rather than recording an
 /// empty one.
 ///

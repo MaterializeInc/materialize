@@ -121,6 +121,15 @@ where
         self.shared.upper()
     }
 
+    /// The `(applied, requested)` logical compaction frontiers of this point.
+    ///
+    /// `applied` is what the publishing runtime's trace compacted to, `requested` what its
+    /// controller stream asked for. They differ by exactly what the importing runtime's standing
+    /// hold, or a live reader, is keeping the publisher from shedding.
+    pub(crate) fn logical_frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
+        (self.shared.since(), self.shared.writer_since())
+    }
+
     /// Why this point would refuse an `as_of`. See [`Diagnostics`].
     pub(crate) fn diagnostics(&self) -> Diagnostics<Tr::Time> {
         Diagnostics {
