@@ -20,6 +20,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::str::StrExt;
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_repr::{ColumnName, RelationVersionSelector};
@@ -865,6 +866,18 @@ impl AstDisplay for ResolvedNetworkPolicyName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResolvedQueryPolicyName {
+    pub id: QueryPolicyId,
+    pub name: String,
+}
+
+impl AstDisplay for ResolvedQueryPolicyName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("[{} AS {}]", self.id, self.name));
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedObjectName {
     Cluster(ResolvedClusterName),
     ClusterReplica(ResolvedClusterReplicaName),
@@ -872,6 +885,7 @@ pub enum ResolvedObjectName {
     Schema(ResolvedSchemaName),
     Role(ResolvedRoleName),
     NetworkPolicy(ResolvedNetworkPolicyName),
+    QueryPolicy(ResolvedQueryPolicyName),
     Item(ResolvedItemName),
 }
 
@@ -885,6 +899,7 @@ impl AstDisplay for ResolvedObjectName {
             ResolvedObjectName::Role(n) => f.write_node(n),
             ResolvedObjectName::Item(n) => f.write_node(n),
             ResolvedObjectName::NetworkPolicy(n) => f.write_node(n),
+            ResolvedObjectName::QueryPolicy(n) => f.write_node(n),
         }
     }
 }
@@ -1024,6 +1039,7 @@ pub enum ObjectId {
     Role(RoleId),
     Item(CatalogItemId),
     NetworkPolicy(NetworkPolicyId),
+    QueryPolicy(QueryPolicyId),
 }
 
 impl ObjectId {
@@ -1073,6 +1089,7 @@ impl ObjectId {
             ObjectId::Role(role_id) => role_id.is_system(),
             ObjectId::Item(global_id) => global_id.is_system(),
             ObjectId::NetworkPolicy(network_policy_id) => network_policy_id.is_system(),
+            ObjectId::QueryPolicy(id) => id.is_system(),
         }
     }
 
@@ -1085,6 +1102,7 @@ impl ObjectId {
             ObjectId::Role(role_id) => role_id.is_user(),
             ObjectId::Item(global_id) => global_id.is_user(),
             ObjectId::NetworkPolicy(network_policy_id) => network_policy_id.is_user(),
+            ObjectId::QueryPolicy(id) => id.is_user(),
         }
     }
 }
@@ -1107,6 +1125,7 @@ impl fmt::Display for ObjectId {
             ObjectId::Role(role_id) => write!(f, "R{role_id}"),
             ObjectId::Item(item_id) => write!(f, "I{item_id}"),
             ObjectId::NetworkPolicy(network_policy_id) => write!(f, "NP{network_policy_id}"),
+            ObjectId::QueryPolicy(id) => write!(f, "QP{id}"),
         }
     }
 }
@@ -1136,6 +1155,7 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
                 ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
             },
             ResolvedObjectName::NetworkPolicy(name) => Ok(ObjectId::NetworkPolicy(name.id)),
+            ResolvedObjectName::QueryPolicy(name) => Ok(ObjectId::QueryPolicy(name.id)),
         }
     }
 }
@@ -1244,6 +1264,7 @@ impl From<CommentObjectId> for ObjectId {
             CommentObjectId::Cluster(id) => ObjectId::Cluster(id),
             CommentObjectId::ClusterReplica(id) => ObjectId::ClusterReplica(id),
             CommentObjectId::NetworkPolicy(id) => ObjectId::NetworkPolicy(id),
+            CommentObjectId::QueryPolicy(id) => ObjectId::QueryPolicy(id),
         }
     }
 }
@@ -1305,6 +1326,7 @@ pub enum CommentObjectId {
     Cluster(ClusterId),
     ClusterReplica((ClusterId, ReplicaId)),
     NetworkPolicy(NetworkPolicyId),
+    QueryPolicy(QueryPolicyId),
 }
 
 /// Whether to resolve an name in the types namespace, the functions namespace,
@@ -2192,6 +2214,17 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             UnresolvedObjectName::NetworkPolicy(name) => ResolvedObjectName::NetworkPolicy(
                 self.fold_network_policy_name(RawNetworkPolicyName::Unresolved(name)),
             ),
+            UnresolvedObjectName::QueryPolicy(name) => {
+                let name = name.as_str().to_string();
+                let id = match self.catalog.resolve_query_policy(&name) {
+                    Ok(policy) => policy.id(),
+                    Err(error) => {
+                        self.status = Err(error.into());
+                        QueryPolicyId::User(0)
+                    }
+                };
+                ResolvedObjectName::QueryPolicy(ResolvedQueryPolicyName { id, name })
+            }
         }
     }
 

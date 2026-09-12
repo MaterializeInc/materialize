@@ -42,6 +42,66 @@ fn datadriven() {
 }
 
 #[mz_ore::test]
+fn query_policy_syntax() {
+    use mz_sql_parser::ast::{QueryPolicyOption, Statement, Value};
+
+    let sql = "CREATE QUERY POLICY guarded (MODE = 'enforce', RULES (no_slow (action = 'reject', metric = 'query_plan_includes', value = 'slow_path_query'), no_persist (action = 'reject', metric = 'query_plan_includes', value = 'persist_read')))";
+    let ast = parse_statements(sql).unwrap().remove(0).ast;
+    let Statement::CreateQueryPolicy(policy) = &ast else {
+        panic!("expected CREATE QUERY POLICY");
+    };
+    assert_eq!(policy.name.as_str(), "guarded");
+    assert_eq!(
+        policy.options[0],
+        QueryPolicyOption::Mode(Value::String("enforce".into()))
+    );
+    let QueryPolicyOption::Rules(rules) = &policy.options[1] else {
+        panic!("expected RULES");
+    };
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rules[0].name.as_str(), "no_slow");
+    assert_eq!(rules[1].name.as_str(), "no_persist");
+
+    for sql in [
+        sql,
+        "CREATE QUERY POLICY \"guarded name\" (RULES ())",
+        "ALTER QUERY POLICY guarded SET (MODE = 'warn')",
+        "ALTER QUERY POLICY guarded SET (RULES ())",
+        "ALTER QUERY POLICY guarded OWNER TO policy_admin",
+        "DROP QUERY POLICY IF EXISTS guarded, other",
+        "GRANT USAGE ON QUERY POLICY guarded TO analyst",
+        "REVOKE USAGE ON QUERY POLICY guarded FROM analyst",
+        "GRANT USAGE ON ALL QUERY POLICIES TO analyst",
+        "ALTER CLUSTER c SET (QUERY POLICY = guarded)",
+        "ALTER CLUSTER c RESET (QUERY POLICY)",
+        "ALTER ROLE analyst SET query_policy = guarded",
+        "ALTER ROLE analyst RESET query_policy",
+    ] {
+        let ast = parse_statements(sql).unwrap().remove(0).ast;
+        for displayed in [ast.to_ast_string_simple(), ast.to_ast_string_stable()] {
+            let reparsed = parse_statements(&displayed).unwrap().remove(0).ast;
+            assert_eq!(
+                ast, reparsed,
+                "query policy round trip: {sql} -> {displayed}"
+            );
+        }
+    }
+
+    for sql in [
+        "CREATE QUERY POLICY schema.guarded (RULES ())",
+        "ALTER QUERY POLICY schema.guarded SET (MODE = 'warn')",
+        "DROP QUERY POLICY schema.guarded",
+        "CREATE QUERY POLICY guarded (RULES (r (duration = 10)))",
+        "CREATE QUERY POLICY guarded (RULES (r (heap = 10)))",
+    ] {
+        assert!(
+            parse_statements(sql).is_err(),
+            "unexpectedly accepted {sql}"
+        );
+    }
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
@@ -1418,5 +1478,30 @@ fn postfix_access_receiver_reparenthesized_after_nested_stripped() {
             ast, reparsed,
             "postfix-access receiver display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
         );
+    }
+}
+
+#[mz_ore::test]
+fn create_query_policy_privilege() {
+    use mz_sql_parser::ast::{Privilege, PrivilegeSpecification, Statement};
+
+    for sql in [
+        "GRANT CREATEQUERYPOLICY ON SYSTEM TO alice",
+        "REVOKE CREATEQUERYPOLICY ON SYSTEM FROM alice",
+    ] {
+        let ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        let privileges = match &ast {
+            Statement::GrantPrivileges(stmt) => &stmt.privileges,
+            Statement::RevokePrivileges(stmt) => &stmt.privileges,
+            _ => panic!("expected a privilege statement"),
+        };
+        assert_eq!(
+            privileges,
+            &PrivilegeSpecification::Privileges(vec![Privilege::CREATEQUERYPOLICY])
+        );
+        assert_eq!(ast.to_ast_string_simple(), sql);
     }
 }

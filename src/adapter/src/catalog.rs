@@ -45,7 +45,7 @@ use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpr
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
-    NetworkPolicy, Role, RoleAuth, Schema,
+    NetworkPolicy, QueryPolicy, Role, RoleAuth, Schema,
 };
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -61,6 +61,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, SqlScalarType,
@@ -1279,6 +1280,7 @@ impl Catalog {
                 ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
                 ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
                 ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(*id).privileges()),
+                ObjectId::QueryPolicy(id) => Some(&self.state.get_query_policy(id).privileges),
             },
             SystemObjectId::System => Some(&self.state.system_privileges),
         }
@@ -1370,6 +1372,10 @@ impl Catalog {
 
     pub fn get_network_policy_by_name(&self, name: &str) -> Option<&NetworkPolicy> {
         self.state.try_get_network_policy_by_name(name)
+    }
+
+    pub fn get_query_policy(&self, id: QueryPolicyId) -> &QueryPolicy {
+        self.state.get_query_policy(&id)
     }
 
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
@@ -1548,6 +1554,15 @@ impl Catalog {
             ObjectId::NetworkPolicy(network_policy_id) => {
                 self.ensure_not_reserved_network_policy(network_policy_id)
             }
+            ObjectId::QueryPolicy(id) => {
+                if id.is_builtin() {
+                    Err(Error::new(ErrorKind::ReservedQueryPolicyName(
+                        self.state.get_query_policy(id).name.clone(),
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
         }
     }
 
@@ -1712,6 +1727,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
+        CommentObjectId::QueryPolicy(_) => ObjectType::QueryPolicy,
     }
 }
 
@@ -1743,6 +1759,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            mz_sql::catalog::ObjectType::QueryPolicy => ObjectType::QueryPolicy,
         },
         SystemObjectType::System => ObjectType::System,
     }
@@ -2125,6 +2142,28 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
+    fn resolve_query_policy(
+        &self,
+        name: &str,
+    ) -> Result<&dyn mz_sql::catalog::CatalogQueryPolicy, SqlCatalogError> {
+        Ok(self
+            .state
+            .try_get_query_policy_by_name(name)
+            .ok_or_else(|| SqlCatalogError::UnknownQueryPolicy(name.into()))?)
+    }
+
+    fn get_query_policy(&self, id: &QueryPolicyId) -> &dyn mz_sql::catalog::CatalogQueryPolicy {
+        self.state.get_query_policy(id)
+    }
+
+    fn get_query_policies(&self) -> Vec<&dyn mz_sql::catalog::CatalogQueryPolicy> {
+        self.state
+            .query_policies_by_id
+            .values()
+            .map(|policy| -> &dyn mz_sql::catalog::CatalogQueryPolicy { policy })
+            .collect()
+    }
+
     fn resolve_cluster(
         &self,
         cluster_name: Option<&str>,
@@ -2381,6 +2420,9 @@ impl SessionCatalog for ConnCatalog<'_> {
             SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
             SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
                 Some(self.get_network_policy(id).privileges())
+            }
+            SystemObjectId::Object(ObjectId::QueryPolicy(id)) => {
+                Some(&self.state.get_query_policy(id).privileges)
             }
             SystemObjectId::Object(ObjectId::ClusterReplica(_))
             | SystemObjectId::Object(ObjectId::Role(_)) => None,

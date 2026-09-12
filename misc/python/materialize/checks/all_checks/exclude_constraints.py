@@ -22,7 +22,7 @@ class ExcludeConstraints(Check):
     upstream constraints must remain a non-event across them."""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v26.41.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v26.42.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""

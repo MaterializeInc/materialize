@@ -2369,6 +2369,11 @@ def workflow_documentation_defaults(
                 shutil.copyfile(path, os.path.join(dir, file))
             else:
                 content = download_repo_file_at_tag(path, str(version))
+                if file == "sample-minio.yaml":
+                    # Historical manifests use the unavailable Docker Hub image.
+                    content = content.replace(
+                        b"image: minio/minio", b"image: quay.io/minio/minio"
+                    )
                 with open(os.path.join(dir, file), "wb") as f:
                     f.write(content)
 

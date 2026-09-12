@@ -1208,6 +1208,13 @@ impl PeekClient {
                 // The typ here was generated from the HIR SQL type and simply stored in LIR.
                 let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
 
+                crate::query_policy::check_query_policies(
+                    &catalog,
+                    session,
+                    target_cluster_id,
+                    &peek_plan,
+                )?;
+
                 coord::sequencer::emit_optimizer_notices(
                     &*catalog,
                     session,
@@ -1375,6 +1382,12 @@ impl PeekClient {
                 df_meta,
                 optimization_finished_at: _optimization_finished_at,
             } => {
+                crate::query_policy::check_query_policies(
+                    &catalog,
+                    session,
+                    target_cluster_id,
+                    &df_desc,
+                )?;
                 if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
                     session.add_notice(AdapterNotice::EqualSubscribeBounds {
                         bound: *df_desc.until.as_option().expect("as of set"),
@@ -1420,6 +1433,13 @@ impl PeekClient {
                 source_ids,
             } => {
                 let (df_desc, df_meta) = global_lir_plan.unapply();
+
+                crate::query_policy::check_query_policies(
+                    &catalog,
+                    session,
+                    target_cluster_id,
+                    &df_desc,
+                )?;
 
                 coord::sequencer::emit_optimizer_notices(
                     &*catalog,

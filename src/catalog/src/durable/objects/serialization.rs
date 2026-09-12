@@ -20,10 +20,10 @@ use crate::durable::objects::{
     ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    NetworkPolicyKey, NetworkPolicyValue, QueryPolicyKey, QueryPolicyValue,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey,
+    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
@@ -57,6 +57,7 @@ impl RustType<proto::ClusterConfig> for ClusterConfig {
         proto::ClusterConfig {
             variant: self.variant.into_proto(),
             workload_class: self.workload_class.clone(),
+            query_policy: self.query_policy.into_proto(),
         }
     }
 
@@ -64,6 +65,7 @@ impl RustType<proto::ClusterConfig> for ClusterConfig {
         Ok(Self {
             variant: proto.variant.into_rust()?,
             workload_class: proto.workload_class,
+            query_policy: proto.query_policy.into_rust()?,
         })
     }
 }
@@ -698,6 +700,44 @@ impl RustType<proto::RoleAuthValue> for RoleAuthValue {
         Ok(RoleAuthValue {
             password_hash: proto.password_hash,
             updated_at: proto.updated_at.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::QueryPolicyKey> for QueryPolicyKey {
+    fn into_proto(&self) -> proto::QueryPolicyKey {
+        proto::QueryPolicyKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::QueryPolicyKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::QueryPolicyValue> for QueryPolicyValue {
+    fn into_proto(&self) -> proto::QueryPolicyValue {
+        proto::QueryPolicyValue {
+            name: self.name.clone(),
+            mode: self.mode.into_proto(),
+            rules: self.rules.into_proto(),
+            owner_id: self.owner_id.into_proto(),
+            privileges: self.privileges.into_proto(),
+            oid: self.oid,
+        }
+    }
+
+    fn from_proto(proto: proto::QueryPolicyValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            name: proto.name,
+            mode: proto.mode.into_rust()?,
+            rules: proto.rules.into_rust()?,
+            owner_id: proto.owner_id.into_rust()?,
+            privileges: proto.privileges.into_rust()?,
+            oid: proto.oid,
         })
     }
 }

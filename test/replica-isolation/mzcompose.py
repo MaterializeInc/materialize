@@ -482,18 +482,14 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         if any(
             isinstance(check, ArrangedIntro) for check in disruption.compaction_checks
         ):
-            # Disable introspection subscribes because they break the
-            # `ArrangedIntro` check by disabling compaction of logging indexes
-            # on all replicas if one of the replicas is failing. That's because
-            # of a defect of replica-targeted subscribes: They get installed on
-            # all replicas but only the targeted replica can drive the write
-            # frontier forward. If the targeted replica is crashing, the write
-            # frontier cannot advance and thus the read frontier cannot either.
-            #
-            # TODO(database-issues#8091): Fix this by installing targeted subscribes only on the
-            #               targeted replica.
+            # Replica-targeted introspection consumers hold shared read
+            # capabilities on logging indexes. A consumer on an unreachable
+            # replica can therefore prevent compaction on healthy replicas.
+            # Disable their installation before creating the test cluster to
+            # isolate its introspection compaction from those consumers.
             c.sql(
-                "ALTER SYSTEM SET enable_introspection_subscribes = false;",
+                "ALTER SYSTEM SET enable_introspection_subscribes = false;"
+                "ALTER SYSTEM SET enable_metric_sink = false;",
                 port=6877,
                 user="mz_system",
             )

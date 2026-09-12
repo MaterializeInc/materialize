@@ -366,7 +366,7 @@ Trace {
                                         object_id: "SYSTEM",
                                         grantee_id: "s1",
                                         grantor_id: "s1",
-                                        privileges: "RBNP",
+                                        privileges: "RBNPQ",
                                     },
                                 ),
                             },
@@ -452,6 +452,7 @@ Trace {
                                     burst: None,
                                 },
                             ),
+                            query_policy: None,
                         },
                     },
                 ),
@@ -853,6 +854,20 @@ Trace {
             (
                 (
                     IdAllocKey {
+                        name: "user_query_policy",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
+            (
+                (
+                    IdAllocKey {
                         name: "user_role",
                     },
                     IdAllocValue {
@@ -914,6 +929,9 @@ Trace {
             ),
         ],
     },
+    query_policies: CollectionTrace {
+        values: [],
+    },
     roles: CollectionTrace {
         values: [
             (
@@ -940,6 +958,7 @@ Trace {
                         },
                         vars: RoleVars {
                             entries: [],
+                            query_policy: None,
                         },
                         oid: 16661,
                     },
@@ -969,6 +988,7 @@ Trace {
                         },
                         vars: RoleVars {
                             entries: [],
+                            query_policy: None,
                         },
                         oid: 16662,
                     },
@@ -998,6 +1018,7 @@ Trace {
                         },
                         vars: RoleVars {
                             entries: [],
+                            query_policy: None,
                         },
                         oid: 16984,
                     },
@@ -1027,6 +1048,7 @@ Trace {
                         },
                         vars: RoleVars {
                             entries: [],
+                            query_policy: None,
                         },
                         oid: 17076,
                     },
@@ -1054,6 +1076,7 @@ Trace {
                         },
                         vars: RoleVars {
                             entries: [],
+                            query_policy: None,
                         },
                         oid: 16944,
                     },
@@ -1083,6 +1106,7 @@ Trace {
                         },
                         vars: RoleVars {
                             entries: [],
+                            query_policy: None,
                         },
                         oid: 16663,
                     },
@@ -1112,6 +1136,7 @@ Trace {
                         },
                         vars: RoleVars {
                             entries: [],
+                            query_policy: None,
                         },
                         oid: 16664,
                     },
@@ -1613,7 +1638,7 @@ Trace {
                     },
                     SystemPrivilegesValue {
                         acl_mode: AclMode {
-                            bitflags: 8053063680,
+                            bitflags: 8321499136,
                         },
                     },
                 ),

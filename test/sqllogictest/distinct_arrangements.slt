@@ -15,9 +15,14 @@ reset-server
 # increase unexpectedly. This is to prevent issues like this:
 # https://github.com/MaterializeInc/database-issues/issues/6038
 
-# Introspection subscribes add noise to the introspection sources, so disable them.
+# Background introspection consumers add arrangements unrelated to these queries.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_introspection_subscribes = false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_metric_sink = false;
 ----
 COMPLETE 0
 

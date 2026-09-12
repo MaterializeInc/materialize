@@ -56,6 +56,8 @@ const CREATE_DB_CHAR: char = 'B';
 const CREATE_CLUSTER_CHAR: char = 'N';
 // compute network Policy
 const CREATE_NETWORK_POLICY_CHAR: char = 'P';
+// Query policy
+const CREATE_QUERY_POLICY_CHAR: char = 'Q';
 
 const INSERT_STR: &str = "INSERT";
 const SELECT_STR: &str = "SELECT";
@@ -67,6 +69,7 @@ const CREATE_ROLE_STR: &str = "CREATEROLE";
 const CREATE_DB_STR: &str = "CREATEDB";
 const CREATE_CLUSTER_STR: &str = "CREATECLUSTER";
 const CREATE_NETWORK_POLICY_STR: &str = "CREATENETWORKPOLICY";
+const CREATE_QUERY_POLICY_STR: &str = "CREATEQUERYPOLICY";
 
 /// The OID used to represent the PUBLIC role. See:
 /// <https://github.com/postgres/postgres/blob/29a0ccbce97978e5d65b8f96c85a00611bb403c4/src/include/utils/acl.h#L46>
@@ -97,6 +100,7 @@ bitflags! {
         const CREATE = 1 << 9;
 
         // Materialize custom privileges.
+        const CREATE_QUERY_POLICY = 1 << 28;
         const CREATE_CLUSTER = 1 << 29;
         const CREATE_DB = 1 << 30;
         const CREATE_ROLE = 1 << 31;
@@ -120,6 +124,7 @@ impl AclMode {
             CREATE_DB_STR => Ok(AclMode::CREATE_DB),
             CREATE_CLUSTER_STR => Ok(AclMode::CREATE_CLUSTER),
             CREATE_NETWORK_POLICY_STR => Ok(AclMode::CREATE_NETWORK_POLICY),
+            CREATE_QUERY_POLICY_STR => Ok(AclMode::CREATE_QUERY_POLICY),
             _ => Err(anyhow!("{}", s.quoted())),
         }
     }
@@ -169,6 +174,9 @@ impl AclMode {
         if self.contains(AclMode::CREATE_NETWORK_POLICY) {
             privileges.push(CREATE_NETWORK_POLICY_STR);
         }
+        if self.contains(AclMode::CREATE_QUERY_POLICY) {
+            privileges.push(CREATE_QUERY_POLICY_STR);
+        }
         privileges
     }
 }
@@ -190,6 +198,7 @@ impl FromStr for AclMode {
                 CREATE_DB_CHAR => acl_mode.bitor_assign(AclMode::CREATE_DB),
                 CREATE_CLUSTER_CHAR => acl_mode.bitor_assign(AclMode::CREATE_CLUSTER),
                 CREATE_NETWORK_POLICY_CHAR => acl_mode.bitor_assign(AclMode::CREATE_NETWORK_POLICY),
+                CREATE_QUERY_POLICY_CHAR => acl_mode.bitor_assign(AclMode::CREATE_QUERY_POLICY),
                 _ => return Err(anyhow!("invalid privilege '{c}' in acl mode '{s}'")),
             }
         }
@@ -230,6 +239,9 @@ impl fmt::Display for AclMode {
         }
         if self.contains(AclMode::CREATE_NETWORK_POLICY) {
             write!(f, "{CREATE_NETWORK_POLICY_CHAR}")?;
+        }
+        if self.contains(AclMode::CREATE_QUERY_POLICY) {
+            write!(f, "{CREATE_QUERY_POLICY_CHAR}")?;
         }
         Ok(())
     }
@@ -951,6 +963,29 @@ fn test_mz_acl_parsing() {
     mz_ore::assert_err!("=/".parse::<MzAclItem>());
     mz_ore::assert_err!("f62hfiuew827fhh".parse::<MzAclItem>());
     mz_ore::assert_err!("u2=rw/s66=CU/u33".parse::<MzAclItem>());
+}
+
+#[mz_ore::test]
+fn test_create_query_policy_privilege() {
+    let privilege = AclMode::CREATE_QUERY_POLICY;
+    assert_eq!(privilege.bits(), 1 << 28);
+    assert_eq!(
+        AclMode::parse_single_privilege(" createquerypolicy ").unwrap(),
+        privilege
+    );
+    assert_eq!("Q".parse::<AclMode>().unwrap(), privilege);
+    assert_eq!(privilege.to_string(), "Q");
+    assert_eq!(privilege.explode(), vec!["CREATEQUERYPOLICY"]);
+    let combined = privilege.union(AclMode::CREATE_NETWORK_POLICY);
+    assert_eq!(
+        AclMode::parse_multiple_privileges("CREATENETWORKPOLICY, CREATEQUERYPOLICY").unwrap(),
+        combined
+    );
+    assert_eq!("PQ".parse::<AclMode>().unwrap(), combined);
+    assert_eq!(combined.to_string(), "PQ");
+    let item = "u1=PQ/u2".parse::<MzAclItem>().unwrap();
+    assert_eq!(item.acl_mode, combined);
+    assert_eq!(item.to_string(), "u1=PQ/u2");
 }
 
 #[mz_ore::test]

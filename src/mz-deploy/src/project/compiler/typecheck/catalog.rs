@@ -33,6 +33,7 @@ use mz_ore::now::NOW_ZERO;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector, SqlScalarType,
@@ -41,10 +42,10 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase, CatalogError,
-    CatalogItem, CatalogItemType, CatalogNetworkPolicy, CatalogRole, CatalogSchema, CatalogType,
-    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId,
-    IdReference, NameReference, ObjectType as SqlObjectType, RoleAttributes, SessionCatalog,
-    SystemObjectType,
+    CatalogItem, CatalogItemType, CatalogNetworkPolicy, CatalogQueryPolicy, CatalogRole,
+    CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, ObjectType as SqlObjectType,
+    RoleAttributes, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     Aug, FullItemName, FullSchemaName, ItemQualifiers, PartialItemName, QualifiedItemName,
@@ -1474,6 +1475,18 @@ impl SessionCatalog for CatalogRuntime {
         Vec::new()
     }
 
+    fn resolve_query_policy(&self, name: &str) -> Result<&dyn CatalogQueryPolicy, CatalogError> {
+        Err(CatalogError::UnknownQueryPolicy(name.into()))
+    }
+
+    fn get_query_policy(&self, _id: &QueryPolicyId) -> &dyn CatalogQueryPolicy {
+        unreachable!("catalog backend has no query policies")
+    }
+
+    fn get_query_policies(&self) -> Vec<&dyn CatalogQueryPolicy> {
+        Vec::new()
+    }
+
     fn resolve_cluster<'a, 'b>(
         &'a self,
         cluster_name: Option<&'b str>,
@@ -1769,6 +1782,7 @@ impl SessionCatalog for CatalogRuntime {
             mz_sql::names::ObjectId::Role(_) => SqlObjectType::Role,
             mz_sql::names::ObjectId::ClusterReplica(_) => SqlObjectType::ClusterReplica,
             mz_sql::names::ObjectId::NetworkPolicy(_) => SqlObjectType::NetworkPolicy,
+            mz_sql::names::ObjectId::QueryPolicy(_) => SqlObjectType::QueryPolicy,
         }
     }
 
@@ -2159,6 +2173,18 @@ impl SessionCatalog for TaskCatalog {
 
     fn get_network_policies(&self) -> Vec<&dyn CatalogNetworkPolicy> {
         self.base.get_network_policies()
+    }
+
+    fn resolve_query_policy(&self, name: &str) -> Result<&dyn CatalogQueryPolicy, CatalogError> {
+        self.base.resolve_query_policy(name)
+    }
+
+    fn get_query_policy(&self, id: &QueryPolicyId) -> &dyn CatalogQueryPolicy {
+        self.base.get_query_policy(id)
+    }
+
+    fn get_query_policies(&self) -> Vec<&dyn CatalogQueryPolicy> {
+        self.base.get_query_policies()
     }
 
     fn resolve_cluster<'a, 'b>(

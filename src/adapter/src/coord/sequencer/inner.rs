@@ -992,6 +992,40 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_create_query_policy(
+        &mut self,
+        session: &Session,
+        plan::CreateQueryPolicyPlan { name, mode, rules }: plan::CreateQueryPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::CreateQueryPolicy {
+            name,
+            mode,
+            rules,
+            owner_id: *session.current_role_id(),
+        };
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::CreatedQueryPolicy)
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_query_policy(
+        &mut self,
+        session: &Session,
+        plan::AlterQueryPolicyPlan {
+            id,
+            name: _,
+            mode,
+            rules,
+        }: plan::AlterQueryPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::AlterQueryPolicy { id, mode, rules };
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::AlteredObject(ObjectType::QueryPolicy))
+    }
+
+    #[instrument]
     pub(super) async fn sequence_create_network_policy(
         &mut self,
         session: &Session,
@@ -1514,6 +1548,23 @@ impl Coordinator {
                         .push(format!("owner of {object_description}"));
                 }
             }
+        }
+        for policy in catalog.get_query_policies() {
+            let id = SystemObjectId::Object(ObjectId::QueryPolicy(policy.id()));
+            if let Some(role_name) = dropped_roles.get(&policy.owner_id()) {
+                let object_description = ErrorMessageObjectDescription::from_sys_id(&id, &catalog);
+                dependent_objects
+                    .entry(role_name.to_string())
+                    .or_default()
+                    .push(format!("owner of {object_description}"));
+            }
+            privilege_check(
+                policy.privileges(),
+                dropped_roles,
+                &mut dependent_objects,
+                &id,
+                &catalog,
+            );
         }
         privilege_check(
             self.catalog().system_privileges(),
@@ -3330,6 +3381,7 @@ impl Coordinator {
         // Get the attributes and variables from the role, as they currently are.
         let mut attributes: RoleAttributesRaw = role.attributes().clone().into();
         let mut vars = role.vars().clone();
+        let mut query_policy = self.catalog().get_role(&id).vars.query_policy;
 
         // Whether to set the password to NULL. This is a special case since the existing
         // password is not stored in the role attributes.
@@ -3337,6 +3389,7 @@ impl Coordinator {
 
         // Apply our updates.
         match option {
+            PlannedAlterRoleOption::QueryPolicy(policy) => query_policy = policy,
             PlannedAlterRoleOption::Attributes(attrs) => {
                 self.validate_role_attributes(&attrs.clone().into())?;
 
@@ -3426,7 +3479,10 @@ impl Coordinator {
             name,
             attributes,
             nopassword,
-            vars: RoleVars { map: vars },
+            vars: RoleVars {
+                map: vars,
+                query_policy,
+            },
         };
         let response = self
             .catalog_transact(Some(session), vec![op])
