@@ -40,9 +40,10 @@ acceptance. Remaining work:
    dependencies, and pending replacements. Suspended-target replacement recovery
    remains an explicit investigation in the log.
 3. Move the controller bundle out with catalog following, enactment, and publication
-   as its interface. DDL and table appends stay with the adapter. The ownership of
-   transaction-WAL time advancement during adapter loss is an open question raised
-   to Aljoscha in the latest handoff. Pause that extraction boundary pending guidance.
+   as its interface. DDL and table appends stay with the adapter. Table time stays
+   adapter-driven for now: assume a live adapter ticks transaction-WAL time, and
+   let the demonstration state that table-fed dataflows pause while the adapter
+   is down.
 
 Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
 shared-view index topology and diagnostics. Larger-scale work and the known
