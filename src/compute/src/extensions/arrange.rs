@@ -16,7 +16,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MERGE_BATCHER};
@@ -287,12 +286,13 @@ pub trait ArrangementSize {
 /// Batch-size logging identifies each batch by the address of its backing allocation and holds a
 /// weak reference to it, so it needs the `Arc` underlying the spine's [`ArcBatch<B>`] batches;
 /// `batch.0` reaches straight through the newtype to it.
-fn log_arrangement_size_inner<'scope, B, L>(
-    arranged: Arranged<'scope, TraceAgent<Spine<ArcBatch<B>>>>,
+fn log_arrangement_size_inner<'scope, B, Tr, L>(
+    arranged: Arranged<'scope, TraceAgent<Tr>>,
     mut logic: L,
-) -> Arranged<'scope, TraceAgent<Spine<ArcBatch<B>>>>
+) -> Arranged<'scope, TraceAgent<Tr>>
 where
     B: Batch + 'static,
+    Tr: TraceReader<Batch = ArcBatch<B>> + 'static,
     L: FnMut(&B) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
