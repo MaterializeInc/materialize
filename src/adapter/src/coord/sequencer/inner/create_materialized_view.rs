@@ -496,7 +496,7 @@ impl Coordinator {
 
         // Collect optimizer parameters.
         let compute_instance = self
-            .instance_snapshot(*cluster_id)
+            .candidate_instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
             self.allocate_user_id().await?
@@ -676,6 +676,13 @@ impl Coordinator {
                 .copied()
                 .chain(raw_expr.depends_on()),
         )?;
+        // Admission promises logical input history, not the availability of a
+        // candidate index. Installation validates or replans those access paths.
+        let id_bundle = if self.catalog().state().catalog_read_protection_enabled() {
+            logical_inputs.clone()
+        } else {
+            id_bundle
+        };
 
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(ctx.session().conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
@@ -695,13 +702,15 @@ impl Coordinator {
         let additional_read_holds = self
             .acquire_query_read_holds(&additional_inputs.difference(&read_holds.id_bundle()))
             .await?;
-        let (dataflow_as_of, storage_as_of, until) = self.select_timestamps(
-            id_bundle,
-            refresh_schedule.as_ref(),
-            &read_holds,
-            &additional_read_holds,
-            &logical_inputs,
-        )?;
+        let (dataflow_as_of, storage_as_of, until) = self
+            .select_timestamps(
+                id_bundle,
+                refresh_schedule.as_ref(),
+                &read_holds,
+                &additional_read_holds,
+                &logical_inputs,
+            )
+            .await?;
 
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -874,7 +883,7 @@ impl Coordinator {
 
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
     /// materialized view.
-    fn select_timestamps(
+    async fn select_timestamps(
         &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
@@ -935,11 +944,17 @@ impl Coordinator {
                     refresh_schedule.round_up_timestamp(*least_valid_read_ts)
                 {
                     storage_as_of = Antichain::from_elem(first_refresh_ts);
-                    dataflow_as_of.join_assign(
-                        &self
-                            .greatest_available_read(&id_bundle)
-                            .meet(&storage_as_of),
-                    );
+                    let greatest_available = if let Some(client) = self.query_client.as_ref() {
+                        client
+                            .write_frontier(self.catalog(), &id_bundle)
+                            .await?
+                            .iter()
+                            .map(|time| time.step_back().unwrap_or(*time))
+                            .collect()
+                    } else {
+                        self.greatest_available_read(&id_bundle)
+                    };
+                    dataflow_as_of.join_assign(&greatest_available.meet(&storage_as_of));
                 } else {
                     let last_refresh = refresh_schedule.last_refresh().expect(
                         "if round_up_timestamp returned None, then there should be a last refresh",

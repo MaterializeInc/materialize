@@ -300,6 +300,8 @@ impl Coordinator {
 
     fn update_storage_config(&mut self) {
         let config_params = flags::storage_config(self.catalog().system_config());
+        self.adapter_storage.update_parameters(&config_params);
+        self.storage_configuration.update(config_params.clone());
         self.controller.storage.update_parameters(config_params);
     }
 
@@ -415,6 +417,7 @@ impl Coordinator {
         }
 
         let mut tables_to_drop = BTreeSet::new();
+        let mut txn_tables_to_drop = BTreeSet::new();
         let mut sources_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut storage_sink_gids_to_drop = vec![];
@@ -490,9 +493,14 @@ impl Coordinator {
                 }
 
                 CatalogImplication::Table(CatalogImplicationKind::Dropped(table, full_name)) => {
+                    let txn_managed =
+                        matches!(table.data_source, TableDataSource::TableWrites { .. });
                     let global_ids = table.global_ids();
                     for global_id in global_ids {
                         tables_to_drop.insert((catalog_id, global_id));
+                        if txn_managed {
+                            txn_tables_to_drop.insert(global_id);
+                        }
                         dropped_item_names.insert(global_id, full_name.clone());
                     }
                 }
@@ -1257,8 +1265,12 @@ impl Coordinator {
             // logging around to indicate when an actual dependency error might
             // occur.
             if !tables_to_drop.is_empty() {
-                self.drop_tables(tables_to_drop.into_iter().collect_vec())
-                    .await;
+                // Forgetting follows every staged append in the adapter's FIFO.
+                if !txn_tables_to_drop.is_empty() {
+                    self.forget_tables_via_committer(txn_tables_to_drop.into_iter().collect())
+                        .await;
+                }
+                self.drop_tables(tables_to_drop.into_iter().collect_vec());
             }
 
             if !sources_to_drop.is_empty() {
@@ -1349,7 +1361,7 @@ impl Coordinator {
                 let caching_secrets_reader = self.caching_secrets_reader.clone();
                 let secrets_controller = Arc::clone(&self.secrets_controller);
                 let secrets_reader = Arc::clone(self.secrets_reader());
-                let storage_config = self.controller.storage.config().clone();
+                let storage_config = self.storage_configuration.clone();
 
                 async move {
                     for (connection, replication_slot_name) in replication_slots_to_drop {
@@ -1660,15 +1672,40 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Describe adapter-owned table writes from committed shard metadata.
+    pub(super) fn table_registration(
+        &self,
+        id: GlobalId,
+        relation_desc: mz_repr::RelationDesc,
+    ) -> crate::table_writer::TableRegistration {
+        crate::table_writer::TableRegistration {
+            id,
+            data_shard: self
+                .catalog()
+                .state()
+                .storage_metadata()
+                .get_collection_shard(id)
+                .expect("table has committed shard metadata"),
+            relation_desc,
+        }
+    }
+
     #[instrument(level = "debug")]
     async fn create_table_collections(
         &mut self,
         table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
-        // Storage filters table catalog items that are not managed by txn-wal.
-        let table_ids: Vec<GlobalId> = table_collections_to_create.keys().copied().collect();
+        let registrations = table_collections_to_create
+            .iter()
+            .filter_map(|(id, collection)| {
+                matches!(collection.data_source, DataSource::Table)
+                    .then(|| self.table_registration(*id, collection.desc.clone()))
+            })
+            .collect::<Vec<_>>();
         let collections = table_collections_to_create.into_iter().collect_vec();
+        self.register_adapter_storage_collections(&collections, &BTreeSet::new())
+            .await;
 
         // Confirm leadership after allocating the collections' initial timestamp.
         let write_ts = self.get_local_write_ts().await;
@@ -1689,11 +1726,6 @@ impl Coordinator {
 
         // Registration can choose a later timestamp than the collections' initial since. Reads
         // remain above the applied registration timestamp.
-        let registrations = self
-            .controller
-            .storage
-            .table_registrations(table_ids)
-            .unwrap_or_terminate("cannot fail to look up table registrations");
         let table_ts = if registrations.is_empty() {
             // Without txn-wal registration, this timestamp still makes the collections readable.
             self.apply_local_write(register_ts).await;
@@ -1743,6 +1775,9 @@ impl Coordinator {
         &mut self,
         source_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
     ) -> Result<(), AdapterError> {
+        let collections = source_collections_to_create.into_iter().collect_vec();
+        self.register_adapter_storage_collections(&collections, &BTreeSet::new())
+            .await;
         let storage_metadata = self.catalog.state().storage_metadata();
 
         self.controller
@@ -1750,12 +1785,54 @@ impl Coordinator {
             .create_collections(
                 storage_metadata,
                 None, // Sources don't need a write timestamp
-                source_collections_to_create.into_iter().collect_vec(),
+                collections,
             )
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
         Ok(())
+    }
+
+    /// Start request-side writers from committed shard identities, independently of storage enactment.
+    pub(super) async fn register_adapter_storage_collections(
+        &self,
+        collections: &[(GlobalId, CollectionDescription)],
+        migrated_storage_collections: &BTreeSet<GlobalId>,
+    ) {
+        for (id, collection) in collections {
+            let history = match collection.data_source {
+                DataSource::Webhook => None,
+                DataSource::Introspection(typ) if typ.is_statement_history() => Some(typ),
+                _ => continue,
+            };
+            let shard = self
+                .catalog
+                .state()
+                .storage_metadata()
+                .get_collection_shard(*id)
+                .expect("adapter-written collection has committed shard metadata");
+            let writer = self
+                .persist_client
+                .open_writer(
+                    shard,
+                    Arc::new(collection.desc.clone()),
+                    Arc::new(mz_persist_types::codec_impls::UnitSchema),
+                    mz_persist_client::Diagnostics {
+                        shard_name: id.to_string(),
+                        handle_purpose: "adapter storage writes".to_owned(),
+                    },
+                )
+                .await
+                .expect("adapter-written schema matches committed description");
+            if let Some(typ) = history {
+                let force_writable =
+                    self.controller.read_only() && migrated_storage_collections.contains(id);
+                self.adapter_storage
+                    .register_history(typ, *id, writer, force_writable);
+            } else {
+                self.adapter_storage.register_webhook(*id, writer);
+            }
+        }
     }
 
     #[instrument(level = "debug")]
@@ -1960,6 +2037,8 @@ impl Coordinator {
         let new_desc = new_table
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
+        let registration = matches!(new_table.data_source, TableDataSource::TableWrites { .. })
+            .then(|| self.table_registration(new_gid, new_desc.clone()));
 
         // Confirm leadership before mutating controller state.
         let write_ts = self.get_local_write_ts().await;
@@ -1981,12 +2060,9 @@ impl Coordinator {
             .unwrap_or_terminate("failed to alter desc of table");
 
         // FIFO registration follows all staged writes to the old collection.
-        let registrations = self
-            .controller
-            .storage
-            .table_registrations(vec![new_gid])
-            .unwrap_or_terminate("cannot fail to look up table registrations");
-        self.register_tables_via_committer(registrations).await;
+        if let Some(registration) = registration {
+            self.register_tables_via_committer(vec![registration]).await;
+        }
 
         // Initialize the ReadPolicy which ensures we have the correct read holds.
         let compaction_window = new_table

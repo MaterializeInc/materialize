@@ -20,6 +20,7 @@ use itertools::Itertools;
 use mz_cluster_client::ReplicaId;
 use mz_repr::Diff;
 use mz_repr::{GlobalId, Row};
+use mz_storage_client::controller::StorageWriteOp;
 use mz_storage_client::statistics::{
     ControllerSourceStatistics, ExpirableStats, ZeroInitializedStats,
 };
@@ -54,7 +55,7 @@ pub(super) fn spawn_statistics_scraper<StatsWrapper, Stats>(
     shared_stats: Arc<Mutex<StatsWrapper>>,
     previous_values: Vec<Row>,
     initial_interval: Duration,
-    mut interval_updated: Receiver<Duration>,
+    interval_updated: Receiver<Duration>,
     statistics_retention_duration: Duration,
     metrics: mz_storage_client::metrics::StorageControllerMetrics,
 ) -> Box<dyn Any + Send + Sync>
@@ -62,44 +63,83 @@ where
     StatsWrapper: AsStats<Stats> + Debug + Send + 'static,
     Stats: PackableStats + ExpirableStats + ZeroInitializedStats + Clone + Debug + Send + 'static,
 {
+    let previous_values = previous_values
+        .into_iter()
+        .map(|row| Stats::unpack(row, &metrics))
+        .collect();
+    spawn_prepared_statistics_scraper(
+        statistics_collection_id,
+        collection_mgmt,
+        shared_stats,
+        previous_values,
+        initial_interval,
+        interval_updated,
+        statistics_retention_duration,
+    )
+}
+
+/// Publishes independently restored statistics without replica-specific instrumentation.
+pub(super) fn spawn_prepared_statistics_scraper<StatsWrapper, Stats>(
+    statistics_collection_id: GlobalId,
+    collection_mgmt: CollectionManager,
+    shared_stats: Arc<Mutex<StatsWrapper>>,
+    previous_values: Vec<(GlobalId, Option<ReplicaId>, Stats)>,
+    initial_interval: Duration,
+    mut interval_updated: Receiver<Duration>,
+    statistics_retention_duration: Duration,
+) -> Box<dyn Any + Send + Sync>
+where
+    StatsWrapper: AsStats<Stats> + Debug + Send + 'static,
+    Stats: PackableStats + ExpirableStats + ZeroInitializedStats + Clone + Debug + Send + 'static,
+{
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+    // Retiring the destination can race both initialization and a scrape. Keep
+    // its channel as the publication capability and stop when that channel closes.
+    let Some(writer) = collection_mgmt.differential_write_sender(statistics_collection_id) else {
+        return Box::new(());
+    };
+
+    // Keep track of what we think is the contents of the output
+    // collection, so that we can emit the required retractions/updates
+    // when we learn about new metrics.
+    //
+    // The producer keeps `shared_stats` initialized and up to date.
+    let mut current_metrics = <ChangeBatch<_>>::new();
+
+    let mut correction = Vec::new();
+    {
+        let mut shared_stats = shared_stats.lock().expect("poisoned");
+        for (collection_id, replica_id, current_stats) in previous_values {
+            shared_stats
+                .as_mut_stats()
+                .insert((collection_id, replica_id), current_stats);
+        }
+
+        let mut row_buf = Row::default();
+        for (_, stats) in shared_stats.as_stats().iter() {
+            stats.pack(row_buf.packer());
+            correction.push((row_buf.clone(), Diff::ONE));
+        }
+    }
+
+    tracing::debug!(%statistics_collection_id, ?correction, "seeding stats collection");
+    // Even an empty inventory must synchronize and retract orphaned persisted
+    // rows. Queue the initial desired state before reconciliation can start.
+    current_metrics.extend(correction.iter().map(|(r, d)| (r.clone(), d.into_inner())));
+    let (tx, _rx) = oneshot::channel();
+    if writer
+        .send((
+            StorageWriteOp::Append {
+                updates: correction,
+            },
+            tx,
+        ))
+        .is_err()
+    {
+        return Box::new(());
+    }
 
     mz_ore::task::spawn(|| "statistics_scraper", async move {
-        // Keep track of what we think is the contents of the output
-        // collection, so that we can emit the required retractions/updates
-        // when we learn about new metrics.
-        //
-        // We assume that `shared_stats` is kept up-to-date (and initialized)
-        // by the controller.
-        let mut current_metrics = <ChangeBatch<_>>::new();
-
-        let mut correction = Vec::new();
-        {
-            let mut shared_stats = shared_stats.lock().expect("poisoned");
-            for row in previous_values {
-                let (collection_id, replica_id, current_stats) = Stats::unpack(row, &metrics);
-
-                shared_stats
-                    .as_mut_stats()
-                    .insert((collection_id, replica_id), current_stats);
-            }
-
-            let mut row_buf = Row::default();
-            for (_, stats) in shared_stats.as_stats().iter() {
-                stats.pack(row_buf.packer());
-                correction.push((row_buf.clone(), Diff::ONE));
-            }
-        }
-
-        tracing::debug!(%statistics_collection_id, ?correction, "seeding stats collection");
-        // Make sure that the desired state matches what is already there, when
-        // we start up!
-        if !correction.is_empty() {
-            current_metrics.extend(correction.iter().map(|(r, d)| (r.clone(), d.into_inner())));
-
-            collection_mgmt.differential_append(statistics_collection_id, correction);
-        }
-
         let mut interval = tokio::time::interval(initial_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -161,10 +201,10 @@ where
                             .into_iter()
                             .map(|(r, d)| (r, d.into()))
                             .collect();
-                        collection_mgmt.differential_append(
-                            statistics_collection_id,
-                            updates,
-                        );
+                        let (tx, _rx) = oneshot::channel();
+                        if writer.send((StorageWriteOp::Append { updates }, tx)).is_err() {
+                            break;
+                        }
                     }
                 }
             }
@@ -178,7 +218,7 @@ where
 
 /// A wrapper around source and webhook statistics maps so we can hold them within a single lock.
 #[derive(Debug)]
-pub(super) struct SourceStatistics {
+pub(super) struct WebhookStatisticsState {
     /// Statistics-per-source that will be emitted to the source statistics table with
     /// the [`spawn_statistics_scraper`] above.
     pub source_statistics: BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSourceStatistics>,
@@ -189,7 +229,7 @@ pub(super) struct SourceStatistics {
     pub webhook_statistics: BTreeMap<GlobalId, Arc<WebhookStatistics>>,
 }
 
-impl AsStats<ControllerSourceStatistics> for SourceStatistics {
+impl AsStats<ControllerSourceStatistics> for WebhookStatisticsState {
     fn as_stats(&self) -> &BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSourceStatistics> {
         &self.source_statistics
     }
@@ -203,7 +243,7 @@ impl AsStats<ControllerSourceStatistics> for SourceStatistics {
 
 /// Spawns a task that continually drains webhook statistics into `shared_stats.
 pub(super) fn spawn_webhook_statistics_scraper(
-    shared_stats: Arc<Mutex<SourceStatistics>>,
+    shared_stats: Arc<Mutex<WebhookStatisticsState>>,
     initial_interval: Duration,
     mut interval_updated: Receiver<Duration>,
 ) -> Box<dyn Any + Send + Sync> {

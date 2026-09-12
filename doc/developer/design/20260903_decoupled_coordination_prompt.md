@@ -21,15 +21,18 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
-Milestone 2 is active. The lifecycle-service scope question is decided in the
+Milestone 2 is active. The controller-bundle placement question is decided in the
 design's Lifecycle placement and Query client decisions and the re-cut milestone.
 Order the work so each step lands and is verified in-process before the process
 boundary moves:
 
 The query connection split and generation-scoped cooperating catalog writers are
 implemented in-process. MV and metric-sink compute installation and sink alteration
-derive from committed state. These are implementation checkpoints, not milestone
-acceptance. Remaining work:
+derive from committed state. Remote COPY staging uses request-owned storage query
+connections, while its row commitment stays in the adapter. Webhook and statement
+history writes are adapter-owned. Request statistics, real-time recency and progress
+use metadata/Persist and the query protocol. These are in-process checkpoints, not
+milestone acceptance. Remaining work:
 
 1. Finish replacing the adapter's direct use of controller frontiers and holds
    with the query client: storage frontiers from persist, compute
@@ -37,13 +40,14 @@ acceptance. Remaining work:
    dataflows through it, durable client protection as its only protection. The
    client records and reclamation rule are agreed. No remote controller access API.
 2. Verify committed maintained installation, including cache rejection, same-batch
-   dependencies, and pending replacements. Suspended-target replacement recovery
-   remains an explicit investigation in the log.
+   dependencies, and pending replacements. Exercise suspended-target replacement
+   recovery in both protection modes.
 3. Move the controller bundle out with catalog following, enactment, and publication
    as its interface. DDL and table appends stay with the adapter. Table time stays
    adapter-driven for now: assume a live adapter ticks transaction-WAL time, and
    let the demonstration state that table-fed dataflows pause while the adapter
-   is down.
+   is down. Webhook batching and idle ticking likewise require a live adapter
+    for this milestone.
 
 Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
 shared-view index topology and diagnostics. Larger-scale work and the known

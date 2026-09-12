@@ -66,6 +66,26 @@ impl DataflowParameters {
 /// on them.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum InternalStorageCommand {
+    /// Worker zero sequences query opens, commands and retirement together, so a
+    /// delayed process endpoint cannot resurrect retired work.
+    Query {
+        /// Connection identity shared by all replica processes.
+        nonce: uuid::Uuid,
+        /// A missing command retires the connection and its unfinished work.
+        command: Option<mz_storage_client::client::StorageCommand>,
+    },
+    /// Initial lifecycle configuration has entered the common command order.
+    QueryReady,
+    /// One worker has produced its terminal result. Tokens can be released only
+    /// after every worker has finished, so local shutdown cannot stop a sibling's
+    /// progress. The nonce fences notifications from cancelled connections.
+    QueryFinished {
+        /// The connection that owns this ingestion.
+        nonce: uuid::Uuid,
+        /// The completed ingestion.
+        ingestion_id: uuid::Uuid,
+    },
+
     /// Suspend and restart the dataflow identified by the `GlobalId`.
     SuspendAndRestart {
         /// The id of the dataflow that should be restarted.
@@ -101,6 +121,8 @@ pub enum InternalStorageCommand {
         /// Description of the oneshot ingestion.
         request: OneshotIngestionRequest,
     },
+    /// Cancel a legacy oneshot in the same order as admission.
+    CancelOneshotIngestion(uuid::Uuid),
     /// Render a sink dataflow.
     RunSinkDataflow(
         GlobalId,

@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A tokio tasks (and support machinery) for dealing with the persist handles
-//! that the storage controller needs to hold.
+//! Writes and upper advancement for migrated builtin tables in read-only mode.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::ControlFlow;
@@ -19,14 +18,13 @@ use mz_persist_client::write::WriteHandle;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{TableData, Update};
 use mz_storage_types::StorageDiff;
-use mz_storage_types::controller::InvalidUpper;
+use mz_storage_types::controller::{InvalidUpper, StorageError};
 use mz_storage_types::sources::SourceData;
 use timely::PartialOrder;
 use timely::progress::Antichain;
 use tracing::Span;
 
-use crate::StorageError;
-use crate::persist_handles::{PersistTableWriteCmd, append_work};
+use super::{PersistTableWriteCmd, append_work};
 
 /// Handles table updates in read only mode.
 ///
@@ -127,8 +125,7 @@ async fn handle_commands(
     while let Some((span, command)) = commands.pop_front() {
         match command {
             PersistTableWriteCmd::Register(_register_ts, tables, tx) => {
-                let ids_handles =
-                    crate::persist_handles::open_table_write_handles(persist_client, tables).await;
+                let ids_handles = super::open_table_write_handles(persist_client, tables).await;
                 for (id, write_handle) in ids_handles {
                     // As of today, we can only migrate builtin (system) tables.
                     assert!(id.is_system(), "trying to register non-system id {id}");

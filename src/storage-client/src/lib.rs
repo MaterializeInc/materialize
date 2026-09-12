@@ -10,6 +10,7 @@
 //! Materialize's storage layer.
 
 pub mod client;
+pub mod collection_reader;
 pub mod controller;
 pub mod healthcheck;
 pub mod metrics;

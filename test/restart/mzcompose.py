@@ -904,7 +904,7 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
                          '{}'::map[text=>text] AS labels, total::double AS value,
                          'uncached maintained total'::text AS help FROM uncached_mv;
                 > CREATE METRIC SINK uncached_metric_sink FROM uncached_metrics
-                  WITH (PREFIX = 'mz_uncached_');
+                  WITH (PREFIX = 'mz_metric_sink_uncached_');
 
                 # Keep the first refresh pending until after catalog reconstruction.
                 > CREATE CLUSTER uncached_refresh SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
@@ -915,6 +915,23 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
                   WITH (REFRESH AT CREATION)
                   AS SELECT a FROM uncached_refresh_t;
                 > UPDATE uncached_refresh_t SET a = 2;
+
+                # A pending replacement owns no writes to the target's lagging shard.
+                > CREATE CLUSTER uncached_replace_target
+                  SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+                > CREATE MATERIALIZED VIEW uncached_target IN CLUSTER uncached_replace_target
+                  AS SELECT a FROM uncached_index_t;
+                > CREATE TABLE uncached_replacement_t (a int);
+                > INSERT INTO uncached_replacement_t VALUES (99);
+                > SELECT i.read_frontier > o.write_frontier
+                  FROM mz_internal.mz_frontiers i JOIN mz_tables t ON t.id = i.object_id
+                  CROSS JOIN mz_internal.mz_frontiers o
+                  JOIN mz_materialized_views m ON m.id = o.object_id
+                  WHERE t.name = 'uncached_replacement_t' AND m.name = 'uncached_target';
+                true
+                > CREATE REPLACEMENT MATERIALIZED VIEW uncached_replacement
+                  FOR uncached_target IN CLUSTER quickstart
+                  AS SELECT a FROM uncached_replacement_t;
                 """),
         )
         index_id = c.sql_query(
@@ -935,7 +952,7 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
 
                     > SET cluster_replica = r1;
                     > SELECT value = 5 FROM mz_introspection.mz_cluster_prometheus_metrics
-                      WHERE metric_name = 'mz_uncached_total';
+                      WHERE metric_name = 'mz_metric_sink_uncached_total';
                     true
                     """),
             )
@@ -969,13 +986,21 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
         c.testdrive(
             service="testdrive_no_reset",
             input=dedent("""
+                > ALTER CLUSTER uncached_replace_target SET (REPLICATION FACTOR 1);
+                > SELECT a FROM uncached_target;
+                1
+                2
+                > ALTER MATERIALIZED VIEW uncached_target APPLY REPLACEMENT uncached_replacement;
+                > SELECT a FROM uncached_target;
+                99
+
                 > INSERT INTO uncached_index_t VALUES (3);
                 > SELECT total FROM uncached_mv;
                 9
 
                 > SET cluster_replica = r1;
                 > SELECT value = 9 FROM mz_introspection.mz_cluster_prometheus_metrics
-                  WHERE metric_name = 'mz_uncached_total';
+                  WHERE metric_name = 'mz_metric_sink_uncached_total';
                 true
                 > RESET cluster_replica;
 
@@ -1001,6 +1026,8 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
         c.sql("DROP TABLE uncached_index_t CASCADE", reuse_connection=False)
         c.sql("DROP TABLE uncached_refresh_t CASCADE", reuse_connection=False)
         c.sql("DROP CLUSTER uncached_refresh", reuse_connection=False)
+        c.sql("DROP TABLE uncached_replacement_t CASCADE", reuse_connection=False)
+        c.sql("DROP CLUSTER uncached_replace_target", reuse_connection=False)
 
 
 def _catalog_protection_metrics(text: str, shard: str) -> dict:
@@ -1184,13 +1211,16 @@ def workflow_catalog_read_protection(c: Composition) -> None:
             f"FROM mz_internal.mz_frontiers WHERE object_id = '{index}'"
         )
 
-        def index_permission() -> dict | None:
+        def catalog_snapshot() -> dict:
             response = requests.get(
                 f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
                 timeout=10,
             )
             response.raise_for_status()
-            return response.json()["collection_compaction_bounds"].get(index)
+            return response.json()
+
+        def index_permission() -> dict | None:
+            return catalog_snapshot()["collection_compaction_bounds"].get(index)
 
         assert index_permission() is None
         td(f"""
@@ -1239,13 +1269,34 @@ def workflow_catalog_read_protection(c: Composition) -> None:
             assert index_permission() == {"elements": [cap]}
             assert time.monotonic() - capped_start < 300
         query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'")
-        td(f"""
+        # Bound publication cannot release a crashed incarnation's valid grants.
+        # Observe the authority at release and allow the five-minute reclamation
+        # grace plus its sampling/publication intervals, without changing them.
+        snapshot = catalog_snapshot()
+        print(
+            json.dumps(
+                {
+                    "phase": "index-permission-release",
+                    "cap": cap,
+                    "client_incarnations": snapshot["client_incarnations"],
+                    "client_requirements": [
+                        grant
+                        for grant in snapshot["client_read_requirements"]
+                        if grant[1] in (encoded_id(index), encoded_id(index_input))
+                    ],
+                }
+            )
+        )
+        td(
+            f"""
             > SELECT (v->>'frontier')::numeric > {cap}
               FROM ({index_bound_sql}) r(v);
             true
             > SELECT read_frontier > {cap} FROM ({index_frontier_sql}) f;
             true
-        """)
+        """,
+            timeout=420,
+        )
         permission = record("CollectionCompactionBound", index)["frontier"]
         c.kill("materialized")
         c.up("materialized")

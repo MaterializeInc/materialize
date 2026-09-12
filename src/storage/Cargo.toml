@@ -97,6 +97,7 @@ mz-build-info = { path = "../build-info" }
 mz-persist = { path = "../persist" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+mz-secrets = { path = "../secrets" }
 itertools.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

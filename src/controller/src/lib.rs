@@ -50,9 +50,7 @@ use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_secrets_cli::SecretsReaderCliArgs;
-use mz_storage_client::controller::{
-    IntrospectionType, StorageController, StorageMetadata, StorageTxn,
-};
+use mz_storage_client::controller::{IntrospectionType, StorageController, StorageTxn};
 use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
@@ -67,7 +65,9 @@ pub mod replica_http_locator;
 
 // Export this on behalf of the storage controller to provide a unified
 // interface, allowing other crates to depend on this crate alone.
+pub use mz_storage_controller::adapter_storage::AdapterStorageWriter;
 pub use mz_storage_controller::prepare_initialization;
+pub use mz_storage_controller::rtr::real_time_recency_ts;
 pub use replica_http_locator::ReplicaHttpLocator;
 
 /// Configures a controller.
@@ -507,11 +507,8 @@ impl Controller {
 
     /// Process a pending response from the storage controller. If necessary,
     /// return a higher-level response to our client.
-    fn process_storage_response(
-        &mut self,
-        storage_metadata: &StorageMetadata,
-    ) -> Result<Option<ControllerResponse>, anyhow::Error> {
-        let maybe_response = self.storage.process(storage_metadata)?;
+    fn process_storage_response(&mut self) -> Result<Option<ControllerResponse>, anyhow::Error> {
+        let maybe_response = self.storage.process()?;
         Ok(maybe_response.and_then(
             |mz_storage_client::controller::Response::FrontierUpdates(r)| {
                 self.handle_frontier_updates(&r)
@@ -545,17 +542,11 @@ impl Controller {
     ///
     /// This method is guaranteed to return "quickly" unless doing so would
     /// compromise the correctness of the system.
-    ///
-    /// This method is **not** guaranteed to be cancellation safe. It **must**
-    /// be awaited to completion.
     #[mz_ore::instrument(level = "debug")]
-    pub fn process(
-        &mut self,
-        storage_metadata: &StorageMetadata,
-    ) -> Result<Option<ControllerResponse>, anyhow::Error> {
+    pub fn process(&mut self) -> Result<Option<ControllerResponse>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
-            Readiness::Storage => self.process_storage_response(storage_metadata),
+            Readiness::Storage => self.process_storage_response(),
             Readiness::Compute => self.process_compute_response(),
             Readiness::Metrics((id, metrics)) => self.process_replica_metrics(id, metrics),
             Readiness::Internal(message) => Ok(Some(message)),
@@ -679,6 +670,7 @@ impl Controller {
         read_only: bool,
         catalog_read_protection_enabled: bool,
         storage_txn: &dyn StorageTxn,
+        txns_metrics: Arc<TxnMetrics>,
     ) -> Self {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
@@ -689,7 +681,6 @@ impl Controller {
 
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
-        let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
             Arc::clone(&config.persist_clients),

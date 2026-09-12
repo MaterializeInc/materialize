@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A tokio tasks (and support machinery) for dealing with the persist handles
-//! that the storage controller needs to hold.
+//! Table writes and registration through the transaction WAL or read-only migration worker.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -19,14 +18,15 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::critical::Opaque;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_client::client::{TableData, Update};
-use mz_storage_client::controller::TableRegistration;
+use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
-use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
+use mz_storage_types::controller::{InvalidUpper, StorageError, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::progress::Antichain;
@@ -34,12 +34,87 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Span, debug, info_span};
 
-use crate::StorageError;
-
 mod read_only_table_worker;
 
+/// Metadata required to register a table with the txns shard.
 #[derive(Debug, Clone)]
-pub struct PersistTableWriteWorker {
+pub(crate) struct TableRegistration {
+    pub id: GlobalId,
+    pub data_shard: ShardId,
+    pub relation_desc: RelationDesc,
+}
+
+/// Queues txns-shard operations on the table worker.
+///
+/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
+/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
+/// restores its bookkeeping and the caller must retry at a fresh timestamp.
+pub(crate) trait TableWriteHandle: Debug + Send + Sync {
+    /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Registers `tables` at `register_ts`.
+    fn register(
+        &self,
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
+    fn forget(
+        &self,
+        forget_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+}
+
+/// Opens the table writer after the txns shard identity has been durably recorded.
+///
+/// Callers must await this before starting controller txn reads: writable mode upgrades
+/// the txns shard version before any reader starts.
+pub(crate) async fn open(
+    persist: PersistClient,
+    txns_id: ShardId,
+    txns_metrics: Arc<mz_txn_wal::metrics::Metrics>,
+    read_only: bool,
+) -> Arc<dyn TableWriteHandle> {
+    let worker = if read_only {
+        let txns_write = persist
+            .open_writer(
+                txns_id,
+                Arc::new(TxnsCodecRow::desc()),
+                Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: "txns".to_owned(),
+                    handle_purpose: "follow txns upper".to_owned(),
+                },
+            )
+            .await
+            .expect("txns schema shouldn't change");
+        PersistTableWriteWorker::new_read_only_mode(txns_write, persist.clone())
+    } else {
+        let mut txns = TxnsHandle::open(
+            Timestamp::MIN,
+            persist.clone(),
+            persist.dyncfgs().clone(),
+            Arc::clone(&txns_metrics),
+            txns_id,
+            Opaque::encode(&PersistEpoch::default()),
+        )
+        .await;
+        txns.upgrade_version().await;
+        PersistTableWriteWorker::new_txns(txns, persist.clone())
+    };
+    Arc::new(worker)
+}
+
+#[derive(Debug, Clone)]
+struct PersistTableWriteWorker {
     inner: Arc<PersistTableWriteWorkerInner>,
 }
 
@@ -214,7 +289,13 @@ impl PersistTableWriteWorker {
         }
     }
 
-    pub(crate) fn register(
+    fn send(&self, cmd: PersistTableWriteCmd) {
+        self.inner.send(cmd);
+    }
+}
+
+impl TableWriteHandle for PersistTableWriteWorker {
+    fn register(
         &self,
         register_ts: Timestamp,
         tables: Vec<TableRegistration>,
@@ -227,7 +308,7 @@ impl PersistTableWriteWorker {
         rx
     }
 
-    pub(crate) fn append(
+    fn append(
         &self,
         write_ts: Timestamp,
         advance_to: Timestamp,
@@ -247,42 +328,13 @@ impl PersistTableWriteWorker {
         rx
     }
 
-    fn send(&self, cmd: PersistTableWriteCmd) {
-        self.inner.send(cmd);
-    }
-}
-
-/// A [`TableWriteHandle`](mz_storage_client::controller::TableWriteHandle) backed by the table
-/// worker.
-#[derive(Debug, Clone)]
-pub(crate) struct TableWriteWorkerHandle(pub(crate) PersistTableWriteWorker);
-
-impl mz_storage_client::controller::TableWriteHandle for TableWriteWorkerHandle {
-    fn append(
-        &self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> oneshot::Receiver<Result<(), StorageError>> {
-        self.0.append(write_ts, advance_to, commands)
-    }
-
-    fn register(
-        &self,
-        register_ts: Timestamp,
-        tables: Vec<TableRegistration>,
-    ) -> oneshot::Receiver<Result<(), StorageError>> {
-        self.0.register(register_ts, tables)
-    }
-
     fn forget(
         &self,
         forget_ts: Timestamp,
         ids: Vec<GlobalId>,
     ) -> oneshot::Receiver<Result<(), StorageError>> {
         let (tx, rx) = oneshot::channel();
-        self.0
-            .send(PersistTableWriteCmd::DropHandles { forget_ts, ids, tx });
+        self.send(PersistTableWriteCmd::DropHandles { forget_ts, ids, tx });
         rx
     }
 }
@@ -580,5 +632,162 @@ impl PersistTableWriteWorkerInner {
                 tracing::trace!("could not forward command: {:?}", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::{Diff, Row};
+
+    async fn persist_client() -> PersistClient {
+        let mut config = mz_persist_client::cfg::PersistConfig::new_for_tests();
+        config.configs = Arc::new(mz_txn_wal::all_dyncfgs((*config.configs).clone()));
+        mz_persist_client::cache::PersistClientCache::new(
+            config,
+            &MetricsRegistry::new(),
+            |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+        )
+        .open(mz_persist_types::PersistLocation::new_in_mem())
+        .await
+        .expect("can open in-memory Persist")
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn standalone_writer_orders_membership_and_appends() {
+        let persist = persist_client().await;
+        let txns = ShardId::new();
+        let shard = ShardId::new();
+        let id = GlobalId::User(1);
+        let writer = open(
+            persist.clone(),
+            txns,
+            Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
+            false,
+        )
+        .await;
+        let mut reader = persist
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("can open table reader");
+
+        // Enqueue without awaiting, so registration, append, and forgetting must
+        // be serialized by the concrete worker, without a storage controller.
+        let registered = writer.register(
+            10.into(),
+            vec![TableRegistration {
+                id,
+                data_shard: shard,
+                relation_desc: RelationDesc::empty(),
+            }],
+        );
+        let appended = writer.append(
+            11.into(),
+            12.into(),
+            vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])],
+        );
+        let forgotten = writer.forget(12.into(), vec![id, GlobalId::User(2)]);
+        for result in [registered, appended, forgotten] {
+            result
+                .await
+                .expect("worker responds")
+                .expect("ordered operation succeeds");
+        }
+        // Forgotten tables keep their data. Shard finalization belongs to
+        // collection lifetime management, not the row writer.
+        let rows = reader
+            .snapshot_and_fetch(Antichain::from_elem(11.into()))
+            .await
+            .expect("written rows remain readable");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0.0, SourceData(Ok(Row::default())));
+        assert_eq!(rows[0].2, 1);
+
+        writer
+            .append(13.into(), 14.into(), Vec::new())
+            .await
+            .expect("worker responds")
+            .expect("empty append advances WAL time");
+        assert_eq!(
+            persist
+                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                    txns,
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .expect("can observe WAL upper"),
+            Antichain::from_elem(14.into()),
+        );
+        reader.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn read_only_backfill_does_not_tick_the_wal() {
+        let persist = persist_client().await;
+        let txns = ShardId::new();
+        let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
+        let live = open(persist.clone(), txns, Arc::clone(&metrics), false).await;
+        live.append(10.into(), 11.into(), Vec::new())
+            .await
+            .expect("live worker responds")
+            .expect("live adapter ticks WAL");
+        let prewarming = open(persist.clone(), txns, metrics, true).await;
+        let shard = ShardId::new();
+        let id = GlobalId::System(1);
+        let mut reader = persist
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("can open migrated table reader");
+        prewarming
+            .register(
+                12.into(),
+                vec![TableRegistration {
+                    id,
+                    data_shard: shard,
+                    relation_desc: RelationDesc::empty(),
+                }],
+            )
+            .await
+            .expect("prewarming worker responds")
+            .expect("can register migrated shard locally");
+        prewarming
+            .append(
+                0.into(),
+                1.into(),
+                vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])],
+            )
+            .await
+            .expect("prewarming worker responds")
+            .expect("can backfill migrated shard");
+        assert_eq!(
+            persist
+                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                    txns,
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .expect("can observe WAL upper"),
+            Antichain::from_elem(11.into()),
+        );
+        let rows = reader
+            .snapshot_and_fetch(Antichain::from_elem(0.into()))
+            .await
+            .expect("backfilled row is readable");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0.0, SourceData(Ok(Row::default())));
+        reader.expire().await;
     }
 }

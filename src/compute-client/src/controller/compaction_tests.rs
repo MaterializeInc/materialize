@@ -23,7 +23,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, MetricSink
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-use mz_persist_types::{PersistLocation, ShardId};
+use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, RelationVersion, ReprRelationType, Row, Timestamp};
 use mz_storage_client::client::TimestamplessUpdateBuilder;
 use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
@@ -791,14 +791,7 @@ impl StorageCollections for EmptyStorage {
         unimplemented!("storage is not used by these compute tests")
     }
 
-    async fn prepare_state(
-        &self,
-        _txn: &mut (dyn StorageTxn + Send),
-        _ids_to_add: BTreeSet<GlobalId>,
-        _ids_to_drop: BTreeSet<GlobalId>,
-        _ids_to_register: BTreeMap<GlobalId, ShardId>,
-        _live_collection_ids: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError> {
+    fn acknowledge_finalized_shards(&self, _txn: &mut (dyn StorageTxn + Send)) {
         unimplemented!("storage is not used by these compute tests")
     }
 

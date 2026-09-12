@@ -226,31 +226,10 @@ pub trait StorageCollections: Debug + Sync {
         Result<TimestamplessUpdateBuilder<SourceData, (), StorageDiff>, StorageError>,
     >;
 
-    /// Update the given [`StorageTxn`] with the appropriate metadata given the
-    /// IDs to add and drop. This does not require locally installed collections
-    /// and does not physically finalize shards.
-    ///
-    /// When dropping IDs, `live_collection_ids` must contain every live storage
-    /// collection ID (all versions) in the final catalog state of this transaction,
-    /// including same-call additions and registrations. It may be empty when
-    /// there are no drops. Durable mappings alone are not evidence of liveness.
-    ///
-    /// Drops take precedence over additions and registrations for the same ID.
-    /// Dropped IDs must not be live. Added and registered IDs must not already
-    /// have metadata, and the two sets must be disjoint. Registered shards must
-    /// not already be eligible for finalization. An error requires aborting the
-    /// transaction, as metadata changes may already have been staged.
-    ///
-    /// The data modified in the `StorageTxn` must be made available in all
-    /// subsequent calls that require [`StorageMetadata`] as a parameter.
-    async fn prepare_state(
-        &self,
-        txn: &mut (dyn StorageTxn + Send),
-        ids_to_add: BTreeSet<GlobalId>,
-        ids_to_drop: BTreeSet<GlobalId>,
-        ids_to_register: BTreeMap<GlobalId, ShardId>,
-        live_collection_ids: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError>;
+    /// Remove locally finalized shards from the transaction's finalization WAL.
+    /// Local acknowledgments are retained until committed metadata confirms their
+    /// removal, so aborting the transaction does not lose an acknowledgment.
+    fn acknowledge_finalized_shards(&self, txn: &mut (dyn StorageTxn + Send));
 
     /// Create the collections described by the individual
     /// [CollectionDescriptions](CollectionDescription).
@@ -429,13 +408,13 @@ pub struct StorageCollectionsImpl {
     read_only: bool,
 
     /// The set of [ShardIds](ShardId) that we have to finalize. These will have
-    /// been persisted by the caller of [StorageCollections::prepare_state].
+    /// been persisted by the caller of [prepare_collection_state].
     finalizable_shards: Arc<ShardIdSet>,
 
     /// The set of [ShardIds](ShardId) that we have finalized. We keep track of
     /// shards here until we are given a chance to let our callers know that
     /// these have been finalized, for example via
-    /// [StorageCollections::prepare_state].
+    /// [StorageCollections::acknowledge_finalized_shards].
     finalized_shards: Arc<ShardIdSet>,
 
     /// Collections maintained by this [StorageCollections].
@@ -496,7 +475,7 @@ impl StorageCollectionsImpl {
     /// Note that when creating a new [StorageCollections], you must also
     /// reconcile it with the previous state using
     /// [StorageCollections::initialize_state],
-    /// [StorageCollections::prepare_state], and
+    /// [prepare_collection_state], and
     /// [StorageCollections::create_collections_for_bootstrap].
     pub async fn new(
         persist_location: PersistLocation,
@@ -1400,6 +1379,62 @@ impl StorageCollectionsImpl {
     }
 }
 
+/// Update the given [`StorageTxn`] with the appropriate metadata given the
+/// IDs to add and drop. This does not require locally installed collections
+/// and does not physically finalize shards.
+///
+/// When dropping IDs, `live_collection_ids` must contain every live storage
+/// collection ID (all versions) in the final catalog state of this transaction,
+/// including same-call additions and registrations. It may be empty when
+/// there are no drops. Durable mappings alone are not evidence of liveness.
+///
+/// Drops take precedence over additions and registrations for the same ID.
+/// IDs whose metadata is deleted must not be live. The transaction may retain
+/// client-required metadata, which must be included in `live_collection_ids`.
+/// Added and registered IDs must not already have metadata, and the two sets
+/// must be disjoint. Registered shards must not already be eligible for
+/// finalization. An error requires aborting the transaction, as metadata changes
+/// may already have been staged.
+///
+/// The data modified in the `StorageTxn` must be made available in all
+/// subsequent calls that require [`StorageMetadata`] as a parameter.
+pub fn prepare_collection_state(
+    txn: &mut (dyn StorageTxn + Send),
+    ids_to_add: BTreeSet<GlobalId>,
+    ids_to_drop: BTreeSet<GlobalId>,
+    ids_to_register: BTreeMap<GlobalId, ShardId>,
+    live_collection_ids: &BTreeSet<GlobalId>,
+) -> Result<(), StorageError> {
+    txn.insert_collection_metadata(
+        ids_to_add
+            .into_iter()
+            .map(|id| (id, ShardId::new()))
+            .collect(),
+    )?;
+    txn.insert_collection_metadata(ids_to_register)?;
+
+    // Delete the metadata for any dropped collections.
+    let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
+
+    // Every dropped mapping is a candidate, including aliases and collections
+    // not installed here. Only live catalog references protect a shared shard:
+    // orphaned durable mappings must not prevent reclamation.
+    let dropped_shards: BTreeSet<_> = dropped_mappings
+        .into_iter()
+        .map(|(_, shard)| shard)
+        .collect();
+    if !dropped_shards.is_empty() {
+        let (_, dropped_shards) = partition_finalizable_shards(
+            txn.get_collection_metadata(),
+            live_collection_ids,
+            dropped_shards,
+        );
+        txn.insert_unfinalized_shards(dropped_shards)?;
+    }
+
+    Ok(())
+}
+
 /// Partitions the finalization WAL by whether an active collection references
 /// each shard.
 fn partition_finalizable_shards(
@@ -1438,14 +1473,14 @@ impl StorageCollections for StorageCollectionsImpl {
         let new_collections: BTreeSet<GlobalId> =
             init_ids.difference(&existing_metadata).cloned().collect();
 
-        self.prepare_state(
+        prepare_collection_state(
             txn,
             new_collections,
             BTreeSet::default(),
             BTreeMap::default(),
             &init_ids,
-        )
-        .await?;
+        )?;
+        self.acknowledge_finalized_shards(txn);
 
         // All unreferenced shards that belong to collections dropped in the
         // last epoch are eligible for finalization. Active collection metadata
@@ -1817,47 +1852,9 @@ impl StorageCollections for StorageCollectionsImpl {
         }
     }
 
-    async fn prepare_state(
-        &self,
-        txn: &mut (dyn StorageTxn + Send),
-        ids_to_add: BTreeSet<GlobalId>,
-        ids_to_drop: BTreeSet<GlobalId>,
-        ids_to_register: BTreeMap<GlobalId, ShardId>,
-        live_collection_ids: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError> {
-        txn.insert_collection_metadata(
-            ids_to_add
-                .into_iter()
-                .map(|id| (id, ShardId::new()))
-                .collect(),
-        )?;
-        txn.insert_collection_metadata(ids_to_register)?;
-
-        // Delete the metadata for any dropped collections.
-        let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
-
-        // Every dropped mapping is a candidate, including aliases and collections
-        // not installed here. Only live catalog references protect a shared shard:
-        // orphaned durable mappings must not prevent reclamation.
-        let dropped_shards: BTreeSet<_> = dropped_mappings
-            .into_iter()
-            .map(|(_, shard)| shard)
-            .collect();
-        if !dropped_shards.is_empty() {
-            let (_, dropped_shards) = partition_finalizable_shards(
-                txn.get_collection_metadata(),
-                live_collection_ids,
-                dropped_shards,
-            );
-            txn.insert_unfinalized_shards(dropped_shards)?;
-        }
-
-        // Reconcile any shards we've successfully finalized with the shard
-        // finalization collection.
+    fn acknowledge_finalized_shards(&self, txn: &mut (dyn StorageTxn + Send)) {
         let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
         txn.remove_unfinalized_shards(finalized_shards);
-
-        Ok(())
     }
 
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
@@ -1912,13 +1909,36 @@ impl StorageCollections for StorageCollectionsImpl {
                 .extend(bound.iter().copied());
         }
         let creating: BTreeSet<_> = collections.iter().map(|(id, _)| *id).collect();
+        let mut retained_to_open = BTreeSet::new();
         {
             let existing = self.collections.lock().expect("lock poisoned");
-            let creating_shards: BTreeSet<_> = creating
+            let mut creating_shards: BTreeSet<_> = creating
                 .iter()
-                .chain(storage_metadata.retained_collections.iter())
                 .map(|id| storage_metadata.get_collection_shard(*id))
                 .collect::<Result<_, _>>()?;
+            let pending_live_shards: BTreeSet<_> = storage_metadata
+                .collection_metadata
+                .iter()
+                .filter(|(id, _)| {
+                    !storage_metadata.retained_collections.contains(*id)
+                        && !creating.contains(*id)
+                        && !existing.contains_key(*id)
+                })
+                .map(|(_, shard)| *shard)
+                .collect();
+            // Bootstrap can reach a shard's live primary in a later batch. Open
+            // its retained aliases with that batch, so they share the primary's
+            // dependency accounting rather than becoming independent roots.
+            // A shard with only retained lifetimes can be recovered immediately.
+            for id in &storage_metadata.retained_collections {
+                let shard = storage_metadata.get_collection_shard(*id)?;
+                if creating_shards.contains(&shard) || !pending_live_shards.contains(&shard) {
+                    retained_to_open.insert(*id);
+                }
+            }
+            for id in &retained_to_open {
+                creating_shards.insert(storage_metadata.get_collection_shard(*id)?);
+            }
             if self.catalog_read_protection_enabled && !self.read_only {
                 // An alias omitted from the create batch still constrains its shard.
                 // Missing permission cannot be interpreted as an absent requirement.
@@ -1998,7 +2018,7 @@ impl StorageCollections for StorageCollectionsImpl {
             }
             let mut retained = Vec::new();
             if !self.read_only {
-                for id in &storage_metadata.retained_collections {
+                for id in &retained_to_open {
                     if existing.contains_key(id) {
                         continue;
                     }
@@ -2705,13 +2725,13 @@ impl StorageCollections for StorageCollectionsImpl {
             }
 
             // Unless the collection has a primary, its shard must have been previously removed
-            // by `StorageCollections::prepare_state`.
+            // by `prepare_collection_state`.
             if collection.primary.is_none() {
                 let metadata = storage_metadata.get_collection_shard(id);
                 mz_ore::soft_assert_or_log!(
                     matches!(metadata, Err(StorageError::IdentifierMissing(_))),
                     "dropping {id}, but drop was not synchronized with storage \
-                     controller via `prepare_state`"
+                     metadata via `prepare_collection_state`"
                 );
 
                 // Releasing the owner's since can destroy a shared shard even if the
@@ -5129,6 +5149,23 @@ mod tests {
             if live {
                 metadata.collection_metadata.insert(primary, shard);
                 metadata.compaction_bounds.insert(primary, frontier(20));
+                // Bootstrap can install unrelated dependencies before the live
+                // primary. Retained aliases must not require its batch early.
+                let earlier = GlobalId::User(4);
+                metadata.collection_metadata.insert(earlier, ShardId::new());
+                metadata.compaction_bounds.insert(earlier, frontier(0));
+                controller
+                    .create_collections_for_bootstrap(
+                        &metadata,
+                        None,
+                        vec![(
+                            earlier,
+                            CollectionDescription::for_other(RelationDesc::empty(), None),
+                        )],
+                        &BTreeSet::new(),
+                    )
+                    .await
+                    .unwrap();
                 creates.push((
                     primary,
                     CollectionDescription::for_other(RelationDesc::empty(), None),
@@ -6039,29 +6076,25 @@ mod tests {
         let id = GlobalId::User(1);
         let orphan = GlobalId::User(2);
         let mut txn = TestTxn::default();
-        controller
-            .prepare_state(
-                &mut txn,
-                BTreeSet::from([id]),
-                BTreeSet::new(),
-                BTreeMap::new(),
-                &BTreeSet::new(),
-            )
-            .await
-            .unwrap();
+        prepare_collection_state(
+            &mut txn,
+            BTreeSet::from([id]),
+            BTreeSet::new(),
+            BTreeMap::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
         let shard = txn.metadata[&id];
         // A durable orphan sharing the shard must not prevent runtime cleanup.
         txn.metadata.insert(orphan, shard);
-        controller
-            .prepare_state(
-                &mut txn,
-                BTreeSet::new(),
-                BTreeSet::from([id]),
-                BTreeMap::new(),
-                &BTreeSet::new(),
-            )
-            .await
-            .unwrap();
+        prepare_collection_state(
+            &mut txn,
+            BTreeSet::new(),
+            BTreeSet::from([id]),
+            BTreeMap::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
         assert_eq!(txn.metadata, BTreeMap::from([(orphan, shard)]));
         assert_eq!(txn.unfinalized, BTreeSet::from([shard]));
         assert!(controller.collections.lock().unwrap().is_empty());
@@ -6070,26 +6103,16 @@ mod tests {
         // Acknowledgment removes durable WAL entries, but retains the local
         // acknowledgment until committed metadata is supplied back to storage.
         controller.finalized_shards.lock().insert(shard);
-        controller
-            .prepare_state(
-                &mut txn,
-                BTreeSet::new(),
-                BTreeSet::new(),
-                BTreeMap::new(),
-                &BTreeSet::new(),
-            )
-            .await
-            .unwrap();
+        controller.acknowledge_finalized_shards(&mut txn);
         assert!(txn.unfinalized.is_empty());
         assert!(controller.finalized_shards.lock().contains(&shard));
     }
 
-    #[mz_ore::test(tokio::test)]
-    async fn test_prepare_state_shared_aliases() {
+    #[mz_ore::test]
+    fn test_prepare_collection_state_shared_aliases() {
         // Both an existing alias and one registered with the drop protect the
         // shared shard, even when no collection has been installed locally.
         for register_with_drop in [false, true] {
-            let (controller, _persist) = bound_test_controller().await;
             let primary = GlobalId::User(1);
             let alias = GlobalId::User(2);
             let shard = ShardId::new();
@@ -6103,54 +6126,43 @@ mod tests {
                 txn.metadata.insert(alias, shard);
                 BTreeMap::new()
             };
-            controller
-                .prepare_state(
-                    &mut txn,
-                    BTreeSet::new(),
-                    BTreeSet::from([primary]),
-                    registration,
-                    &BTreeSet::from([alias]),
-                )
-                .await
-                .unwrap();
+            prepare_collection_state(
+                &mut txn,
+                BTreeSet::new(),
+                BTreeSet::from([primary]),
+                registration,
+                &BTreeSet::from([alias]),
+            )
+            .unwrap();
             assert_eq!(txn.metadata, BTreeMap::from([(alias, shard)]));
             assert!(txn.unfinalized.is_empty());
-            controller
-                .prepare_state(
-                    &mut txn,
-                    BTreeSet::new(),
-                    BTreeSet::from([alias]),
-                    BTreeMap::new(),
-                    &BTreeSet::new(),
-                )
-                .await
-                .unwrap();
-            assert!(txn.metadata.is_empty());
-            assert_eq!(txn.unfinalized, BTreeSet::from([shard]));
-            assert!(controller.collections.lock().unwrap().is_empty());
-            assert!(controller.finalizable_shards.lock().is_empty());
-        }
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn test_prepare_state_create_drop_overlap() {
-        let (controller, _persist) = bound_test_controller().await;
-        let id = GlobalId::User(1);
-        let mut txn = TestTxn::default();
-        controller
-            .prepare_state(
+            prepare_collection_state(
                 &mut txn,
-                BTreeSet::from([id]),
-                BTreeSet::from([id]),
+                BTreeSet::new(),
+                BTreeSet::from([alias]),
                 BTreeMap::new(),
                 &BTreeSet::new(),
             )
-            .await
             .unwrap();
+            assert!(txn.metadata.is_empty());
+            assert_eq!(txn.unfinalized, BTreeSet::from([shard]));
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_prepare_collection_state_create_drop_overlap() {
+        let id = GlobalId::User(1);
+        let mut txn = TestTxn::default();
+        prepare_collection_state(
+            &mut txn,
+            BTreeSet::from([id]),
+            BTreeSet::from([id]),
+            BTreeMap::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
         assert!(txn.metadata.is_empty());
         assert_eq!(txn.unfinalized.len(), 1);
-        assert!(controller.collections.lock().unwrap().is_empty());
-        assert!(controller.finalizable_shards.lock().is_empty());
     }
 
     #[mz_ore::test(tokio::test)]

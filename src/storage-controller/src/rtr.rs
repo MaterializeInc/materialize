@@ -41,7 +41,7 @@ use crate::Timestamp;
 ///   generator sources do not yet (or might never) support real-time
 ///   recency. You can avoid this panic by choosing to not call this
 ///   function on load generator sources.
-pub(super) async fn real_time_recency_ts(
+pub async fn real_time_recency_ts(
     connection: GenericSourceConnection,
     id: GlobalId,
     config: StorageConfiguration,

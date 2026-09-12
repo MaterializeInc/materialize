@@ -321,7 +321,7 @@ impl Coordinator {
 
         // Collect optimizer parameters.
         let compute_instance = self
-            .instance_snapshot(*cluster_id)
+            .candidate_instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
             self.allocate_user_id().await?

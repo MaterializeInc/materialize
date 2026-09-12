@@ -393,6 +393,9 @@ impl ComputeState {
             for probe in collection.input_probes.values() {
                 probe.with_frontier(|f| input.extend(f.iter().copied()));
             }
+            // Logical write progress starts at installation, even if the shared Persist
+            // upper is behind. Output progress above still uses the raw upper.
+            write.join_assign(&collection.as_of);
             frontiers.insert(
                 id,
                 FrontiersResponse {

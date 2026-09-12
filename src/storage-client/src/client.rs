@@ -61,11 +61,58 @@ impl GenericClient<StorageCommand, StorageResponse> for Box<dyn StorageClient> {
     }
 }
 
+/// Validates the connection role before forwarding commands to a cluster client.
+/// Query handshakes open the transport with Hello and retain a worker-visible marker.
+#[derive(Debug)]
+pub struct RoleClient<C> {
+    inner: C,
+    query: Option<bool>,
+}
+
+impl<C> RoleClient<C> {
+    /// Wrap a fresh, unconnected client.
+    pub fn new(inner: C) -> Self {
+        Self { inner, query: None }
+    }
+}
+
+#[async_trait]
+impl<C: StorageClient> GenericClient<StorageCommand, StorageResponse> for RoleClient<C> {
+    async fn send(&mut self, command: StorageCommand) -> anyhow::Result<()> {
+        use StorageCommand::*;
+        match (self.query, &command) {
+            (None, Hello { .. }) => self.query = Some(false),
+            (None, HelloQuery { nonce }) => {
+                self.inner.send(Hello { nonce: *nonce }).await?;
+                self.query = Some(true);
+            }
+            (None, _) => anyhow::bail!("first storage command must be Hello or HelloQuery"),
+            (Some(_), Hello { .. } | HelloQuery { .. }) => {
+                anyhow::bail!("duplicate storage handshake")
+            }
+            (Some(true), RunOneshotIngestion(_) | CancelOneshotIngestion(_)) => (),
+            (Some(true), _) => anyhow::bail!("command is not allowed on this query connection"),
+            (Some(false), _) => (),
+        }
+        self.inner.send(command).await
+    }
+
+    async fn recv(&mut self) -> anyhow::Result<Option<StorageResponse>> {
+        self.inner.recv().await
+    }
+}
+
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand {
     /// Transmits connection meta information, before other commands are sent.
     Hello {
+        nonce: Uuid,
+    },
+    /// Opens an ephemeral query connection without replacing maintained lifecycle.
+    /// Use a fresh nonce, common to all replica process connections. Only oneshot
+    /// run and cancel commands are permitted. Wait for QueryReady before work.
+    HelloQuery {
         nonce: Uuid,
     },
     /// Indicates that the controller has sent all commands reflecting its
@@ -95,9 +142,9 @@ pub enum StorageCommand {
     RunOneshotIngestion(Box<RunOneshotIngestion>),
     /// `CancelOneshotIngestion` instructs the replica to cancel the identified oneshot ingestion.
     ///
-    /// It is invalid to send a [`CancelOneshotIngestion`] command that references a oneshot
-    /// ingestion that was not created by a corresponding [`RunOneshotIngestion`] command before.
-    /// Doing so may cause the replica to exhibit undefined behavior.
+    /// On lifecycle connections, the ingestion must have been created by a corresponding
+    /// [`RunOneshotIngestion`] command. On query connections, cancellation also suppresses
+    /// admission of that ID and cannot cancel another connection's work.
     ///
     /// [`CancelOneshotIngestion`]: crate::client::StorageCommand::CancelOneshotIngestion
     /// [`RunOneshotIngestion`]: crate::client::StorageCommand::RunOneshotIngestion
@@ -110,6 +157,7 @@ impl StorageCommand {
         use StorageCommand::*;
         match self {
             Hello { .. }
+            | HelloQuery { .. }
             | InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
@@ -334,6 +382,10 @@ impl From<StatusUpdate> for AppendOnlyUpdate {
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse {
+    /// All workers can accept oneshot work for this query connection.
+    /// Requires initial lifecycle configuration, but not completion of a subsequent
+    /// lifecycle reconnect. Query results and cleanup continue during reconciliation.
+    QueryReady,
     /// A new upper frontier for the specified identifier.
     FrontierUpper(GlobalId, Antichain<Timestamp>),
     /// Punctuation indicates that no more responses will be transmitted for the specified id
@@ -355,6 +407,8 @@ pub enum StorageResponse {
 pub struct PartitionedStorageState {
     /// Number of partitions the state machine represents.
     parts: usize,
+    /// Workers or processes that acknowledged the query handshake.
+    query_ready: std::collections::BTreeSet<usize>,
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
     uppers: BTreeMap<
@@ -375,6 +429,7 @@ impl Partitionable<StorageCommand, StorageResponse> for (StorageCommand, Storage
     fn new(parts: usize) -> PartitionedStorageState {
         PartitionedStorageState {
             parts,
+            query_ready: Default::default(),
             uppers: BTreeMap::new(),
             oneshot_source_responses: BTreeMap::new(),
         }
@@ -390,7 +445,7 @@ impl PartitionedStorageState {
         //
         // TODO(guswynn): cluster-unification: consolidate this with compute.
         match command {
-            StorageCommand::Hello { .. } => {}
+            StorageCommand::Hello { .. } | StorageCommand::HelloQuery { .. } => {}
             StorageCommand::RunIngestion(ingestion) => {
                 self.insert_new_uppers(ingestion.description.collection_ids());
             }
@@ -442,6 +497,11 @@ impl PartitionedState<StorageCommand, StorageResponse> for PartitionedStorageSta
         response: StorageResponse,
     ) -> Option<Result<StorageResponse, anyhow::Error>> {
         match response {
+            StorageResponse::QueryReady => {
+                let novel = self.query_ready.insert(shard_id);
+                (novel && self.query_ready.len() == self.parts)
+                    .then_some(Ok(StorageResponse::QueryReady))
+            }
             // Avoid multiple retractions of minimum time, to present as updates from one worker.
             StorageResponse::FrontierUpper(id, new_shard_upper) => {
                 let (frontier, shard_frontiers) = match self.uppers.get_mut(&id) {
@@ -642,5 +702,113 @@ mod tests {
     #[mz_ore::test]
     fn test_storage_response_size() {
         assert_eq!(std::mem::size_of::<StorageResponse>(), 120);
+    }
+}
+
+#[cfg(test)]
+mod query_wire_tests {
+    use super::*;
+    use mz_service::local::LocalClient;
+    use tokio::sync::mpsc;
+
+    #[mz_ore::test(tokio::test)]
+    async fn storage_query_role_validation() {
+        for query in [false, true] {
+            let (commands, mut received) = mpsc::unbounded_channel();
+            let (_responses, response_rx) = mpsc::unbounded_channel();
+            let mut client = RoleClient::new(LocalClient::new(
+                response_rx,
+                commands,
+                std::thread::current(),
+            ));
+            assert!(client.send(StorageCommand::AllowWrites).await.is_err());
+            assert!(received.try_recv().is_err());
+            let nonce = Uuid::new_v4();
+            let hello = if query {
+                StorageCommand::HelloQuery { nonce }
+            } else {
+                StorageCommand::Hello { nonce }
+            };
+            client.send(hello.clone()).await.unwrap();
+            assert_eq!(received.recv().await, Some(StorageCommand::Hello { nonce }));
+            if query {
+                assert_eq!(received.recv().await, Some(hello));
+            }
+            for command in [
+                StorageCommand::Hello { nonce },
+                StorageCommand::HelloQuery { nonce },
+            ] {
+                assert!(client.send(command).await.is_err());
+                assert!(received.try_recv().is_err());
+            }
+            for command in [
+                StorageCommand::InitializationComplete,
+                StorageCommand::AllowWrites,
+                StorageCommand::UpdateConfiguration(Default::default()),
+                StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
+            ] {
+                let result = client.send(command.clone()).await;
+                if query {
+                    assert!(result.is_err());
+                    assert!(received.try_recv().is_err());
+                } else {
+                    result.unwrap();
+                    assert_eq!(received.recv().await, Some(command));
+                }
+            }
+            let cancel = StorageCommand::CancelOneshotIngestion(Uuid::new_v4());
+            client.send(cancel.clone()).await.unwrap();
+            assert_eq!(received.recv().await, Some(cancel));
+        }
+    }
+
+    #[mz_ore::test]
+    fn storage_query_aggregation_across_workers_and_processes() {
+        let processes = 2;
+        let workers = 3;
+        let mut replica = <(StorageCommand, StorageResponse)>::new(processes);
+        let mut local: Vec<_> = (0..processes)
+            .map(|_| <(StorageCommand, StorageResponse)>::new(workers))
+            .collect();
+        let nonce = Uuid::new_v4();
+        let hello = StorageCommand::HelloQuery { nonce };
+        assert_eq!(
+            replica.split_command(hello.clone()),
+            vec![Some(hello.clone()); processes]
+        );
+        let id = Uuid::new_v4();
+        for process in (0..processes).rev() {
+            assert_eq!(
+                local[process].split_command(hello.clone()),
+                vec![Some(hello.clone()); workers]
+            );
+            for worker in (0..workers).rev() {
+                let ready = local[process].absorb_response(worker, StorageResponse::QueryReady);
+                assert_eq!(ready.is_some(), worker == 0);
+                if let Some(ready) = ready {
+                    let ready = replica.absorb_response(process, ready.unwrap());
+                    assert_eq!(ready.is_some(), process == 0);
+                    if let Some(ready) = ready {
+                        assert_eq!(ready.unwrap(), StorageResponse::QueryReady);
+                    }
+                }
+                let batches = StorageResponse::StagedBatches(BTreeMap::from([(
+                    id,
+                    vec![Err(format!("process {process} worker {worker}"))],
+                )]));
+                let batches = local[process].absorb_response(worker, batches);
+                assert_eq!(batches.is_some(), worker == 0);
+                if let Some(batches) = batches {
+                    let batches = replica.absorb_response(process, batches.unwrap());
+                    assert_eq!(batches.is_some(), process == 0);
+                    if let Some(batches) = batches {
+                        let StorageResponse::StagedBatches(batches) = batches.unwrap() else {
+                            panic!()
+                        };
+                        assert_eq!(batches[&id].len(), processes * workers);
+                    }
+                }
+            }
+        }
     }
 }

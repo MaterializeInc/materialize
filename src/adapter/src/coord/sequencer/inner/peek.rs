@@ -253,7 +253,7 @@ impl Coordinator {
         let catalog = self.owned_catalog();
         let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
         let compute_instance = self
-            .instance_snapshot(cluster.id())
+            .query_instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
@@ -499,7 +499,9 @@ impl Coordinator {
             // There's a chance for index skew (indexes were created/deleted between stages) from the
             // original plan, but that seems acceptable for insights.
             for cluster in self.catalog().user_clusters() {
-                let snapshot = self.instance_snapshot(cluster.id).expect("must exist");
+                let snapshot = self
+                    .query_instance_snapshot(cluster.id)
+                    .expect("must exist");
                 compute_instances.insert(cluster.name.clone(), snapshot);
             }
         }
@@ -868,7 +870,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         let connection_context = self.connection_context().clone();
         let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-            .get(self.controller.storage.config().config_set());
+            .get(self.storage_configuration.config_set());
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "peek copy to preflight",
             async move {

@@ -44,7 +44,6 @@ use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::critical::Opaque;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
@@ -54,27 +53,24 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
 use mz_storage_client::client::{
     AppendOnlyUpdate, RunIngestionCommand, RunOneshotIngestion, RunSinkCommand, Status,
-    StatusUpdate, StorageCommand, StorageResponse, TableData,
+    StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
-    IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
-    WallclockLagHistogramPeriod,
+    IntrospectionType, Response, StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
+    WallclockLag, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
     MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_STATUS_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_client::statistics::{
-    ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
-};
+use mz_storage_client::statistics::{ControllerSinkStatistics, ControllerSourceStatistics};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
-use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
+use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
@@ -89,7 +85,6 @@ use mz_storage_types::sources::{
 use mz_storage_types::{AlterCompatible, StorageDiff, dyncfgs};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
-use mz_txn_wal::txns::TxnsHandle;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch};
@@ -99,11 +94,11 @@ use tokio::time::MissedTickBehavior;
 use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
 
+pub mod adapter_storage;
 mod collection_mgmt;
 mod history;
 mod instance;
-mod persist_handles;
-mod rtr;
+pub mod rtr;
 mod statistics;
 
 #[derive(Derivative)]
@@ -157,18 +152,10 @@ pub struct Controller {
     /// messages from the replica.
     dropped_objects: BTreeMap<GlobalId, BTreeSet<ReplicaId>>,
 
-    /// Write handle for table shards.
-    pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker,
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<Timestamp>,
     txns_metrics: Arc<TxnMetrics>,
     stashed_responses: Vec<(Option<ReplicaId>, StorageResponse)>,
-    /// Channel for sending table handle drops.
-    #[derivative(Debug = "ignore")]
-    pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
-    /// Channel for receiving table handle drops.
-    #[derivative(Debug = "ignore")]
-    pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
     /// Closures that can be used to send responses from oneshot ingestions.
     #[derivative(Debug = "ignore")]
     pending_oneshot_ingestions: BTreeMap<uuid::Uuid, PendingOneshotIngestion>,
@@ -186,9 +173,9 @@ pub struct Controller {
 
     // The following two fields must always be locked in order.
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
-    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s, as well
-    /// as webhook statistics.
-    source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
+    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`.
+    source_statistics:
+        Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSourceStatistics>>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics: Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSinkStatistics>>>,
@@ -952,11 +939,6 @@ impl StorageController for Controller {
             .rev()
             .chain(collections_to_register.into_iter());
 
-        // Statistics need a level of indirection so we can mutably borrow
-        // `self` when registering collections and when we are inserting
-        // statistics.
-        let mut new_webhook_statistic_entries = BTreeSet::new();
-
         for (id, description, write, metadata) in to_register {
             let is_in_txns = |id, metadata: &CollectionMetadata| {
                 metadata.txns_shard.is_some()
@@ -1054,7 +1036,7 @@ impl StorageController for Controller {
             let mut extra_state = CollectionStateExtra::None;
             let mut maybe_instance_id = None;
             match &data_source {
-                DataSource::Introspection(typ) => {
+                DataSource::Introspection(typ) if !typ.is_statement_history() => {
                     debug!(
                         ?data_source, meta = ?metadata,
                         "registering {id} with persist monotonic worker",
@@ -1071,26 +1053,7 @@ impl StorageController for Controller {
                         persist_client.clone(),
                     )?;
                 }
-                DataSource::Webhook => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "registering {id} with persist monotonic worker",
-                    );
-                    // This collection of statistics is periodically aggregated into
-                    // `source_statistics`.
-                    new_webhook_statistic_entries.insert(id);
-                    // Register the collection so our manager knows about it.
-                    //
-                    // NOTE: Maybe this shouldn't be in the collection manager,
-                    // and collection manager should only be responsible for
-                    // built-in introspection collections?
-                    self.collection_manager.register_append_only_collection(
-                        id,
-                        write.expect_handle("webhook collections are not tables"),
-                        false,
-                        None,
-                    );
-                }
+                DataSource::Webhook | DataSource::Introspection(_) => {}
                 DataSource::IngestionExport {
                     ingestion_id,
                     details,
@@ -1210,20 +1173,6 @@ impl StorageController for Controller {
             self.collections.insert(id, collection_state);
         }
 
-        {
-            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-
-            // Webhooks don't run on clusters/replicas, so we initialize their
-            // statistics collection here.
-            for id in new_webhook_statistic_entries {
-                source_statistics.webhook_statistics.entry(id).or_default();
-            }
-
-            // Sources and sinks only have statistics in the collection when
-            // there is a replica that is reporting them. No need to initialize
-            // here.
-        }
-
         self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
 
         // TODO(guswynn): perform the io in this final section concurrently.
@@ -1251,31 +1200,6 @@ impl StorageController for Controller {
                     }
                 }
             };
-        }
-
-        Ok(())
-    }
-
-    fn check_alter_ingestion_source_desc(
-        &mut self,
-        ingestion_id: GlobalId,
-        source_desc: &SourceDesc,
-    ) -> Result<(), StorageError> {
-        let source_collection = self.collection(ingestion_id)?;
-        let data_source = &source_collection.data_source;
-        match &data_source {
-            DataSource::Ingestion(cur_ingestion) => {
-                cur_ingestion
-                    .desc
-                    .alter_compatible(ingestion_id, source_desc)?;
-            }
-            o => {
-                tracing::info!(
-                    "{ingestion_id} inalterable because its data source is {:?} and not an ingestion",
-                    o
-                );
-                Err(AlterError { id: ingestion_id })?
-            }
         }
 
         Ok(())
@@ -1486,62 +1410,6 @@ impl StorageController for Controller {
         self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
 
         Ok(())
-    }
-
-    async fn register_table_collections(
-        &mut self,
-        register_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> Result<(), StorageError> {
-        let mut tables = self.table_registrations(ids)?;
-
-        // A read-only deployment only writes its migrated builtin tables.
-        if self.read_only {
-            tables.retain(|table| self.migrated_storage_collections.contains(&table.id));
-        }
-        if tables.is_empty() {
-            return Ok(());
-        }
-
-        match self
-            .persist_table_worker
-            .register(register_ts, tables)
-            .await
-        {
-            Ok(res) => res,
-            Err(_recv) => Err(StorageError::ShuttingDown("persist_table_worker")),
-        }
-    }
-
-    fn table_registrations(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Result<Vec<TableRegistration>, StorageError> {
-        // The storage data source decides which table catalog items use txn-wal.
-        let mut tables = Vec::with_capacity(ids.len());
-        for id in ids {
-            let collection = self.collection(id)?;
-            if matches!(collection.data_source, DataSource::Table) {
-                let metadata = &collection.collection_metadata;
-                tables.push(TableRegistration {
-                    id,
-                    data_shard: metadata.data_shard,
-                    relation_desc: metadata.relation_desc.clone(),
-                });
-            }
-        }
-        Ok(tables)
-    }
-
-    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError> {
-        let mut tables = Vec::with_capacity(ids.len());
-        for id in ids {
-            let collection = self.collection(id)?;
-            if matches!(collection.data_source, DataSource::Table) {
-                tables.push(id);
-            }
-        }
-        Ok(tables)
     }
 
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError> {
@@ -1831,24 +1699,17 @@ impl StorageController for Controller {
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError> {
-        let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
-            .into_iter()
-            .partition(|id| match self.collections[id].data_source {
-                DataSource::Table => true,
-                DataSource::IngestionExport { .. } | DataSource::Webhook => false,
+        for id in &identifiers {
+            match self.collection(*id)?.data_source {
+                DataSource::Table | DataSource::IngestionExport { .. } | DataSource::Webhook => {}
                 _ => panic!("identifier is not a table: {}", id),
-            });
-
-        if table_write_ids.len() > 0 {
-            let tx = self.pending_table_handle_drops_tx.clone();
-            for identifier in table_write_ids {
-                let _ = tx.send(identifier);
             }
         }
 
-        if data_source_ids.len() > 0 {
-            self.validate_collection_ids(data_source_ids.iter().cloned())?;
-            self.drop_sources_unvalidated(storage_metadata, data_source_ids)?;
+        // The adapter completes table writer forgetting before calling us. Read
+        // accounting may already be retired, but execution cleanup is ours.
+        if !identifiers.is_empty() {
+            self.drop_sources_unvalidated(storage_metadata, identifiers)?;
         }
 
         Ok(())
@@ -1885,11 +1746,6 @@ impl StorageController for Controller {
             if let Some(collection_state) = collection_state {
                 match collection_state.data_source {
                     DataSource::Webhook => {
-                        // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                        // could probably use some love and maybe get merged together?
-                        let fut = self.collection_manager.unregister_collection(*id);
-                        mz_ore::task::spawn(|| format!("storage-webhook-cleanup-{id}"), fut);
-
                         collections_to_drop.push(*id);
                         source_statistics_to_drop.push(*id);
                     }
@@ -1999,12 +1855,7 @@ impl StorageController for Controller {
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
             for id in source_statistics_to_drop {
-                source_statistics
-                    .source_statistics
-                    .retain(|(stats_id, _), _| stats_id != &id);
-                source_statistics
-                    .webhook_statistics
-                    .retain(|stats_id, _| stats_id != &id);
+                source_statistics.retain(|(stats_id, _), _| stats_id != &id);
             }
         }
 
@@ -2151,64 +2002,8 @@ impl StorageController for Controller {
             .drop_collections_unvalidated(storage_metadata, sinks_to_drop);
     }
 
-    #[instrument(level = "debug")]
-    fn append_table(
-        &mut self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
-        if self.read_only {
-            // While in read only mode, ONLY collections that have been migrated
-            // and need to be re-hydrated in read only mode can be written to.
-            if !commands
-                .iter()
-                .all(|(id, _)| id.is_system() && self.migrated_storage_collections.contains(id))
-            {
-                return Err(StorageError::ReadOnly);
-            }
-        }
-
-        // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
-        for (id, updates) in commands.iter() {
-            if !updates.is_empty() {
-                if !write_ts.less_than(&advance_to) {
-                    return Err(StorageError::UpdateBeyondUpper(*id));
-                }
-            }
-        }
-
-        Ok(self
-            .persist_table_worker
-            .append(write_ts, advance_to, commands))
-    }
-
-    fn table_write_handle(&self) -> Arc<dyn mz_storage_client::controller::TableWriteHandle> {
-        Arc::new(persist_handles::TableWriteWorkerHandle(
-            self.persist_table_worker.clone(),
-        ))
-    }
-
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
-        self.collection_manager.monotonic_appender(id)
-    }
-
-    fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError> {
-        // Call to this method are usually cached so the lock is not in the critical path.
-        let source_statistics = self.source_statistics.lock().expect("poisoned");
-        source_statistics
-            .webhook_statistics
-            .get(&id)
-            .cloned()
-            .ok_or(StorageError::IdentifierMissing(id))
-    }
-
     async fn ready(&mut self) {
         if self.maintenance_scheduled {
-            return;
-        }
-
-        if !self.pending_table_handle_drops_rx.is_empty() {
             return;
         }
 
@@ -2226,10 +2021,7 @@ impl StorageController for Controller {
     }
 
     #[instrument(level = "debug")]
-    fn process(
-        &mut self,
-        storage_metadata: &StorageMetadata,
-    ) -> Result<Option<Response>, anyhow::Error> {
+    fn process(&mut self) -> Result<Option<Response>, anyhow::Error> {
         // Perform periodic maintenance work.
         if self.maintenance_scheduled {
             self.maintain();
@@ -2292,9 +2084,7 @@ impl StorageController for Controller {
                                 continue;
                             }
 
-                            let entry = shared_stats
-                                .source_statistics
-                                .entry((stat.id, Some(replica_id)));
+                            let entry = shared_stats.entry((stat.id, Some(replica_id)));
 
                             match entry {
                                 btree_map::Entry::Vacant(vacant_entry) => {
@@ -2442,6 +2232,9 @@ impl StorageController for Controller {
                     }
                     status_updates.push(status_update);
                 }
+                (_, StorageResponse::QueryReady) => {
+                    panic!("query response on lifecycle connection")
+                }
                 (_replica_id, StorageResponse::StagedBatches(batches)) => {
                     for (ingestion_id, batches) in batches {
                         match self.pending_oneshot_ingestions.remove(&ingestion_id) {
@@ -2468,15 +2261,6 @@ impl StorageController for Controller {
 
         self.record_status_updates(status_updates);
 
-        // Process dropped tables in a single batch.
-        let mut dropped_table_ids = Vec::new();
-        while let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
-            dropped_table_ids.push(dropped_id);
-        }
-        if !dropped_table_ids.is_empty() {
-            self.drop_sources(storage_metadata, dropped_table_ids)?;
-        }
-
         if updated_frontiers.is_empty() {
             Ok(None)
         } else {
@@ -2484,22 +2268,6 @@ impl StorageController for Controller {
                 updated_frontiers.into_iter().collect(),
             )))
         }
-    }
-
-    async fn inspect_persist_state(
-        &self,
-        id: GlobalId,
-    ) -> Result<serde_json::Value, anyhow::Error> {
-        let collection = &self.storage_collections.collection_metadata(id)?;
-        let client = self
-            .persist
-            .open(collection.persist_location.clone())
-            .await?;
-        let shard_state = client
-            .inspect_shard::<Timestamp>(&collection.data_shard)
-            .await?;
-        let json_state = serde_json::to_value(shard_state)?;
-        Ok(json_state)
     }
 
     fn append_introspection_updates(
@@ -2545,7 +2313,9 @@ impl StorageController for Controller {
         type_: IntrospectionType,
     ) -> mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)> {
         let id = self.introspection_ids[&type_];
-        self.collection_manager.differential_write_sender(id)
+        self.collection_manager
+            .differential_write_sender(id)
+            .expect("introspection collection is registered")
     }
 
     async fn real_time_recent_timestamp(
@@ -2672,12 +2442,9 @@ impl StorageController for Controller {
             read_only,
             collections,
             dropped_objects,
-            persist_table_worker: _,
             txns_read: _,
             txns_metrics: _,
             stashed_responses,
-            pending_table_handle_drops_tx: _,
-            pending_table_handle_drops_rx: _,
             pending_oneshot_ingestions,
             collection_manager: _,
             introspection_ids,
@@ -2817,36 +2584,6 @@ where
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
 
-        let persist_table_worker = if read_only {
-            let txns_write = txns_client
-                .open_writer(
-                    txns_id,
-                    Arc::new(TxnsCodecRow::desc()),
-                    Arc::new(UnitSchema),
-                    Diagnostics {
-                        shard_name: "txns".to_owned(),
-                        handle_purpose: "follow txns upper".to_owned(),
-                    },
-                )
-                .await
-                .expect("txns schema shouldn't change");
-            persist_handles::PersistTableWriteWorker::new_read_only_mode(
-                txns_write,
-                txns_client.clone(),
-            )
-        } else {
-            let mut txns = TxnsHandle::open(
-                Timestamp::MIN,
-                txns_client.clone(),
-                txns_client.dyncfgs().clone(),
-                Arc::clone(&txns_metrics),
-                txns_id,
-                Opaque::encode(&PersistEpoch::default()),
-            )
-            .await;
-            txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns, txns_client.clone())
-        };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
@@ -2856,9 +2593,6 @@ where
 
         let (statistics_interval_sender, _) =
             channel(mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT);
-
-        let (pending_table_handle_drops_tx, pending_table_handle_drops_rx) =
-            tokio::sync::mpsc::unbounded_channel();
 
         let mut maintenance_ticker = tokio::time::interval(Duration::from_secs(1));
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -2873,22 +2607,16 @@ where
             build_info,
             collections: BTreeMap::default(),
             dropped_objects: Default::default(),
-            persist_table_worker,
             txns_read,
             txns_metrics,
             stashed_responses: vec![],
-            pending_table_handle_drops_tx,
-            pending_table_handle_drops_rx,
             pending_oneshot_ingestions: BTreeMap::default(),
             collection_manager,
             introspection_ids,
             introspection_tokens,
             now,
             read_only,
-            source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
-                source_statistics: BTreeMap::new(),
-                webhook_statistics: BTreeMap::new(),
-            })),
+            source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             statistics_interval_sender,
             instances: BTreeMap::new(),
@@ -3119,13 +2847,14 @@ where
         }
     }
 
-    /// Validate that a collection exists for all identifiers, and error if any do not.
+    /// Validate that this controller owns execution state for all identifiers.
+    /// StorageCollections read accounting may be retired before execution cleanup.
     fn validate_collection_ids(
         &self,
         ids: impl Iterator<Item = GlobalId>,
     ) -> Result<(), StorageError> {
         for id in ids {
-            self.storage_collections.check_exists(id)?;
+            self.collection(id)?;
         }
         Ok(())
     }
@@ -3290,7 +3019,6 @@ where
         self.source_statistics
             .lock()
             .expect("poisoned")
-            .source_statistics
             // collections should also contain subsources.
             .retain(|(k, _replica_id), _| self.storage_collections.check_exists(*k).is_ok());
         self.sink_statistics
@@ -4272,6 +4000,106 @@ mod tests {
         )
         .await;
         (controller, collections, persist)
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn drop_tables_after_read_state_retired() {
+        let (mut controller, collections, _) = export_test_controller().await;
+        let table = GlobalId::User(1);
+        let source = GlobalId::User(2);
+        let unknown = GlobalId::User(99);
+        let mut descriptions = vec![
+            (
+                table,
+                CollectionDescription::for_table(RelationDesc::empty()),
+            ),
+            (
+                source,
+                CollectionDescription::for_other(RelationDesc::empty(), None),
+            ),
+        ];
+        for (id, typ, desc) in [
+            (
+                GlobalId::System(1),
+                IntrospectionType::ShardMapping,
+                RelationDesc::builder()
+                    .with_column("object_id", mz_repr::SqlScalarType::String.nullable(false))
+                    .with_column("shard_id", mz_repr::SqlScalarType::String.nullable(false))
+                    .finish(),
+            ),
+            (
+                GlobalId::System(2),
+                IntrospectionType::SourceStatusHistory,
+                MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
+            ),
+            (
+                GlobalId::System(3),
+                IntrospectionType::SinkStatusHistory,
+                MZ_SINK_STATUS_HISTORY_DESC.clone(),
+            ),
+        ] {
+            let mut description = CollectionDescription::for_other(desc, None);
+            description.data_source = DataSource::Introspection(typ);
+            descriptions.push((id, description));
+        }
+        let mut metadata = StorageMetadata {
+            collection_metadata: descriptions
+                .iter()
+                .map(|(id, _)| (*id, ShardId::new()))
+                .collect(),
+            compaction_bounds: descriptions
+                .iter()
+                .map(|(id, _)| (*id, frontier(0)))
+                .collect(),
+            ..Default::default()
+        };
+        controller
+            .create_collections_for_bootstrap(&metadata, None, descriptions, &BTreeSet::new())
+            .await
+            .unwrap();
+
+        // Committed catalog removal and table forgetting can retire read accounting
+        // before the controller is asked to clean up execution state.
+        for id in [table, source] {
+            metadata.collection_metadata.remove(&id);
+            metadata.compaction_bounds.remove(&id);
+        }
+        collections.drop_collections_unvalidated(&metadata, vec![table, source]);
+        for retired in [table, source] {
+            assert!(matches!(
+                collections.check_exists(retired),
+                Err(StorageError::IdentifierMissing(id)) if id == retired
+            ));
+            assert!(controller.collection(retired).is_ok());
+        }
+        assert!(matches!(
+            controller.collection(table).unwrap().data_source,
+            DataSource::Table
+        ));
+
+        // Validate the whole batch before performing any execution cleanup.
+        assert!(matches!(
+            controller.drop_tables(&metadata, vec![table, unknown]),
+            Err(StorageError::IdentifierMissing(id)) if id == unknown
+        ));
+        assert!(matches!(
+            controller.drop_sources(&metadata, vec![source, unknown]),
+            Err(StorageError::IdentifierMissing(id)) if id == unknown
+        ));
+        assert!(controller.collection(table).is_ok());
+        assert!(controller.collection(source).is_ok());
+
+        controller.drop_tables(&metadata, vec![table]).unwrap();
+        assert!(matches!(
+            controller.collection(table),
+            Err(StorageError::IdentifierMissing(id)) if id == table
+        ));
+        controller.drop_sources(&metadata, vec![source]).unwrap();
+        assert!(matches!(
+            controller.collection(source),
+            Err(StorageError::IdentifierMissing(id)) if id == source
+        ));
+        controller.process().unwrap();
     }
 
     fn export_description(from: GlobalId) -> ExportDescription {

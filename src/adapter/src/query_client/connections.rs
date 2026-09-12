@@ -44,7 +44,10 @@ pub(crate) struct QueryReplicaConnectionsConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Endpoint {
-    Unmanaged(Vec<String>),
+    Unmanaged {
+        compute: Vec<String>,
+        storage: Vec<String>,
+    },
     Managed {
         service: String,
         scale: NonZero<u16>,
@@ -56,6 +59,45 @@ struct Settings {
     connect_timeout: Duration,
     keepalive_timeout: Duration,
     max_result_size: usize,
+}
+
+/// A catalog-owned replica target, not a maintained-controller handle.
+pub(crate) struct StorageReplicaTarget {
+    pub replica_id: ReplicaId,
+    pub retired: watch::Receiver<()>,
+    endpoint: Endpoint,
+    settings: Settings,
+    config: Arc<QueryReplicaConnectionsConfig>,
+}
+
+impl StorageReplicaTarget {
+    pub(crate) async fn connect(
+        &self,
+    ) -> anyhow::Result<Box<dyn mz_storage_client::client::StorageClient>> {
+        use mz_storage_client::client::{StorageCommand, StorageResponse};
+        let addresses = match &self.endpoint {
+            Endpoint::Unmanaged { storage, .. } => storage.clone(),
+            Endpoint::Managed { service, scale } => self.config.orchestrator.service_addresses(
+                service,
+                *scale,
+                &ServicePort {
+                    name: "storagectl".into(),
+                    port_hint: 2100,
+                },
+            )?,
+        };
+        anyhow::ensure!(!addresses.is_empty(), "replica has no storagectl addresses");
+        Ok(Box::new(
+            Client::<StorageCommand, StorageResponse>::connect_partitioned(
+                addresses,
+                self.config.build_info.semver_version(),
+                self.settings.connect_timeout,
+                self.settings.keepalive_timeout,
+                NoopMetrics,
+            )
+            .await?,
+        ))
+    }
 }
 
 struct ReplicaState {
@@ -130,9 +172,10 @@ impl QueryReplicaConnections {
                 cluster.replicas().map(move |replica| {
                     let key = (cluster.id, replica.replica_id);
                     let endpoint = match &replica.config.location {
-                        ReplicaLocation::Unmanaged(location) => {
-                            Endpoint::Unmanaged(location.computectl_addrs.clone())
-                        }
+                        ReplicaLocation::Unmanaged(location) => Endpoint::Unmanaged {
+                            compute: location.computectl_addrs.clone(),
+                            storage: location.storagectl_addrs.clone(),
+                        },
                         ReplicaLocation::Managed(location) => Endpoint::Managed {
                             service: ReplicaServiceName {
                                 cluster_id: cluster.id,
@@ -148,6 +191,28 @@ impl QueryReplicaConnections {
             })
             .collect();
         self.reconcile(desired, settings);
+    }
+
+    /// Snapshot storage targets without waiting for compute readiness. The lifetime
+    /// watch closes when the replica is removed or its endpoint is replaced.
+    pub(crate) fn storage_targets(&self, cluster: ComputeInstanceId) -> Vec<StorageReplicaTarget> {
+        self.replicas
+            .lock()
+            .expect("query replicas mutex poisoned")
+            .iter()
+            .filter(|((id, _), _)| *id == cluster)
+            .map(|((_, replica_id), replica)| StorageReplicaTarget {
+                replica_id: *replica_id,
+                retired: replica.settings_changed.subscribe(),
+                endpoint: replica.endpoint.clone(),
+                settings: replica
+                    .state
+                    .lock()
+                    .expect("query replica mutex poisoned")
+                    .settings,
+                config: Arc::clone(&self.config),
+            })
+            .collect()
     }
 
     fn reconcile(&self, desired: BTreeMap<ReplicaKey, Endpoint>, settings: Settings) {
@@ -273,7 +338,7 @@ async fn run(
         };
         let result = async {
             let addresses = match &endpoint {
-                Endpoint::Unmanaged(addresses) => addresses.clone(),
+                Endpoint::Unmanaged { compute, .. } => compute.clone(),
                 Endpoint::Managed { service, scale } => config.orchestrator.service_addresses(
                     service,
                     *scale,

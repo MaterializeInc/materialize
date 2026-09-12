@@ -772,3 +772,71 @@ A pending MV replacement's creation frontier is independent of the target's shar
 output progress. Runtime installation respects that distinction. Restarting with
 the target still suspended remains a separate investigation: bootstrap still
 applies the shared output's recovery constraint to the pending replacement.
+
+### 2026-09-12: Adapter-driven table time agreed with Aljoscha
+
+Aljoscha relayed the designer's decision: transaction-WAL ticking stays with
+adapters. Assume a live adapter for table-time progress. The single-adapter
+milestone 2 demonstration explicitly accepts paused table-fed dataflows and shows
+source-fed dataflows and compaction continuing. This resolves the extraction
+question without adding another WAL writer. Use “lifecycle components” or “the
+process running the controller bundle,” not “lifecycle process” or “lifecycle
+service.” Next: resume the remaining in-process prerequisites and bundle extraction.
+
+### 2026-09-12: Adapter-owned table writer and replacement recovery
+
+The adapter owns the existing WAL worker and its append/register/forget FIFO.
+Registration uses committed descriptions and shard metadata, not controller
+inventory. Read-only backfill remains limited to migrated system tables and does
+not tick the WAL. The bundle retains transaction reading and collection lifetime
+management.
+
+Pending replacement recovery distinguishes durable creation protection from
+unprotected input holds that can advance with the target. Sealed-target pruning
+retains its existing semantics. Compaction publication cannot release abandoned
+client grants, independently of its cadence. Next: finish the remaining query-side
+controller dependencies and extract the controller bundle.
+
+Read accounting can retire before execution cleanup. Table/source cleanup now
+validates the controller's own inventory, and table cleanup follows adapter
+forgetting without a deferred channel. Retained aliases whose live primary belongs
+to a later bootstrap batch wait for that batch, with shared-shard permission still
+enforced across all aliases.
+
+Remaining request ownership includes webhook batching, idle progress and statistics,
+and storage-side oneshot COPY execution. Metadata-driven Persist reads need no
+controller state. Storage query connections must coexist with maintained execution,
+not replace its connection or replay completed COPY requests.
+
+Remote COPY staging uses fresh, request-owned storage query connections, with row
+commitment still in the adapter. Query admission, retirement, and all-worker
+completion use the storage sequencer. Completion must retain tokens until every
+worker finishes, or local release can stall a sibling. COPY completion carries its
+ingestion UUID so a late canceled result cannot consume a newer request's context.
+Connection lifetime bounds replay/cancellation state for the per-COPY client.
+
+Asked Aljoscha whether webhook idle progress must continue without the sole adapter,
+or may pause alongside adapter-driven table time. Webhooks have a separate idle
+driver coupled to HTTP batching and statistics. The proposal is to preserve idle
+progress in lifecycle components and separate adapter-owned HTTP execution, but
+that boundary and statistics ownership are not yet settled.
+
+### 2026-09-12: adapter-owned webhook ticking
+
+Aljoscha chose the same live-adapter assumption for webhook ticking as table time.
+Keep HTTP batching and idle advancement together with the adapter. The adapter-loss
+demonstration can let webhook-fed work pause and must show autonomous source-fed
+maintenance and compaction continuing.
+
+Adapter-owned storage execution includes statement histories and webhook statistics.
+The existing raw statistics relation is partitioned by replica ID, with NULL rows
+owned by the adapter. Even an empty restored inventory must reconcile persisted
+rows. Catalog shard preparation is independent of controller inventory, while
+physical finalization acknowledgments remain with the finalizer.
+
+Maintained creation admits logical input history, not candidate index readiness.
+Query progress observes Persist and compute directly. Compute write observations
+must include the installed as-of lower bound, and fresh notification subscriptions
+must not replay old changes. Remaining extraction includes selected-plan/notice
+publication, startup protection ordering, and separating maintained enactment from
+the request-serving event loop. Naming does not require an extra wrapper.

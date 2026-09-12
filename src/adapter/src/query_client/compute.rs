@@ -197,8 +197,12 @@ impl ReplicaQueryClient {
 
     /// Notifications to re-read cached frontiers, including on connection loss.
     /// Notifications may coalesce and do not themselves keep the connection alive.
+    /// Subscribe before reading cached state. Each subscription starts at the
+    /// current version so repeated subscriptions do not replay old notifications.
     pub fn frontier_changes(&self) -> watch::Receiver<()> {
-        self.0.changes.clone()
+        let mut changes = self.0.changes.clone();
+        changes.borrow_and_update();
+        changes
     }
 
     /// Update the connection-local response ceiling, including replica aggregation.
@@ -713,6 +717,8 @@ mod tests {
                 .expect("connected client should return frontier observations"),
             None
         );
+        let mut fresh = client.frontier_changes();
+        assert!(!fresh.has_changed().expect("connected watcher"));
         peer.respond(ComputeResponse::Frontiers(
             id,
             FrontiersResponse {
@@ -723,6 +729,9 @@ mod tests {
         bounded(changed.changed())
             .await
             .expect("frontier watcher should receive a change notification");
+        bounded(fresh.changed())
+            .await
+            .expect("fresh watcher observes new progress");
         let cached = client
             .collection_frontiers(id)
             .expect("connected client should return frontier observations")

@@ -23,7 +23,6 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::num::NonZeroI64;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -58,8 +57,7 @@ use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
-use crate::statistics::WebhookStatistics;
+use crate::client::{AppendOnlyUpdate, StatusUpdate};
 
 #[derive(
     Clone,
@@ -114,6 +112,20 @@ pub enum IntrospectionType {
     PrivatelinkConnectionStatusHistory,
 }
 
+impl IntrospectionType {
+    /// Whether the adapter owns this statement-history collection's writer.
+    pub fn is_statement_history(self) -> bool {
+        matches!(
+            self,
+            Self::SessionHistory
+                | Self::PreparedStatementHistory
+                | Self::StatementExecutionHistory
+                | Self::StatementLifecycleHistory
+                | Self::SqlText
+        )
+    }
+}
+
 /// Describes how data is written to the collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataSource {
@@ -128,8 +140,8 @@ pub enum DataSource {
         details: SourceExportDetails,
         data_config: SourceExportDataConfig,
     },
-    /// Data comes from introspection sources, which the controller itself is
-    /// responsible for generating.
+    /// Data comes from introspection sources. Statement histories are written
+    /// by the adapter, while other writers are managed by the controller.
     Introspection(IntrospectionType),
     /// Data comes from the source's remapping/reclock operator.
     Progress,
@@ -322,43 +334,6 @@ impl StorageWriteOp {
     }
 }
 
-/// Metadata required to register a table with the txns shard.
-#[derive(Debug, Clone)]
-pub struct TableRegistration {
-    pub id: GlobalId,
-    pub data_shard: ShardId,
-    pub relation_desc: RelationDesc,
-}
-
-/// Queues txns-shard operations on the storage table worker.
-///
-/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
-/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
-/// restores its bookkeeping and the caller must retry at a fresh timestamp.
-pub trait TableWriteHandle: Debug + Send + Sync {
-    /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
-    fn append(
-        &self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
-
-    /// Registers `tables` at `register_ts`.
-    fn register(
-        &self,
-        register_ts: Timestamp,
-        tables: Vec<TableRegistration>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
-
-    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
-    fn forget(
-        &self,
-        forget_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> oneshot::Receiver<Result<(), StorageError>>;
-}
-
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     /// Marks the end of any initialization commands.
@@ -527,8 +502,8 @@ pub trait StorageController: Debug {
     /// collections are a table (i.e. all materialized views, sources, etc).
     ///
     /// This sets up storage but does not register tables in the txns shard. Runtime registration
-    /// must go through the adapter's group committer. Bootstrap uses
-    /// [`Self::register_table_collections`].
+    /// must go through the adapter's group committer. Bootstrap registers tables through
+    /// the adapter's table writer.
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -554,18 +529,6 @@ pub trait StorageController: Debug {
         register_ts: Option<Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError>;
-
-    /// Check that the ingestion associated with `id` can use the provided
-    /// [`SourceDesc`].
-    ///
-    /// Note that this check is optimistic and its return of `Ok(())` does not
-    /// guarantee that subsequent calls to `alter_ingestion_source_desc` are
-    /// guaranteed to succeed.
-    fn check_alter_ingestion_source_desc(
-        &mut self,
-        ingestion_id: GlobalId,
-        source_desc: &SourceDesc,
     ) -> Result<(), StorageError>;
 
     /// Alters each identified ingestion to use the correlated [`SourceDesc`].
@@ -597,27 +560,6 @@ pub trait StorageController: Debug {
         new_desc: RelationDesc,
         expected_version: RelationVersion,
     ) -> Result<(), StorageError>;
-
-    /// Registers the `DataSource::Table` collections among `ids` during bootstrap.
-    ///
-    /// Runtime registration must go through the adapter's group committer. In read-only mode, only
-    /// migrated tables are registered.
-    async fn register_table_collections(
-        &mut self,
-        register_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> Result<(), StorageError>;
-
-    /// Returns registration metadata for the `DataSource::Table` collections among `ids`.
-    ///
-    /// Other data sources are ignored.
-    fn table_registrations(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Result<Vec<TableRegistration>, StorageError>;
-
-    /// Returns the `DataSource::Table` IDs among `ids`.
-    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError>;
@@ -707,33 +649,6 @@ pub trait StorageController: Debug {
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
 
-    /// Appends to tables during bootstrap.
-    ///
-    /// Runtime writes must go through the adapter's group committer. The returned receiver resolves
-    /// when the atomic write completes.
-    fn append_table(
-        &mut self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
-
-    /// Returns the process-lifetime storage mechanism used by the adapter's group committer.
-    fn table_write_handle(&self) -> Arc<dyn TableWriteHandle>;
-
-    /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
-    /// append to the specified [`GlobalId`].
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
-
-    /// Returns a shared [`WebhookStatistics`] which can be used to report user-facing
-    /// statistics for this given webhhook, specified by the [`GlobalId`].
-    ///
-    // This is used to support a fairly special case, where a source needs to report statistics
-    // from outside the ordinary controller-clusterd path. Its possible to merge this with
-    // `monotonic_appender`, whose only current user is webhooks, but given that they will
-    // likely be moved to clusterd, we just leave this a special case.
-    fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError>;
-
     /// Waits until the controller is ready to process a response.
     ///
     /// This method may block for an arbitrarily long time.
@@ -745,24 +660,7 @@ pub trait StorageController: Debug {
     async fn ready(&mut self);
 
     /// Processes the work queued by [`StorageController::ready`].
-    fn process(
-        &mut self,
-        storage_metadata: &StorageMetadata,
-    ) -> Result<Option<Response>, anyhow::Error>;
-
-    /// Exposes the internal state of the data shard for debugging and QA.
-    ///
-    /// We'll be thoughtful about making unnecessary changes, but the **output
-    /// of this method needs to be gated from users**, so that it's not subject
-    /// to our backward compatibility guarantees.
-    ///
-    /// TODO: Ideally this would return `impl Serialize` so the caller can do
-    /// with it what they like, but that doesn't work in traits yet. The
-    /// workaround (an associated type) doesn't work because persist doesn't
-    /// want to make the type public. In the meantime, move the `serde_json`
-    /// call from the single user into this method.
-    async fn inspect_persist_state(&self, id: GlobalId)
-    -> Result<serde_json::Value, anyhow::Error>;
+    fn process(&mut self) -> Result<Option<Response>, anyhow::Error>;
 
     /// Records append-only updates for the given introspection type.
     ///
