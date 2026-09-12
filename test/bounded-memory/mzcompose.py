@@ -96,6 +96,9 @@ class Scenario:
     timeout: str = "5m"
     disabled: bool = False
     needs_iceberg: bool = False
+    # Let clusterd page out past its memory limit instead of being OOM-killed at twice the
+    # limit, for scenarios whose working set is meant to exceed memory.
+    unlimited_swap: bool = False
 
 
 class PgCdcScenario(Scenario):
@@ -1334,9 +1337,73 @@ SCENARIOS = [
 ]
 
 
+# Bytes of padding per row of the swap scenarios' arrangement. With the row's own overhead a
+# million rows is about a gibibyte, so the clusterd limit below is a gibibyte and the ratio
+# is millions of rows.
+SWAP_PAD_LEN = 1024
+SWAP_ROWS_PER_GIB = 1_000_000
+SWAP_INSERT_CHUNK = 500_000
+
+
+def swap_scenario(ratio: float) -> Scenario:
+    """A scenario whose indexed working set is `ratio` times clusterd's memory limit.
+
+    The working set is one arrangement of `ratio` gibibytes: a table of integers, padded to a
+    kibibyte per row by an indexed view, so the table itself stays small in persist and only the
+    arrangement is large. The replica has a gibibyte of memory and unlimited swap, so the kernel
+    pages the arrangement out rather than killing clusterd, and hydrating and reading it is what
+    the scenario times. The final query asserts that swap was actually used, since a run that
+    fit in memory would prove nothing about paging.
+    """
+    rows = int(ratio * SWAP_ROWS_PER_GIB)
+    inserts = [
+        f"> INSERT INTO t SELECT * FROM generate_series({start + 1}, {min(start + SWAP_INSERT_CHUNK, rows)})"
+        for start in range(0, rows, SWAP_INSERT_CHUNK)
+    ]
+    # Assembled line by line rather than through `dedent`, since testdrive reads an indented
+    # line as the continuation of the statement above it.
+    setup = "\n".join(
+        [
+            "> CREATE TABLE t (f1 int)",
+            f"> CREATE VIEW padded AS SELECT f1, repeat('x', {SWAP_PAD_LEN}) AS pad FROM t",
+            "> CREATE INDEX padded_idx IN CLUSTER clusterd ON padded (f1)",
+            "",
+            *inserts,
+            "",
+        ]
+    )
+    # The replica-targeted introspection read has to run on the paging replica itself.
+    hydrated_and_swapping = dedent(f"""
+        > SET cluster = clusterd
+
+        > SELECT count(*) FROM padded
+        {rows}
+
+        > SELECT bool_or(value::int8 > 0)
+          FROM mz_introspection.mz_cluster_replica_resource_usage
+          WHERE source = 'cgroup' AND metric = 'swap_peak'
+        true
+        """)
+    return Scenario(
+        name=f"swap-{ratio:g}x",
+        pre_restart=setup + hydrated_and_swapping,
+        post_restart=hydrated_and_swapping,
+        materialized_memory="4.5Gb",
+        clusterd_memory="1Gb",
+        # Paging a working set several times memory is slow by design; the budget is per query.
+        timeout="30m",
+        unlimited_swap=True,
+    )
+
+
+SWAP_SCENARIOS = [swap_scenario(ratio) for ratio in (1.5, 2, 3, 6)]
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
-        if name in ["default", "minimization-search"]:
+        # `swap` needs a host with swap, which the default agents do not have, so it runs as its
+        # own nightly step.
+        if name in ["default", "minimization-search", "swap"]:
             return
         with c.test_case(name):
             c.workflow(name)
@@ -1370,6 +1437,30 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
             )
 
+            run_scenario(
+                c,
+                scenario,
+                materialized_memory=scenario.materialized_memory,
+                clusterd_memory=scenario.clusterd_memory,
+            )
+
+
+def workflow_swap(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Hydrate and read arrangements larger than clusterd's memory, paging into swap."""
+
+    parser.add_argument(
+        "scenarios", nargs="*", default=None, help="run specified Scenarios"
+    )
+    args = parser.parse_args()
+    check_scenario_names(args.scenarios, SWAP_SCENARIOS)
+
+    for scenario in shard_list(SWAP_SCENARIOS, lambda scenario: scenario.name):
+        if shall_skip_scenario(scenario, args):
+            continue
+        with c.test_case(f"Scenario '{scenario.name}'"):
+            print(
+                f"+++ Running scenario {scenario.name} with clusterd_memory={scenario.clusterd_memory} and unlimited swap ..."
+            )
             run_scenario(
                 c,
                 scenario,
@@ -1449,9 +1540,11 @@ def workflow_minimization_search(
         test_analytics.on_upload_failed(e)
 
 
-def check_scenario_names(scenario_names: list[str] | None) -> None:
+def check_scenario_names(
+    scenario_names: list[str] | None, scenarios: list[Scenario] = SCENARIOS
+) -> None:
     """Reject unknown scenario names, a typo would otherwise silently skip everything."""
-    known_names = [scenario.name for scenario in SCENARIOS]
+    known_names = [scenario.name for scenario in scenarios]
     unknown_names = [name for name in scenario_names or [] if name not in known_names]
     if unknown_names:
         raise UIError(
@@ -1475,7 +1568,7 @@ def run_scenario(
 
     with c.override(
         Materialized(memory=materialized_memory, support_external_clusterd=True),
-        Clusterd(memory=clusterd_memory),
+        Clusterd(memory=clusterd_memory, unlimited_swap=scenario.unlimited_swap),
     ):
         c.up(
             "redpanda",
@@ -1494,6 +1587,20 @@ def run_scenario(
                 else []
             ),
         )
+
+        if scenario.unlimited_swap:
+            # `/proc/meminfo` in a container is the host's. Without swap the kernel can only
+            # OOM-kill at the limit, and the scenario would fail for the wrong reason.
+            meminfo = c.exec("clusterd", "cat", "/proc/meminfo", capture=True).stdout
+            swap_total = next(
+                int(line.split()[1])
+                for line in meminfo.splitlines()
+                if line.startswith("SwapTotal:")
+            )
+            if swap_total == 0:
+                raise UIError(
+                    f"scenario {scenario.name} pages into swap, but the host has none"
+                )
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
