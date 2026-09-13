@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/hydration_history.rs
-revision: 46f729653a
+revision: 46ec25c090
 ---
 
 # `adapter::coord::hydration_history`
@@ -29,9 +29,9 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 ## Collection Queries
 
-`object_collection_sql` builds a `SELECT` that joins `mz_compute_hydration_times_per_worker` against `mz_object_hydration_history` with an anti-join, filtering to fully-hydrated user indexes and materialized views (all workers have a `hydrated_at`) whose episodes are not yet recorded. The cutoff and the anti-join sit outside the aggregate so they do not interfere with the per-worker completeness check.
+`object_collection_sql` builds a `SELECT` that joins `mz_compute_hydration_times_per_worker` against `mz_object_hydration_history` with an anti-join, filtering to fully-hydrated exports (all workers have a `hydrated_at`) whose episodes are not yet recorded. Introspection-index exports (IDs starting with `si`) and transient exports (IDs starting with `t`) are excluded. The cutoff and the anti-join sit outside the aggregate so they do not interfere with the per-worker completeness check.
 
-`replica_collection_sql` implements a gaps-and-islands algorithm over compute export hydration intervals to find the latest completed hydration episode that is disconnected from any still-open interval. Transient exports (those with IDs starting with `t`) are excluded. The query also waits until every configured replica process (`process_count`) has reported resource usage before committing the episode, capturing `peak_memory_bytes` (cgroup `memory_peak`) and `peak_disk_bytes` (statvfs `fs_used_peak`, falling back to cgroup `swap_peak`).
+`replica_collection_sql` implements a gaps-and-islands algorithm over compute export hydration intervals to find the latest completed hydration episode that is disconnected from any still-open interval. Transient exports (those with IDs starting with `t`) are excluded from episode construction entirely. Introspection-index exports (IDs starting with `si`) participate in episode boundary and completion calculations but are excluded from the `object_count` column, so introspection-only episodes are visible with `object_count = 0`. The query also waits until every configured replica process (`process_count`) has reported resource usage before committing the episode, capturing `peak_memory_bytes` (cgroup `memory_peak`) and `peak_disk_bytes` (statvfs `fs_used_peak`, falling back to cgroup `swap_peak`).
 
 ## Retention
 
