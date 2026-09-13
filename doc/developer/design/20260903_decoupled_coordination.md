@@ -256,6 +256,16 @@ and does not gate their catalog writes, so it can later dissolve into per-cluste
 followers without another redesign. Collection lifecycle and compaction belong to
 it. DDL and table appends are request-scoped and stay with adapters.
 
+### Written plans
+
+The writer that commits a maintained object also writes its optimized plan and
+notices, per build. Lifecycle components install what is written and do not plan.
+EXPLAIN and `mz_notices` read and hold that written state. DDL that removes
+something a written plan imports rewrites the affected plans in the same
+transaction without reinstalling the running dataflows. A new index does not
+change existing plans. A new generation's adapters write plans for their version
+before that generation's components install.
+
 ### Query client
 
 An adapter reads through a query client that owns that client's read
