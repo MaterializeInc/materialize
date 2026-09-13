@@ -46,10 +46,10 @@ app's settings.
 
 ### Step 2. Add the provider to tfvars
 
-Add an entry to `upstream_oidc_providers` in your `terraform.tfvars`:
+Add an entry to `upstream_identity_providers` in your `terraform.tfvars`:
 
 ```hcl
-upstream_oidc_providers = [
+upstream_identity_providers = [
   {
     id            = "okta"
     provider      = "generic"
@@ -67,10 +67,10 @@ provider. The label text becomes the button on the login screen.
 
 ### Step 3. Test the login
 
-Open the Materialize console in an incognito window:
+Open the Materialize Console in an incognito window:
 `https://<your-console-hostname>`. You should see the Kratos login
 screen with a "Sign in with Okta" button. Click it; you'll bounce
-through your IdP and land in the Materialize console signed in.
+through your IdP and land in the Materialize Console signed in.
 
 ## SAML via Polis
 
@@ -100,6 +100,7 @@ Save and grab the SAML metadata URL (or download the metadata XML).
 Assign users (or groups) to the app so they can authenticate through it.
 
 {{< note >}}
+
 **Okta:** set the `groups` claim in the **Group Attribute Statements**
 table, not the **Add expression** dialog at the top of the Attribute
 Statements section. The Group Attribute Statements table lives under the
@@ -111,6 +112,7 @@ expression UI does not expose group functions like `Groups.startsWith` or
 table is the reliable path. See Okta's [attribute statements](https://help.okta.com/oie/en-us/content/topics/apps/define-attribute-statements.htm),
 the legacy config, versus their newer [federated claims](https://help.okta.com/oie/en-us/content/topics/apps/federated-claims-overview.htm)
 model.
+
 {{</ note >}}
 
 ### Step 2. Get the Polis admin API key
@@ -136,7 +138,7 @@ curl -X POST https://<your-polis-hostname>/api/v1/sso \
   --data-urlencode "tenant=<customer-name>" \
   --data-urlencode "product=materialize" \
   --data-urlencode "name=<idp-name>-saml" \
-  --data-urlencode "redirectUrl=https://<your-kratos-hostname>/self-service/methods/oidc/callback/polis" \
+  --data-urlencode "redirectUrl=https://<your-kratos-hostname>/self-service/methods/saml/callback/polis" \
   --data-urlencode "defaultRedirectUrl=https://<your-console-hostname>" \
   --data-urlencode "metadataUrl=https://<idp-metadata-url>"
 ```
@@ -151,16 +153,16 @@ curl -X POST https://<your-polis-hostname>/api/v1/sso \
   --data-urlencode "tenant=<customer-name>" \
   --data-urlencode "product=materialize" \
   --data-urlencode "name=<idp-name>-saml" \
-  --data-urlencode "redirectUrl=https://<your-kratos-hostname>/self-service/methods/oidc/callback/polis" \
+  --data-urlencode "redirectUrl=https://<your-kratos-hostname>/self-service/methods/saml/callback/polis" \
   --data-urlencode "defaultRedirectUrl=https://<your-console-hostname>" \
-  --data-urlencode "rawMetadata=$(cat saml-metadata.xml)"
+  --data-urlencode "rawMetadata=$(cat idp-metadata.xml)"
 ```
 
 If `rawMetadata` fails with "Couldn't fetch XML data" (some shells strip
 newlines), base64-encode the file first and use `encodedRawMetadata` instead:
 
 ```bash
---data-urlencode "encodedRawMetadata=$(base64 < saml-metadata.xml | tr -d '\n')"
+--data-urlencode "encodedRawMetadata=$(base64 < idp-metadata.xml | tr -d '\n')"
 ```
 
 The response contains a `clientID` and `clientSecret`. Save them for the
@@ -173,33 +175,38 @@ curl -s -H "Authorization: Api-Key $POLIS_API_KEY" \
   "https://<your-polis-hostname>/api/v1/sso?tenant=<customer-name>&product=materialize" | jq .
 ```
 
-### Step 4. Wire Polis into Kratos as an upstream OIDC provider
+### Step 4. Wire Polis into Kratos as a SAML sign-in provider
 
-Polis acts as an OIDC provider to Kratos. Add an entry to
-`upstream_oidc_providers` in tfvars, alongside any direct OIDC entries:
+Polis is a SAML method in Kratos, not an OIDC provider, so it goes in
+`saml_providers` rather than `upstream_identity_providers`. Add an entry:
 
 ```hcl
-upstream_oidc_providers = [
+saml_providers = [
   {
     id            = "polis"
-    provider      = "generic"
+    label         = "Sign in via SAML"
     client_id     = "<clientID from Step 3>"
     client_secret = "<clientSecret from Step 3>"
     issuer_url    = "https://<your-polis-hostname>"
-    scope         = ["openid", "email", "profile"]
-    label         = "Sign in via SAML"
+    auth_url      = "https://<your-polis-hostname>/api/oauth/authorize"
+    token_url     = "https://<your-polis-hostname>/api/oauth/token"
   },
 ]
 ```
+
+The `issuer_url` is the base Polis URL, with no `/saml` suffix. Save the
+SAML metadata from Step 1 as `idp-metadata.xml` next to your
+`terraform.tfvars`: the example's `main.tf` reads it with `file()` and
+injects it as `raw_idp_metadata_xml`, so you never paste XML into tfvars.
 
 Run `terraform apply`. The "Sign in via SAML" button will appear on the
 Kratos login screen.
 
 ### Step 5. Test the SAML login
 
-Open the Materialize console in an incognito window. Click **Sign in via
+Open the Materialize Console in an incognito window. Click **Sign in via
 SAML**. You'll bounce through Polis to your IdP, authenticate, and land
-in the Materialize console. The federated identity is created in Kratos
+in the Materialize Console. The federated identity is created in Kratos
 on first login, and Materialize JIT-creates the SQL role from your email
 claim.
 
@@ -274,11 +281,13 @@ You should see the assigned users with their email, name, and external
 ID populated.
 
 {{< note >}}
+
 **Existing assignments don't backfill on enable.** If a user was
 assigned to the SAML app before SCIM was turned on, Okta doesn't
 re-push them. Either unassign and reassign the user (the cleanest
 trigger), or push manually via Okta admin → Directory → People → the
 user → Applications → "..." → Push profile updates.
+
 {{</ note >}}
 
 ### Step 4. (Optional) Sync groups
