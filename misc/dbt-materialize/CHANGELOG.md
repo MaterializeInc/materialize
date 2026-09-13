@@ -32,6 +32,13 @@
     `mz_version` (for example, through a proxy that strips it) now get a
     clear error instead of a crash on the missing version string.
 
+* Run unit tests on the target cluster from `profiles.yml`. The unit test
+  materialization never passed a cluster to the macro that sets it, so unit
+  test queries always ran against the session default cluster. Unit test
+  nodes do not carry the tested model's `cluster` config, so the profile
+  cluster is what applies; when none is set, the session default cluster is
+  used, as before.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)
