@@ -11,9 +11,24 @@ menu:
 
 When an upstream system becomes unavailable (a Kafka broker outage, a paused
 replication slot, an ingestion cluster with no running replicas), the affected
-sources stop making progress, or **stall**. A stalled source does not have to
-stop your application from reading: in many cases, Materialize keeps serving
-queries from the last consistently ingested data.
+source's write frontier stops advancing, or **stalls**. This is one of three
+things "stalled" can mean, and the only one this page is about:
+
+* **Write frontier stalled (this page).** The last consistently ingested data
+  is intact and nothing new is written. Reads below the frozen write frontier
+  keep serving.
+* **[`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
+  reports `stalled`.** A transient status carrying an error string, for
+  example a connectivity hiccup. It does not poison the collection; ingestion
+  resumes on its own once the underlying issue clears.
+* **A durable ingestion error**, such as a decoding or replication error,
+  written into the collection's own error stream. From that timestamp
+  forward, every read of the collection returns the error, at every isolation
+  level, and none of the patterns on this page recover from it.
+
+A stalled write frontier does not have to stop your application from reading:
+in many cases, Materialize keeps serving queries from the last consistently
+ingested data.
 
 Whether a given query keeps serving depends on two things: the
 [isolation level](/serve-results/isolation-level/) of the session, and the
@@ -57,25 +72,36 @@ no stalled data at all are unaffected under either isolation level.
 | `SUBSCRIBE` to a single stalled collection | Serves stale | Blocks |
 | Join between a stalled collection and a healthy one | Blocks | Blocks |
 | Query mixing a stalled collection and a user-writable table | Blocks | Blocks |
-| Read of stalled data inside an explicit transaction | Blocks | Blocks |
+| Explicit transaction, if a stalled collection shares a schema with anything the transaction reads | Blocks | Blocks |
 
-Blocked queries **wait**; they do not error. A blocked query completes once
-the source resumes and its write frontier passes the query's timestamp, with
-no work lost. Note that `statement_timeout` does not interrupt this wait: it
-cancels queries that are executing, but does not fire while a query is waiting
-for its timestamp to become available. Use client-side timeouts to bound the
-wait.
+Blocked queries **wait**; they do not error, and a client-side cancellation
+(a driver-level statement timeout, or `Ctrl-C`) still reaches them right
+away. A blocked query otherwise completes once the source resumes and its
+write frontier passes the query's timestamp, with no work lost.
+
+Note that server-side `statement_timeout` does not bound this wait: it is
+existing, general behavior scoped to the read portion of write statements
+(`INSERT ... SELECT`, and the `WHERE` of `UPDATE`/`DELETE`), not to blocked
+reads, so it never fires while a query is waiting for its timestamp to
+become available. Use a client-side timeout to bound the wait on a plain
+`SELECT`.
 
 To see why a specific query does or does not serve, use [`EXPLAIN
 TIMESTAMP`](/sql/explain-timestamp/): it reports `can respond immediately:
-true/false` along with the read and write frontiers of every input.
+true/false` along with the read and write frontiers of every input. To check
+frontiers across every object at once,
+[`mz_internal.mz_frontiers`](/sql/system-catalog/mz_internal/#mz_frontiers)
+reports the read and write frontier of every source, sink, table, index, and
+materialized view, and
+[`mz_internal.mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
+reports whether a source is merely `stalled` or has hit a durable error.
 
 ## Keep serving across sources: maintain the query
 
 The recommended pattern for queries that span sources is to maintain the query
-as an [indexed view](/concepts/views/#indexes-on-views) or [materialized
-view](/concepts/views/#materialized-views), and have the application read from
-that object directly:
+as an [indexed view](/fundamentals/concepts/views/#indexes-on-views) or
+[materialized view](/fundamentals/concepts/views/#materialized-views), and
+have the application read from that object directly:
 
 ```mzsql
 CREATE VIEW order_enrichment AS
@@ -93,54 +119,33 @@ long as the stall lasts. This is also the recommended pattern for query
 latency in general, since point lookups on the index are served directly from
 the index.
 
-## Keep ad hoc queries serving: align frontiers with a maintained object
+## Ad hoc queries across a stalled and a live source
 
-If your application must issue **ad hoc** queries that reference multiple
-collections (for example, generated queries from a BI tool joining a stalled
-source to a live one), you can keep those queries servable during a stall by
-maintaining *any* object that reads the same set of inputs:
+An ad hoc query that joins a stalled collection to one still advancing (for
+example, a generated query from a BI tool) has no supported way to keep
+serving: Materialize can only wait for the two collections' timestamp ranges
+to overlap again, or fail.
 
-```mzsql
--- A small maintained object whose only purpose is to hold the read
--- frontiers of its inputs together.
-CREATE MATERIALIZED VIEW frontier_alignment AS
-  SELECT max(id) FROM (
-    SELECT id FROM kafka_orders
-    UNION ALL
-    SELECT id FROM pg_customers
-  );
-```
+It is possible to hand-roll an overlap by maintaining an unrelated object
+that reads the same inputs, since a maintained object holds back its inputs'
+read frontiers for as long as it stays readable. This is not a supported
+pattern: for a materialized view, the held-back window is exactly one step
+behind the object's own write frontier, not a window you control, and the
+optimizer can prune an input it proves unused, silently narrowing what the
+trick actually covers. Treat it as a last resort, not a technique to build on.
 
-Because the maintained object must remain readable at its own (frozen) write
-frontier, Materialize holds back the read frontiers of **all** of its inputs.
-That keeps the stalled and live collections' frontier intervals overlapping,
-so an ad hoc query over any subset of those inputs can still select a valid
-timestamp and serve stale results instead of blocking.
+If your application issues this kind of ad hoc query, convert it to the
+maintained-query pattern above instead of trying to align frontiers after
+the fact.
 
-For this to work, note:
+## Avoid explicit transactions during a stall
 
-- **The object must exist before the stall.** Once the live inputs' read
-  frontiers have advanced past the stalled collection's write frontier,
-  compaction has already discarded the historical data. Creating the aligning
-  object after the fact does not help, and the new object itself cannot serve
-  until the source resumes.
-
-- **The object must genuinely read every input you want covered.** The
-  optimizer removes inputs it can prove are unused (for example, behind
-  `WHERE false`). Check `EXPLAIN` on the object's definition to confirm all
-  intended inputs appear in the plan.
-
-- **Holding back read frontiers has a cost.** For the duration of the stall,
-  Materialize retains historical data for the covered inputs that it would
-  otherwise compact away.
-
-- **Reads of stalled data inside explicit transactions are not rescued**
-  (see below).
-
-## Don't use transactions
-
-Explicit read transactions that touch stalled data are unable to serve
-during a stall. Issue single-statement queries instead.
+Materialize picks one timestamp for an entire transaction, valid across
+every object in every schema referenced by its first statement, not just the
+objects the transaction actually reads. If a stalled collection shares a
+schema with a healthy table you query inside `BEGIN`, the transaction blocks
+even though it never reads the stalled collection. Issue single-statement
+queries instead of wrapping reads in an explicit transaction during a stall.
 
 {{< if-released "v26.29" >}}
 ## Fail fast instead of blocking
@@ -154,10 +159,12 @@ level. During a stall:
   bounded staleness, as long as the stall is younger than the configured
   bound.
 
-- Query shapes that would block under serializable, and any query reading
-  stalled data once the stall exceeds the bound, **error immediately** with
-  `SQLSTATE 40001` instead of blocking, giving the application a clean signal
-  to retry or fall back.
+- A query that would block under serializable instead errors once the data
+  available is too stale for your bound. When a valid, if stale, timestamp
+  exists, Materialize raises a serialization failure (`SQLSTATE 40001`) so
+  your application gets a clean, retryable signal. When the inputs' timestamp
+  ranges never overlap at all, it raises a different, non-retryable error
+  instead. Design your fallback to handle both.
 
 ```mzsql
 SET TRANSACTION_ISOLATION TO 'bounded staleness 1m';
@@ -168,6 +175,8 @@ SET TRANSACTION_ISOLATION TO 'bounded staleness 1m';
 
 - [Isolation levels](/serve-results/isolation-level/)
 - [`EXPLAIN TIMESTAMP`](/sql/explain-timestamp/)
+- [`mz_internal.mz_frontiers`](/sql/system-catalog/mz_internal/#mz_frontiers)
+- [`mz_internal.mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
 - [`BEGIN`](/sql/begin/)
 - [`SUBSCRIBE`](/sql/subscribe/)
 - [Troubleshooting serving](/serve-results/troubleshooting/)
