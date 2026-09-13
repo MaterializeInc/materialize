@@ -56,7 +56,7 @@ FROM create_permission, usage_permission;
 
 {% set database_check = run_query(database_permissions) %}
 {% if execute %}
-    {% if database_check.rows[0][0] or database_check[0][1] %}
+    {% if database_check.rows[0][0] or database_check.rows[0][1] %}
         {{ exceptions.raise_compiler_error("""
             Missing necessary permissions to execute a deployment. The current role """ ~
             database_check.rows[0][2] ~ """ needs CREATE and USAGE privileges on database """ ~
@@ -74,7 +74,7 @@ FROM create_permission, usage_permission;
     {% if has_create_cluster.rows[0][0] %}
         {{ exceptions.raise_compiler_error("""
             Missing necessary permissions to execute a deployment. The current role
-            """ ~ has_create_cluster.rows[0][1] ~ """ needs CREATECLUSTER privlidges.
+            """ ~ has_create_cluster.rows[0][1] ~ """ needs CREATECLUSTER privileges.
 
             Hint: `GRANT CREATECLUSTER ON SYSTEM TO """ ~ has_create_cluster.rows[0][1] ~ """;`
         """) }}
@@ -98,20 +98,23 @@ WITH clusters_under_deployment AS (
     )
 ),
 
+-- Materialize treats a role as an owner when it is the owner or a member of
+-- the owning role, so clusters owned by a shared role the deploying role
+-- belongs to count as owned here too.
 cluster_with_ownership AS (
     SELECT c.name FROM clusters_under_deployment c
     INNER JOIN mz_roles ON c.owner_id = mz_roles.id
-    WHERE mz_roles.name = current_role
+    WHERE pg_has_role(current_role, mz_roles.name, 'USAGE')
 ),
 
 missing_ownership AS (
     SELECT name
-    FROM cluster_with_ownership
+    FROM clusters_under_deployment
 
     EXCEPT
 
     SELECT name
-    FROM clusters_under_deployment
+    FROM cluster_with_ownership
 )
 
 SELECT name, quote_ident(current_role)
@@ -148,20 +151,22 @@ WITH schemas_under_deployment AS (
     )
 ),
 
+-- See the note on cluster ownership above: membership in the owning role
+-- counts as ownership.
 schemas_with_ownership AS (
     SELECT s.name FROM schemas_under_deployment s
     INNER JOIN mz_roles ON s.owner_id = mz_roles.id
-    WHERE mz_roles.name = current_role
+    WHERE pg_has_role(current_role, mz_roles.name, 'USAGE')
 ),
 
 missing_ownership AS (
     SELECT name
-    FROM schemas_with_ownership
+    FROM schemas_under_deployment
 
     EXCEPT
 
     SELECT name
-    FROM schemas_under_deployment
+    FROM schemas_with_ownership
 )
 
 SELECT name, quote_ident(current_role)
@@ -173,7 +178,7 @@ FROM missing_ownership
     {% if schema_ownership|length > 0 %}
         {{ exceptions.raise_compiler_error("""
             Missing necessary permissions to execute a deployment. The current role """
-            ~ schema_ownership.rows[0][1] ~ """ needs to be an owner of cluster """ ~
+            ~ schema_ownership.rows[0][1] ~ """ needs to be an owner of schema """ ~
             schema_ownership.rows[0][0] ~ """.
 
             Hint: `ALTER SCHEMA """ ~ schema_ownership.rows[0][0] ~ """ OWNER TO """ ~ schema_ownership.rows[0][1] ~ """;`
