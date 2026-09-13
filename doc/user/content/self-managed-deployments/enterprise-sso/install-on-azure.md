@@ -18,7 +18,7 @@ with the Ory-based enterprise SSO stack on AKS.
 
 {{% self-managed/materialize-components-sentence %}} This example layers the
 Ory stack (Kratos, Hydra, the selfservice UI, and optional Polis) on top so
-that the Materialize console authenticates users through OIDC, with SAML and
+that the Materialize Console authenticates users through OIDC, with SAML and
 SCIM available when Polis is enabled. The example wires these modules
 together as a reference; the individual modules are designed to be composed
 into your own Terraform rather than used only through the example.
@@ -39,7 +39,7 @@ the additions below.
 
 | Resource | Description |
 |----------|-------------|
-| Public Hostnames | Six browser-facing hostnames (Hydra, Kratos, the selfservice UI, optional Polis, the Materialize console, balancerd). DNS records are created by you after `terraform apply`. |
+| Public Hostnames | Six browser-facing hostnames (Hydra, Kratos, the selfservice UI, optional Polis, the Materialize Console, balancerd). DNS records are created by you after `terraform apply`. |
 | LoadBalancer Services | One per browser-facing service in the `ory` and `materialize-environment` namespaces. Backed by Azure standard load balancers. |
 
 ### Database
@@ -55,7 +55,7 @@ the additions below.
 | Resource | Description |
 |----------|-------------|
 | Ory Kratos | Helm release in the `ory` namespace. Identity management: login, registration, recovery, account flows. |
-| Ory Hydra | Helm release in the `ory` namespace. OAuth2 / OIDC provider that the Materialize console trusts. Hydra Maester is enabled. |
+| Ory Hydra | Helm release in the `ory` namespace. OAuth2 / OIDC provider that the Materialize Console trusts. Hydra Maester is enabled. |
 | Ory Selfservice UI | Helm release in the `ory` namespace. Renders the Kratos login, consent, and recovery pages. |
 | Ory Polis (optional) | Helm release in the `ory` namespace when `enable_polis = true`. SAML-to-OIDC bridge plus SCIM endpoint. |
 | Polis TLS termination (optional) | Polis serves plain HTTP internally. The Polis chart runs a TLS-terminating sidecar that presents HTTPS on the public port, using the cert-manager certificate mounted into it. |

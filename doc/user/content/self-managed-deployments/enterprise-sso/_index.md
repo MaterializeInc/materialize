@@ -15,7 +15,7 @@ Self-Managed Materialize ships with a built-in OIDC authentication path
 documented at [SSO](/security/self-managed/sso/). For customers who need
 **SAML**, **SCIM provisioning**, or **federation through an IdP-agnostic
 proxy**, Materialize provides an additional Terraform-managed Ory stack
-that sits in front of the Materialize console and acts as the OIDC issuer.
+that sits in front of the Materialize Console and acts as the OIDC issuer.
 
 This section walks through deploying that stack, configuring it against
 your identity provider, and operating it day to day.
@@ -73,8 +73,8 @@ network policies, console TLS).
 When you apply one of the enterprise examples, Terraform stands up:
 
 - A Kubernetes cluster (AKS / GKE / EKS) sized for both Materialize and Ory
-- A Materialize Postgres instance (Cloud SQL / Flexible Server / RDS)
-- A separate Postgres instance (or set of databases on a shared instance,
+- A Materialize PostgreSQL instance (Cloud SQL / Flexible Server / RDS)
+- A separate PostgreSQL instance (or set of databases on a shared instance,
   depending on cloud) for Kratos, Hydra, and Polis
 - Object storage for Materialize's persistence backend
 - The Materialize operator and a Materialize instance CR
@@ -84,6 +84,35 @@ When you apply one of the enterprise examples, Terraform stands up:
 - cert-manager, with either a self-signed or BYO ClusterIssuer for the
   browser-facing TLS certificates
 - Optional: Prometheus and Grafana for observability
+
+## Roles and what to expect end-to-end
+
+Standing up this stack is usually a multi-party effort, though on a smaller
+team one person often wears several of these hats.
+
+| Role | Owns | Pages |
+|---|---|---|
+| Materialize / infra admin | Runs the Terraform enterprise example: sets tfvars (including `enable_polis`, the browser-facing FQDNs, and `saml_providers`), places `idp-metadata.xml` next to the tfvars, applies, and wires OIDC into Materialize (the module handles the wiring). | [Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/), the install pages, and [Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/) |
+| IdP / Okta admin | Creates the SAML app (and the optional SCIM app): sets the ACS URL to `https://<your-polis-hostname>/api/oauth/saml` and the audience to `https://saml.boxyhq.com`, exports the IdP metadata XML, assigns users and groups, and hands the metadata (plus the SCIM token) back to the infra admin. | [Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/) |
+| DNS owner | Creates the A / CNAME records pointing at the LoadBalancer IPs after the first apply, so cert-manager can issue the browser-facing TLS certificates. | The install pages and [Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/) |
+
+End to end, the handoffs run in this order:
+
+1. Gather the [prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/), including a license key that carries the `ory` entitlement.
+2. The IdP admin creates the SAML application and exports its metadata XML.
+3. The infra admin applies Terraform with Polis enabled and `idp-metadata.xml` in place.
+4. The DNS owner creates the DNS records, and cert-manager issues the TLS certificates.
+5. The infra admin registers the Polis SAML connection, adds the `saml_providers` block, and re-applies.
+6. Optionally, the IdP admin enables SCIM provisioning.
+7. Verify sign-in from the Materialize Console.
+
+{{< note >}}
+
+You can stop after the OIDC-only steps. SAML and SCIM are later additions, so a
+smaller deployment that needs only OIDC sign-in is not over-scoped by the full
+sequence.
+
+{{</ note >}}
 
 ## Reading order
 

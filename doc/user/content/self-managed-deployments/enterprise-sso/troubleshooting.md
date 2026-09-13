@@ -43,7 +43,7 @@ you can see which component rejected the flow.
 | First login fails with `no matching authentication claim found in the JWT` | User clicked Allow on the consent screen without ticking the `email` scope | Module sets `skipConsent: true` on the OAuth2Client which bypasses the consent screen for the Materialize client; re-run `terraform apply` |
 | `"Couldn't fetch XML data"` when registering a Polis SAML connection | The IdP's metadata URL is gated by API auth | Post `rawMetadata=<XML>` to Polis instead of `metadataUrl=...` |
 | "Sign in via SAML" button missing on Kratos login | Cached login flow from before the polis provider was added | Hard refresh or open a new incognito session |
-| Materialize console reaches the login screen but balancerd times out | DNS or cert SAN mismatch | Confirm the balancerd hostname A record resolves and is in the cert SAN list (`balancerd_extra_dns_names`) |
+| Materialize Console reaches the login screen but balancerd times out | DNS or cert SAN mismatch | Confirm the balancerd hostname A record resolves and is in the cert SAN list (`balancerd_extra_dns_names`) |
 | User logs in but can't run any SQL | JIT role created with no privileges | Run `GRANT <role> TO "user@email"` as `mz_system` |
 | SCIM "Test Connector Configuration" passes but no users push | Existing assignments don't backfill when SCIM is enabled after-the-fact | In Okta, unassign + reassign the user, or push profile updates from the people side |
 | `terraform destroy` hangs on `kubernetes_namespace.ory` | OAuth2Client finalizer not cleared because Hydra Maester is torn down before processing it | `kubectl patch oauth2client materialize-oauth2-client -n ory --type=json -p='[{"op":"remove","path":"/metadata/finalizers"}]'` then re-run destroy |
@@ -117,7 +117,7 @@ IdP must exactly match what Kratos sends:
 https://<your-kratos-hostname>/self-service/methods/oidc/callback/<id>
 ```
 
-where `<id>` is the entry in `upstream_oidc_providers`. Trailing slashes
+where `<id>` is the entry in `upstream_identity_providers`. Trailing slashes
 matter. Update the redirect URI in the IdP to match.
 
 If the redirect URI is correct, check the `oidc_audience` system

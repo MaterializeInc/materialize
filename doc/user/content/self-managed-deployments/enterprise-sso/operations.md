@@ -14,7 +14,7 @@ your IdP is connected.
 ## Add additional OAuth2 clients
 
 By default the ory-stack module registers a single OAuth2Client in Hydra for the
-Materialize console. If you have other internal applications that
+Materialize Console. If you have other internal applications that
 should authenticate through the same Hydra instance, you can register
 additional clients using Hydra Maester's `OAuth2Client` CRDs.
 
@@ -75,7 +75,7 @@ reconcile.
 
 ## Manage Kratos identities
 
-Kratos stores user identities in its own Postgres database. You can
+Kratos stores user identities in its own PostgreSQL database. You can
 inspect and manage them via Kratos's admin API.
 
 Get the in-cluster admin URL:
@@ -304,11 +304,11 @@ kratos_helm_values = {
 
 Apply. The "Sign up" link disappears from the login screen.
 
-## Back up the Ory Postgres database
+## Back up the Ory PostgreSQL database
 
 The Ory components (Kratos, Hydra, Polis) store identities, OAuth2
 clients, sessions, SAML connections, and SCIM directory state in a
-Postgres database. Loss of this database means:
+PostgreSQL database. Loss of this database means:
 
 - All Kratos identities are gone (users will need to re-register / be
   re-provisioned via SCIM on next login)
@@ -336,7 +336,7 @@ Key signals to alert on:
 - Kratos `/sessions/whoami` 5xx rate (session validation failing)
 - Polis OIDC callback errors (SAML assertions failing)
 - Pod restart counts on any Ory component
-- Postgres connection failures from any Ory component (suggests DB
+- PostgreSQL connection failures from any Ory component (suggests DB
   saturation or networking issues)
 
 ## Future work

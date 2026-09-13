@@ -18,7 +18,7 @@ carries the `ory` entitlement. Community licenses don't include this
 entitlement, and licenses issued before the entitlement existed will keep
 working for Materialize itself but will be rejected by the Ory registry
 proxy. Contact
-[Materialize support](https://materialize.com/docs/support/) to have an
+[Materialize support](/support/) to have an
 ory-enabled key issued.
 
 The Ory components ship as private OEL (Ory Enterprise License) images.
@@ -28,8 +28,10 @@ uses your Materialize license key JWT (passed as the password in a Kubernetes
 `imagePullSecret`), so there is no separate Ory credential to manage.
 
 {{< note >}}
+
 The license key is also used by Materialize itself; the same JWT covers both.
 There is no separate "Ory key" to manage.
+
 {{</ note >}}
 
 ## Cluster Egress
@@ -55,7 +57,7 @@ Polis enabled, that is six hostnames:
 | `kratos.example.com` | Kratos public API; browser-side redirect target |
 | `auth.example.com` | Selfservice UI (login, consent, registration pages) |
 | `polis.example.com` | Polis (SAML ACS, SCIM endpoint, OIDC token endpoint). Only when Polis is enabled. |
-| `console.example.com` | Materialize console |
+| `console.example.com` | Materialize Console |
 | `balancerd.example.com` | Materialize's SQL-over-HTTP endpoint. The console's browser-side JS calls this directly, so it needs a public hostname and a trusted TLS cert. |
 
 You will create DNS records pointing at the LoadBalancer IPs (or hostnames,
