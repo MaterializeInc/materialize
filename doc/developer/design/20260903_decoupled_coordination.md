@@ -249,12 +249,13 @@ permission, and there is no startup-specific writer protocol.
 
 ### Lifecycle placement
 
-The controller bundle may run as one independent process that follows the
-catalog, enacts maintained state, and publishes protection. Those three
-responsibilities are its interface. It does not serve controller state to adapters
-and does not gate their catalog writes, so it can later dissolve into per-cluster
-followers without another redesign. Collection lifecycle and compaction belong to
-it. DDL and table appends are request-scoped and stay with adapters.
+The lifecycle components, today's controllers, may run together as one
+independent process that follows the catalog, enacts maintained state, and
+publishes protection. Those three responsibilities are its interface. It does not
+serve controller state to adapters and does not gate their catalog writes, so it
+can later dissolve into per-cluster followers without another redesign.
+Collection lifecycle and compaction belong to it. DDL and table appends are
+request-scoped and stay with adapters.
 
 ### Written plans
 

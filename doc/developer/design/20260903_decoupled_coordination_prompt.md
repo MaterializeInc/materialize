@@ -42,12 +42,12 @@ milestone acceptance. Remaining work:
 2. Verify committed maintained installation, including cache rejection, same-batch
    dependencies, and pending replacements. Exercise suspended-target replacement
    recovery in both protection modes.
-3. Move the controller bundle out with catalog following, enactment, and publication
-   as its interface. DDL and table appends stay with the adapter. Table time stays
-   adapter-driven for now: assume a live adapter ticks transaction-WAL time, and
-   let the demonstration state that table-fed dataflows pause while the adapter
-   is down. Webhook batching and idle ticking likewise require a live adapter
-    for this milestone.
+3. Move the lifecycle components into their own process, with catalog following,
+   enactment, and publication as its interface. DDL and table appends stay with
+   the adapter. Table time stays adapter-driven for now: assume a live adapter
+   ticks transaction-WAL time, and let the demonstration state that table-fed
+   dataflows pause while the adapter is down. Webhook batching and idle ticking
+   likewise require a live adapter for this milestone.
 
 Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
 shared-view index topology and diagnostics. Larger-scale work and the known
