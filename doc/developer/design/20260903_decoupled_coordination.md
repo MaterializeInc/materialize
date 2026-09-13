@@ -261,10 +261,12 @@ it. DDL and table appends are request-scoped and stay with adapters.
 The writer that commits a maintained object also writes its optimized plan and
 notices, per build. Lifecycle components install what is written and do not plan.
 EXPLAIN and `mz_notices` read and hold that written state. DDL that removes
-something a written plan imports rewrites the affected plans in the same
-transaction without reinstalling the running dataflows. A new index does not
-change existing plans. A new generation's adapters write plans for their version
-before that generation's components install.
+something a written plan imports rewrites the affected plans of the writer's own
+build in the same transaction without reinstalling the running dataflows. Other
+builds rewrite theirs when they observe the change, and a plan whose import is
+gone is not installable until then. No build writes another's plans. A new index
+does not change existing plans. A new generation's adapters write plans for their
+version before that generation's components install.
 
 ### Query client
 
