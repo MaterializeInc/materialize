@@ -27,7 +27,10 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio
+        # Pulled from quay.io because MinIO deleted the `minio/minio` repository
+        # from Docker Hub, where an unqualified name resolves. Pinned to the tag
+        # the cloudtest MinIO deployment uses.
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
         args:
         - server
         - /data
