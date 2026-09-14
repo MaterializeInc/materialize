@@ -128,37 +128,32 @@ true
 true
 
 # Slow-path query: its join needs a dataflow with a transient index, unlike the
-# fast-path queries above. That index is replica-targeted at r1 along with the
-# peek that reads it; if it were instead broadcast to every replica, r2 would
-# panic on the peek below since it never received this dataflow.
+# fast-path queries above. That index is replica-targeted at r1, the same
+# replica as the peek that reads it. A broadcast peek against an index that
+# exists only on r1 would panic r2 in `handle_peek` on the missing trace. That
+# panic aborts this test's `materialized` container, because the harness runs
+# with `propagate_crashes`. The regression protection remains the
+# `mz_peek_durations_histogram_raw` check on r2 at the end of this block: it
+# only reads 0 because r2 never received this peek.
 > SELECT count(*) >= 0
   FROM mz_introspection.mz_compute_frontiers_per_worker f
   JOIN mz_introspection.mz_compute_exports_per_worker e USING (export_id, worker_id)
 true
 
-# r2 must still be online: a broadcast peek against an index that only exists
-# on r1 would have panicked it.
-> SELECT count(*) FROM mz_internal.mz_cluster_replica_statuses s
-  JOIN mz_catalog.mz_cluster_replicas r ON s.replica_id = r.id
-  JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
-  WHERE c.name = 'test' AND s.status <> 'online'
-0
-
 $ set-from-sql var=ts
 SELECT mz_now()::text
 
-# `mz_cluster_replica_frontiers` is populated by the coordinator from
-# frontier reports and is served off mz_catalog_server, so querying it does
-# not itself send anything to r2 and cannot pollute the count checked below
-# (unlike a query against a raw log source on the "test" cluster, which
-# would). Waiting for r2's own reported frontier to advance past `ts`
-# (captured right after the r1 queries above, including the slow-path query
-# and its replica-status check) proves r2's replica has communicated with the
-# controller at least once since those queries ran, without guessing at a
-# wall-clock duration. This assumes the controller's frontier reports and a
-# replica's own introspection-log publication are not arbitrarily far apart
-# in time; that has held in practice, but if r2 is ever observed to still see
-# stale data at this point, this barrier is why.
+# With `cluster_replica = r1` set, this query is replica-targeted at r1: it
+# never reaches r2, so it cannot add to the peek count checked below (unlike a
+# query against a raw log source that let auto-routing pick a replica).
+# Waiting for r2's own reported frontier to advance past `ts` (captured right
+# after the r1 queries above, including the slow-path query) proves r2's
+# replica has communicated with the controller at least once since those
+# queries ran, without guessing at a wall-clock duration. This assumes the
+# controller's frontier reports and a replica's own introspection-log
+# publication are not arbitrarily far apart in time. That has held in
+# practice, but if r2 is ever observed to still see stale data at this point,
+# this barrier is why.
 > SELECT bool_and(f.write_frontier > ${ts})
   FROM mz_cluster_replicas r, mz_cluster_replica_frontiers f
   WHERE r.id = f.replica_id AND r.name = 'r2'
