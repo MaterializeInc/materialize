@@ -30,7 +30,7 @@ use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
     ColumnName, Datum, Diff, ReprColumnType, ReprRelationType, Row, RowArena, RowPacker, SharedRow,
-    SqlColumnType, SqlRelationType, SqlScalarType, datum_size,
+    SqlColumnType, SqlRelationType, SqlScalarType, StableRow, datum_size,
 };
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
@@ -652,12 +652,20 @@ fn lag_lead<'a, I>(
     order_by: &[ColumnOrder],
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
+    constant_args: &Option<ConstantLagLeadArgs>,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let iter = lag_lead_no_list(datums, &temp_storage, order_by, lag_lead_type, ignore_nulls);
+    let iter = lag_lead_no_list(
+        datums,
+        &temp_storage,
+        order_by,
+        lag_lead_type,
+        ignore_nulls,
+        constant_args,
+    );
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(iter);
     })
@@ -671,6 +679,7 @@ fn lag_lead_no_list<'a: 'b, 'b, I>(
     order_by: &[ColumnOrder],
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
+    constant_args: &Option<ConstantLagLeadArgs>,
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -679,16 +688,14 @@ where
     let datums = order_aggregate_datums(datums, order_by);
 
     // Take the (OriginalRow, EncodedArgs) records and unwrap them into separate datums.
-    // EncodedArgs = (InputValue, Offset, DefaultValue) for Lag/Lead
     // (`OriginalRow` is kept in a record form, as we don't need to look inside that.)
+    let unwrap_args = lag_lead_arg_unwrapper(callers_temp_storage, constant_args);
     let (orig_rows, unwrapped_args): (Vec<_>, Vec<_>) = datums
         .into_iter()
         .map(|d| {
             let mut iter = d.unwrap_list().iter();
             let original_row = iter.next().unwrap();
-            let (input_value, offset, default_value) =
-                unwrap_lag_lead_encoded_args(iter.next().unwrap());
-            (original_row, (input_value, offset, default_value))
+            (original_row, unwrap_args(iter.next().unwrap()))
         })
         .unzip();
 
@@ -708,15 +715,37 @@ where
         })
 }
 
-/// lag/lead's arguments are in a record. This function unwraps this record.
-fn unwrap_lag_lead_encoded_args(encoded_args: Datum) -> (Datum, Datum, Datum) {
-    let mut encoded_args_iter = encoded_args.unwrap_list().iter();
-    let (input_value, offset, default_value) = (
-        encoded_args_iter.next().unwrap(),
-        encoded_args_iter.next().unwrap(),
-        encoded_args_iter.next().unwrap(),
-    );
-    (input_value, offset, default_value)
+/// Returns a closure turning one row's encoded `lag`/`lead` arguments into the
+/// `(value, offset, default)` triple the computation works on.
+///
+/// `constant_args` selects the encoding: `None` means the row carries a
+/// `(value, offset, default)` record, `Some` that it carries the bare `value`
+/// and the other two arguments come from the plan. A constant `default` is
+/// copied into `temp_storage` once here, so every row of the partition shares
+/// the one copy.
+fn lag_lead_arg_unwrapper<'a>(
+    temp_storage: &'a RowArena,
+    constant_args: &Option<ConstantLagLeadArgs>,
+) -> impl Fn(Datum<'a>) -> (Datum<'a>, Datum<'a>, Datum<'a>) {
+    let constants = constant_args
+        .as_ref()
+        .map(|ConstantLagLeadArgs { offset, default }| {
+            (
+                offset.map_or(Datum::Null, Datum::Int32),
+                temp_storage.make_datum(|packer| packer.push(default.unpack_first())),
+            )
+        });
+    move |encoded_args| match constants {
+        Some((offset, default)) => (encoded_args, offset, default),
+        None => {
+            let mut iter = encoded_args.unwrap_list().iter();
+            (
+                iter.next().unwrap(),
+                iter.next().unwrap(),
+                iter.next().unwrap(),
+            )
+        }
+    }
 }
 
 /// Each element of `args` has the 3 arguments evaluated for a single input row.
@@ -1227,12 +1256,11 @@ where
                 order_by: inner_order_by,
                 lag_lead,
                 ignore_nulls,
+                constant_args,
             } => {
                 assert_eq!(order_by, inner_order_by);
-                let unwrapped_argss = encoded_argss
-                    .into_iter()
-                    .map(|encoded_args| unwrap_lag_lead_encoded_args(encoded_args))
-                    .collect();
+                let unwrap_args = lag_lead_arg_unwrapper(callers_temp_storage, constant_args);
+                let unwrapped_argss = encoded_argss.into_iter().map(unwrap_args).collect();
                 lag_lead_inner(unwrapped_argss, lag_lead, ignore_nulls)
             }
             AggregateFunc::FirstValue {
@@ -1861,6 +1889,36 @@ pub enum LagLeadType {
     Lead,
 }
 
+/// The `offset` and `default` arguments of a `lag`/`lead` call, when both are
+/// known at planning time.
+///
+/// `lag`/`lead` normally read all three of their arguments out of a per-row
+/// `(value, offset, default)` record, which means two plan-time constants are
+/// packed into every row of the window reduce's input arrangement. When they
+/// are constant they live here instead, and the per-row encoded argument is
+/// the bare `value` datum. See `AggregateFunc::LagLead`.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+pub struct ConstantLagLeadArgs {
+    /// The `offset` argument; `None` is SQL NULL, for which `lag`/`lead`
+    /// returns NULL for every row.
+    pub offset: Option<i32>,
+    /// The `default` argument, as a single-datum row.
+    ///
+    /// A [`StableRow`] because `AggregateFunc` is part of the stable LIR
+    /// serialization surface, where raw `Row` bytes must not appear.
+    pub default: StableRow,
+}
+
 #[derive(
     Clone,
     Debug,
@@ -1970,6 +2028,11 @@ pub enum AggregateFunc {
         order_by: Vec<ColumnOrder>,
         lag_lead: LagLeadType,
         ignore_nulls: bool,
+        /// The `offset` and `default` arguments when both are plan-time
+        /// constants. `Some` changes the shape of the per-row encoded
+        /// argument from a `(value, offset, default)` record to the bare
+        /// `value` datum.
+        constant_args: Option<ConstantLagLeadArgs>,
     },
     FirstValue {
         order_by: Vec<ColumnOrder>,
@@ -2183,7 +2246,15 @@ impl AggregateFunc {
                 order_by,
                 lag_lead: lag_lead_type,
                 ignore_nulls,
-            } => lag_lead(datums, temp_storage, order_by, lag_lead_type, ignore_nulls),
+                constant_args,
+            } => lag_lead(
+                datums,
+                temp_storage,
+                order_by,
+                lag_lead_type,
+                ignore_nulls,
+                constant_args,
+            ),
             AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
@@ -2287,8 +2358,16 @@ impl AggregateFunc {
                 order_by,
                 lag_lead: lag_lead_type,
                 ignore_nulls,
-            } => lag_lead_no_list(datums, temp_storage, order_by, lag_lead_type, ignore_nulls)
-                .collect_vec(),
+                constant_args,
+            } => lag_lead_no_list(
+                datums,
+                temp_storage,
+                order_by,
+                lag_lead_type,
+                ignore_nulls,
+                constant_args,
+            )
+            .collect_vec(),
             AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
@@ -2520,7 +2599,7 @@ impl AggregateFunc {
             AggregateFunc::DenseRank { .. } => {
                 AggregateFunc::output_type_ranking_window_funcs(&input_type, "?dense_rank?")
             }
-            AggregateFunc::LagLead { lag_lead: lag_lead_type, .. } => {
+            AggregateFunc::LagLead { lag_lead: lag_lead_type, constant_args, .. } => {
                 // The input type for Lag is ((OriginalRow, EncodedArgs), OrderByExprs...)
                 let fields = input_type.scalar_type.unwrap_record_element_type();
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
@@ -2528,7 +2607,10 @@ impl AggregateFunc {
                     .nullable(false);
                 let encoded_args = fields[0].unwrap_record_element_type()[1];
                 let output_type_inner =
-                    Self::lag_lead_output_type_inner_from_encoded_args(encoded_args);
+                    Self::lag_lead_output_type_inner_from_encoded_args(
+                        encoded_args,
+                        constant_args.as_ref(),
+                    );
                 let column_name = Self::lag_lead_result_column_name(lag_lead_type);
 
                 SqlScalarType::List {
@@ -2664,7 +2746,7 @@ impl AggregateFunc {
                                     |(arg_type, func)| {
                                     match func {
                                         AggregateFunc::LagLead {
-                                            lag_lead: lag_lead_type, ..
+                                            lag_lead: lag_lead_type, constant_args, ..
                                         } => {
                                             let name = Self::lag_lead_result_column_name(
                                                 lag_lead_type,
@@ -2672,6 +2754,7 @@ impl AggregateFunc {
                                             let ty = Self
                                                 ::lag_lead_output_type_inner_from_encoded_args(
                                                     arg_type,
+                                                    constant_args.as_ref(),
                                                 );
                                             (name, ty)
                                         },
@@ -2797,18 +2880,27 @@ impl AggregateFunc {
         }
     }
 
-    /// Given the `EncodedArgs` part of `((OriginalRow, EncodedArgs), OrderByExprs...)`,
-    /// this computes the type of the first field of the output type. (The first field is the
-    /// real result, the rest is the original row.)
+    /// The type of a `lag`/`lead` result, given the `EncodedArgs` part of
+    /// `((OriginalRow, EncodedArgs), OrderByExprs...)`.
+    ///
+    /// This is the first field of the aggregate's output type; the rest is the
+    /// original row.
+    ///
+    /// The result has the type of the `value` argument, but is always nullable:
+    /// it is null when the lag/lead computation reaches over the bounds of the
+    /// window partition. Where to find `value` depends on whether `offset` and
+    /// `default` were hoisted into the function; see
+    /// [`ConstantLagLeadArgs`].
     fn lag_lead_output_type_inner_from_encoded_args(
         encoded_args_type: &SqlScalarType,
+        constant_args: Option<&ConstantLagLeadArgs>,
     ) -> SqlColumnType {
-        // lag/lead have 3 arguments, and the output type is
-        // the same as the first of these, but always nullable. (It's null when the
-        // lag/lead computation reaches over the bounds of the window partition.)
-        encoded_args_type.unwrap_record_element_type()[0]
-            .clone()
-            .nullable(true)
+        match constant_args {
+            Some(_) => encoded_args_type.clone().nullable(true),
+            None => encoded_args_type.unwrap_record_element_type()[0]
+                .clone()
+                .nullable(true),
+        }
     }
 
     fn lag_lead_result_column_name(lag_lead_type: &LagLeadType) -> ColumnName {
@@ -3277,10 +3369,24 @@ where
                 lag_lead: _,
                 ignore_nulls,
                 order_by,
+                constant_args,
             } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
                 f.write_str(name)?;
                 f.write_str("[")?;
+                // The hoisted arguments no longer appear in the argument
+                // expression this function is rendered next to, so print them
+                // here to keep the plan a complete description of the call.
+                // They are literals, so they go through `humanize_datum` and
+                // are redacted along with every other literal in the plan.
+                if let Some(ConstantLagLeadArgs { offset, default }) = constant_args {
+                    f.write_str("offset=")?;
+                    self.mode
+                        .humanize_datum(offset.map_or(Datum::Null, Datum::Int32), f)?;
+                    f.write_str(", default=")?;
+                    self.mode.humanize_datum(default.unpack_first(), f)?;
+                    f.write_str(", ")?;
+                }
                 if *ignore_nulls {
                     f.write_str("ignore_nulls=true, ")?;
                 }
