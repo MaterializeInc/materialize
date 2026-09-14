@@ -282,6 +282,7 @@ impl Coordinator {
             FRONTEND_READ_THEN_WRITE.get(self.catalog().system_config().dyncfgs()),
             self.group_commit_tx.clone(),
             self.controller.read_only(),
+            Arc::clone(&self.frontend_peek_registry),
         );
         Sweep {
             client,

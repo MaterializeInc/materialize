@@ -215,6 +215,7 @@ use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::optimize::{self, Optimize, OptimizerConfig};
+use crate::peek_registry::FrontendPeekRegistry;
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{
     StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId,
@@ -527,6 +528,7 @@ impl Message {
                 Command::LookupConnection { .. } => "lookup-connection",
                 Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
+                Command::InstallPeekWatchSets { .. } => "install-peek-watch-sets",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
@@ -2104,6 +2106,12 @@ pub struct Coordinator {
     pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client.
     client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
+    /// Registry of in-flight frontend-sequenced peeks, shared with every
+    /// session's `PeekClient`. Frontend peeks register/unregister here off the
+    /// coordinator task; the coordinator reads it from its teardown paths, to
+    /// cancel a connection's peeks and to cancel peeks whose dependencies were
+    /// dropped.
+    frontend_peek_registry: Arc<FrontendPeekRegistry>,
 
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
@@ -5384,6 +5392,12 @@ pub fn serve(
 
         let (group_commit_tx, group_commit_rx) = appends::notifier();
 
+        // Shared between the coordinator and every session's `PeekClient`. The
+        // shard count is set well above the concurrent-session counts we
+        // benchmark at rather than tuned against a measurement.
+        let frontend_peek_registry = Arc::new(FrontendPeekRegistry::new(64));
+        let coord_frontend_peek_registry = Arc::clone(&frontend_peek_registry);
+
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
@@ -5441,6 +5455,7 @@ pub fn serve(
                     txn_read_holds: Default::default(),
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),
+                    frontend_peek_registry: coord_frontend_peek_registry,
                     pending_linearize_read_txns: BTreeMap::new(),
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),
@@ -5568,6 +5583,7 @@ pub fn serve(
                     now,
                     environment_id,
                     segment_client_clone,
+                    frontend_peek_registry,
                 );
                 Ok((handle, client))
             }
