@@ -162,9 +162,9 @@ pub(super) struct Instance {
     ///
     /// New entries are added for all peeks initiated through [`Instance::peek`].
     ///
-    /// The entry for a peek is only removed once all replicas have responded to the peek. This is
-    /// currently required to ensure all replicas have stopped reading from the peeked collection's
-    /// inputs before we allow them to compact. database-issues#4822 tracks changing this so we only have to wait
+    /// The entry for a peek is removed once the first replica has responded to it (or the peek is
+    /// cancelled). This is currently required to ensure all replicas have stopped reading from the
+    /// peeked collection's inputs before we allow them to compact. database-issues#4822 tracks changing this so we only have to wait
     /// for the first peek response.
     peeks: BTreeMap<Uuid, PendingPeek>,
     /// Currently in-progress subscribes.
@@ -1283,7 +1283,7 @@ impl Instance {
 
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.history.iter() {
-            // Skip `CreateDataflow` commands targeted at different replicas.
+            // Skip commands targeted at a different replica.
             if let Some(target_replica) = self.target_replica(command)
                 && target_replica != id
             {

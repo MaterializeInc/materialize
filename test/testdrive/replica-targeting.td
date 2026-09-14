@@ -108,9 +108,9 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # Test that replica-targeted peeks are only sent to the target replica.
 #
 # `mz_peek_durations_histogram_raw` records every peek a replica has completed.
-# Replica r2 never receives a query until the final check, which is a fast-path
-# peek against the raw log itself and is therefore not yet recorded when it is
-# served. Any peek issued on r1 that also reached r2 would show up here.
+# A peek is recorded in the histogram only once it completes, so the final
+# check's own peek is not yet counted when it is served, whichever path it
+# takes. Any earlier peek issued on r1 that also reached r2 would show up here.
 
 > DROP CLUSTER test CASCADE
 > CREATE CLUSTER test REPLICAS (
@@ -120,6 +120,14 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > SET cluster = test
 > SET cluster_replica = r1
 
+# Every query in this block is slow path: even a bare aggregate over an
+# introspection relation needs a dataflow and a transient index, replica-
+# targeted at r1, the same replica as the peek that reads it. A broadcast peek
+# against an index that exists only on r1 would panic r2 in `handle_peek` on
+# the missing trace. That panic aborts this test's `materialized` container,
+# because the harness runs with `propagate_crashes`. The regression protection
+# remains the `mz_peek_durations_histogram_raw` check on r2 at the end of this
+# block: it only reads 0 because r2 never received any of these peeks.
 > SELECT count(*) >= 0 FROM mz_introspection.mz_compute_frontiers_per_worker
 true
 > SELECT count(*) >= 0 FROM mz_introspection.mz_compute_frontiers_per_worker
@@ -127,14 +135,11 @@ true
 > SELECT count(*) >= 0 FROM mz_introspection.mz_compute_frontiers_per_worker
 true
 
-# Slow-path query: its join needs a dataflow with a transient index, unlike the
-# fast-path queries above. That index is replica-targeted at r1, the same
-# replica as the peek that reads it. A broadcast peek against an index that
-# exists only on r1 would panic r2 in `handle_peek` on the missing trace. That
-# panic aborts this test's `materialized` container, because the harness runs
-# with `propagate_crashes`. The regression protection remains the
-# `mz_peek_durations_histogram_raw` check on r2 at the end of this block: it
-# only reads 0 because r2 never received this peek.
+# Fast-path replica-targeted peek: a direct index read, no transient dataflow.
+> SELECT worker_id FROM mz_introspection.mz_compute_frontiers_per_worker WHERE worker_id = 0 LIMIT 1
+0
+
+# The join below adds a second imported index to the transient dataflow.
 > SELECT count(*) >= 0
   FROM mz_introspection.mz_compute_frontiers_per_worker f
   JOIN mz_introspection.mz_compute_exports_per_worker e USING (export_id, worker_id)
@@ -147,9 +152,9 @@ SELECT mz_now()::text
 # never reaches r2, so it cannot add to the peek count checked below (unlike a
 # query against a raw log source that let auto-routing pick a replica).
 # Waiting for r2's own reported frontier to advance past `ts` (captured right
-# after the r1 queries above, including the slow-path query) proves r2's
-# replica has communicated with the controller at least once since those
-# queries ran, without guessing at a wall-clock duration. This assumes the
+# after the r1 queries above) proves r2's replica has communicated with the
+# controller at least once since those queries ran, without guessing at a
+# wall-clock duration. This assumes the
 # controller's frontier reports and a replica's own introspection-log
 # publication are not arbitrarily far apart in time. That has held in
 # practice, but if r2 is ever observed to still see stale data at this point,
