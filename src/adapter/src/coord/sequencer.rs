@@ -110,7 +110,7 @@ impl Coordinator {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
-            if self.controller.read_only() && !plan.allowed_in_read_only() {
+            if self.read_only_controllers && !plan.allowed_in_read_only() {
                 ctx.retire(Err(AdapterError::ReadOnly));
                 return;
             }
@@ -1114,7 +1114,7 @@ pub(crate) async fn explain_pushdown_future_inner<
 >(
     session: &Session,
     catalog: &Catalog,
-    storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
+    storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
     query_client: Option<&Arc<crate::query_client::QueryClient>>,
     as_of: Antichain<Timestamp>,
     mz_now: ResultSpec<'static>,
@@ -1152,6 +1152,7 @@ pub(crate) async fn explain_pushdown_future_inner<
             .boxed()
         } else {
             storage_collections
+                .expect("unprotected pushdown explanations require storage collections")
                 .snapshot_parts_stats(id, as_of.clone())
                 .await
                 .map(|result| result.map_err(AdapterError::from))
@@ -1297,7 +1298,7 @@ pub(crate) async fn statistics_oracle(
     query_as_of: &Antichain<Timestamp>,
     is_oneshot: bool,
     system_config: &vars::SystemVars,
-    storage_collections: &dyn StorageCollections,
+    storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
     query_client: Option<(&crate::query_client::QueryClient, &Catalog)>,
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
     if !session.vars().enable_session_cardinality_estimates() {
@@ -1342,7 +1343,7 @@ impl CachedStatisticsOracle {
     pub async fn new(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<Timestamp>,
-        storage_collections: &dyn StorageCollections,
+        storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
         query_client: Option<(&crate::query_client::QueryClient, &Catalog)>,
     ) -> Result<Self, AdapterError> {
         let mut cache = BTreeMap::new();
@@ -1365,6 +1366,7 @@ impl CachedStatisticsOracle {
                 }
             } else {
                 storage_collections
+                    .expect("unprotected statistics require storage collections")
                     .snapshot_stats(*id, as_of.clone())
                     .await
                     .map_err(AdapterError::from)

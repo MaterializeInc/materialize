@@ -187,7 +187,7 @@ impl Coordinator {
             }
             WriteAttemptKind::Background { .. } => {}
         }
-        if self.controller.read_only() {
+        if self.read_only_controllers {
             result.send(WriteResult::ReadOnly);
             return;
         }

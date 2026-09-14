@@ -72,8 +72,8 @@ pub struct PeekClient {
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
     /// in a hot loop. Hopefully this won't occur any time soon.
     compute_instances: BTreeMap<ComputeInstanceId, InstanceClient>,
-    /// Handle to storage collections for reading frontiers and policies.
-    pub storage_collections: StorageCollectionsHandle,
+    /// Legacy storage access, present only without durable query-client protection.
+    pub storage_collections: Option<StorageCollectionsHandle>,
     pub(crate) query_client: Option<Arc<crate::query_client::QueryClient>>,
     /// A generator for transient `GlobalId`s, shared with Coordinator.
     pub transient_id_gen: Arc<TransientIdGen>,
@@ -154,7 +154,7 @@ impl PeekClient {
     pub(crate) fn new(
         coordinator_client: CoordinatorClient,
         catalog: &Arc<Catalog>,
-        storage_collections: StorageCollectionsHandle,
+        storage_collections: Option<StorageCollectionsHandle>,
         query_client: Option<Arc<crate::query_client::QueryClient>>,
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
@@ -165,6 +165,7 @@ impl PeekClient {
         group_commit_notifier: GroupCommitNotifier,
         read_only: bool,
     ) -> Self {
+        assert_eq!(storage_collections.is_some(), query_client.is_none());
         Self {
             coordinator_client,
             catalog_cache: Arc::downgrade(catalog),
@@ -187,6 +188,7 @@ impl PeekClient {
         &mut self,
         compute_instance: ComputeInstanceId,
     ) -> Result<InstanceClient, CollectionLookupError> {
+        assert!(self.query_client.is_none(), "legacy compute access only");
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
@@ -328,20 +330,19 @@ impl PeekClient {
         let mut upper = Antichain::new();
 
         if !id_bundle.storage_ids.is_empty() {
-            let desired_storage: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
-            let storage_read_holds = self
+            let storage_collections = self
                 .storage_collections
-                .acquire_read_holds(desired_storage)?;
+                .as_ref()
+                .expect("unprotected peeks require storage collections");
+            let desired_storage: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
+            let storage_read_holds = storage_collections.acquire_read_holds(desired_storage)?;
             read_holds.storage_holds = storage_read_holds
                 .into_iter()
                 .map(|hold| (hold.id(), hold))
                 .collect();
 
             let storage_ids: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
-            for f in self
-                .storage_collections
-                .collections_frontiers(storage_ids)?
-            {
+            for f in storage_collections.collections_frontiers(storage_ids)? {
                 upper.extend(f.write_frontier);
             }
         }
@@ -481,6 +482,8 @@ impl PeekClient {
                     client.collection_metadata(&catalog, coll_id)?
                 } else {
                     self.storage_collections
+                        .as_ref()
+                        .expect("unprotected peeks require storage collections")
                         .collection_metadata(coll_id)
                         .map_err(AdapterError::concurrent_dependency_drop_from_collection_missing)?
                 };

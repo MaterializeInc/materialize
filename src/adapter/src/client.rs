@@ -294,7 +294,7 @@ impl Client {
 
         // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
         // handle termination.
-        // Build the PeekClient with controller handles returned from startup.
+        // Build the PeekClient with query or legacy storage access returned from startup.
         let StartupResponse {
             role_id,
             write_notify,

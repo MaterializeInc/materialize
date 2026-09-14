@@ -734,7 +734,7 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>, Vec<u64>), AdapterError> {
-        if self.controller.read_only() {
+        if self.read_only_controllers {
             return Err(AdapterError::ReadOnly);
         }
 

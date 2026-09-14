@@ -2655,7 +2655,9 @@ impl Coordinator {
         super::explain_pushdown_future_inner(
             session,
             &self.catalog,
-            &self.controller.storage_collections,
+            self.query_client
+                .is_none()
+                .then(|| self.controller.storage_collections.as_ref()),
             self.query_client.as_ref(),
             as_of,
             mz_now,
@@ -5182,7 +5184,9 @@ impl Coordinator {
             query_as_of,
             is_oneshot,
             self.catalog().system_config(),
-            self.controller.storage_collections.as_ref(),
+            self.query_client
+                .is_none()
+                .then(|| self.controller.storage_collections.as_ref()),
             self.query_client
                 .as_deref()
                 .map(|client| (client, self.catalog())),

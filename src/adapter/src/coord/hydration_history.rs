@@ -280,7 +280,9 @@ impl Coordinator {
                 metrics: self.metrics.clone(),
             },
             &catalog,
-            Arc::clone(&self.controller.storage_collections),
+            self.query_client
+                .is_none()
+                .then(|| Arc::clone(&self.controller.storage_collections)),
             self.query_client.clone(),
             Arc::clone(&self.transient_id_gen),
             self.optimizer_metrics.clone(),

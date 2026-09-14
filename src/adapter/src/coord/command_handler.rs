@@ -962,7 +962,10 @@ impl Coordinator {
                     write_notify: notify,
                     session_defaults,
                     catalog,
-                    storage_collections: Arc::clone(&self.controller.storage_collections),
+                    storage_collections: self
+                        .query_client
+                        .is_none()
+                        .then(|| Arc::clone(&self.controller.storage_collections)),
                     query_client: self.query_client.clone(),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
@@ -972,7 +975,7 @@ impl Coordinator {
                     occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
                     frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
                     group_commit_notifier: self.group_commit_tx.clone(),
-                    read_only: self.controller.read_only(),
+                    read_only: self.read_only_controllers,
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate

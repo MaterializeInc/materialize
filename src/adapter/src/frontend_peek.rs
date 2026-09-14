@@ -797,7 +797,7 @@ impl PeekClient {
             &determination.timestamp_context.antichain(),
             true,
             catalog.system_config(),
-            &*self.storage_collections,
+            self.storage_collections.as_deref(),
             self.query_client
                 .as_deref()
                 .map(|client| (client, &*catalog)),
@@ -1193,7 +1193,7 @@ impl PeekClient {
                     coord::sequencer::explain_pushdown_future_inner(
                         session,
                         &*catalog,
-                        &self.storage_collections,
+                        self.storage_collections.as_deref(),
                         self.query_client.as_ref(),
                         as_of,
                         mz_now,

@@ -602,8 +602,7 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
-    pub storage_collections:
-        Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>,
+    pub storage_collections: Option<crate::peek_client::StorageCollectionsHandle>,
     pub(crate) query_client: Option<Arc<crate::query_client::QueryClient>>,
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
