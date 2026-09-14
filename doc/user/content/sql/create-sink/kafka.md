@@ -598,7 +598,9 @@ There are three ways to resolve this error:
 
   You should only disable this verification if you have outside knowledge of
   the properties of your data that guarantees the uniqueness of the key you
-  have specified.
+  have specified. This is useful, for example, when sinking a table whose
+  upstream key constraints were excluded at creation time; see
+  [Constraints](/ingest-data/constraints/).
 
   {{< warning >}}
   If the key is not in fact unique, downstream consumers may not be able to

@@ -24,6 +24,10 @@ table schema changes seamlessly, specifically:
 
 This guide walks you through how to handle these changes without any downtime in Materialize.
 
+For upstream **constraint** changes (dropping a `PRIMARY KEY`, `UNIQUE`, or
+`NOT NULL` constraint), see [Constraints](/ingest-data/constraints/), which
+applies the same versioned-schema workflow.
+
 ## Prerequisites
 
 Some familiarity with Materialize. If you've never used Materialize before,
