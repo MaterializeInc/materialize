@@ -1039,6 +1039,7 @@ def workflow_selected_plan_explain(c: Composition) -> None:
                 "enable_catalog_read_protection": "true",
                 "enable_expression_cache": "false",
                 "enable_mz_notices": "true",
+                "enable_explain_pushdown": "true",
             },
         )
     ):
@@ -1065,7 +1066,8 @@ def workflow_selected_plan_explain(c: Composition) -> None:
         c.testdrive(
             service="testdrive_no_reset",
             input=dedent("""
-                > CREATE MATERIALIZED VIEW selected_mv AS SELECT sum(a) AS total FROM selected_t;
+                > CREATE MATERIALIZED VIEW selected_mv AS
+                  SELECT sum(a) AS total FROM selected_t WHERE a > 0;
                 > CREATE VIEW selected_v AS SELECT a + 1 AS b FROM selected_t;
                 > CREATE INDEX selected_consumer ON selected_v ();
 
@@ -1152,6 +1154,16 @@ def workflow_selected_plan_explain(c: Composition) -> None:
                 )
                 assert "ReadIndex" not in plan, (object_name, plan)
 
+        # Pushdown describes the selected storage import, not the index still
+        # retained by the unchanged running MV. Part counts can vary with compaction.
+        def verify_pushdown() -> None:
+            rows = c.sql_query(
+                "EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW selected_mv",
+                reuse_connection=False,
+            )
+            assert [row[0] for row in rows] == ["materialize.public.selected_t"], rows
+
+        verify_pushdown()
         c.testdrive(
             service="testdrive_no_reset",
             input=dedent("""
@@ -1170,6 +1182,7 @@ def workflow_selected_plan_explain(c: Composition) -> None:
         c.kill("materialized")
         c.up("materialized")
         assert plans() == rewritten
+        verify_pushdown()
         assert notice_count("selected_consumer") == 1
         c.testdrive(
             service="testdrive_no_reset",

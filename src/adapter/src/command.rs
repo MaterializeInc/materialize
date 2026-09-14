@@ -395,8 +395,8 @@ pub enum Command {
         tx: oneshot::Sender<()>,
     },
 
-    /// Generate a timestamp explanation.
-    /// This is used when `emit_timestamp_notice` is enabled.
+    /// Generate a legacy, unprotected timestamp explanation for a notice.
+    /// Protected callers observe frontiers directly through QueryClient.
     ExplainTimestamp {
         conn_id: ConnectionId,
         session_wall_time: DateTime<Utc>,

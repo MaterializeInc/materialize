@@ -37,6 +37,17 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+/// Identifies the build that owns written plans, including distinct development builds.
+pub fn expression_build_version(build_info: &mz_build_info::BuildInfo) -> Version {
+    if build_info.is_dev() {
+        build_info
+            .semver_version_build()
+            .expect("build ID is not available on this platform")
+    } else {
+        build_info.semver_version()
+    }
+}
+
 #[derive(
     Debug,
     Clone,

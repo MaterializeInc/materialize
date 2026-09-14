@@ -860,8 +860,11 @@ pub struct TimestampExplanation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampSource {
     pub name: String,
-    pub read_frontier: Vec<Timestamp>,
-    pub write_frontier: Vec<Timestamp>,
+    /// Read frontier, or unknown. Protected observations report physical since,
+    /// not a grant or compaction permission. Empty and MIN are known frontiers.
+    pub read_frontier: Option<Vec<Timestamp>>,
+    /// Observed upper, independently available from the physical since.
+    pub write_frontier: Option<Vec<Timestamp>>,
 }
 
 pub trait DisplayableInTimeline {
@@ -980,24 +983,23 @@ impl fmt::Display for TimestampExplanation {
         for source in &self.sources {
             writeln!(f, "")?;
             writeln!(f, "source {}:", source.name)?;
-            writeln!(
-                f,
-                "                  read frontier:{:?}",
-                source
-                    .read_frontier
-                    .iter()
-                    .map(|t| t.display(timeline))
-                    .collect::<Vec<_>>()
-            )?;
-            writeln!(
-                f,
-                "                 write frontier:{:?}",
-                source
-                    .write_frontier
-                    .iter()
-                    .map(|t| t.display(timeline))
-                    .collect::<Vec<_>>()
-            )?;
+            for (label, frontier) in [
+                ("                  read frontier:", &source.read_frontier),
+                ("                 write frontier:", &source.write_frontier),
+            ] {
+                write!(f, "{label}")?;
+                match frontier {
+                    Some(frontier) => writeln!(
+                        f,
+                        "{:?}",
+                        frontier
+                            .iter()
+                            .map(|t| t.display(timeline))
+                            .collect::<Vec<_>>()
+                    )?,
+                    None => writeln!(f, "unknown")?,
+                }
+            }
         }
 
         writeln!(f, "")?;
@@ -1195,6 +1197,60 @@ mod constraints {
 mod tests {
     use super::*;
     use mz_storage_types::read_holds::ReadHold;
+
+    #[mz_ore::test]
+    fn timestamp_source_output_distinguishes_unknown_empty_and_min() {
+        let mut explanation = TimestampExplanation {
+            determination: TimestampDetermination {
+                timestamp_context: TimestampContext::NoTimestamp,
+                since: Antichain::new(),
+                upper: Antichain::new(),
+                largest_not_in_advance_of_upper: Timestamp::MIN,
+                oracle_read_ts: None,
+                session_oracle_read_ts: None,
+                real_time_recency_ts: None,
+                constraints: Default::default(),
+            },
+            sources: Vec::new(),
+            session_wall_time: DateTime::UNIX_EPOCH,
+            respond_immediately: true,
+        };
+        let cases = [
+            (None, serde_json::Value::Null, "unknown"),
+            (Some(vec![]), serde_json::json!([]), "[]"),
+            (
+                Some(vec![Timestamp::MIN]),
+                serde_json::json!([0]),
+                "[            0]",
+            ),
+        ];
+        for (read, read_json, read_text) in &cases {
+            for (write, write_json, write_text) in &cases {
+                explanation.sources = vec![TimestampSource {
+                    name: "input".into(),
+                    read_frontier: read.clone(),
+                    write_frontier: write.clone(),
+                }];
+                let json =
+                    serde_json::to_value(&explanation).expect("timestamp explanation serializes");
+                assert_eq!(&json["sources"][0]["read_frontier"], read_json);
+                assert_eq!(&json["sources"][0]["write_frontier"], write_json);
+                let text = explanation.to_string();
+                assert!(
+                    text.contains(&format!("                  read frontier:{read_text}\n")),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(&format!("                 write frontier:{write_text}\n")),
+                    "{text}"
+                );
+                let decoded: TimestampExplanation =
+                    serde_json::from_value(json).expect("timestamp explanation roundtrips");
+                assert_eq!(&decoded.sources[0].read_frontier, read);
+                assert_eq!(&decoded.sources[0].write_frontier, write);
+            }
+        }
+    }
 
     #[mz_ore::test]
     fn acquisition_target_preserves_timestamp_constraints() {

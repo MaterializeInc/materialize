@@ -275,6 +275,105 @@ impl QueryClient {
         })
     }
 
+    /// Diagnostic observations only. Call off the coordinator, within the
+    /// request's cancellation/deadline boundary, and only when requested.
+    /// Missing observations are independent for read and write. In particular,
+    /// protection grants and catalog permissions are not physical read frontiers.
+    pub(crate) async fn explain_timestamp(
+        &self,
+        catalog: &Catalog,
+        conn_id: &mz_adapter_types::connection::ConnectionId,
+        session_wall_time: chrono::DateTime<chrono::Utc>,
+        bundle: &CollectionIdBundle,
+        determination: crate::coord::timestamp_selection::TimestampDetermination,
+    ) -> crate::TimestampExplanation {
+        use crate::coord::timestamp_selection::TimestampSource;
+
+        let name = |id, kind| {
+            let name = catalog
+                .try_get_entry_by_global_id(&id)
+                .map(|item| {
+                    catalog
+                        .resolve_full_name(item.name(), Some(conn_id))
+                        .to_string()
+                })
+                .unwrap_or_else(|| id.to_string());
+            format!("{name} ({id}, {kind})")
+        };
+        let mut sources = Vec::new();
+        // This cache lasts only for this diagnostic request. Lazy table uppers
+        // come from the WAL, but their physical sinces come from their data shards.
+        let mut txns_upper = None;
+        for id in &bundle.storage_ids {
+            let (mut read_frontier, mut write_frontier) = (None, None);
+            if let Ok(metadata) = self.collection_metadata(catalog, *id) {
+                read_frontier = self
+                    .persist
+                    .recent_since::<SourceData, (), Timestamp, StorageDiff>(
+                        metadata.data_shard,
+                        diagnostics(*id),
+                    )
+                    .await
+                    .ok()
+                    .map(|f| f.elements().to_vec());
+                write_frontier = if let Some(shard) = metadata.txns_shard {
+                    if txns_upper.is_none() {
+                        txns_upper = Some(
+                            self.persist
+                                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                                    shard,
+                                    diagnostics(*id),
+                                )
+                                .await
+                                .ok()
+                                .map(|f| f.elements().to_vec()),
+                        );
+                    }
+                    txns_upper.as_ref().expect("observed WAL upper").clone()
+                } else {
+                    self.persist
+                        .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                            metadata.data_shard,
+                            diagnostics(*id),
+                        )
+                        .await
+                        .ok()
+                        .map(|f| f.elements().to_vec())
+                };
+            }
+            sources.push(TimestampSource {
+                name: name(*id, "storage"),
+                read_frontier,
+                write_frontier,
+            });
+        }
+        for (cluster, ids) in &bundle.compute_ids {
+            let replicas = self.replica_clients(*cluster, None);
+            for id in ids {
+                let mut since: Option<Antichain<Timestamp>> = None;
+                for replica in &replicas {
+                    if let Ok(Some(frontiers)) = replica.collection_frontiers(*id)
+                        && let Some(frontier) = frontiers.read_frontier
+                    {
+                        since.get_or_insert_with(Antichain::new).extend(frontier);
+                    }
+                }
+                sources.push(TimestampSource {
+                    name: name(*id, "compute"),
+                    read_frontier: since.map(|f| f.elements().to_vec()),
+                    write_frontier: Self::observed_compute_frontier(&replicas, *id)
+                        .map(|f| f.elements().to_vec()),
+                });
+            }
+        }
+        crate::TimestampExplanation {
+            respond_immediately: determination.respond_immediately(),
+            determination,
+            sources,
+            session_wall_time,
+        }
+    }
+
     /// Observes the bundle's write frontier without acquiring read protection.
     /// Storage uppers come from Persist, including the transaction WAL for lazy
     /// tables. Compute uppers use cached observations, taking the maximum across
@@ -870,6 +969,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_repr::CatalogItemId;
+    use mz_sql::session::metadata::SessionMetadata;
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_storage_client::controller::StorageTxn;
 
@@ -1116,6 +1216,45 @@ mod tests {
             catalog.state().client_read_requirements()[&(incarnation, id)],
             Timestamp::from(100)
         );
+        // Neither the grant at 100 nor the permission at 40 is the physical
+        // since, which remains MIN until the reader advances it.
+        let explanation = client
+            .explain_timestamp(
+                &catalog,
+                crate::session::Session::dummy().conn_id(),
+                chrono::DateTime::UNIX_EPOCH,
+                &CollectionIdBundle {
+                    storage_ids: BTreeSet::from([id, GlobalId::User(100_001)]),
+                    compute_ids: BTreeMap::from([(
+                        ComputeInstanceId::User(1),
+                        BTreeSet::from([GlobalId::User(100_002)]),
+                    )]),
+                },
+                crate::coord::timestamp_selection::TimestampDetermination {
+                    timestamp_context:
+                        crate::coord::timestamp_selection::TimestampContext::NoTimestamp,
+                    since: frontier(100),
+                    upper: frontier(80),
+                    largest_not_in_advance_of_upper: Timestamp::from(79),
+                    oracle_read_ts: Some(Timestamp::from(100)),
+                    session_oracle_read_ts: None,
+                    real_time_recency_ts: None,
+                    constraints: Default::default(),
+                },
+            )
+            .await;
+        assert_eq!(
+            explanation.sources[0].read_frontier,
+            Some(vec![Timestamp::MIN])
+        );
+        assert_eq!(
+            explanation.sources[0].write_frontier,
+            Some(vec![Timestamp::from(80)])
+        );
+        for source in &explanation.sources[1..] {
+            assert_eq!(source.read_frontier, None);
+            assert_eq!(source.write_frontier, None);
+        }
         reader.downgrade_since(&frontier(40)).await;
         assert_eq!(
             persist
@@ -1273,6 +1412,29 @@ mod tests {
                 None
             );
         }
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(90),
+                Antichain::new(),
+            )
+            .await
+            .expect("valid append usage")
+            .expect("upper matches before sealing");
+        let sealed = client
+            .explain_timestamp(
+                &catalog,
+                crate::session::Session::dummy().conn_id(),
+                explanation.session_wall_time,
+                &bundle,
+                explanation.determination,
+            )
+            .await;
+        assert_eq!(
+            sealed.sources[0].read_frontier,
+            Some(vec![Timestamp::from(40)])
+        );
+        assert_eq!(sealed.sources[0].write_frontier, Some(vec![]));
         reader.expire().await;
         writer.expire().await;
     }

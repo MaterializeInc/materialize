@@ -39,6 +39,32 @@ use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
 use crate::{ExecuteContext, ExecuteResponse};
 
+/// Run diagnostic I/O within the execution's existing budget. Cancellation and
+/// expiration take precedence over ready work, including work that would dispatch
+/// another request. Dropping the work must be cancellation-safe.
+pub(crate) async fn run_diagnostic<T>(
+    cancel: impl std::future::Future<Output = ()>,
+    expires: Option<std::time::Instant>,
+    work: impl std::future::Future<Output = Result<T, AdapterError>>,
+) -> Result<T, AdapterError> {
+    let deadline = async {
+        match expires {
+            Some(expires) => {
+                if std::time::Instant::now() < expires {
+                    tokio::time::sleep_until(expires.into()).await;
+                }
+            }
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancel => Err(AdapterError::Canceled),
+        _ = deadline => Err(AdapterError::StatementTimeout),
+        result = work => result,
+    }
+}
+
 /// Handles responding to clients.
 #[derive(Debug)]
 pub struct ClientTransmitter<T>
@@ -551,5 +577,38 @@ where
     // Cycle detection: if we didn't process all items, there's a cycle.
     if !items_by_key.is_empty() {
         panic!("dependency cycle: {items_by_key:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn diagnostic_cancellation_and_expiration_precede_work() {
+        use std::future::{pending, poll_fn, ready};
+        use std::task::Poll;
+        use std::time::{Duration, Instant};
+
+        let expired = Some(Instant::now() - Duration::from_secs(1));
+        let must_not_run = || {
+            poll_fn(|_| -> Poll<Result<(), AdapterError>> {
+                panic!("canceled or expired diagnostic work was polled")
+            })
+        };
+        assert!(matches!(
+            run_diagnostic(ready(()), expired, must_not_run()).await,
+            Err(AdapterError::Canceled)
+        ));
+        assert!(matches!(
+            run_diagnostic(pending(), expired, must_not_run()).await,
+            Err(AdapterError::StatementTimeout)
+        ));
+        assert_eq!(
+            run_diagnostic(pending(), None, ready(Ok(7)))
+                .await
+                .expect("uncanceled diagnostic succeeds"),
+            7
+        );
     }
 }

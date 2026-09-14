@@ -910,3 +910,88 @@ Within one build, write-before-select and atomic import rewrites make pending wo
 transient. Failures retry with backoff and must be logged, counted, and surfaced.
 Do not build scoped exceptions. Actual stalls may motivate a separate decision to
 scope the rule using committed catalog dependents.
+
+### 2026-09-14: Adapter-loss demonstration drives process extraction
+
+Aljoscha relayed the designer's steering: define the mzcompose adapter-loss workflow
+now and move lifecycle ownership into its own process before exhausting the
+controller-read tail. Diagnostics without query-client observations may be unknown.
+The demo must observe source-fed MV execution, sinks, and compaction while the
+adapter is stopped, explicitly allow table/webhook-fed work to pause, and verify
+queries resume after restart. Design and prompt bodies stay untouched.
+
+The cluster `adapter-loss` workflow expects separate `--coordination-role=adapter`
+and `--coordination-role=lifecycle` services. Those entrypoints are not wired yet.
+`Catalog::open_committed` supplies non-initializing reconstruction for the joined
+lifecycle process. Next: branch before listener binding and component construction,
+keep adapter writers absent from lifecycle and controllers absent from adapter,
+then split bootstrap and loop inputs by ownership. Query-backed introspection and
+curated metrics must keep an explicit planning/writing owner, not be silently skipped.
+
+### 2026-09-14: Replica placement supersedes process extraction, consolidated handoff
+
+Aljoscha and the designer decided that compute and storage clusterd replicas follow
+and enact their cluster's catalog. There will be no separate lifecycle process or
+lifecycle connection. The preceding extraction plan is superseded. Keep the query
+client, cooperating writers, written plans, client protection, connection split,
+and adapter-owned table/webhook writers. Replica orchestration stays in envd.
+Design and prompt bodies are designer-owned. This log replaces the handover file.
+
+Implementation checkpoint retained from the handover:
+- Immutable expression entries in `src/catalog/src/expr_cache.rs` are keyed by
+  build, export GlobalId and UUID. Catalog `WrittenPlan` selections use the catalog
+  CAS. Import validation uses final candidate state, not an operation prefix.
+- Writer create stages select plans atomically. `prepare_written_plan_rewrites`
+  uses post-DDL state, index replan ordering and protection through commit. It
+  handles replacement versions and writer-owned notice changes. CREATE INDEX
+  does not rewrite existing plans. Build ownership remains the caller's duty.
+- Protected runtime installation consumes selected bytes with dependency retries
+  and the global publication/reclamation barrier. Mixed bootstrap still plans.
+  Missing bytes can still error in writer notice refresh and bootstrap.
+- Metadata-only retries must apply foreign changes and resample proposals after
+  changed execution constraints. Request diagnostics use real query-client
+  observations or unknown. `Catalog::open_committed` reconstructs without bootstrap
+  DDL or planning. WAL writer startup is separate from controller construction.
+- Relevant boundary fixtures are catalog `written-plans`, adapter MV/selection
+  tests, `restart/selected-plan-explain`, and environmentd
+  `test_peer_index_pending_installation`. Remaining scenarios include same-batch
+  dependencies and aliases, replacement reconstruction, failed CAS and delayed
+  permission application. Preserve pending historical outputs and feature behavior.
+
+Next is a compute replica follower alongside the controller, then replacement of
+controller installation by replica reconciliation. Replica execution reads need
+incarnation-scoped client protection before removing cross-replica hold accounting.
+Direct query routing/merging follows, then storage enactment on the same follower
+path. Bring shard finalization and unsafe concurrent sink external writes to
+Aljoscha before implementing their rule. Do not retain duplicate storage enactment.
+
+The `cluster/adapter-loss` workflow now uses surviving clusterds, including a
+two-replica compute cluster, rather than separate envd roles. It requires Kafka
+execution and direct Persist history compaction during absence. Controlled slow
+hydration, same-batch dependencies and delayed/concurrent permission scenarios
+remain to be added. Table/webhook work may pause. Compute alone is not milestone
+completion. Cross-build repair, upgrades, prewarming-owned selections and retired
+build cleanup remain deferred.
+
+### 2026-09-14: Storage ownership decisions from Aljoscha and the designer
+
+Finalization applies committed permission after collection metadata retirement,
+which excludes surviving alias and requirement references. Duplicate finalization
+attempts are harmless. For M2 the adapter drains it, deferred during adapter loss.
+There is no replica-side finalization drain.
+
+Kafka sinks have one active replica, selected as the lowest live incarnation among
+the cluster's replicas. Stable per-sink transactional IDs provide handover and ALTER
+fencing when a new producer opens. DROP stops when the follower observes it, with
+the existing command-delivery lag allowance. No catalog sink lease. Remove the
+ordered catalog-epoch lifecycle admission, not generation-scoped cooperative
+admission or incarnation-scoped client protection.
+
+### 2026-09-15: Shared catalog-following path
+
+Aljoscha relayed the designer’s direction to replace snapshot-derived follower
+state with a committed read-only Catalog, its update stream, and shared
+parse-and-absorb catalog implications. Delete the parallel derivation. Replica
+enactment must acquire incarnation-scoped import protection before choosing an
+as_of and installing through its worker path, then apply bounds before proposing
+them. The controller remains the installer until that path can replace it.
