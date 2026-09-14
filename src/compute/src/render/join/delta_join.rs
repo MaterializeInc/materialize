@@ -42,6 +42,7 @@ use crate::render::RenderTimestamp;
 use crate::render::columnar::{CollectionEdge, flat_map_datums, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
+use crate::shared_trace::SharedOksEnter;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -323,6 +324,9 @@ fn bundle_errs<'scope, T: RenderTimestamp>(
             ArrangementFlavor::Trace(_id, _oks, errs) => {
                 errs.clone().as_collection(|k, _v| k.clone())
             }
+            ArrangementFlavor::SharedTrace(_id, _oks, errs) => {
+                errs.clone().as_collection(|k, _v| k.clone())
+            }
         };
         collected.push(errs);
     }
@@ -393,6 +397,31 @@ where
                 )
             } else {
                 build_halfjoin_trace::<_, RowRowEnter<_, _, _>, _>(
+                    updates,
+                    oks,
+                    prev_key,
+                    prev_thinning,
+                    |t1, t2| t1.lt(t2),
+                    closure,
+                    config_set,
+                )
+            };
+            (oks, errs2)
+        }
+        // As `Trace`, over the trace type the interactive runtime imports.
+        Some(ArrangementFlavor::SharedTrace(_, oks, _errs)) => {
+            let (oks, errs2) = if source_precedes_lookup {
+                build_halfjoin_trace::<_, SharedOksEnter<_>, _>(
+                    updates,
+                    oks,
+                    prev_key,
+                    prev_thinning,
+                    |t1, t2| t1.le(t2),
+                    closure,
+                    config_set,
+                )
+            } else {
+                build_halfjoin_trace::<_, SharedOksEnter<_>, _>(
                     updates,
                     oks,
                     prev_key,
@@ -746,6 +775,16 @@ where
                 source_relation,
                 initial_closure,
             )
+        }
+        // As `Trace`, over the trace type the interactive runtime imports.
+        Some(ArrangementFlavor::SharedTrace(_, oks, _errs)) => {
+            let (oks, errs2) = build_update_stream_trace::<_, SharedOksEnter<_>>(
+                oks,
+                as_of,
+                source_relation,
+                initial_closure,
+            );
+            (oks, errs2)
         }
         None => panic!("Arrangement promised by the planner is absent!"),
     }
