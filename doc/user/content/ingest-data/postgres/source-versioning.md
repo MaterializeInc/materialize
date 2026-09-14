@@ -191,13 +191,18 @@ has been altered.
 
 {{< warn-if-unreleased "v26.42" >}}
 
+Materialize ignores the following constraints: foreign key, `CHECK`, and
+`EXCLUSION`. As such, you can add or drop them without affecting ingestion.
+To handle changes in `PRIMARY KEY`, `UNIQUE`, and `NOT NULL` constraints,
+follow the steps below.
+
 ### A. Exclude the constraint in Materialize
 
-To drop a `PRIMARY KEY` or `UNIQUE` constraint safely, in Materialize, first,
-create a new `v4` schema, and recreate table `T` in the new schema but exclude
-the constraint to drop. In this example, we'll drop the primary key `t_pkey`.
-The constraint name is a string literal and must match the upstream name
-exactly, including case.
+To drop a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint, in Materialize,
+first, create a new `v4` schema, and recreate table `T` in the new schema but
+exclude the constraint to drop. In this example, we'll drop the primary key
+`t_pkey`. The constraint name is a string literal and must match the upstream
+name exactly, including case.
 
 ```sql
 CREATE SCHEMA v4;
@@ -205,9 +210,17 @@ CREATE TABLE v4.T
     FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE CONSTRAINTS ('t_pkey'));
 ```
 
-Materialize does not record the excluded constraint as a key of `v4.T`. To
-record no constraints at all, so that any later `PRIMARY KEY`, `UNIQUE`, or
-`NOT NULL` drop is also safe, use `WITH (EXCLUDE ALL CONSTRAINTS)` instead.
+Materialize does not record the excluded constraint as a key of `v4.T`.
+
+`EXCLUDE CONSTRAINTS` only accepts `PRIMARY KEY` and `UNIQUE` constraint
+names. To record no constraints at all, including `NOT NULL`, so that any
+later constraint drop is also safe, use `EXCLUDE ALL CONSTRAINTS` instead:
+
+```sql
+CREATE SCHEMA v4;
+CREATE TABLE v4.T
+    FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE ALL CONSTRAINTS);
+```
 
 {{< note >}}
 
