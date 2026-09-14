@@ -26,7 +26,9 @@ export const NODE_DIMENSIONS: Record<
 > = {
   operator: { width: 240, height: 96 },
   region: { width: 260, height: 120 },
-  port: { width: 90, height: 24 },
+  // Wide enough for a port label plus the arrow and peer count its link
+  // carries when it leads somewhere (see PortNode).
+  port: { width: 112, height: 24 },
 };
 
 const LAYOUT_OPTIONS: Record<string, string> = {

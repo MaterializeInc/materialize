@@ -17,4 +17,9 @@
     transform 200ms ease,
     width 200ms ease,
     height 200ms ease;
+  /* Dragging anywhere on the canvas pans it, including across nodes. Without
+   * this, a drag that starts over a node's label begins a text selection
+   * that fights the pan. Node text is a label, not content to copy: the
+   * detail panel is where values are read and copied from. */
+  user-select: none;
 }

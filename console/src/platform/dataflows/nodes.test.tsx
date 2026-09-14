@@ -156,11 +156,11 @@ describe("RegionNode toggle", () => {
     await renderComponent(
       <RegionNode {...nodeProps(regionData({ expanded: true }))} />,
     );
-    // The header (toggle + label) must stay clickable so the disclosure
-    // triangle and double-click-to-navigate keep working; the body must not
-    // intercept clicks, or nodes/edges nested inside the expanded container
-    // (rendered as later siblings on the canvas, not children of this
-    // component) would never receive them.
+    // The header (toggle + label) must stay clickable so both of the
+    // region's controls keep working; the body must not intercept clicks,
+    // or nodes/edges nested inside the expanded container (rendered as
+    // later siblings on the canvas, not children of this component) would
+    // never receive them.
     const header = screen.getByTestId("region-toggle").parentElement;
     expect(header).not.toBeNull();
     expect(header).toHaveStyle({ pointerEvents: "auto" });
@@ -168,16 +168,100 @@ describe("RegionNode toggle", () => {
     expect(body).not.toBeNull();
     expect(body).toHaveStyle({ pointerEvents: "none" });
   });
+
+  // The two controls have to stay distinguishable: expanding shows the
+  // region's children here, navigating replaces the view with them.
+  it("separates expanding from navigating, both collapsed and expanded", async () => {
+    for (const expanded of [false, true]) {
+      const onToggleExpand = vi.fn();
+      const onNavigate = vi.fn();
+      const onNodeClick = vi.fn();
+      const { unmount } = await renderComponent(
+        <div onClick={onNodeClick}>
+          <RegionNode
+            {...nodeProps(regionData({ expanded, onToggleExpand, onNavigate }))}
+          />
+        </div>,
+      );
+
+      fireEvent.click(screen.getByTestId("region-enter"));
+      expect(onNavigate).toHaveBeenCalledWith("n1");
+      expect(onToggleExpand).not.toHaveBeenCalled();
+      // Navigating is not also selecting: the click stops at the link.
+      expect(onNodeClick).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId("region-toggle"));
+      expect(onToggleExpand).toHaveBeenCalledWith("n1");
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      unmount();
+    }
+  });
 });
 
 describe("PortNode", () => {
+  const portData = (
+    peers: VisibleNode["peers"],
+    over: Partial<FlowNodeData> = {},
+  ): FlowNodeData => ({
+    ...baseData,
+    node: { ...baseNode, kind: "port" as const, label: "input 0", peers },
+    ...over,
+  });
+
+  const peer = (label: string): VisibleNode["peers"][number] => ({
+    address: [8, 2],
+    label,
+    messagesSent: 0n,
+    batchesSent: 0n,
+    channelTypes: [],
+    peerPortId: null,
+  });
+
   it("renders the port's label", async () => {
-    const data = {
-      ...baseData,
-      node: { ...baseNode, kind: "port" as const, label: "input 0" },
-    };
-    await renderComponent(<PortNode {...nodeProps(data)} />);
+    await renderComponent(<PortNode {...nodeProps(portData([]))} />);
     expect(screen.getByText("input 0")).toBeVisible();
+  });
+
+  // Whether a port leads anywhere has to be visible without clicking it.
+  it("is not a link when the port leads nowhere", async () => {
+    await renderComponent(<PortNode {...nodeProps(portData([]))} />);
+    expect(screen.queryByTestId("port-jump")).toBeNull();
+  });
+
+  it("jumps from the link when there is exactly one peer", async () => {
+    const onJumpToPeer = vi.fn();
+    const only = peer("RegionB");
+    const onNodeClick = vi.fn();
+    await renderComponent(
+      <div onClick={onNodeClick}>
+        <PortNode {...nodeProps(portData([only], { onJumpToPeer }))} />
+      </div>,
+    );
+    fireEvent.click(screen.getByTestId("port-jump"));
+    expect(onJumpToPeer).toHaveBeenCalledWith(only);
+    expect(onNodeClick).not.toHaveBeenCalled();
+  });
+
+  // Several peers is still somewhere to go, so it still reads as a link,
+  // but which one is a choice only the detail panel can offer: the click
+  // has to reach the node and select it rather than guess.
+  it("shows a count and selects instead of guessing when peers are ambiguous", async () => {
+    const onJumpToPeer = vi.fn();
+    const onNodeClick = vi.fn();
+    await renderComponent(
+      <div onClick={onNodeClick}>
+        <PortNode
+          {...nodeProps(
+            portData([peer("RegionB"), peer("RegionC")], { onJumpToPeer }),
+          )}
+        />
+      </div>,
+    );
+    const link = screen.getByTestId("port-jump");
+    expect(link).toHaveTextContent("2");
+    fireEvent.click(link);
+    expect(onJumpToPeer).not.toHaveBeenCalled();
+    expect(onNodeClick).toHaveBeenCalled();
   });
 });
 
