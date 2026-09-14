@@ -581,6 +581,20 @@ impl ComputeState {
             let compress_min_depth =
                 u8::try_from(COLUMN_CHUNK_COMPRESS_MIN_DEPTH.get(config)).unwrap_or(u8::MAX);
             mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
+
+            let chunk_codec = COLUMN_CHUNK_CODEC.get(config);
+            match chunk_codec.parse() {
+                Ok(codec) => mz_timely_util::columnar::chunk::set_compress_codec(codec),
+                Err(err) => error!(err, chunk_codec, "Invalid value for column_chunk_codec"),
+            }
+
+            let zstd_level = COLUMN_CHUNK_ZSTD_LEVEL.get(config);
+            let applied = i32::try_from(zstd_level)
+                .map_err(|err| err.to_string())
+                .and_then(mz_timely_util::columnar::chunk::set_compress_zstd_level);
+            if let Err(err) = applied {
+                error!(err, zstd_level, "Invalid value for column_chunk_zstd_level");
+            }
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on

@@ -7987,6 +7987,7 @@ dependencies = [
  "uuid",
  "yansi",
  "zeroize",
+ "zstd",
 ]
 
 [[package]]
