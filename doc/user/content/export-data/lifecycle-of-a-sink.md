@@ -24,7 +24,7 @@ type. Differences between the two are called out where they matter.
 
 | State      | Meaning                                                                      |
 |------------|--------------------------------------------------------------------------------|
-| `created`  | The default shown before any status has been recorded, cleared almost immediately. See [Created](#created). |
+| `created`  | The default shown before any status has been recorded, cleared almost immediately. See [Created, starting, and running](#created-starting-and-running). |
 | `starting` | The sink is connecting to the external system and initializing.               |
 | `running`  | The sink is writing: first its input snapshot, then incremental changes.      |
 | `paused`   | No cluster replica is running the sink. It makes no progress until one is.    |
@@ -46,7 +46,7 @@ CREATE SINK orders_sink IN CLUSTER export_demo
   ENVELOPE DEBEZIUM;
 ```
 
-## Created
+## Created, starting, and running
 
 `created` is the default `mz_sink_statuses` reports before any status has
 been recorded for the sink, not a state a sink lingers in: creating a sink
@@ -68,8 +68,6 @@ WHERE name = 'orders_sink';
 
 If the sink's cluster has no replicas when you create it, it moves to
 `paused` instead. See [Paused](#paused).
-
-## Starting and running
 
 `running` covers both the sink's initial write of its input snapshot and
 steady-state writing of incremental changes, so the status alone does not
