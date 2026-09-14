@@ -82,7 +82,9 @@ use crate::names::{
     ResolvedItemName,
 };
 use crate::plan::error::PlanError;
-use crate::plan::statement::ddl::load_generator_ast_to_generator;
+use crate::plan::statement::ddl::{
+    RefreshTimeOption, load_generator_ast_to_generator, plan_refresh_time,
+};
 use crate::plan::{SourceReferences, StatementContext};
 use crate::pure::error::{IcebergSinkPurificationError, SqlServerSourcePurificationError};
 use crate::pure::mysql::{ensure_binlog_full_metadata, is_binlog_full_metadata};
@@ -2951,21 +2953,7 @@ pub fn purify_create_materialized_view_options(
             }),
         )
     };
-    // Prepare the `mz_timestamp` type.
-    let (mz_timestamp_id, mz_timestamp_type) = {
-        let item = catalog.get_system_type("mz_timestamp");
-        let full_name = catalog.resolve_full_name(item.name());
-        (
-            item.id(),
-            ResolvedDataType::Named {
-                id: item.id(),
-                qualifiers: item.name().qualifiers.clone(),
-                full_name,
-                modifiers: vec![],
-                print_id: true,
-            },
-        )
-    };
+    let (mz_timestamp_id, mz_timestamp_type) = mz_timestamp_type(&catalog);
 
     let mut introduced_mz_timestamp = false;
 
@@ -3016,7 +3004,10 @@ pub fn purify_create_materialized_view_options(
         }
     }
 
-    // 4. If the user didn't give any REFRESH option, then default to ON COMMIT.
+    // 4. Fold the remaining `REFRESH AT` / `ALIGNED TO` expressions to literals.
+    let folded = fold_refresh_times(&catalog, cmvs);
+
+    // 5. If the user didn't give any REFRESH option, then default to ON COMMIT.
     if !cmvs.with_options.iter().any(|o| {
         matches!(
             o,
@@ -3032,7 +3023,7 @@ pub fn purify_create_materialized_view_options(
         })
     }
 
-    // 5. Attend to `resolved_ids`: The purification might have
+    // 6. Attend to `resolved_ids`: The purification might have
     // - added references to `mz_timestamp`;
     // - removed references to `mz_now`.
     if introduced_mz_timestamp {
@@ -3046,6 +3037,86 @@ pub fn purify_create_materialized_view_options(
     if !visitor.contains_temporal {
         resolved_ids.remove_item(&mz_now_id);
     }
+
+    // 7. A fold replaces an arbitrary expression, so besides adding `mz_timestamp` it can retract
+    // any reference that expression made (the target type of a cast, a function). Re-resolve the
+    // statement rather than track that piecemeal: this is what loading it from the catalog
+    // computes. If it no longer resolves, a concurrent DDL removed a dependency, which planning
+    // reports, so the ids tracked above stand.
+    if folded {
+        let sql = Statement::CreateMaterializedView(cmvs.clone()).to_ast_string_stable();
+        if let Ok(stmt) = crate::parse::parse(&sql)
+            && let Ok((_, ids)) = crate::names::resolve(&catalog, stmt.into_element().ast)
+        {
+            *resolved_ids = ids;
+        }
+    }
+}
+
+/// The catalog id of the `mz_timestamp` type and its resolved name for use in a purified
+/// statement, which prints as `[<id> AS pg_catalog.mz_timestamp]`.
+fn mz_timestamp_type(catalog: &dyn SessionCatalog) -> (CatalogItemId, ResolvedDataType) {
+    let item = catalog.get_system_type("mz_timestamp");
+    let full_name = catalog.resolve_full_name(item.name());
+    (
+        item.id(),
+        ResolvedDataType::Named {
+            id: item.id(),
+            qualifiers: item.name().qualifiers.clone(),
+            full_name,
+            modifiers: vec![],
+            print_id: true,
+        },
+    )
+}
+
+/// `<millis>::mz_timestamp`, the literal form a refresh time is stored as. The cast keeps the
+/// expression's type.
+fn mz_timestamp_literal(timestamp: Timestamp, mz_timestamp_type: ResolvedDataType) -> Expr<Aug> {
+    Expr::Cast {
+        expr: Box::new(Expr::Value(Value::Number(timestamp.to_string()))),
+        data_type: mz_timestamp_type,
+    }
+}
+
+/// Folds the `REFRESH AT` time and `REFRESH EVERY ... ALIGNED TO` alignment of every `REFRESH`
+/// option to the `mz_timestamp` literal it evaluates to. Returns whether any option changed.
+///
+/// The stored `create_sql` is the only durable record of the refresh schedule, and
+/// `mz_materialized_view_refresh_strategies` reads it back without a planner, so the times have
+/// to be stored as literals. Planning a literal yields the same time, so the fold is idempotent.
+/// An expression that does not fold is left as written for `plan_create_materialized_view` to
+/// reject with its usual error.
+pub fn fold_refresh_times(
+    catalog: &dyn SessionCatalog,
+    cmvs: &mut CreateMaterializedViewStatement<Aug>,
+) -> bool {
+    let scx = StatementContext::new(None, catalog);
+    let (_, mz_timestamp_type) = mz_timestamp_type(catalog);
+    let mut folded = false;
+    for option in cmvs.with_options.iter_mut() {
+        let (option_kind, time) = match &mut option.value {
+            Some(WithOptionValue::Refresh(RefreshOptionValue::At(RefreshAtOptionValue {
+                time,
+            }))) => (RefreshTimeOption::At, time),
+            Some(WithOptionValue::Refresh(RefreshOptionValue::Every(
+                RefreshEveryOptionValue {
+                    aligned_to: Some(aligned_to),
+                    ..
+                },
+            ))) => (RefreshTimeOption::AlignedTo, aligned_to),
+            _ => continue,
+        };
+        let Ok(timestamp) = plan_refresh_time(&scx, option_kind, time.clone()) else {
+            continue;
+        };
+        let literal = mz_timestamp_literal(timestamp, mz_timestamp_type.clone());
+        if *time != literal {
+            *time = literal;
+            folded = true;
+        }
+    }
+    folded
 }
 
 /// Returns true if the [MaterializedViewOption] either already involves `mz_now()` or will involve
@@ -3134,12 +3205,7 @@ impl VisitMut<'_, Aug> for MzNowPurifierVisitor {
                 let mz_now = self.mz_now.expect(
                     "we should have chosen a timestamp if the expression contains mz_now()",
                 );
-                // We substitute `mz_now()` with number + a cast to `mz_timestamp`. The cast is to
-                // not alter the type of the expression.
-                *expr = Expr::Cast {
-                    expr: Box::new(Expr::Value(Value::Number(mz_now.to_string()))),
-                    data_type: self.mz_timestamp_type.clone(),
-                };
+                *expr = mz_timestamp_literal(mz_now, self.mz_timestamp_type.clone());
                 self.introduced_mz_timestamp = true;
             }
             _ => visit_expr_mut(self, expr),
