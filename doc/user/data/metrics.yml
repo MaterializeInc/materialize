@@ -156,6 +156,22 @@ metrics:
   help: The time it takes to apply catalog implications.
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_arrangement_exert_policy_calls_total
+  help: Arrangement maintenance turns that consulted the exertion policy.
+  source: src/cluster/src/client.rs
+  visibility: internal
+- name: mz_arrangement_exert_policy_grants_total
+  help: Exertion policy grants, by reason.
+  labels:
+  - reason
+  source: src/cluster/src/client.rs
+  visibility: internal
+- name: mz_arrangement_exert_policy_grants_total
+  help: Exertion policy grants, by reason.
+  labels:
+  - reason
+  source: src/cluster/src/client.rs
+  visibility: internal
 - name: mz_arrangement_maintenance_active_info
   help: Whether maintenance is currently occuring.
   labels:
@@ -519,6 +535,31 @@ metrics:
   labels:
   - server_name
   source: src/service/src/transport/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_bytes_total
+  help: Uncompressed serialized bytes processed at instrumented columnar stages.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_calls_total
+  help: Columnar work operations, by stage.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_rows_total
+  help: Rows processed by columnar work, including repeated visits.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_size_total
+  help: Disjoint columnar operation row-size buckets, indexed by ceil(log2(rows)).
+  labels:
+  - log2_rows
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
   visibility: internal
 - name: mz_column_pager_budget_configured_bytes
   help: Most-recently-configured total budget for the column-pager tiered policy.
