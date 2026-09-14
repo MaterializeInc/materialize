@@ -19,17 +19,17 @@ use differential_dataflow::trace::Batcher;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ColumnChunk};
 use mz_timely_util::columnar::columnar_exchange_data;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketRange, BucketTimestamp};
 use timely::Accountable;
+use timely::ExchangeData;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ExchangeCore};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
-use timely::{ExchangeData, PartialOrder};
 
 use crate::typedefs::MzData;
 
@@ -158,10 +158,12 @@ where
                 let peeled = chain.peel(upper.borrow());
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
-                    // The chain hands back `Column` chunks already in the output's
-                    // shape, so each one moves as a container.
-                    for mut chunk in peeled.into_iter().flat_map(|x| x.done()) {
-                        session.give_container(&mut chunk);
+                    // The chain hands back chunks whose bodies load into a
+                    // `Column` already in the output's shape, so each one moves as
+                    // a container.
+                    for chunk in peeled.into_iter().flat_map(|x| x.done()) {
+                        let mut column = chunk.into_column();
+                        session.give_container(&mut column);
                     }
                 } else {
                     // If we don't have a cap, we should not have any data to reveal.
@@ -288,8 +290,9 @@ where
                     if let Some(cap) = cap.as_ref() {
                         let mut session = output.session_with_builder(cap);
                         for chunk in peeled.into_iter().flat_map(|x| x.done()) {
+                            let column = chunk.into_column();
                             session.give_iterator(
-                                chunk
+                                column
                                     .borrow()
                                     .into_index_iter()
                                     .map(<(D, T, mz_repr::Diff)>::into_owned),
@@ -327,30 +330,34 @@ where
     }
 }
 
-/// A wrapper around [`ColumnMergeBatcher`] that implements the bucketing API.
+/// A wrapper around [`AccountedChunkBatcher`] that implements the bucketing API.
 ///
-/// This is the same columnar-native merge batcher (`Col2ValPagedBatcher`) the
-/// default arrangement uses, so the bucket chain and arrangements share a single
-/// merge-batcher implementation. The batcher consumes pre-chunked, consolidated
-/// [`Column`] input, so this wrapper carries a [`ColumnChunker`] that sorts and
-/// consolidates the input columns into the chunks the batcher consumes.
+/// This is the same merge batcher the arrange sites' chunked arm uses, so the
+/// bucket chain and those arrangements share one merge-batcher implementation.
+/// The choice is unconditional here: the bucket chain does not consult the
+/// arrange batcher selector.
+///
+/// The batcher consumes sorted, consolidated [`ColumnChunk`] input, so this
+/// wrapper carries a [`ColumnChunker`] that sorts and consolidates the input
+/// columns into the [`Column`]s it wraps as chunks.
 struct MergeBatcherWrapper<D, T, R>
 where
-    D: MzData + Ord + Clone,
-    T: MzData + Ord + PartialOrder + Clone,
-    R: MzData + Semigroup + Default,
+    D: MzData,
+    T: MzData + Ord + Default + Timestamp + Lattice,
+    R: MzData + Semigroup + Default + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    for<'a> columnar::Ref<'a, R>: Ord,
 {
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
     chunker: ColumnChunker<(D, T, R)>,
-    inner: ColumnMergeBatcher<D, T, R>,
+    inner: AccountedChunkBatcher<D, T, R>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
 where
-    D: MzData + Ord + Clone + 'static,
-    T: MzData + Ord + PartialOrder + Clone + Default + Timestamp,
-    R: MzData + Semigroup + Default + 'static + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    D: MzData + Ord + Clone,
+    T: MzData + Ord + Clone + Default + Timestamp + Lattice,
+    R: MzData + Semigroup + Default + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> columnar::Ref<'a, R>: Ord,
     for<'a> <D as Columnar>::Container: Push<columnar::Ref<'a, D>>,
     for<'a> <T as Columnar>::Container: Push<columnar::Ref<'a, T>>,
@@ -363,7 +370,7 @@ where
             logger: logger.clone(),
             operator_id,
             chunker: ColumnChunker::default(),
-            inner: ColumnMergeBatcher::new(logger, operator_id),
+            inner: AccountedChunkBatcher::new(logger, operator_id),
         }
     }
 
@@ -377,20 +384,22 @@ where
         self.chunker.push_into(buffer);
         buffer.clear();
         while let Some(chunk) = self.chunker.extract() {
-            self.inner.push_into(std::mem::take(chunk));
+            self.inner
+                .push_into(ColumnChunk::from_column(std::mem::take(chunk)));
         }
     }
 
     /// Flush any partial chunk still held by the chunker into the batcher.
     fn flush(&mut self) {
-        use timely::container::ContainerBuilder as _;
+        use timely::container::{ContainerBuilder as _, PushInto as _};
         while let Some(chunk) = self.chunker.finish() {
-            self.inner.push_into(std::mem::take(chunk));
+            self.inner
+                .push_into(ColumnChunk::from_column(std::mem::take(chunk)));
         }
     }
 
-    /// Reveal the contents of the merge batcher, returning a vector of `Column` chunks.
-    fn done(mut self) -> Vec<Column<(D, T, R)>> {
+    /// Reveal the contents of the merge batcher, returning a vector of chunks.
+    fn done(mut self) -> Vec<ColumnChunk<D, T, R>> {
         self.flush();
         let (chain, _description) = self.inner.seal(Antichain::new());
         chain
@@ -399,9 +408,9 @@ where
 
 impl<D, T, R> Bucket for MergeBatcherWrapper<D, T, R>
 where
-    D: MzData + Ord + Clone + 'static,
-    T: MzData + Ord + PartialOrder + Clone + Default + 'static + BucketTimestamp,
-    R: MzData + Semigroup + Default + 'static + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    D: MzData + Ord + Clone,
+    T: MzData + Ord + Clone + Default + Lattice + BucketTimestamp,
+    R: MzData + Semigroup + Default + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> columnar::Ref<'a, R>: Ord,
     for<'a> <D as Columnar>::Container: Push<columnar::Ref<'a, D>>,
     for<'a> <T as Columnar>::Container: Push<columnar::Ref<'a, T>>,
@@ -411,19 +420,18 @@ where
     type Timestamp = T;
 
     fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
-        // Re-chunks the sealed chunks into the lower batcher rather than splitting the
-        // batcher's chains in place, so the chunker sorts and re-pushes every record,
-        // which is what the per-record `fuel` charge below accounts for. No record is
-        // reconstituted as an owned tuple on the way.
-        //
-        // TODO: Split the batcher's chains directly without re-chunking.
+        use timely::container::PushInto as _;
         self.flush();
         let upper = Antichain::from_elem(timestamp.clone());
         let mut lower = Self::new(self.logger.clone(), self.operator_id);
+        // Sealing at `timestamp` ships exactly the updates strictly less than it,
+        // as sorted, consolidated chunks; feed them to the lower batcher whole,
+        // so spilled bodies move without being loaded. The `fuel` charge covers
+        // the sealing work those records paid for.
         let (chain, _description) = self.inner.seal(upper);
-        for mut chunk in chain {
+        for chunk in chain {
             *fuel = fuel.saturating_sub(chunk.record_count());
-            lower.push_container(&mut chunk);
+            lower.inner.push_into(chunk);
         }
         (lower, self)
     }
