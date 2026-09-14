@@ -2,25 +2,19 @@
 headless: true
 ---
 
-The SQL Server source resumes replication from a [log sequence number
+### Operations that do not require re-creating the source
+For operations that are supported automatically, Materialize is able to resume
+replication from a [log sequence number
 (LSN)](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-log-architecture-and-management-guide)
-that Materialize tracks as it consumes the upstream change data capture (CDC)
-change tables. Because LSNs live in the SQL Server transaction log, they survive
+that it tracks as it consumes the upstream change data capture (CDC) change
+tables. Because LSNs live in the SQL Server transaction log, they survive
 routine operational events: after a transient interruption the source stalls,
 then resumes from its last committed LSN and catches up automatically. **No
 action is required** for the operations in the first section below.
 
-A smaller set of events breaks LSN or CDC-change-table continuity. When this
-happens, Materialize cannot guarantee a correct, gap-free view of your data, so
-it puts the source (or an individual table) into an error state that requires
-**re-creating** the source or table. Re-creating triggers a fresh
-[snapshot](/ingest-data/#snapshotting) and rehydration of dependent objects.
-
-### Operations that do not require re-creating the source
-
-The source recovers on its own — it briefly reports a `stalled` status while the
-condition persists, then returns to `running` and catches up — for all of the
-following:
+The source recovers on its own. It will briefly reports a `stalled` status while the
+condition persists, then returns to `running` and catch up for all of the
+following scenarios:
 
 - Restarting or patching SQL Server (including OS-level restarts).
 - Restarting Materialize. The source resumes from its tracked LSN and does
@@ -51,6 +45,12 @@ mode.
 {{< /warning >}}
 
 ### Operations that require re-creating the source
+A smaller set of events breaks LSN or CDC-change-table continuity. When this
+happens, Materialize cannot guarantee a correct, gap-free view of your data, so
+it puts the **entire source** into an error state that requires **re-creating**
+the source. Re-creating triggers a fresh [snapshot](/ingest-data/#snapshotting)
+and rehydration of dependent objects. Upstream changes to an individual table's
+schema are handled separately, and do not error the entire source.
 
 The following events put the **entire source** into an error state. In each
 case, the remediation is to drop and re-create the source:
@@ -105,25 +105,7 @@ period, or increase retention beforehand with
 [`sys.sp_cdc_change_job`](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-change-job-transact-sql)
 (`@job_type = 'cleanup'`, `@retention`).
 
-### Operations that require re-creating only the affected table
-
-Some events fail a single table while the rest of the source keeps replicating.
-
-- **Incompatible schema change** (for example, dropping an ingested column, or
-  dropping a `NOT NULL` constraint) errors that table with `Incompatible schema
-  change for table dbo_<table> ...`. See [Handling upstream
-  operations](#handling-upstream-operations) for the per-table recovery steps.
-
-- **Disabling CDC on one table** (`sys.sp_cdc_disable_table`) removes that
-  table's change-table functions, which stalls the source. You can recover
-  without re-creating the whole source by dropping just the affected table in
-  Materialize — the remaining tables resume replicating:
-
-  ```mzsql
-  DROP TABLE table_1;
-  ```
-
-### Always On availability groups
+### Always-On failovers
 
 Materialize supports SQL Server configured with Always On availability groups,
 including failover between replicas, with one configuration change.
