@@ -109,6 +109,11 @@ pools](/self-managed-deployments/deployment-guidelines/resize-node-pools/).
   regardless of the strategy.
 - `AUTO SCALING STRATEGY` cannot be combined with a `SCHEDULE` other than the
   default `MANUAL`, and is only available on managed clusters.
+- Autoscaling for hydration does not apply to the new generation during a
+  Materialize Self-Managed version upgrade. Until it's promoted, the new
+  generation runs read-only and can't provision a burst replica, so it
+  hydrates only at its configured steady `SIZE`. See [Rollout
+  strategies](/self-managed-deployments/upgrading/#rollout-strategies).
 
 ## Related pages
 
