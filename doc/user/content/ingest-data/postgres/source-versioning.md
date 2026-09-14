@@ -191,6 +191,10 @@ has been altered.
 
 {{< warn-if-unreleased "v26.42" >}}
 
+{{< public-preview >}}
+Excluding constraints with `EXCLUDE CONSTRAINTS` or `EXCLUDE ALL CONSTRAINTS`
+{{< /public-preview >}}
+
 Materialize ignores the following constraints: foreign key, `CHECK`, and
 `EXCLUSION`. As such, you can add or drop them without affecting ingestion.
 To handle changes in `PRIMARY KEY`, `UNIQUE`, and `NOT NULL` constraints,
@@ -213,8 +217,10 @@ CREATE TABLE v4.T
 Materialize does not record the excluded constraint as a key of `v4.T`.
 
 `EXCLUDE CONSTRAINTS` only accepts `PRIMARY KEY` and `UNIQUE` constraint
-names. To record no constraints at all, including `NOT NULL`, so that any
-later constraint drop is also safe, use `EXCLUDE ALL CONSTRAINTS` instead:
+names. A `NOT NULL` constraint on a specific column cannot be excluded by
+name. To drop a `NOT NULL` constraint safely, use `EXCLUDE ALL CONSTRAINTS`
+instead, which records no constraints at all: the table has no keys and every
+column is nullable, so any later constraint drop is safe.
 
 ```sql
 CREATE SCHEMA v4;
