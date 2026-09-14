@@ -312,6 +312,7 @@ There are several constraints on `CLONE OBJECTS`:
  - In the "development, cluster-based cloning" `CLONE OBJECTS` usage:
    + Downstream objects in other clusters are not automatically cloned.
    + If the source cluster has objects from more than one schema, they must be uniquely named.
+ - We do not pin one-shot sinks, like `CopyToS3` or subscribes.
 
 There is also a new corner case: a cloned index might now be in a different schema than the object it indexes.
 This breaks an existing invariant, but it is not clear if it is important or not---if not, we should relax it; if so, we should require that we clone upstream objects as well.
