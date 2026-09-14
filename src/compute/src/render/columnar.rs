@@ -9,8 +9,8 @@
 
 //! Columnar dataflow edge support.
 //!
-//! Defines [`CollectionEdge`], the columnar batch representation that dataflow
-//! edges between Plan nodes carry. Every producer emits this representation.
+//! Defines [`ColCollection`], the columnar collection that dataflow edges between Plan
+//! nodes carry. Every producer emits this representation.
 //!
 //! Within a Plan node, operators may freely materialize `Vec` collections. Only
 //! the collection edge format is constrained. A node that produces a row-based
@@ -50,14 +50,15 @@ use crate::render::errors::DataflowErrorSer;
 /// container is [`Column<(D, T, R)>`] instead of `Vec<(D, T, R)>`.
 pub type ColumnarCollection<'scope, T, D, R> = Collection<'scope, T, Column<(D, T, R)>>;
 
-/// A dataflow edge between Plan nodes: a columnar collection of `(Row, Diff)` updates.
-pub type CollectionEdge<'scope, T> = ColumnarCollection<'scope, T, Row, Diff>;
+/// A columnar collection of `(Row, Diff)` updates, which is what a dataflow edge between
+/// Plan nodes carries.
+pub type ColCollection<'scope, T> = ColumnarCollection<'scope, T, Row, Diff>;
 
 /// Concatenates a collection of columnar edges.
-pub fn concat_many<'scope, T, I>(scope: Scope<'scope, T>, edges: I) -> CollectionEdge<'scope, T>
+pub fn concat_many<'scope, T, I>(scope: Scope<'scope, T>, edges: I) -> ColCollection<'scope, T>
 where
     T: RenderTimestamp,
-    I: IntoIterator<Item = CollectionEdge<'scope, T>>,
+    I: IntoIterator<Item = ColCollection<'scope, T>>,
 {
     let cols: Vec<_> = edges.into_iter().collect();
     differential_dataflow::collection::concatenate(scope, cols)
@@ -73,7 +74,7 @@ where
 /// read [`mz_repr::Datum`]s from each row anyway). It iterates the columnar
 /// batch directly without going through an owned [`Row`].
 pub fn flat_map_datums<'scope, T, DCB, L>(
-    edge: CollectionEdge<'scope, T>,
+    edge: ColCollection<'scope, T>,
     name: &str,
     max_demand: usize,
     mut logic: L,
