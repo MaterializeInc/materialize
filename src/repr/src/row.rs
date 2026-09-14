@@ -685,6 +685,12 @@ mod columnar {
             self.bounds.push(u64::cast_from(self.values.len()));
         }
     }
+    impl<BC: Push<u64>> Push<Row> for Rows<BC> {
+        #[inline(always)]
+        fn push(&mut self, item: Row) {
+            self.push(&item);
+        }
+    }
     impl<BC: for<'a> Push<&'a u64>> Push<&RowRef> for Rows<BC> {
         #[inline(always)]
         fn push(&mut self, item: &RowRef) {

@@ -302,11 +302,11 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// `differential_join` forms its arrangement key off the edge, so a columnar source
     /// needs no decode.
     Collection(CollectionEdge<'scope, T>),
-    /// The intra-operator multi-stage accumulator.
+    /// The intra-operator accumulator of a stage whose closure can error.
     ///
-    /// A stage writes this when its output stays inside the operator, either feeding the
-    /// next stage's arrangement or a finalization closure. A stage whose output is the
-    /// node's output writes [`JoinedFlavor::Collection`].
+    /// Such a stage produces `Result`s that `ok_err` demultiplexes, and the ok side is a
+    /// `Vec` by the time the demux is done. Every other stage writes
+    /// [`JoinedFlavor::Collection`].
     VecCollection(VecCollection<'scope, T, Row, Diff>),
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
@@ -465,10 +465,9 @@ where
         terminal: bool,
         errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) -> JoinedFlavor<'s, T> {
-        // If we have a streamed input, we must first form an arrangement. The
-        // source edge keys off the `CollectionEdge` (a columnar source has no
-        // `ColumnarToVec` hop); the intra-operator accumulator is a bare
-        // `VecCollection` and keys off its `Vec`-forming logic.
+        // A streamed input must first form an arrangement. Both keying operators pack
+        // the same `(key, value)` column; they differ only in whether they read the input
+        // borrowed from a column or from a `Vec`.
         match joined {
             JoinedFlavor::Collection(edge) => {
                 let (arranged, errs) = arrange_join_input(
@@ -555,11 +554,10 @@ where
     ///
     /// The return type includes an optional error collection, which may be
     /// `None` if we can determine that `closure` cannot error.
-    /// `terminal` marks a stage whose output is the node's output, which makes
-    /// the ok side write a [`ColumnBuilder`] instead of the `Vec` accumulator, so
-    /// the node needs no leaf encode. An error-capable closure writes the
-    /// accumulator either way, because its output has to be demuxed by
-    /// `ok_err` before the ok side can be encoded.
+    /// Both infallible arms write the columnar collection, so `terminal` selects only
+    /// whether the builder consolidates: a terminal stage's output leaves the operator,
+    /// while a non-terminal stage's is consolidated by the next stage's batcher. The
+    /// error-capable arm writes the `Vec` accumulator, which `ok_err` splits.
     fn differential_join_inner<'s, Tr1, Tr2>(
         &self,
         prev_keyed: Arranged<'s, Tr1>,
@@ -581,8 +579,7 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
 
-        // The `Vec` accumulator's builder. Named because the ok side picks
-        // between it and a `ColumnBuilder` on `terminal`.
+        // The builder for the error-capable arm, whose `Result`s are not columnar.
         type VecCB<D, T> = CapacityContainerBuilder<Vec<(D, T, Diff)>>;
 
         if closure.could_error() {
@@ -628,9 +625,11 @@ where
 
             (JoinedFlavor::Collection(oks.as_collection()), None)
         } else {
+            // The next stage's arrangement batcher consolidates this, and `mz_join_core`
+            // has already consolidated each chunk it produces, so this builder does not.
             let oks = self
                 .linear_join_spec
-                .render::<T, _, _, _, _, VecCB<Row, T>>(
+                .render::<T, _, _, _, _, ColumnBuilder<(Row, T, Diff)>>(
                     prev_keyed,
                     next_input,
                     move |key, old, new| {
@@ -639,7 +638,7 @@ where
                     },
                 );
 
-            (JoinedFlavor::VecCollection(oks.as_collection()), None)
+            (JoinedFlavor::Collection(oks.as_collection()), None)
         }
     }
 }
@@ -705,9 +704,9 @@ where
 ///
 /// The key and value are pushed borrowed into a `ColumnBuilder`, so the ok path
 /// materializes no owned `Row` per record. The error path owns time and diff.
-/// Called by [`arrange_join_collection`] for the intra-operator accumulator,
-/// which is row-formatted. [`arrange_join_input`] does the same job for the
-/// columnar source edge, reading records from the borrowed column instead.
+/// Called by [`arrange_join_collection`] for the error-capable arm's accumulator,
+/// which is row-formatted. [`arrange_join_input`] does the same job for a columnar
+/// input, reading records from the borrowed column instead.
 fn key_join_input_vec<'s, T>(
     stream: Stream<'s, T, Vec<(Row, T, Diff)>>,
     stream_key: Vec<LirScalarExpr>,
@@ -1011,12 +1010,12 @@ mod tests {
         assert!(!err.is_empty());
     }
 
-    /// The bare-`VecCollection` accumulator path (`arrange_join_collection`, used
-    /// for join stages after the first) forms the same keyed arrangement as the
-    /// columnar source edge path (`arrange_join_input`). The two use different
-    /// keying implementations (`arrange_join_input` keys inline off the borrowed
-    /// column, `arrange_join_collection` keys via `key_join_input_vec`), so this
-    /// cross-checks the two keying paths against each other.
+    /// The `VecCollection` accumulator path (`arrange_join_collection`, used by the
+    /// error-capable arm) forms the same keyed arrangement as the columnar path
+    /// (`arrange_join_input`). The two use different keying implementations
+    /// (`arrange_join_input` keys inline off the borrowed column,
+    /// `arrange_join_collection` keys via `key_join_input_vec`), so this cross-checks
+    /// the two keying paths against each other.
     #[mz_ore::test]
     fn arrange_join_collection_matches_edge() {
         let key = vec![LirScalarExpr::column(0)];
