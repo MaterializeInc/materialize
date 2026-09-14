@@ -39,7 +39,7 @@ use mz_timely_util::columnar::{
 };
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
-use timely::container::CapacityContainerBuilder;
+use timely::container::NoopBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -1190,12 +1190,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             let (err_output, err_stream) = builder.new_output();
             let mut err_output = OutputBuilder::from(err_output);
             let (passthrough_output, passthrough_stream) = builder.new_output();
-            // The passthrough forwards the input `Column` unchanged; its builder's container
-            // type must match the input so `give_container` can hand the batch through.
-            let mut passthrough_output = OutputBuilder::<
-                _,
-                CapacityContainerBuilder<Column<(Row, T, Diff)>>,
-            >::from(passthrough_output);
+            let mut passthrough_output =
+                OutputBuilder::<_, NoopBuilder<Column<(Row, T, Diff)>>>::from(passthrough_output);
             let mut input = builder.new_input(oks.inner, Pipeline);
             builder.set_notify_for(0, FrontierInterest::Never);
             builder.build(move |_capabilities| {
@@ -1234,7 +1230,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                                 }
                             }
                         }
-                        passthrough_output.session(&time).give_container(data);
+                        passthrough_output
+                            .session_with_builder(&time)
+                            .give_container(data);
                     });
                 }
             });
