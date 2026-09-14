@@ -24,7 +24,7 @@ following scenarios:
 - Toggling the database between `SINGLE_USER`/`MULTI_USER` or
   `READ_ONLY`/`READ_WRITE` (for example, during patching).
 - Data-file, filegroup, or index maintenance that rewrites data in place.
-- [Availability group failover](#always-on-availability-groups), with the
+- [Availability group failover](#always-on-failovers), with the
   configuration change described below.
 
 {{< note >}}

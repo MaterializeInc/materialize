@@ -82,7 +82,7 @@ error text and any required configuration.
 | Taking the database `OFFLINE` and back `ONLINE` | Supported automatically. |
 | Toggling `SINGLE_USER`/`MULTI_USER` or `READ_ONLY`/`READ_WRITE` | Supported automatically. |
 | Data-file, filegroup, or index maintenance that rewrites data in place | Supported automatically. |
-| [Availability group failover](#always-on-availability-groups) | Supported automatically, with a configuration change. |
+| [Availability group failover](#always-on-failovers) | Supported automatically, with a configuration change. |
 | [Point-in-time restore](#point-in-time-restore) | Requires re-creating the source. |
 | [CDC disabled at the database level](#cdc-disabled-at-the-database-level) | Requires re-creating the source. |
 | [Change-table retention](#change-table-retention) exceeded during an outage | Requires re-creating the source. |
