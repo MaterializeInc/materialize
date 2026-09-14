@@ -575,7 +575,39 @@ impl Controller {
         );
     }
 
-    /// Remove replicas that are orphaned in the current generation.
+    /// Lists actual replica services across all generations.
+    ///
+    /// For snapshot-based orphan cleanup, await this list before reading
+    /// authoritative durable catalog replica membership.
+    pub async fn list_replica_services(&self) -> Result<Vec<ReplicaServiceName>, anyhow::Error> {
+        self.orchestrator
+            .list_services()
+            .await?
+            .iter()
+            .map(|s| s.parse())
+            .collect()
+    }
+
+    /// Removes only observed, current-generation services absent from `live`.
+    ///
+    /// The caller must obtain `observed` from `list_replica_services` BEFORE
+    /// fetching `live` from the authoritative durable catalog, not a bootstrap
+    /// or controller-local snapshot. Service creation must follow catalog commit
+    /// and replica IDs must never be reused. Thus an observed service absent from
+    /// the later catalog snapshot cannot belong to an in-flight allocation.
+    /// Services created after the list are left for a subsequent cleanup pass.
+    pub fn remove_orphaned_replicas_from_snapshot(
+        &self,
+        observed: Vec<ReplicaServiceName>,
+        live: BTreeSet<(ClusterId, ReplicaId)>,
+    ) -> Result<(), anyhow::Error> {
+        remove_orphaned_replica_services(observed, &live, self.deploy_generation, |name| {
+            self.deprovision_replica(name.cluster_id, name.replica_id, name.generation)
+        })
+    }
+
+    /// Remove replicas that are orphaned in the current generation using local
+    /// inventory and allocator bounds, for unprotected upgrade/prewarming.
     #[instrument]
     pub async fn remove_orphaned_replicas(
         &mut self,
@@ -702,6 +734,8 @@ impl Controller {
         let aws_external_id_prefix = self.connection_context().aws_external_id_prefix.clone();
         let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let catalog_persist_location = self.catalog_persist_location.clone();
+        let deploy_generation = self.deploy_generation;
         let secrets_args = self.secrets_args.to_flags();
 
         // TODO(teskje): use the same values as for compute?
@@ -789,6 +823,21 @@ impl Controller {
                             compute_timely_config.to_string(),
                         ),
                     ];
+                    if let Some(location) = &catalog_persist_location {
+                        args.extend([
+                            format!("--catalog-cluster-id={cluster_id}"),
+                            format!("--catalog-replica-id={replica_id}"),
+                            format!("--catalog-deploy-generation={deploy_generation}"),
+                            format!(
+                                "--catalog-persist-blob-url={}",
+                                location.blob_uri.to_string_unredacted()
+                            ),
+                            format!(
+                                "--catalog-persist-consensus-url={}",
+                                location.consensus_uri.to_string_unredacted()
+                            ),
+                        ]);
+                    }
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(
                             "--aws-external-id-prefix={}",
@@ -992,6 +1041,22 @@ impl Controller {
     }
 }
 
+fn remove_orphaned_replica_services(
+    observed: Vec<ReplicaServiceName>,
+    live: &BTreeSet<(ClusterId, ReplicaId)>,
+    deploy_generation: u64,
+    mut drop_service: impl FnMut(ReplicaServiceName) -> Result<(), anyhow::Error>,
+) -> Result<(), anyhow::Error> {
+    for name in observed {
+        if name.generation == deploy_generation
+            && !live.contains(&(name.cluster_id, name.replica_id))
+        {
+            drop_service(name)?;
+        }
+    }
+    Ok(())
+}
+
 /// Remove all replicas from past generations.
 async fn try_remove_past_generation_replicas(
     orchestrator: &dyn NamespacedOrchestrator,
@@ -1053,5 +1118,64 @@ impl FromStr for ReplicaServiceName {
             // TODO: remove this in the next version of Materialize.
             generation: caps.get(3).map_or("0", |m| m.as_str()).parse().unwrap(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_orphan_cleanup() {
+        // The actuator inventory includes a committed replica missing from the
+        // caller's bootstrap inventory, an orphan, and other generations.
+        let mut services: BTreeSet<String> = [
+            "u1-replica-u1-gen-2",
+            "u1-replica-u2-gen-2",
+            "u1-replica-u3-gen-1",
+            "u1-replica-u4-gen-3",
+            "s1-replica-s1-gen-2",
+        ]
+        .map(String::from)
+        .into_iter()
+        .collect();
+        let observed = services.iter().map(|s| s.parse().unwrap()).collect();
+
+        // Read authoritative membership after listing, including the newly
+        // committed replica. A service arriving after the list is out of scope,
+        // even if it is absent from this catalog snapshot.
+        let live = BTreeSet::from([
+            (ClusterId::User(1), ReplicaId::User(1)),
+            (ClusterId::System(1), ReplicaId::System(1)),
+        ]);
+        services.insert("u1-replica-u5-gen-2".into());
+        remove_orphaned_replica_services(observed, &live, 2, |name| {
+            assert!(services.remove(&name.to_string()));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            services,
+            [
+                "u1-replica-u1-gen-2",
+                "u1-replica-u3-gen-1",
+                "u1-replica-u4-gen-3",
+                "u1-replica-u5-gen-2",
+                "s1-replica-s1-gen-2",
+            ]
+            .map(String::from)
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn snapshot_orphan_cleanup_propagates_drop_failure() {
+        let observed = vec!["u1-replica-u1-gen-2".parse().unwrap()];
+        let result = remove_orphaned_replica_services(observed, &BTreeSet::new(), 2, |_| {
+            Err(anyhow!("drop failed"))
+        });
+        assert_eq!(result.unwrap_err().to_string(), "drop failed");
     }
 }

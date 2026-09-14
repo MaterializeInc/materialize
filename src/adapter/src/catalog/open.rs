@@ -123,7 +123,7 @@ pub struct OpenCatalogResult {
 }
 
 impl Catalog {
-    fn diagnostic_state_config(config: &StateConfig) -> StateConfig {
+    pub(super) fn diagnostic_state_config(config: &StateConfig) -> StateConfig {
         StateConfig {
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
@@ -168,6 +168,15 @@ impl Catalog {
     ) -> Result<CatalogState, AdapterError> {
         let mut config = Self::diagnostic_state_config(&self.diagnostic_config);
         config.system_parameter_defaults = self.state.system_config().defaults();
+        Self::reconstruct_state_from_config(config, input).await
+    }
+
+    /// Replays a committed snapshot without committing or accepting durable changes.
+    pub(super) async fn reconstruct_state_from_config(
+        config: StateConfig,
+        input: mz_catalog::durable::CatalogSnapshot,
+    ) -> Result<CatalogState, AdapterError> {
+        let mut config = Self::diagnostic_state_config(&config);
         config.boot_ts = input.upper;
         let before = input.snapshot;
         let mut txn = mz_catalog::durable::DryRunTransaction::from_snapshot(
@@ -295,7 +304,7 @@ impl Catalog {
 
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
 
-        // Diagnostic replay must preserve pending replicas and builtin desired state,
+        // Committed replay must preserve pending replicas and builtin desired state,
         // which restart reconciliation is allowed to change.
         let new_builtin_collections = if deploy_generation.is_some() {
             migrate::durable_migrate(
@@ -580,7 +589,10 @@ impl Catalog {
             }
         };
 
-        if state.catalog_read_protection_enabled() && expr_cache_handle.is_none() {
+        if deploy_generation.is_some()
+            && state.catalog_read_protection_enabled()
+            && expr_cache_handle.is_none()
+        {
             expr_cache_handle = Some(
                 ExpressionCacheHandle::open_plan_store(
                     Self::expression_build_version(config.build_info),
@@ -911,24 +923,20 @@ impl Catalog {
         Ok(())
     }
 
-    /// Initialize maintained controllers and the adapter table writer after their
-    /// shared storage identities are durable.
-    pub(crate) async fn initialize_controller(
-        &mut self,
-        config: mz_controller::ControllerConfig,
-        envd_epoch: core::num::NonZeroI64,
+    /// Initialize adapter-owned WAL writing before lifecycle transaction readers start.
+    pub(crate) async fn initialize_table_writer(
+        &self,
+        persist: mz_persist_client::PersistClient,
+        metrics_registry: &mz_ore::metrics::MetricsRegistry,
         read_only: bool,
     ) -> Result<
         (
-            mz_controller::Controller,
             Arc<dyn crate::table_writer::TableWriteHandle>,
+            Arc<mz_txn_wal::metrics::Metrics>,
         ),
         mz_catalog::durable::CatalogError,
     > {
-        let controller_start = Instant::now();
-        info!("startup: controller init: beginning");
-
-        let (controller, table_writer) = {
+        let shard = {
             let mut storage = self.storage().await;
             let mut tx = storage.transaction().await?;
             mz_controller::prepare_initialization(&mut tx)
@@ -936,31 +944,35 @@ impl Catalog {
             let updates = tx.get_and_commit_op_updates();
             assert!(
                 updates.is_empty(),
-                "initializing controller should not produce updates: {updates:?}"
+                "WAL initialization should not produce catalog projection updates: {updates:?}"
             );
+            let shard = tx.get_txn_wal_shard().expect("WAL identity is initialized");
             let commit_ts = tx.upper();
             tx.commit(commit_ts).await?;
+            shard
+        };
+        let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(metrics_registry));
+        let writer =
+            crate::table_writer::open(persist, shard, Arc::clone(&metrics), read_only).await;
+        Ok((writer, metrics))
+    }
 
+    /// Open lifecycle controllers after the adapter has initialized the WAL identity
+    /// and format. Does not open an adapter table writer.
+    pub(crate) async fn initialize_controller(
+        &mut self,
+        config: mz_controller::ControllerConfig,
+        envd_epoch: core::num::NonZeroI64,
+        read_only: bool,
+        txns_metrics: Arc<mz_txn_wal::metrics::Metrics>,
+    ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
+        let controller_start = Instant::now();
+        info!("startup: controller init: beginning");
+
+        let controller = {
+            let mut storage = self.storage().await;
             let read_only_tx = storage.transaction().await?;
-            let txns_metrics =
-                Arc::new(mz_txn_wal::metrics::Metrics::new(&config.metrics_registry));
-            let persist = config
-                .persist_clients
-                .open(config.persist_location.clone())
-                .await
-                .expect("persist location is valid");
-            // Upgrade the WAL before controller transaction readers start. The
-            // writer is adapter-owned and does not depend on installed collections.
-            let table_writer = crate::table_writer::open(
-                persist,
-                read_only_tx
-                    .get_txn_wal_shard()
-                    .expect("WAL identity is initialized"),
-                Arc::clone(&txns_metrics),
-                read_only,
-            )
-            .await;
-            let controller = mz_controller::Controller::new(
+            mz_controller::Controller::new(
                 config,
                 envd_epoch,
                 read_only,
@@ -968,8 +980,7 @@ impl Catalog {
                 &read_only_tx,
                 txns_metrics,
             )
-            .await;
-            (controller, table_writer)
+            .await
         };
 
         self.initialize_storage_state(&controller.storage_collections)
@@ -980,7 +991,7 @@ impl Catalog {
             controller_start.elapsed()
         );
 
-        Ok((controller, table_writer))
+        Ok(controller)
     }
 
     /// Politely releases all external resources that can only be released in an async context.

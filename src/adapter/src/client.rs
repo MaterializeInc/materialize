@@ -826,7 +826,7 @@ impl SessionClient {
         let mut logging = ExecutionLogging::adopt(outer_ctx_extra, &self.peek_client);
 
         let result = self
-            .execute_attempts(portal_name, &mut logging, cancel_future)
+            .execute_attempts(portal_name, &mut logging, cancel_future, execute_started)
             .await;
 
         logging.retire(&result);
@@ -842,6 +842,7 @@ impl SessionClient {
         portal_name: String,
         logging: &mut ExecutionLogging,
         cancel_future: impl Future<Output = ()> + Send + Clone,
+        execute_started: Instant,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
         // flows through `try_frontend_peek` /
@@ -859,8 +860,16 @@ impl SessionClient {
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
-        // TODO(peek-seq): wire up cancel_future
-        let peek_result = self.try_frontend_peek(&portal_name, logging).await?;
+        // Diagnostic I/O observes disconnects. Other frontend stages retain their
+        // own execution and cancellation boundaries.
+        let peek_result = self
+            .try_frontend_peek(
+                &portal_name,
+                logging,
+                cancel_future.clone(),
+                execute_started,
+            )
+            .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
             return Ok(resp);
@@ -1496,11 +1505,19 @@ impl SessionClient {
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
+        diagnostic_cancel: impl Future<Output = ()> + Send,
+        execute_started: Instant,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek(portal_name, session, logging)
+                .try_frontend_peek(
+                    portal_name,
+                    session,
+                    logging,
+                    diagnostic_cancel,
+                    execute_started,
+                )
                 .await
         } else {
             Ok(None)

@@ -987,8 +987,12 @@ impl PeekClient {
         if session.vars().emit_timestamp_notice() {
             let conn_id = session.conn_id().clone();
             let session_wall_time = session.pcx().wall_time;
-            let explanation = self
-                .call_coordinator(|tx| Command::ExplainTimestamp {
+            let explanation = if let Some(client) = &self.query_client {
+                client
+                    .explain_timestamp(catalog, &conn_id, session_wall_time, &bundle, determination)
+                    .await
+            } else {
+                self.call_coordinator(|tx| Command::ExplainTimestamp {
                     conn_id,
                     session_wall_time,
                     cluster_id,
@@ -996,7 +1000,8 @@ impl PeekClient {
                     determination,
                     tx,
                 })
-                .await?;
+                .await?
+            };
             session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
         }
 

@@ -20,17 +20,25 @@ hyper-util.workspace = true
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
+mz-catalog = { path = "../catalog" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute = { path = "../compute", default-features = false }
+mz-compute-types = { path = "../compute-types" }
+mz-controller-types = { path = "../controller-types" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-http-util = { path = "../http-util" }
 mz-metrics = { path = "../metrics" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["async", "panic", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
 mz-prof-http = { path = "../prof-http" }
+mz-proto = { path = "../proto" }
+mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
+mz-sql = { path = "../sql" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage = { path = "../storage" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
@@ -38,9 +46,11 @@ mz-txn-wal = { path = "../txn-wal" }
 num_cpus.workspace = true
 rustls.workspace = true
 serde.workspace = true
+timely.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 custom-labels.workspace = true

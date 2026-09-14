@@ -176,6 +176,9 @@ pub struct Controller {
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
 
+    /// Catalog access supplied to replicas in writable protected environments.
+    catalog_persist_location: Option<PersistLocation>,
+
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
 
@@ -295,6 +298,7 @@ impl Controller {
             metrics_rx: _,
             now: _,
             persist_pubsub_url: _,
+            catalog_persist_location: _,
             secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
@@ -714,6 +718,8 @@ impl Controller {
         .await;
 
         let storage_collections = Arc::clone(&collections_ctl);
+        let catalog_persist_location = (catalog_read_protection_enabled && !read_only)
+            .then(|| config.persist_location.clone());
         let compute_controller = ComputeController::new(
             config.build_info,
             storage_collections,
@@ -742,6 +748,7 @@ impl Controller {
             metrics_rx,
             now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
+            catalog_persist_location,
             secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),

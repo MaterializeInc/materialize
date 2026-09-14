@@ -18,12 +18,7 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_compute_types::plan::render_plan::RenderPlan;
-use mz_compute_types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
-};
-use mz_compute_types::sources::SourceInstanceDesc;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::dyncfgs::{
     ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
@@ -1519,93 +1514,25 @@ impl Instance {
             self.copy_tos.insert(copy_to_id);
         }
 
-        // Here we augment all imported sources and all exported sinks with the appropriate
-        // storage metadata needed by the compute instance.
-        let mut source_imports = BTreeMap::new();
-        for (id, import) in dataflow.source_imports {
-            let frontiers = self
-                .storage_collections
-                .collection_frontiers(id)
-                .expect("collection exists");
-
-            let collection_metadata = self
-                .storage_collections
-                .collection_metadata(id)
-                .expect("we have a read hold on this collection");
-
-            let desc = SourceInstanceDesc {
-                storage_metadata: collection_metadata.clone(),
-                arguments: import.desc.arguments,
-                typ: import.desc.typ.clone(),
-            };
-            source_imports.insert(
-                id,
-                mz_compute_types::dataflows::SourceImport {
-                    desc,
-                    monotonic: import.monotonic,
-                    with_snapshot: import.with_snapshot,
-                    upper: frontiers.write_frontier,
-                },
-            );
-        }
-
-        let mut sink_exports = BTreeMap::new();
-        for (id, se) in dataflow.sink_exports {
-            let connection = match se.connection {
-                ComputeSinkConnection::MaterializedView(conn) => {
-                    let metadata = self
-                        .storage_collections
-                        .collection_metadata(id)
-                        .map_err(|_| CollectionMissing(id))?
-                        .clone();
-                    let conn = MaterializedViewSinkConnection {
-                        value_desc: conn.value_desc,
-                        storage_metadata: metadata,
-                    };
-                    ComputeSinkConnection::MaterializedView(conn)
-                }
-                ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
-                ComputeSinkConnection::CopyToS3Oneshot(conn) => {
-                    ComputeSinkConnection::CopyToS3Oneshot(conn)
-                }
-                ComputeSinkConnection::MetricSink(conn) => ComputeSinkConnection::MetricSink(conn),
-            };
-            let desc = ComputeSinkDesc {
-                from: se.from,
-                from_desc: se.from_desc,
-                connection,
-                with_snapshot: se.with_snapshot,
-                up_to: se.up_to,
-                non_null_assertions: se.non_null_assertions,
-                refresh_schedule: se.refresh_schedule,
-            };
-            sink_exports.insert(id, desc);
-        }
-
-        // Flatten the dataflow plans into the representation expected by replicas.
-        let objects_to_build = dataflow
-            .objects_to_build
-            .into_iter()
-            .map(|object| BuildDesc {
-                id: object.id,
-                plan: RenderPlan::try_from(object.plan).expect("valid plan"),
-            })
-            .collect();
-
-        let augmented_dataflow = DataflowDescription {
-            source_imports,
-            sink_exports,
-            objects_to_build,
-            // The rest of the fields are identical
-            index_imports: dataflow.index_imports,
-            index_exports: dataflow.index_exports,
-            as_of: dataflow.as_of.clone(),
-            until: dataflow.until,
-            initial_storage_as_of: dataflow.initial_storage_as_of,
-            refresh_schedule: dataflow.refresh_schedule,
-            debug_name: dataflow.debug_name,
-            time_dependence: dataflow.time_dependence,
-        };
+        let empty_as_of = as_of.is_empty();
+        let augmented_dataflow = dataflow.into_render_plan(
+            |id| {
+                let frontiers = self
+                    .storage_collections
+                    .collection_frontiers(id)
+                    .expect("collection exists");
+                let metadata = self
+                    .storage_collections
+                    .collection_metadata(id)
+                    .expect("we have a read hold on this collection");
+                Ok((metadata, frontiers.write_frontier))
+            },
+            |id| {
+                self.storage_collections
+                    .collection_metadata(id)
+                    .map_err(|_| CollectionMissing(id))
+            },
+        )?;
 
         if augmented_dataflow.is_transient() {
             tracing::debug!(
@@ -1629,7 +1556,7 @@ impl Instance {
 
         // Skip the actual dataflow creation for an empty `as_of`. (Happens e.g. for the
         // bootstrapping of a REFRESH AT mat view that is past its last refresh.)
-        if as_of.is_empty() {
+        if empty_as_of {
             tracing::info!(
                 name = %augmented_dataflow.debug_name,
                 "not sending `CreateDataflow`, because of empty `as_of`",

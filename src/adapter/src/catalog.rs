@@ -752,6 +752,28 @@ impl Catalog {
         self.storage().await.current_upper().await
     }
 
+    /// Read authoritative replica membership for cleanup after listing services.
+    /// Does not substitute the caller's potentially older installed inventory.
+    pub(crate) async fn committed_cluster_replicas(
+        &self,
+    ) -> Result<BTreeSet<(ClusterId, ReplicaId)>, AdapterError> {
+        use mz_catalog::durable::objects::{ClusterReplica, DurableType};
+        use mz_proto::RustType;
+        let snapshot = self.storage().await.snapshot().await?;
+        snapshot
+            .cluster_replicas
+            .into_iter()
+            .map(|(key, value)| {
+                let replica = ClusterReplica::from_key_value(
+                    RustType::from_proto(key)?,
+                    RustType::from_proto(value)?,
+                );
+                Ok((replica.cluster_id, replica.replica_id))
+            })
+            .collect::<Result<_, mz_proto::TryFromProtoError>>()
+            .map_err(|error| AdapterError::Unstructured(error.into()))
+    }
+
     /// Returns the catalog-owned transaction WAL identity after storage initialization.
     pub(crate) async fn txn_wal_shard(&self) -> Result<mz_persist_client::ShardId, AdapterError> {
         use mz_storage_client::controller::StorageTxn;
@@ -1385,8 +1407,24 @@ impl Catalog {
     /// or sharing revision notifications with the serving SQL catalog.
     pub(crate) async fn writer_projection(
         &self,
+        storage: Box<dyn DurableCatalogState>,
+    ) -> Result<Self, AdapterError> {
+        let mut config = Self::diagnostic_state_config(&self.diagnostic_config);
+        config.system_parameter_defaults = self.state.system_config().defaults();
+        Self::open_committed(config, storage).await
+    }
+
+    /// Opens an independent projection of an initialized, same-version catalog.
+    ///
+    /// `storage` must be an already joined handle whose initial updates have not
+    /// been consumed. This does not bootstrap, migrate, reconcile, or produce
+    /// plans. It rejects reconstruction that would require durable changes.
+    /// The caller owns generation admission and any downstream runtime setup.
+    pub(crate) async fn open_committed(
+        config: StateConfig,
         mut storage: Box<dyn DurableCatalogState>,
     ) -> Result<Self, AdapterError> {
+        let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config));
         let deployment_generation = storage.get_deployment_generation().await?;
         let is_bootstrap_complete = storage.is_bootstrap_complete();
         let mut updates = Vec::new();
@@ -1400,15 +1438,17 @@ impl Catalog {
                 Err(error) => return Err(error.into()),
             }
         };
-        let state = self
-            .reconstruct_state(mz_catalog::durable::CatalogSnapshot {
+        let state = Self::reconstruct_state_from_config(
+            config,
+            mz_catalog::durable::CatalogSnapshot {
                 snapshot,
                 updates,
                 upper,
                 deployment_generation,
                 is_bootstrap_complete,
-            })
-            .await?;
+            },
+        )
+        .await?;
         storage.mark_bootstrap_complete().await;
         Ok(Self {
             state,
@@ -1416,7 +1456,7 @@ impl Catalog {
             storage: Arc::new(tokio::sync::Mutex::new(storage)),
             transient_revision: 1,
             shared_transient_revision: Arc::new(AtomicU64::new(1)),
-            diagnostic_config: Arc::clone(&self.diagnostic_config),
+            diagnostic_config,
         })
     }
 
@@ -1669,13 +1709,7 @@ impl Catalog {
     pub(crate) fn expression_build_version(
         build_info: &mz_build_info::BuildInfo,
     ) -> semver::Version {
-        if build_info.is_dev() {
-            build_info
-                .semver_version_build()
-                .expect("build ID is not available on this platform")
-        } else {
-            build_info.semver_version()
-        }
+        mz_catalog::expr_cache::expression_build_version(build_info)
     }
 
     /// Durably prepares a new item's plan and returns the selection to commit with its DDL.
@@ -4931,6 +4965,42 @@ mod tests {
             .expect("follow client metadata");
         assert!(before_metadata.transient_revision_is_current());
 
+        // Restart reconciliation would remove this committed pending replica.
+        let replica = writer_catalog
+            .user_cluster_replicas()
+            .next()
+            .expect("bootstrap user replica")
+            .clone();
+        let mut replica_config = replica.config;
+        let mz_controller::clusters::ReplicaLocation::Managed(location) =
+            &mut replica_config.location
+        else {
+            panic!("bootstrap replica must be managed");
+        };
+        location.pending = true;
+        let ts = writer_catalog.current_upper().await;
+        let replica_id = writer_catalog
+            .allocate_user_replica_ids(1, ts)
+            .await
+            .expect("allocate pending replica ID")[0];
+        let ts = writer_catalog.current_upper().await;
+        writer_catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::CreateClusterReplica {
+                    cluster_id: replica.cluster_id,
+                    replica_id,
+                    name: "pending_replica".into(),
+                    config: replica_config,
+                    owner_id: replica.owner_id,
+                    reason: super::ReplicaCreateDropReason::GracefulReconfiguration,
+                }],
+            )
+            .await
+            .expect("create pending replica");
+
         let joined = mz_catalog::durable::TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(organization_id)
             .with_default_deploy_generation()
@@ -4940,14 +5010,74 @@ mod tests {
             .join()
             .await
             .expect("join active writer generation");
-        let writer_catalog_peer = read_only_catalog
-            .writer_projection(joined)
+        let before_open = writer_catalog
+            .storage()
             .await
-            .expect("reconstruct independent writer projection");
+            .transaction()
+            .await
+            .expect("snapshot before committed open")
+            .current_snapshot();
+        let upper_before_open = writer_catalog.current_upper().await;
+        let mut config = Catalog::diagnostic_state_config(&writer_catalog.diagnostic_config);
+        // Startup-only inputs must not override committed desired state.
+        config.skip_migrations = false;
+        config.builtin_system_cluster_config.replication_factor = 0;
+        config.remote_system_parameters =
+            Some(BTreeMap::from([("max_tables".into(), "999".into())]));
+        config.external_login_password_mz_system = Some("not-a-committed-password".into());
+        config.enable_expression_cache_override = Some(true);
+        let mut writer_catalog_peer = Catalog::open_committed(config, joined)
+            .await
+            .expect("open independent committed catalog");
+        assert!(writer_catalog_peer.expr_cache_handle.is_none());
+        assert_eq!(
+            writer_catalog_peer.state().dump(None).expect("dump peer"),
+            writer_catalog.state().dump(None).expect("dump writer")
+        );
+        assert_eq!(writer_catalog_peer.current_upper().await, upper_before_open);
+        assert_eq!(
+            writer_catalog_peer
+                .storage()
+                .await
+                .transaction()
+                .await
+                .expect("snapshot after committed open")
+                .current_snapshot(),
+            before_open
+        );
         let peer_db = writer_catalog_peer
             .resolve_database(db_name)
             .expect("resolve_database for peer");
         assert_eq!(peer_db, &read_db);
+        let peer_before_ddl = writer_catalog_peer.clone();
+        let ts = writer_catalog.current_upper().await;
+        writer_catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::CreateDatabase {
+                    name: "after_committed_open".into(),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("commit subsequent DDL");
+        assert!(peer_before_ddl.transient_revision_is_current());
+        writer_catalog_peer
+            .sync_to_current_updates()
+            .await
+            .expect("committed loader follows subsequent DDL");
+        assert!(!peer_before_ddl.transient_revision_is_current());
+        assert_eq!(
+            writer_catalog_peer
+                .resolve_database("after_committed_open")
+                .expect("peer followed database"),
+            writer_catalog
+                .resolve_database("after_committed_open")
+                .expect("writer database")
+        );
+        drop(peer_before_ddl);
         writer_catalog
             .sync_to_current_updates()
             .await

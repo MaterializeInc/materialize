@@ -1722,6 +1722,8 @@ fn test_transactional_explain_timestamps() {
             .first()
             .unwrap()
             .read_frontier
+            .as_ref()
+            .expect("physical since is observed")
             .first()
             .unwrap();
 
@@ -4052,8 +4054,14 @@ async fn test_retain_history() {
             .retry_async(|_| async {
                 let ts = get_explain_timestamp_determination(name, &client).await?;
                 let source = ts.sources.into_element();
-                let upper = source.write_frontier.into_element();
-                let since = source.read_frontier.into_element();
+                let upper = source
+                    .write_frontier
+                    .expect("upper is observed")
+                    .into_element();
+                let since = source
+                    .read_frontier
+                    .expect("physical since is observed")
+                    .into_element();
                 if upper.saturating_sub(since) < Timestamp::from(2000u64) {
                     anyhow::bail!("{upper} - {since} should be at least 2s apart")
                 }

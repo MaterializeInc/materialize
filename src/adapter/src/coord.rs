@@ -661,6 +661,8 @@ pub enum PeekStage {
     Optimize(PeekStageOptimize),
     /// Final stage for a peek.
     Finish(PeekStageFinish),
+    /// Requested diagnostic observations, obtained before dispatching the peek.
+    FinishWithTimestampNotice(PeekStageFinish, crate::TimestampExplanation),
     /// Final stage for an explain.
     ExplainPlan(PeekStageExplainPlan),
     ExplainPushdown(PeekStageExplainPushdown),
@@ -1749,11 +1751,24 @@ pub struct ExecuteContextInner {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     session: Session,
     extra: ExecuteContextGuard,
+    /// Fixed when execution enters the coordinator, not renewed by diagnostic stages.
+    statement_deadline: Option<Instant>,
     #[derivative(Debug = "ignore")]
     response_barriers: Vec<BuiltinTableAppendNotify>,
 }
 
 impl ExecuteContext {
+    pub(crate) fn statement_deadline(&self) -> Option<Instant> {
+        self.statement_deadline
+    }
+
+    /// Preserve the parent's diagnostic budget when transferring one execution
+    /// into a child or restored context.
+    pub(crate) fn with_statement_deadline(mut self, deadline: Option<Instant>) -> Self {
+        self.statement_deadline = deadline;
+        self
+    }
+
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -1786,12 +1801,17 @@ impl ExecuteContext {
         extra: ExecuteContextGuard,
         response_barriers: Vec<BuiltinTableAppendNotify>,
     ) -> Self {
+        let timeout = *session.vars().statement_timeout();
+        let statement_deadline = (!timeout.is_zero())
+            .then_some(timeout)
+            .and_then(|timeout| Instant::now().checked_add(timeout));
         Self {
             inner: Some(
                 ExecuteContextInner {
                     tx,
                     session,
                     extra,
+                    statement_deadline,
                     response_barriers,
                     internal_cmd_tx,
                 }
@@ -1828,6 +1848,7 @@ impl ExecuteContext {
             session,
             extra,
             response_barriers,
+            statement_deadline: _,
         } = *self.inner.take().expect("only consumed by value");
         (tx, internal_cmd_tx, session, extra, response_barriers)
     }
@@ -4085,7 +4106,22 @@ impl Coordinator {
         // on compute instances, the snapshot information is incomplete. We fix that by manually
         // updating `ComputeInstanceSnapshot` objects to ensure they contain collections previously
         // optimized.
-        let mut instance_snapshots = BTreeMap::new();
+        let mut instance_snapshots: BTreeMap<_, _> = self
+            .catalog()
+            .clusters()
+            .map(|cluster| {
+                let snapshot = if self.catalog().state().catalog_read_protection_enabled() {
+                    ComputeInstanceSnapshot::new_from_parts(
+                        cluster.id,
+                        cluster.log_indexes.values().copied().collect(),
+                    )
+                } else {
+                    self.instance_snapshot(cluster.id)
+                        .expect("compute instance exists")
+                };
+                (cluster.id, snapshot)
+            })
+            .collect();
         let mut uncached_expressions = BTreeMap::new();
 
         let optimizer_config = |catalog: &Catalog, cluster_id| {
@@ -4106,11 +4142,9 @@ impl Coordinator {
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
-                    let compute_instance =
-                        instance_snapshots.entry(idx.cluster_id).or_insert_with(|| {
-                            self.instance_snapshot(idx.cluster_id)
-                                .expect("compute instance exists")
-                        });
+                    let compute_instance = instance_snapshots
+                        .get_mut(&idx.cluster_id)
+                        .expect("index cluster is declared");
                     let global_id = idx.global_id();
 
                     // The index may already be installed on the compute instance. For example,
@@ -4161,11 +4195,9 @@ impl Coordinator {
                 }
                 CatalogItem::MaterializedView(mv) => {
                     // Collect optimizer parameters.
-                    let compute_instance =
-                        instance_snapshots.entry(mv.cluster_id).or_insert_with(|| {
-                            self.instance_snapshot(mv.cluster_id)
-                                .expect("compute instance exists")
-                        });
+                    let compute_instance = instance_snapshots
+                        .get_mut(&mv.cluster_id)
+                        .expect("materialized view cluster is declared");
                     let global_id = mv.global_id_writes();
 
                     let optimizer_config = optimizer_config(&self.catalog, mv.cluster_id);
@@ -4211,11 +4243,8 @@ impl Coordinator {
                 CatalogItem::MetricSink(metric_sink) => {
                     // Collect optimizer parameters.
                     let compute_instance = instance_snapshots
-                        .entry(metric_sink.cluster_id)
-                        .or_insert_with(|| {
-                            self.instance_snapshot(metric_sink.cluster_id)
-                                .expect("compute instance exists")
-                        });
+                        .get_mut(&metric_sink.cluster_id)
+                        .expect("metric sink cluster is declared");
                     let global_id = metric_sink.global_id;
                     let optimizer_config = optimizer_config(&self.catalog, metric_sink.cluster_id);
 
@@ -5917,12 +5946,19 @@ pub fn serve(
                     handle.block_on(catalog.writer_projection(storage))
                         .unwrap_or_terminate("failed to acquire client protection projection")
                 });
-                let (controller, table_write_handle) = handle
+                let (table_write_handle, txns_metrics) = handle.block_on(
+                    catalog.initialize_table_writer(
+                        persist_client.clone(), &controller_config.metrics_registry,
+                        read_only_controllers,
+                    ),
+                ).unwrap_or_terminate("failed to initialize adapter table writer");
+                let controller = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
                             controller_envd_epoch,
                             read_only_controllers,
+                            txns_metrics,
                         )
                     })
                     .unwrap_or_terminate("failed to initialize storage_controller");
@@ -6047,14 +6083,25 @@ pub fn serve(
                             uncached_local_exprs,
                         )
                         .await?;
-                    coord
-                        .controller
-                        .remove_orphaned_replicas(
+                    if coord.catalog().state().catalog_read_protection_enabled() {
+                        if !read_only_controllers {
+                            let observed = coord.controller.list_replica_services().await
+                                .map_err(AdapterError::Orchestrator)?;
+                            // Writable creation commits before provisioning. Read
+                            // membership after listing, not from bootstrap inventory.
+                            let live = coord.catalog().committed_cluster_replicas().await?;
+                            coord.controller
+                                .remove_orphaned_replicas_from_snapshot(observed, live)
+                                .map_err(AdapterError::Orchestrator)?;
+                        }
+                        // A prewarming savepoint can provision private replicas.
+                        // Durable membership is not authority to delete them.
+                    } else {
+                        coord.controller.remove_orphaned_replicas(
                             coord.catalog().get_next_user_replica_id().await?,
                             coord.catalog().get_next_system_replica_id().await?,
-                        )
-                        .await
-                        .map_err(AdapterError::Orchestrator)?;
+                        ).await.map_err(AdapterError::Orchestrator)?;
+                    }
 
                     if let Some(retention_period) = storage_usage_retention_period {
                         coord

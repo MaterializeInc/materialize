@@ -62,6 +62,7 @@ impl Staged for PeekStage {
             PeekStage::TimestampReadHold(stage) => &mut stage.validity,
             PeekStage::Optimize(stage) => &mut stage.validity,
             PeekStage::Finish(stage) => &mut stage.validity,
+            PeekStage::FinishWithTimestampNotice(stage, _) => &mut stage.validity,
             PeekStage::ExplainPlan(stage) => &mut stage.validity,
             PeekStage::ExplainPushdown(stage) => &mut stage.validity,
             PeekStage::CopyToPreflight(stage) => &mut stage.validity,
@@ -87,7 +88,33 @@ impl Staged for PeekStage {
                     .await
             }
             PeekStage::Optimize(stage) => coord.peek_optimize(ctx.session(), stage).await,
-            PeekStage::Finish(stage) => coord.peek_finish(ctx, stage).await,
+            PeekStage::Finish(stage) => {
+                if coord.query_client.is_some() && ctx.session().vars().emit_timestamp_notice() {
+                    // Finish observations before dispatch so timeout cannot leave
+                    // an executing peek without a consumer for its response.
+                    let explanation = coord.timestamp_explanation(
+                        ctx.session(),
+                        stage.cluster_id,
+                        stage.id_bundle.clone(),
+                        stage.determination.clone(),
+                        ctx.statement_deadline(),
+                    );
+                    Ok(StageResult::Handle(mz_ore::task::spawn(
+                        || "peek timestamp observations",
+                        async move {
+                            Ok(Box::new(PeekStage::FinishWithTimestampNotice(
+                                stage,
+                                explanation.await?,
+                            )))
+                        },
+                    )))
+                } else {
+                    coord.peek_finish(ctx, stage, None).await
+                }
+            }
+            PeekStage::FinishWithTimestampNotice(stage, explanation) => {
+                coord.peek_finish(ctx, stage, Some(explanation)).await
+            }
             PeekStage::ExplainPlan(stage) => coord.peek_explain_plan(ctx.session(), stage).await,
             PeekStage::ExplainPushdown(stage) => {
                 coord.peek_explain_pushdown(ctx.session(), stage).await
@@ -763,6 +790,7 @@ impl Coordinator {
             optimization_finished_at,
             insights_ctx,
         }: PeekStageFinish,
+        timestamp_notice: Option<crate::TimestampExplanation>,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         if let Some(id) = ctx.extra.contents() {
             self.record_statement_lifecycle_event(
@@ -842,13 +870,15 @@ impl Coordinator {
             .await?;
 
         if ctx.session().vars().emit_timestamp_notice() {
-            let explanation = self.explain_timestamp(
-                ctx.session().conn_id(),
-                ctx.session().pcx().wall_time,
-                cluster_id,
-                &id_bundle,
-                determination,
-            );
+            let explanation = timestamp_notice.unwrap_or_else(|| {
+                self.explain_timestamp(
+                    ctx.session().conn_id(),
+                    ctx.session().pcx().wall_time,
+                    cluster_id,
+                    &id_bundle,
+                    determination,
+                )
+            });
             ctx.session()
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }

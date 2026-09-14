@@ -1243,6 +1243,38 @@ impl Coordinator {
         let gid = mview.global_id_writes();
         let mview = mview.clone();
 
+        if let Some(client) = self.query_client.clone() {
+            let catalog = self.owned_catalog();
+            let expires = ctx.statement_deadline();
+            let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+            if let Some((_, previous)) = self.connection_cancel_watches.insert(
+                ctx.session().conn_id().clone(),
+                (cancel_tx, cancel_rx.clone()),
+            ) && *previous.borrow()
+            {
+                ctx.retire(Err(AdapterError::Canceled));
+                return;
+            }
+            mz_ore::task::spawn(
+                || "explain written materialized view pushdown",
+                async move {
+                    let canceled = async {
+                        let _ = cancel_rx.wait_for(|canceled| *canceled).await;
+                    };
+                    let result = crate::util::run_diagnostic(
+                        canceled,
+                        expires,
+                        Self::explain_written_materialized_view_pushdown(
+                            &catalog, &client, &ctx, &mview,
+                        ),
+                    )
+                    .await;
+                    ctx.retire(result);
+                },
+            );
+            return;
+        }
+
         let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
             let msg = format!("cannot find plan for materialized view {item_id} in catalog");
             tracing::error!("{msg}");
@@ -1301,6 +1333,60 @@ impl Coordinator {
                 .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
         )
         .await
+    }
+
+    /// Describe selected source operators at an input snapshot protected by this
+    /// query client. Installation state is not an authority for the selected plan.
+    async fn explain_written_materialized_view_pushdown(
+        catalog: &catalog::Catalog,
+        client: &Arc<crate::query_client::QueryClient>,
+        ctx: &ExecuteContext,
+        mv: &MaterializedView,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan = catalog
+            .selected_plan(mv.global_id_writes())
+            .await?
+            .ok_or_else(|| {
+                AdapterError::internal(
+                    "explain materialized view pushdown",
+                    "selected plan is missing",
+                )
+            })?
+            .physical_plan;
+        let imports = CollectionIdBundle {
+            storage_ids: plan.source_imports.keys().copied().collect(),
+            compute_ids: BTreeMap::new(),
+        };
+        let (holds, _) = client
+            .acquire_read_holds_and_upper(catalog, &imports, |_| Ok(None))
+            .await?;
+        let as_of = holds.least_valid_read();
+        let until = mv
+            .refresh_schedule
+            .as_ref()
+            .and_then(|schedule| schedule.last_refresh())
+            .unwrap_or(Timestamp::MAX);
+        let mz_now = match as_of.as_option() {
+            Some(&as_of) => {
+                ResultSpec::value_between(Datum::MzTimestamp(as_of), Datum::MzTimestamp(until))
+            }
+            None => ResultSpec::value_all(),
+        };
+        let future = crate::coord::sequencer::explain_pushdown_future_inner(
+            ctx.session(),
+            catalog,
+            None,
+            Some(client),
+            as_of,
+            mz_now,
+            plan.source_imports
+                .into_iter()
+                .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
+        )
+        .await;
+        let result = future.await;
+        drop(holds);
+        result
     }
 }
 

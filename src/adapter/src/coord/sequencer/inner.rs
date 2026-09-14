@@ -2861,6 +2861,7 @@ impl Coordinator {
 
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
+        let statement_deadline = ctx.statement_deadline();
         let (tx, _, session, extra, response_barriers) = ctx.into_parts();
         // We construct a new execute context for the peek, with a trivial (`Default::default()`)
         // execution context, because this peek does not directly correspond to an execute,
@@ -2878,7 +2879,8 @@ impl Coordinator {
             self.internal_cmd_tx.clone(),
             session,
             Default::default(),
-        );
+        )
+        .with_statement_deadline(statement_deadline);
 
         self.sequence_peek(
             peek_ctx,
@@ -2920,7 +2922,8 @@ impl Coordinator {
                         session,
                         extra,
                         response_barriers,
-                    );
+                    )
+                    .with_statement_deadline(statement_deadline);
                     otel_ctx.attach_as_parent();
                     ctx.retire(Err(e));
                     return;
@@ -2934,7 +2937,8 @@ impl Coordinator {
                 session,
                 extra,
                 response_barriers,
-            );
+            )
+            .with_statement_deadline(statement_deadline);
             let mut timeout_dur = *ctx.session().vars().statement_timeout();
 
             // Timeout of 0 is equivalent to "off", meaning we will wait "forever."

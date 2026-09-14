@@ -19,11 +19,13 @@ import socket
 import struct
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from copy import copy
 from datetime import datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Event, Thread
+from uuid import uuid4
 
 import psycopg
 import requests
@@ -48,8 +50,9 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -122,8 +125,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ui.warn(f"Skipping {name} under a sanitizer: build has no jemalloc")
             return
 
-        with c.test_case(name):
-            c.workflow(name)
+        # A failed workflow must not leave readers attached when the next one
+        # changes metadata backends or initializes a new catalog history.
+        try:
+            with c.test_case(name):
+                c.workflow(name)
+        finally:
             c.down()
 
     files = buildkite.shard_list(list(c.workflows.keys()), lambda workflow: workflow)
@@ -8660,3 +8667,306 @@ def workflow_test_controller_oracle_stall(
         f"by {growth:.2f}x (ceiling {ceiling}x), so the reads did not stay "
         "bounded per reconciliation phase"
     )
+
+
+def workflow_adapter_loss(c: Composition) -> None:
+    """Source-fed execution and history compaction survive loss of SQL ingress.
+
+    Table/webhook-fed work may pause. Queries and those dataflows must catch up
+    after restart. All outage observations use Kafka or read-only Persist CLI,
+    never another adapter. Compute and storage replicas must remain alive.
+    """
+    timeout = 420  # Includes the abandoned query client's reclamation grace.
+    adapter = Materialized(
+        deploy_generation=1,
+        external_metadata_store=True,
+        external_blob_store=True,
+        use_default_volumes=False,
+        support_external_clusterd=True,
+        additional_system_parameter_defaults={
+            "enable_catalog_read_protection": "true",
+            "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            "persist_inline_writes_single_max_bytes": "0",
+            "persist_compaction_heuristic_min_inputs": "2",
+        },
+    )
+    replicas = ("clusterd1", "clusterd2", "clusterd3")
+    blob_uri = minio_blob_uri()
+    consensus_uri = (
+        f"postgres://root@{c.metadata_store()}:26257?options=--search_path=consensus"
+    )
+    prefix = f"adapter-loss-{uuid4().hex}"
+    source_topic = f"{prefix}-input"
+    outputs = {name: f"{prefix}-{name}" for name in ("source", "table", "webhook")}
+    td = Testdrive(
+        name="adapter-loss-testdrive",
+        materialize_url=f"postgres://materialize@{adapter.name}:6875",
+        materialize_url_internal=f"postgres://mz_system@{adapter.name}:6877",
+        no_reset=True,
+        no_consistency_checks=True,
+        set_persist_urls=False,
+        materialize_params={"cluster": "compute_cluster"},
+    )
+
+    def produce(value: int) -> None:
+        c.exec(
+            "kafka",
+            "kafka-console-producer",
+            "--bootstrap-server=kafka:9092",
+            f"--topic={source_topic}",
+            "--producer-property=acks=all",
+            stdin=f"{value}\n",
+        )
+
+    def consume(name: str, count: int) -> set[int]:
+        # read_committed is essential: uncommitted sink output is not execution
+        # evidence. Start at the beginning so every check includes the warmup row.
+        result = c.exec(
+            "kafka",
+            "kafka-console-consumer",
+            "--bootstrap-server=kafka:9092",
+            f"--topic={outputs[name]}",
+            "--from-beginning",
+            f"--max-messages={count}",
+            "--timeout-ms=10000",
+            "--consumer-property=isolation.level=read_committed",
+            capture=True,
+            capture_stderr=True,
+            check=False,
+        )
+        if result.returncode and "TimeoutException" not in (result.stderr or ""):
+            raise RuntimeError(f"Kafka verification failed: {result}")
+        return {json.loads(line)["v"] for line in result.stdout.splitlines()}
+
+    def inspect(shard: str) -> dict:
+        result = c.run(
+            "persistcli",
+            "persistcli",
+            "inspect",
+            "state",
+            "--shard-id",
+            shard,
+            "--blob-uri",
+            blob_uri,
+            "--consensus-uri",
+            consensus_uri,
+            capture=True,
+            rm=True,
+        )
+        return json.loads(result.stdout)
+
+    def compacted_past(state: dict, timestamp: int) -> bool:
+        # Require persisted history compaction, not just new batches or permission.
+        batches = [*state["batches"], *state["hollow_batches"].values()]
+        return (
+            bool(state["since"])
+            and state["since"][0] > timestamp
+            and any(
+                batch["len"] > 0
+                and batch["lower"][0] <= timestamp
+                and batch["since"]
+                and batch["since"][0] > timestamp
+                for batch in batches
+            )
+        )
+
+    def absent() -> None:
+        assert not c.is_running(adapter.name), "adapter restarted during absence"
+        for replica in replicas:
+            assert c.is_running(replica), f"replica stopped: {replica}"
+
+    with c.override(adapter, td, Persistcli()), ExitStack() as replica_overrides:
+        c.up("kafka", adapter.name)
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            ));
+        """,
+            service=adapter.name,
+        )
+        c.sql(
+            """
+            CREATE CLUSTER compute_cluster REPLICAS (
+                replica1 (
+                    STORAGECTL ADDRESSES ['clusterd2:2100'],
+                    STORAGE ADDRESSES ['clusterd2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                    COMPUTE ADDRESSES ['clusterd2:2102'], WORKERS 2
+                ),
+                replica2 (
+                    STORAGECTL ADDRESSES ['clusterd3:2100'],
+                    STORAGE ADDRESSES ['clusterd3:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd3:2101'],
+                    COMPUTE ADDRESSES ['clusterd3:2102'], WORKERS 2
+                )
+            );
+            """,
+            service=adapter.name,
+        )
+        placements = {
+            ("cluster1", "replica1"): "clusterd1",
+            ("compute_cluster", "replica1"): "clusterd2",
+            ("compute_cluster", "replica2"): "clusterd3",
+        }
+        identities = c.sql_query(
+            """SELECT c.name, r.name, c.id, r.id
+               FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+               WHERE c.name IN ('cluster1', 'compute_cluster')""",
+            service=adapter.name,
+        )
+        assert {(c, r) for c, r, _, _ in identities} == set(placements), identities
+        replica_overrides.enter_context(
+            c.override(
+                *[
+                    Clusterd(
+                        name=placements[cluster_name, replica_name],
+                        workers=2,
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            "--catalog-deploy-generation=1",
+                            f"--catalog-persist-blob-url={blob_uri}",
+                            f"--catalog-persist-consensus-url={consensus_uri}",
+                        ],
+                    )
+                    for cluster_name, replica_name, cluster_id, replica_id in identities
+                ]
+            )
+        )
+        c.up(*replicas)
+        c.exec(
+            "kafka",
+            "kafka-topics",
+            "--bootstrap-server=kafka:9092",
+            "--create",
+            f"--topic={source_topic}",
+            "--partitions=1",
+            "--replication-factor=1",
+        )
+        produce(0)
+        # Controls ingest the same Kafka records into a separate shard. Their
+        # permitted stalls must not hold back the source-only compaction check.
+        c.testdrive(
+            f"""
+            > CREATE CONNECTION al_kafka TO KAFKA
+              (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT)
+            > CREATE SOURCE al_source IN CLUSTER cluster1
+              FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
+            > CREATE TABLE al_input FROM SOURCE al_source
+              (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
+              WITH (RETAIN HISTORY = FOR '1s')
+            > CREATE SOURCE al_control_source IN CLUSTER cluster1
+              FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
+            > CREATE TABLE al_control_input FROM SOURCE al_control_source
+              (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
+            > CREATE TABLE al_table (factor bigint)
+            > INSERT INTO al_table VALUES (1)
+            > CREATE SOURCE al_webhook IN CLUSTER cluster1
+              FROM WEBHOOK BODY FORMAT TEXT
+            > CREATE MATERIALIZED VIEW al_source_mv IN CLUSTER compute_cluster
+              WITH (RETAIN HISTORY = FOR '1s') AS
+              SELECT text::bigint * 10 AS v FROM al_input
+            > CREATE MATERIALIZED VIEW al_table_mv IN CLUSTER compute_cluster AS
+              SELECT text::bigint * 10 * factor AS v
+              FROM al_control_input CROSS JOIN al_table
+            > CREATE MATERIALIZED VIEW al_webhook_mv IN CLUSTER compute_cluster AS
+              SELECT text::bigint * 10 * body::bigint AS v
+              FROM al_control_input CROSS JOIN al_webhook
+            """,
+            service=td.name,
+        )
+        webhook_url = (
+            f"http://localhost:{c.port(adapter.name, 6874)}"
+            "/api/webhook/materialize/public/al_webhook"
+        )
+        requests.post(webhook_url, data="1", timeout=10).raise_for_status()
+        for name, topic in outputs.items():
+            c.testdrive(
+                f"""
+                > CREATE SINK al_{name}_sink IN CLUSTER cluster1
+                  FROM al_{name}_mv INTO KAFKA CONNECTION al_kafka (TOPIC '{topic}')
+                  KEY (v) NOT ENFORCED FORMAT JSON ENVELOPE UPSERT
+                > SELECT * FROM al_{name}_mv
+                0
+                """,
+                service=td.name,
+            )
+            assert consume(name, 1) == {0}, f"{name} sink failed warmup"
+
+        # Resolve shard identities while SQL is available. Never run testdrive
+        # during absence: its initialization can connect even for Kafka commands.
+        shards = dict(
+            c.sql_query(
+                """SELECT r.name, s.shard_id FROM mz_internal.mz_storage_shards s
+                   JOIN mz_internal.mz_object_global_ids g ON g.global_id = s.object_id
+                   JOIN mz_catalog.mz_relations r ON r.id = g.id
+                   WHERE r.name IN ('al_input', 'al_source_mv')""",
+                service=adapter.name,
+            )
+        )
+        assert set(shards) == {"al_input", "al_source_mv"}, shards
+        c.kill(adapter.name)
+        try:
+            absent()
+            before = {name: inspect(shard) for name, shard in shards.items()}
+            assert all(state["upper"] for state in before.values()), before
+            thresholds = {name: state["upper"][0] - 1 for name, state in before.items()}
+            expected = {0}
+            deadline = time.monotonic() + timeout
+            n = 0
+            while True:
+                absent()
+                n += 1
+                produce(n)
+                expected.add(n * 10)
+                actual = consume("source", len(expected))
+                after = {name: inspect(shard) for name, shard in shards.items()}
+                absent()
+                progressed = all(
+                    compacted_past(after[name], thresholds[name]) for name in shards
+                )
+                if actual == expected and progressed:
+                    print(f"Adapter absent: Kafka MV/sink rows={sorted(actual)}")
+                    print(f"Compacted past outage timestamps: {thresholds}")
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"No outage progress: expected={expected}, Kafka={actual}, "
+                        f"compactions before={before}, after={after}"
+                    )
+
+            for name in ("table", "webhook"):
+                actual = consume(name, len(expected))
+                assert {0} <= actual <= expected, (name, actual)
+                print(
+                    f"Adapter absent: {name}-fed rows={sorted(actual)}, "
+                    f"pending (allowed)={sorted(expected - actual)}"
+                )
+            # No SQL write attempt against a stopped adapter. Webhook ingress is
+            # an HTTP negative control, with the same URL verified in warmup.
+            try:
+                response = requests.post(webhook_url, data="2", timeout=5)
+            except (requests.ConnectionError, requests.Timeout):
+                pass
+            else:
+                assert not response.ok, "stopped adapter accepted webhook input"
+            absent()
+        finally:
+            # Restore ingress even on failure, without turning failed outage
+            # observations into passing post-restart observations.
+            c.up(adapter.name)
+
+        for name in outputs:
+            c.testdrive(
+                f"""
+                > SELECT count(*), max(v) FROM al_{name}_mv
+                {len(expected)} {n * 10}
+                """,
+                service=td.name,
+            )
+            assert consume(name, len(expected)) == expected, name

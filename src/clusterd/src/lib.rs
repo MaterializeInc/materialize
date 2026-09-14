@@ -44,6 +44,7 @@ use tokio::runtime::Handle;
 use tower::Service;
 use tracing::{Instrument, debug, error, info, info_span};
 
+mod catalog_follower;
 mod usage_metrics;
 
 const BUILD_INFO: BuildInfo = build_info!();
@@ -108,6 +109,22 @@ struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+
+    /// The cluster whose committed catalog state this replica follows.
+    #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url"])]
+    catalog_cluster_id: Option<mz_controller_types::ClusterId>,
+    /// The replica identity within the declared cluster.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_replica_id: Option<mz_controller_types::ReplicaId>,
+    /// The deployment generation this replica may join, never inferred from the leader.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_deploy_generation: Option<u64>,
+    /// Persist blob location for committed catalog and written plans.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_persist_blob_url: Option<mz_ore::url::SensitiveUrl>,
+    /// Persist consensus location for committed catalog and written plans.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_persist_consensus_url: Option<mz_ore::url::SensitiveUrl>,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -409,6 +426,39 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
     ));
     let txns_ctx = TxnsContext::default();
+
+    // Catalog following is replica-wide, not independently sampled per process.
+    if args.process == 0
+        && let Some(cluster_id) = args.catalog_cluster_id
+    {
+        let environment_id: mz_sql::catalog::EnvironmentId = args.environment_id.parse()?;
+        let config = catalog_follower::Config {
+            organization_id: environment_id.organization_id(),
+            cluster_id,
+            replica_id: args
+                .catalog_replica_id
+                .expect("required with cluster identity"),
+            deploy_generation: args
+                .catalog_deploy_generation
+                .expect("required with cluster identity"),
+            persist_location: mz_persist_client::PersistLocation {
+                blob_uri: args
+                    .catalog_persist_blob_url
+                    .expect("required with cluster identity"),
+                consensus_uri: args
+                    .catalog_persist_consensus_url
+                    .expect("required with cluster identity"),
+            },
+            build_info: &BUILD_INFO,
+        };
+        let clients = Arc::clone(&persist_clients);
+        let registry = metrics_registry.clone();
+        mz_ore::task::spawn(|| "catalog_follower", async move {
+            if let Err(error) = catalog_follower::run(config, clients, registry).await {
+                error!(%error, "catalog follower stopped");
+            }
+        });
+    }
 
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id,
