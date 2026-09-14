@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::adt::interval::{Interval, RoundBehavior};
-use mz_repr::strconv;
+use mz_repr::adt::interval::Interval;
 use mz_sql_parser::ast::IntervalValue;
 
 use crate::plan::PlanError;
@@ -17,25 +16,12 @@ use crate::plan::PlanError;
 ///
 /// The reverse of [`unplan_interval`].
 pub fn plan_interval(iv: &IntervalValue) -> Result<Interval, PlanError> {
-    let leading_precision = parser_datetimefield_to_adt(iv.precision_high);
-    let mut i = strconv::parse_interval_w_disambiguator(
+    Ok(Interval::from_literal(
         &iv.value,
-        match leading_precision {
-            mz_repr::adt::datetime::DateTimeField::Hour
-            | mz_repr::adt::datetime::DateTimeField::Minute => Some(leading_precision),
-            _ => None,
-        },
-        parser_datetimefield_to_adt(iv.precision_low),
-    )?;
-    // Like PostgreSQL, the range qualifier only disambiguates parsing and
-    // discards fields below precision_low. Fields above precision_high are
-    // kept as written.
-    i.truncate_low_fields(
+        parser_datetimefield_to_adt(iv.precision_high),
         parser_datetimefield_to_adt(iv.precision_low),
         iv.fsec_max_precision,
-        RoundBehavior::Nearest,
-    )?;
-    Ok(i)
+    )?)
 }
 
 /// Convert an [`Interval`] into an [`IntervalValue`].
