@@ -10,7 +10,9 @@
 //! Columnar dataflow edge support.
 //!
 //! Defines [`CollectionEdge`], the columnar batch representation that dataflow
-//! edges between Plan nodes carry. Every producer emits this representation.
+//! edges between Plan nodes carry. Every producer emits this representation, and
+//! so does the feedback edge of a recursive binding, so an iteration costs no
+//! conversion.
 //!
 //! Within a Plan node, operators may freely materialize `Vec` collections. Only
 //! the collection edge format is constrained. A node that produces a row-based
@@ -19,6 +21,51 @@
 //! via [`columnar_to_vec`]. Both are named operators (`VecToColumnar`,
 //! `ColumnarToVec`), so those leaf seams stay visible in dataflow
 //! introspection.
+//!
+//! # Which consumers need a decode
+//!
+//! A consumer that reads a record's datums and packs a fresh row only ever borrows
+//! its input, so it reads the edge directly through [`flat_map_datums`] and the
+//! decode would buy it nothing. A decode earns its owned [`Row`] per record only
+//! where the consumer keeps that row.
+//!
+//! # Where `Vec` remains
+//!
+//! The cases below are not oversights. Each is either not ours to choose or waiting
+//! on a change elsewhere, and all are tracked on CPU-253.
+//!
+//! * **Reduce and TopK internals.** Both render their stages over keyed `Vec`
+//!   collections, so the step that forms the key materializes an owned `(Row, Row)`
+//!   per record. Neither decodes in the sense above: TopK's `map_topk_key` and
+//!   reduce's key-value flat map each read the edge and pack what they need, so no
+//!   `ColumnarToVec` stands at either input. Outputs split two ways: TopK's `Basic`
+//!   and `MonotonicTopK` re-encode at `topk_result_to_columnar`, while
+//!   `MonotonicTop1` and reduce hand out an arrangement and leave rebuilding an edge
+//!   to whoever wants one. Neither is structural, and neither is a single change:
+//!   the stages hand intermediate results to differential operators that would need
+//!   to take a container builder first, so converting one stage at a time would
+//!   replace one materialization with several.
+//! * **The delta-join stage chain.** `VecCollection<(Row, T)>` from the seed through
+//!   every `half_join`, re-encoded once at the node's output. Differential has
+//!   `half_join` input changes lined up, and every part of the chain hangs off that
+//!   container, so a conversion made here would be discarded.
+//! * **Sinks.** A sink serializes every row it writes, so materializing the row is
+//!   the output format's requirement rather than a container choice.
+//! * **The `DifferentialDataflow` linear-join arm.** `join_core` returns a
+//!   `VecCollection` and takes no container builder, so that arm re-encodes what it
+//!   produces. Structural until differential offers the builder.
+//! * **The error half of a [`CollectionBundle`].** Errors travel as a
+//!   `VecCollection`. In a healthy dataflow that path carries no records, so
+//!   uniformity is the whole argument for converting it, against a change that
+//!   reaches every render signature. The question becomes real at the ok/err demux
+//!   inside the joins, which is the first consumer that would want both halves
+//!   columnar.
+//! * **Monotonic monoids.** `Top1Monoid` and `ReductionMonoid` carry owned rows
+//!   inside the *diff*, for in-place aggregation within a timestamp. That is an
+//!   arrangement's diff type rather than a channel's container, so the rule here
+//!   does not reach it.
+//!
+//! [`CollectionBundle`]: crate::render::context::CollectionBundle
 
 use columnar::{Borrow, Columnar, Container, Index, Len, Push};
 use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
