@@ -159,3 +159,22 @@ expr (#0 = #1)
 test (true, false, null::boolean, 13)
 ----
 may contain: [false null]
+
+# TryCast never errors and may yield NULL for any input, so the output spec
+# admits NULL even though the input values all convert.
+interpret
+types (text?)
+values ("12", "13")
+expr try_cast[cast_string_to_int32](#0)
+test (12, 13, 14, null::integer)
+----
+may contain: [12 13 14 null]
+
+# The argument's error still propagates through the wrapper.
+interpret
+types (bigint?)
+values (1::bigint, 2::bigint)
+expr try_cast[cast_int64_to_int32](div_int64(#0, 0))
+test (1, null::integer)
+----
+may contain: [1 null <err>]
