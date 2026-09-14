@@ -1826,17 +1826,30 @@ impl Catalog {
         }
     }
 
-    fn update_affects_planning(kind: &mz_catalog::memory::objects::StateUpdateKind) -> bool {
-        use mz_catalog::memory::objects::StateUpdateKind;
-        !matches!(
-            kind,
+    /// Classify an update against the catalog state before applying its batch.
+    fn update_affects_planning(
+        state: &CatalogState,
+        update: &mz_catalog::memory::objects::StateUpdate,
+    ) -> bool {
+        use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
+        match &update.kind {
             StateUpdateKind::CollectionCompactionBound(_)
-                | StateUpdateKind::MaintainedReadRequirement(_)
-                | StateUpdateKind::ClientIncarnation(_)
-                | StateUpdateKind::ClientReadRequirement(_)
-                | StateUpdateKind::UnfinalizedShard(_)
-                | StateUpdateKind::AuditLog(_)
-        )
+            | StateUpdateKind::MaintainedReadRequirement(_)
+            | StateUpdateKind::ClientIncarnation(_)
+            | StateUpdateKind::ClientReadRequirement(_)
+            | StateUpdateKind::UnfinalizedShard(_)
+            | StateUpdateKind::AuditLog(_) => false,
+            // Client release can retire storage metadata after SQL has dropped
+            // the collection. That cleanup does not change planning, but live
+            // mappings (including foreign temporary items) and additions do.
+            StateUpdateKind::StorageCollectionMetadata(metadata)
+                if update.diff == StateDiff::Retraction
+                    && !state.contains_live_collection(&metadata.id) =>
+            {
+                false
+            }
+            _ => true,
+        }
     }
 
     /// Apply this writer's unconsumed committed updates. Downstream owners must
@@ -1873,7 +1886,7 @@ impl Catalog {
         };
         let planning_changed = updates
             .iter()
-            .any(|update| Self::update_affects_planning(&update.kind));
+            .any(|update| Self::update_affects_planning(&self.state, update));
         let (builtin_table_updates, catalog_updates) =
             mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(
                 self.state
