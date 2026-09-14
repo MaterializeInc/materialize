@@ -42,8 +42,21 @@ triggering it in the first place.
 By default, a replica hydrates up to 4 dataflows at a time. Lowering this
 limit spreads out the memory spikes from hydrating many objects at once, at
 the cost of a longer total hydration time; raising it can shorten total
-hydration time at the cost of a higher peak. [Contact our team](/support/) if
-you'd like to tune this for your cluster.
+hydration time at the cost of a higher peak.
+
+- On self-managed deployments, set the `compute_hydration_concurrency` system
+  parameter yourself:
+
+  ```mzsql
+  ALTER SYSTEM SET compute_hydration_concurrency = 2;
+  ```
+
+  See [Configuring system
+  parameters](/self-managed-deployments/configuration-system-parameters/) for
+  other ways to set it.
+
+- On Materialize Cloud, [contact our team](/support/) to have it configured
+  for your cluster.
 
 ## Reuse arrangements across consumers
 
@@ -151,6 +164,7 @@ cost and, on self-managed deployments, the additional capacity required.
 
 - [Hydration](/fundamentals/concepts/hydration/)
 - [Operational guidelines](/clusters/operational-guidelines/)
+- [Configuring system parameters](/self-managed-deployments/configuration-system-parameters/)
 - [Query optimization](/transform-data/optimization/)
 - [Dictionary compression](/transform-data/dictionary-compression/)
 - [Durable subscriptions](/serve-results/durable-subscriptions/)
