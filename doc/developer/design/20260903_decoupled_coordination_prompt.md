@@ -21,12 +21,12 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
-Milestone 2 is active. Placement of lifecycle components is decided in the
-design's Lifecycle placement and Query client decisions and the re-cut milestone.
-Read `20260903_decoupled_coordination_handover.md` for the implementation checkpoint
-and its outstanding verification and integration work.
-Order the work so each step lands and is verified in-process before the process
-boundary moves:
+Milestone 2 is active. Placement is decided in the design's Lifecycle placement
+decision and the re-cut milestone: following and enactment run in compute
+clusterd, at the replica. There is no separate lifecycle process and no
+lifecycle connection for compute. Do not extract the controllers into their own
+process. Read `20260903_decoupled_coordination_handover.md` for the implementation
+checkpoint and its outstanding verification and integration work.
 
 The query connection split and generation-scoped cooperating catalog writers are
 implemented in-process. MV and metric-sink compute installation and sink alteration
@@ -50,12 +50,21 @@ not milestone acceptance. Remaining work:
    notice appends/retractions, same-batch dependencies, and pending
    replacements. Use separate commits where they form coherent implementation or
    review boundaries. An intermediate commit is not a reason to stop the work.
-3. Move the lifecycle components into their own process, with catalog following,
-   enactment, and publication as its interface. DDL and table appends stay with
-   the adapter. Table time stays adapter-driven for now: assume a live adapter
-   ticks transaction-WAL time, and let the demonstration state that table-fed
-   dataflows pause while the adapter is down. Webhook batching and idle ticking
-   likewise require a live adapter for this milestone.
+3. A catalog follower in compute clusterd that installs its cluster's indexes
+   and MVs from written plans and applies committed bounds, first alongside the
+   controller still driving, then replacing the controller's installation path.
+   The compute controller's per-instance logic moves into the replica's
+   reconciliation loop. What stays in envd is replica orchestration.
+4. Replica-owned protection and publication: a replica holds its execution
+   reads as client protection scoped to its incarnation, proposes bounds from
+   its own progress, and advances the requirements of the outputs it writes.
+5. Peeks and query-local dataflows go from the query client straight to
+   replicas, with replica choice and response merging in the client.
+6. Storage clusters keep controller-side enactment. DDL and table appends stay
+   with the adapter. Table time stays adapter-driven for now: assume a live
+   adapter ticks transaction-WAL time, and let the demonstration state that
+   table-fed dataflows pause while the adapter is down. Webhook batching and
+   idle ticking likewise require a live adapter for this milestone.
 
 Verify the apply-before-publish ordering with fixed written plans, including
 reconstruction from logical inputs after an index compacted past an old bound.

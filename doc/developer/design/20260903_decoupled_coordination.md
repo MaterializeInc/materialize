@@ -252,13 +252,21 @@ permission, and there is no startup-specific writer protocol.
 
 ### Lifecycle placement
 
-The lifecycle components, today's controllers, may run together as one
-independent process that follows the catalog, enacts maintained state, and
-publishes protection. Those three responsibilities are its interface. It does not
-serve controller state to adapters and does not gate their catalog writes, so it
-can later dissolve into per-cluster followers without another redesign.
-Collection lifecycle and compaction belong to it. DDL and table appends are
-request-scoped and stay with adapters.
+Following and enactment run in clusterd, at the replica. Each replica follows the
+catalog for its cluster and reconciles itself: it installs from written plans,
+applies committed bounds, and proposes bounds from its own progress. Compute
+replicas come first. Storage clusters take the same path later, and until then
+their enactment stays with the adapter's controllers. For compute there is no
+lifecycle connection: the fast protocol is the only protocol, and nothing sends
+maintained installation commands. Which replica serves a request and how
+replicated responses are merged belong to the query client. Creating replica
+processes stays with envd for now. DDL and table appends are request-scoped and
+stay with adapters.
+
+A replica's execution reads are protected like a client's, scoped to the
+replica's incarnation, so a slow or hydrating replica keeps the input history it
+needs and loses it when it is gone. Maintained requirements remain the recovery
+floor.
 
 ### Written plans
 
@@ -301,15 +309,8 @@ requirement is in that bound, so applying it is monotone and needs no per-proces
 opaque. Local hold accounting does not drive critical handles. A prewarming
 process that needs client protection writes under the active generation, since a
 writer opened under its own pending generation would fence the leader before
-promotion. Where an enactment proves unsafe under two same-generation lifecycle
-instances, that case gets a narrow fence of its own, not a general epoch.
-
-Administrative edits use cooperative compare-and-append in either mode, without
-exclusive admission or promotion. Client heartbeats and recent publication provide
-an advisory live-environment check. `catalog-debug` refuses a live mutation with a
-reason unless `--force` is supplied. A serving writer that cannot apply a committed
-foreign change halts and rebuilds from durable state. This is the general rule for
-foreign writes, not an administrative exception.
+promotion. Where an enactment proves unsafe when two same-generation followers
+perform it, that case gets a narrow fence of its own, not a general epoch.
 
 ## Alternatives
 
@@ -391,18 +392,21 @@ arrangement.
 
 #### 2. Independent maintained lifecycle
 
-Lifecycle components establish and follow maintained state from the catalog in a
-process that is not the adapter, without sequencer installation closures or
-creator-local plans. Creation, changes, deletion, compaction, and protection
-publication continue across adapter loss and recovery. Adapter DDL and lifecycle
-publication commit as cooperating catalog writers. The adapter reads through the
-query client with durable protection, and a cluster accepts its lifecycle
-connection and query connections at once without one replacing the other's state.
+Compute replicas establish and follow their cluster's maintained state from the
+catalog, without sequencer installation closures, creator-local plans, or a
+controller sending installation commands. Creation, changes, deletion,
+compaction, and protection publication for compute-maintained objects continue
+across adapter loss and recovery. Adapter DDL and replica publication commit as
+cooperating catalog writers. The adapter reads through the query client with
+durable protection, straight to replicas. Storage clusters keep controller-side
+enactment for this milestone.
 
-Demonstrate: stop the adapter while maintained dataflows, sources, sinks, and
-compaction continue, then restart it and resume queries. Include same-batch
-dependencies and concurrent or delayed application of committed permission. One
-adapter and one query client suffice.
+Demonstrate: stop the adapter while compute-maintained dataflows and their
+compaction continue, with table-fed dataflows pausing and the demonstration
+saying so, then restart it and resume queries. Include a multi-replica cluster
+with one replica still hydrating, same-batch dependencies, and concurrent or
+delayed application of committed permission. One adapter and one query client
+suffice.
 
 #### 3. Independent query clients
 
