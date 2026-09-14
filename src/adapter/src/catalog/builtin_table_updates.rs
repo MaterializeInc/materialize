@@ -11,20 +11,18 @@ mod notice;
 
 use bytesize::ByteSize;
 use ipnet::IpNet;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
-    MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OPERATORS, MZ_PSEUDO_TYPES,
-    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEX_COLUMNS,
+    MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_ROLE_AUTH,
+    MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
-    CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table, TableDataSource, Type,
+    CatalogItem, DataSourceDesc, Func, Index, Table, TableDataSource, Type,
 };
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
@@ -33,13 +31,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::batch::ProtoBatch;
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::interval::Interval;
-use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
-use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
+    CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType,
 };
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogType, TypeCategory};
@@ -163,9 +158,6 @@ impl CatalogState {
                     | DataSourceDesc::Catalog => vec![],
                 }
             }
-            CatalogItem::MaterializedView(mview) => {
-                self.pack_materialized_view_update(id, mview, diff)
-            }
             // mz_sinks, mz_kafka_sinks and mz_iceberg_sinks read create_sql
             // out of mz_catalog_raw, so there is nothing to pack here.
             CatalogItem::Sink(_) => vec![],
@@ -175,11 +167,13 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            // Tables, views, and metric sinks are exposed through materialized
-            // views derived from `mz_catalog_raw`, and logs and secrets never
-            // had builtin-table rows, so none pack a row here.
+            // Tables, views, materialized views, and metric sinks are exposed
+            // through materialized views derived from `mz_catalog_raw`, and
+            // logs and secrets never had builtin-table rows, so none pack a row
+            // here.
             CatalogItem::Table(_)
             | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
             | CatalogItem::Log(_)
             | CatalogItem::Secret(_)
             | CatalogItem::MetricSink(_) => vec![],
@@ -255,112 +249,6 @@ impl CatalogState {
                     diff,
                 ));
             }
-        }
-
-        // Use initial lcw so that we can tell apart default from non-existent windows.
-        if let Some(cw) = entry.item().initial_logical_compaction_window() {
-            updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
-        }
-
-        updates
-    }
-
-    fn pack_history_retention_strategy_update(
-        &self,
-        id: CatalogItemId,
-        cw: CompactionWindow,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let cw: u64 = cw.comparable_timestamp().into();
-        let cw = Jsonb::from_serde_json(serde_json::Value::Number(serde_json::Number::from(cw)))
-            .expect("must serialize");
-        BuiltinTableUpdate::row(
-            &*MZ_HISTORY_RETENTION_STRATEGIES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                // FOR is the only strategy at the moment. We may introduce FROM or others later.
-                Datum::String("FOR"),
-                cw.into_row().into_element(),
-            ]),
-            diff,
-        )
-    }
-
-    fn pack_materialized_view_update(
-        &self,
-        id: CatalogItemId,
-        mview: &MaterializedView,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut updates = Vec::new();
-
-        if let Some(refresh_schedule) = &mview.refresh_schedule {
-            // This can't be `ON COMMIT`, because that is represented by a `None` instead of an
-            // empty `RefreshSchedule`.
-            assert!(!refresh_schedule.is_empty());
-            for RefreshEvery {
-                interval,
-                aligned_to,
-            } in refresh_schedule.everies.iter()
-            {
-                let aligned_to_dt = mz_ore::now::to_datetime(
-                    <&Timestamp as TryInto<u64>>::try_into(aligned_to).expect("undoes planning"),
-                );
-                updates.push(BuiltinTableUpdate::row(
-                    &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-                    Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::String("every"),
-                        Datum::Interval(
-                            Interval::from_duration(interval).expect(
-                                "planning ensured that this is convertible back to Interval",
-                            ),
-                        ),
-                        Datum::TimestampTz(aligned_to_dt.try_into().expect("undoes planning")),
-                        Datum::Null,
-                    ]),
-                    diff,
-                ));
-            }
-            for at in refresh_schedule.ats.iter() {
-                let at_dt = mz_ore::now::to_datetime(
-                    <&Timestamp as TryInto<u64>>::try_into(at).expect("undoes planning"),
-                );
-                updates.push(BuiltinTableUpdate::row(
-                    &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-                    Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::String("at"),
-                        Datum::Null,
-                        Datum::Null,
-                        Datum::TimestampTz(at_dt.try_into().expect("undoes planning")),
-                    ]),
-                    diff,
-                ));
-            }
-        } else {
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-                Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String("on-commit"),
-                    Datum::Null,
-                    Datum::Null,
-                    Datum::Null,
-                ]),
-                diff,
-            ));
-        }
-
-        if let Some(target_id) = mview.replacement_target {
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_REPLACEMENTS,
-                Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&target_id.to_string()),
-                ]),
-                diff,
-            ));
         }
 
         updates
