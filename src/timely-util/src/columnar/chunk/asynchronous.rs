@@ -33,19 +33,14 @@ type BatchRef<D, T, R> = Rc<ChunkBatch<ColumnChunk<D, T, R>>>;
 /// The caller owns the shutdown token. The input must already have the desired
 /// worker partitioning. All clones of `budget` share decoded-input admission.
 ///
-/// `idle_after` is the quiet time on the input, with no data and no frontier
-/// progress, before the exertion policy may consolidate without limit. While
-/// input flows, optional consolidation is funded by inserted updates. The
-/// exertion policy grants effort per scheduling turn, and turns are not
-/// proportional to input, so an operator woken often while ingesting could
-/// otherwise merge each published batch into its largest batch. Input from a
-/// ticking source arrives in bursts, so this interval must exceed several
-/// ticks, not merely a turn, or every gap between bursts opens the unbounded
-/// drain.
+/// Optional consolidation on an open input is funded by inserted updates and by
+/// input frontier advances, never by scheduling turns: the exertion policy grants
+/// effort per turn, and an operator woken often while ingesting could otherwise
+/// merge each published batch into its largest batch. Only a closed input lifts
+/// that bound.
 pub fn arrange<'scope, D, T, R>(
     stream: Stream<'scope, T, Column<(D, T, R)>>,
     budget: ReadBudget,
-    idle_after: std::time::Duration,
     name: &str,
 ) -> (
     Arranged<'scope, TraceAgent<Spine<D, T, R>>>,
@@ -82,20 +77,13 @@ where
         let mut batcher = Batcher::new(budget.clone());
         let mut chunker = ChunkChunker::<D, T, R>::default();
         let mut upper = Antichain::from_elem(T::minimum());
-        let mut last_input = tokio::time::Instant::now();
-        let mut deferred = false;
         const INPUT_EVENTS_PER_TURN: usize = 32;
         loop {
-            let idle_at = last_input + idle_after;
             let mut event = tokio::select! {
                 biased;
                 _ = input.ready(), if !upper.is_empty() => input.next_sync(),
                 _ = notify.notified() => None,
-                _ = tokio::time::sleep_until(idle_at), if deferred => None,
             };
-            if event.is_some() {
-                last_input = tokio::time::Instant::now();
-            }
             let mut next_upper = None;
             // Extra exertion can introduce virtual batches and change subsequent
             // merge work. Amortize it over queued input, with a finite scheduling
@@ -135,6 +123,7 @@ where
                         description,
                     });
                     writer.insert(Rc::clone(&batch), cap.as_ref().map(|c| c.time().clone()));
+                    state.borrow_mut().fund_progress();
                     if let Some(time) = &cap {
                         output.give(time, batch);
                     }
@@ -148,16 +137,15 @@ where
                     upper = next;
                 }
             }
-            // Queued input funds its own introductions. Inserted updates fund
-            // consolidation while input flows, and only a quiet input lifts that bound.
+            // Queued input funds its own introductions.
             let exertion = if !input.is_empty() {
                 Exertion::Merges
-            } else if upper.is_empty() || last_input.elapsed() >= idle_after {
+            } else if upper.is_empty() {
                 Exertion::Idle
             } else {
                 Exertion::Funded
             };
-            deferred = maintain(&state, &notify, exertion).await;
+            maintain(&state, &notify, exertion).await;
             tokio::task::yield_now().await;
         }
     });

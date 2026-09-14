@@ -406,6 +406,62 @@ fn funded_consolidation_is_bounded_by_inserted_updates() {
     );
 }
 
+// One large batch and one small batch in separate layers, then only frontier
+// progress and funded exertion turns. The policy asks for more effort per grant
+// than the insertions credit, so only progress can pay for consolidation. Returns
+// merge rows worked and the number of non-empty batches left.
+fn progress_without_updates(advances: usize) -> (usize, usize) {
+    let gate = Arc::new(Mutex::new(Gate {
+        permits: usize::MAX,
+        ..Gate::default()
+    }));
+    let mut trace = Spine::new(OperatorInfo::new(0, 0, [].into()), None, None);
+    trace.set_exert_logic(Arc::new(|levels| {
+        let active = levels.iter().any(|(_, count, _)| *count > 1);
+        let separate = levels.iter().filter(|(_, _, len)| *len > 0).count() > 1;
+        (active || separate).then_some(1_000_000)
+    }));
+    for (time, count) in [(0u64, 4096u64), (1, 16)] {
+        trace.insert(Span::new(
+            Description::new(
+                Antichain::from_elem(time),
+                Antichain::from_elem(time + 1),
+                Antichain::from_elem(0),
+            ),
+            Some(Batch {
+                rows: (0..count)
+                    .map(|key| (key + 100_000 * time, time, 1))
+                    .collect(),
+                gate: Arc::clone(&gate),
+            }),
+        ));
+    }
+    trace.set_physical_compaction(Antichain::from_elem(2).borrow());
+    for _ in 0..advances {
+        trace.fund_progress();
+    }
+    for _ in 0..10_000 {
+        trace.exert(Exertion::Funded);
+    }
+    assert!(!trace.maintenance_pending());
+    let mut batches = 0;
+    trace.map_spans(|span| batches += usize::from(span.inner.is_some()));
+    (gate.lock().unwrap().worked, batches)
+}
+
+#[mz_ore::test]
+fn frontier_progress_funds_bounded_consolidation() {
+    let (worked, batches) = progress_without_updates(0);
+    assert_eq!(worked, 0, "turns alone must not fund consolidation");
+    assert_eq!(batches, 2);
+    let (worked, batches) = progress_without_updates(1);
+    assert_eq!(batches, 1, "one advance funds the pending consolidation");
+    assert_eq!(worked, 4096 + 16);
+    let (worked, batches) = progress_without_updates(1_000);
+    assert_eq!(batches, 1);
+    assert_eq!(worked, 4096 + 16, "banked allowances must not redo work");
+}
+
 /// Run with `cargo test -p mz-timely-util maintenance_microbench -- --ignored --nocapture`.
 /// Reports work and read completions before the arranger can next accept input.
 /// Reads complete immediately when requested: timings measure scheduling and mock

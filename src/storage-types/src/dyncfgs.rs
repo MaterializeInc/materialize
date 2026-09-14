@@ -462,18 +462,6 @@ pub const ENABLE_UPSERT_ASYNC_MERGES: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Quiet time on a resumable feedback arrangement's input before its exertion
-/// policy may consolidate without limit. Source input arrives in bursts once per
-/// timestamp tick, so this must span several ticks. Shorter values let idle-time
-/// compaction run between bursts and can merge every published batch into the
-/// largest one. Read once per dataflow.
-pub const UPSERT_IDLE_CONSOLIDATION_DELAY: Config<Duration> = Config::new(
-    "upsert_idle_consolidation_delay",
-    Duration::from_secs(5),
-    "Quiet input time before a resumable upsert-v2 feedback arrangement compacts without an input-funded bound. Takes effect on new dataflows.",
-    ParameterScope::Replica,
-);
-
 /// Separate upsert-v2 payload blocks from columnar merge metadata.
 /// Read once per dataflow. Uses the process pool and asynchronous payload reads.
 pub const ENABLE_UPSERT_PAYLOAD_STASH: Config<bool> = Config::new(
@@ -609,7 +597,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_UPSERT_CHUNKED_STASH)
         .add(&ENABLE_UPSERT_ASYNC_READS)
         .add(&ENABLE_UPSERT_ASYNC_MERGES)
-        .add(&UPSERT_IDLE_CONSOLIDATION_DELAY)
         .add(&ENABLE_UPSERT_PAYLOAD_STASH)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)

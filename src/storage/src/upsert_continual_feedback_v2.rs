@@ -96,7 +96,6 @@
 mod payload;
 
 use std::fmt::Debug;
-use std::time::Duration;
 
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
@@ -115,7 +114,7 @@ use mz_row_spine::DatumSeq;
 use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
 use mz_storage_types::dyncfgs::{
     ENABLE_UPSERT_ASYNC_MERGES, ENABLE_UPSERT_ASYNC_READS, ENABLE_UPSERT_CHUNKED_STASH,
-    ENABLE_UPSERT_PAYLOAD_STASH, UPSERT_IDLE_CONSOLIDATION_DELAY,
+    ENABLE_UPSERT_PAYLOAD_STASH,
 };
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
@@ -162,12 +161,8 @@ pub enum UpsertStashFlavor {
     /// Chunk merge batcher stash, chunk-spine feedback arrangement,
     /// bulk-probe drain. Spills through the process buffer pool.
     Chunked { async_reads: bool },
-    /// Async source batching and feedback trace compaction. `idle_after` is
-    /// the quiet input time before unfunded feedback consolidation may run.
-    Resumable {
-        async_reads: bool,
-        idle_after: Duration,
-    },
+    /// Async source batching and feedback trace compaction.
+    Resumable { async_reads: bool },
 }
 
 impl UpsertStashFlavor {
@@ -181,7 +176,6 @@ impl UpsertStashFlavor {
         {
             Self::Resumable {
                 async_reads: ENABLE_UPSERT_ASYNC_READS.get(config),
-                idle_after: UPSERT_IDLE_CONSOLIDATION_DELAY.get(config),
             }
         } else if ENABLE_UPSERT_CHUNKED_STASH.get(config) {
             Self::Chunked {
@@ -500,14 +494,10 @@ where
             )
         }
 
-        UpsertStashFlavor::Resumable {
-            async_reads,
-            idle_after,
-        } => {
+        UpsertStashFlavor::Resumable { async_reads } => {
             let (persist_arranged, token) = mz_timely_util::columnar::chunk::asynchronous::arrange(
                 encoded,
                 merge_read_budget(),
-                idle_after,
                 "Persist resumable feedback",
             );
             let mut persist_token = persist_token.unwrap_or_default();
@@ -2351,10 +2341,7 @@ mod test {
                 assert_eq!(
                     baseline,
                     run_payload_feedback_scenario(
-                        UpsertStashFlavor::Resumable {
-                            async_reads: false,
-                            idle_after: Duration::from_secs(5),
-                        },
+                        UpsertStashFlavor::Resumable { async_reads: false },
                         width
                     )
                 );

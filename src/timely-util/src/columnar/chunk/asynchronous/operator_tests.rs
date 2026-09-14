@@ -101,10 +101,7 @@ fn install(
 ) -> (InputPort, Option<super::PressOnDropButton>) {
     let (input, stream) = scope.new_input::<Column<Update>>();
     let token = if asynchronous {
-        let idle_after = Duration::from_millis(
-            u64::try_from(parameter("MZ_BENCH_IDLE_CONSOLIDATION_MS", 5000)).unwrap(),
-        );
-        let (arranged, token) = super::arrange(stream, budget, idle_after, "Async");
+        let (arranged, token) = super::arrange(stream, budget, "Async");
         let notify = Arc::clone(&arranged.trace.trace_box_unstable().borrow().trace().notify);
         observed
             .borrow_mut()
@@ -347,6 +344,12 @@ fn run(config: Config) -> Measurement {
                 }
                 let hydrated = start.elapsed();
                 let ingestion_grants = grants.load(Ordering::Relaxed);
+                // A closed input lifts the async operator's input-funded bound on
+                // consolidation for the final drain. The synchronous operator is
+                // torn down when its input closes and drains by self-activation.
+                if config.asynchronous {
+                    drop(inputs);
+                }
                 // Normalize the terminal trace shape without changing the ingestion policy.
                 if hydrated_workers.fetch_add(1, Ordering::Relaxed) + 1 == workers {
                     draining.store(true, Ordering::Relaxed);

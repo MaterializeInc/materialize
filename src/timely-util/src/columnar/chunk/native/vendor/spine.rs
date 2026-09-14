@@ -101,17 +101,30 @@ fn span_len<B: SpineBatch>(span: &Span<B::Time, B>) -> usize {
 /// multiple bounds policy-requested effort while input flows, so it stays
 /// proportional to inserted updates however often the owner is scheduled. Per
 /// scheduling turn the policy would otherwise lift each published batch into the
-/// largest one. Unfunded requests wait for idle exertion.
+/// largest one. Unfunded requests wait for more credit or a closed input.
 const CONSOLIDATION_CREDIT_PER_UPDATE: usize = 8;
+
+/// Policy allowances one input frontier advance funds when no updates arrive.
+///
+/// A quiet input still converges to the policy's reduced form, at a rate set by
+/// the upstream's own progress rather than by how often the owner is woken. A
+/// synchronous storage arrangement was measured healthy at roughly thirty
+/// allowances per published batch; this leaves that margin while a stray batch
+/// still climbs ten levels within a few hundred frontier advances.
+const CONSOLIDATION_GRANTS_PER_PROGRESS: usize = 8;
+
+/// Most progress-funded allowances held back for later, so a long quiet spell
+/// does not bank a burst of forced consolidation for the moment input returns.
+const MAX_BANKED_PROGRESS_GRANTS: usize = 8 * CONSOLIDATION_GRANTS_PER_PROGRESS;
 
 /// How much policy-requested maintenance an exertion turn may start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exertion {
     /// Continue active merges only. Queued input funds its own introductions.
     Merges,
-    /// Grant only what credit accrued by inserted updates can pay for.
+    /// Grant only what credit accrued by inserted updates and frontier progress can pay for.
     Funded,
-    /// Also force separate batches together without limit: the owner has no input to accept.
+    /// Also force separate batches together without limit: the input is closed.
     Idle,
 }
 
@@ -162,6 +175,8 @@ pub struct Spine<B: SpineBatch> {
     waker: Option<Waker>,
     /// Fuel units of policy-requested consolidation that inserted updates have paid for.
     consolidation_credit: usize,
+    /// Policy allowances funded by input frontier advances and not yet spent.
+    progress_grants: usize,
 }
 
 impl<B: SpineBatch + Clone + 'static> Spine<B> {
@@ -314,10 +329,10 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
     ///
     /// Whether and how much effort policy requests is determined by `self.exert_logic`.
     /// `Merges` funds only active merges. `Funded` spends credit that inserted updates
-    /// accrued, so optional effort during ingestion is bounded by
-    /// `CONSOLIDATION_CREDIT_PER_UPDATE` per update. `Idle` grants without limit.
-    /// Returns true when policy requested work that this turn did not grant, so the
-    /// owner knows to return once its input is idle.
+    /// and frontier advances accrued, so optional effort on an open input is bounded
+    /// by `CONSOLIDATION_CREDIT_PER_UPDATE` per update plus
+    /// `CONSOLIDATION_GRANTS_PER_PROGRESS` per advance. `Idle` grants without limit.
+    /// Returns true when policy requested work that this turn did not grant.
     pub fn exert(&mut self, exertion: Exertion) -> bool {
         // Finish the old grant before asking policy for another one.
         if !self.drive_maintenance() {
@@ -335,10 +350,13 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
         match exertion {
             Exertion::Merges if !active_merge => return true,
             Exertion::Funded => {
-                if self.consolidation_credit < effort {
+                if self.consolidation_credit >= effort {
+                    self.consolidation_credit -= effort;
+                } else if self.progress_grants > 0 {
+                    self.progress_grants -= 1;
+                } else {
                     return true;
                 }
-                self.consolidation_credit -= effort;
             }
             Exertion::Merges | Exertion::Idle => {}
         }
@@ -376,6 +394,16 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
     /// Whether an earlier maintenance continuation still needs to finish.
     pub fn maintenance_pending(&self) -> bool {
         !self.maintenance.is_empty()
+    }
+
+    /// Credit the optional consolidation one input frontier advance funds.
+    ///
+    /// Allowances are counted in policy grants rather than fuel, since the batch
+    /// the advance seals may not have reached the layers yet. Banked allowances
+    /// are capped by `MAX_BANKED_PROGRESS_GRANTS`.
+    pub fn fund_progress(&mut self) {
+        self.progress_grants = (self.progress_grants + CONSOLIDATION_GRANTS_PER_PROGRESS)
+            .min(MAX_BANKED_PROGRESS_GRANTS);
     }
 
     /// Set the policy that grants maintenance fuel in the absence of new updates.
@@ -535,6 +563,7 @@ impl<B: SpineBatch> Spine<B> {
             maintenance: VecDeque::new(),
             waker: None,
             consolidation_credit: 0,
+            progress_grants: 0,
         }
     }
 
