@@ -304,8 +304,8 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) fn explain_materialized_view(
-        &self,
+    pub(super) async fn explain_materialized_view(
+        catalog: &catalog::Catalog,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -317,12 +317,23 @@ impl Coordinator {
         let plan::Explainee::MaterializedView(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::MaterializedView(view) = catalog.get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
         let gid = view.global_id_writes();
 
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&gid) else {
+        let selected = if catalog.state().catalog_read_protection_enabled() {
+            Some(catalog.selected_plan(gid).await?.ok_or_else(|| {
+                AdapterError::internal("explain materialized view", "selected plan is missing")
+            })?)
+        } else {
+            None
+        };
+        let metainfo = match &selected {
+            Some(plan) => Some(&plan.dataflow_metainfos),
+            None => catalog.try_get_dataflow_metainfo(&gid),
+        };
+        let Some(dataflow_metainfo) = metainfo else {
             if !id.is_system() {
                 tracing::error!(
                     "cannot find dataflow metainformation for materialized view {id} in catalog"
@@ -333,11 +344,15 @@ impl Coordinator {
             );
         };
 
-        let target_cluster = self.catalog().get_cluster(view.cluster_id);
+        let target_cluster = catalog.get_cluster(view.cluster_id);
 
-        let features = OptimizerFeatures::from(self.catalog().system_config())
+        let features = OptimizerFeatures::from(catalog.system_config())
             .override_from(&target_cluster.config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(view.cluster_id))
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(view.cluster_id),
+            )
             .override_from(&config.features);
 
         let cardinality_stats = BTreeMap::new();
@@ -348,7 +363,7 @@ impl Coordinator {
                 format,
                 &config,
                 &features,
-                &self.catalog().for_session(ctx.session()),
+                &catalog.for_session(ctx.session()),
                 cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
@@ -357,12 +372,16 @@ impl Coordinator {
                 format,
                 &config,
                 &features,
-                &self.catalog().for_session(ctx.session()),
+                &catalog.for_session(ctx.session()),
                 cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
+                let plan = match &selected {
+                    Some(plan) => Some(plan.global_mir.clone()),
+                    None => catalog.try_get_optimized_plan(&gid).cloned(),
+                };
+                let Some(plan) = plan else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
@@ -371,14 +390,18 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &catalog.for_session(ctx.session()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
+                let plan = match &selected {
+                    Some(plan) => Some(plan.physical_plan.clone()),
+                    None => catalog.try_get_physical_plan(&gid).cloned(),
+                };
+                let Some(plan) = plan else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog",);
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
@@ -387,7 +410,7 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &catalog.for_session(ctx.session()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
@@ -866,41 +889,8 @@ impl Coordinator {
                 .materialized_view()
                 .expect("created MV");
             let read_ts = *dataflow_as_of.as_option().expect("readable MV timestamp");
-            let replicas = client.replica_clients(cluster_id, target_replica);
-            // A catalog declaration or bound does not establish that an index
-            // trace exists at this timestamp. Missing native observations make
-            // that path ineligible, not the logical CREATE inadmissible.
-            let mut indexes: BTreeSet<_> = candidate
-                .get_entries()
-                .filter_map(|(_, entry)| {
-                    let CatalogItem::Index(index) = entry.item() else {
-                        return None;
-                    };
-                    if index.cluster_id != cluster_id {
-                        return None;
-                    }
-                    let id = index.global_id();
-                    if candidate
-                        .collection_compaction_bounds()
-                        .get(&id)
-                        .is_some_and(|bound| !bound.less_equal(&read_ts))
-                    {
-                        return None;
-                    }
-                    // Maintained dataflows install on every selected replica, not
-                    // just one readable replica as a peek can.
-                    (!replicas.is_empty()
-                        && replicas.iter().all(|replica| {
-                            replica
-                                .collection_frontiers(id)
-                                .ok()
-                                .flatten()
-                                .and_then(|frontiers| frontiers.read_frontier)
-                                .is_some_and(|since| since.less_equal(&read_ts))
-                        }))
-                    .then_some(id)
-                })
-                .collect();
+            let mut indexes =
+                client.maintained_indexes_at(&candidate, cluster_id, target_replica, read_ts);
             let mut optimizer_config = optimize::OptimizerConfig::from(candidate.system_config());
             // Keep the features selected for this statement, including session
             // and cluster overrides, when only its access paths change.

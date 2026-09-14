@@ -1781,6 +1781,22 @@ impl Catalog {
             .collect())
     }
 
+    /// Reads this snapshot's selected plan for this build, independently of installation.
+    /// A missing selection or immutable entry is not a request to replan.
+    pub(crate) async fn selected_plan(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<GlobalExpressions>, AdapterError> {
+        let build = Self::expression_build_version(self.state.config().build_info).to_string();
+        let Some(revision) = self.state.written_plan(id, &build) else {
+            return Ok(None);
+        };
+        Ok(self
+            .read_written_plans(vec![(id, revision)])
+            .await?
+            .remove(&id))
+    }
+
     /// Returns a best-effort cached plan, whose compatibility the caller must validate.
     pub(crate) async fn cached_global_expressions(
         &self,

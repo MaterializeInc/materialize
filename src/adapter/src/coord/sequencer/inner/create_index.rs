@@ -189,8 +189,8 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) fn explain_index(
-        &self,
+    pub(crate) async fn explain_index(
+        catalog: &catalog::Catalog,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -202,23 +202,42 @@ impl Coordinator {
         let plan::Explainee::Index(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::Index(index) = catalog.get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&index.global_id())
-        else {
+        let selected = if catalog.state().catalog_read_protection_enabled() {
+            Some(
+                catalog
+                    .selected_plan(index.global_id())
+                    .await?
+                    .ok_or_else(|| {
+                        AdapterError::internal("explain index", "selected plan is missing")
+                    })?,
+            )
+        } else {
+            None
+        };
+        let metainfo = match &selected {
+            Some(plan) => Some(&plan.dataflow_metainfos),
+            None => catalog.try_get_dataflow_metainfo(&index.global_id()),
+        };
+        let Some(dataflow_metainfo) = metainfo else {
             if !id.is_system() {
                 tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
             }
             coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
         };
 
-        let target_cluster = self.catalog().get_cluster(index.cluster_id);
+        let target_cluster = catalog.get_cluster(index.cluster_id);
 
-        let features = OptimizerFeatures::from(self.catalog().system_config())
+        let features = OptimizerFeatures::from(catalog.system_config())
             .override_from(&target_cluster.config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(index.cluster_id),
+            )
             .override_from(&config.features);
 
         // TODO(mgree): calculate statistics (need a timestamp)
@@ -226,11 +245,11 @@ impl Coordinator {
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {
-                let Some(plan) = self
-                    .catalog()
-                    .try_get_optimized_plan(&index.global_id())
-                    .cloned()
-                else {
+                let plan = match &selected {
+                    Some(plan) => Some(plan.global_mir.clone()),
+                    None => catalog.try_get_optimized_plan(&index.global_id()).cloned(),
+                };
+                let Some(plan) = plan else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };
@@ -240,18 +259,18 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &catalog.for_session(ctx.session()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let Some(plan) = self
-                    .catalog()
-                    .try_get_physical_plan(&index.global_id())
-                    .cloned()
-                else {
+                let plan = match &selected {
+                    Some(plan) => Some(plan.physical_plan.clone()),
+                    None => catalog.try_get_physical_plan(&index.global_id()).cloned(),
+                };
+                let Some(plan) = plan else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };
@@ -260,7 +279,7 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &catalog.for_session(ctx.session()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,

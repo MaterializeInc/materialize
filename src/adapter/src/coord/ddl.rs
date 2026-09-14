@@ -620,35 +620,23 @@ impl Coordinator {
                 CatalogItem::MetricSink(sink) => (sink.cluster_id, None),
                 _ => continue,
             };
-            let observed = client.instance_snapshot(self.catalog(), cluster);
-            let mut indexes: BTreeSet<_> = candidate
-                .get_entries()
-                .filter_map(|(_, entry)| match entry.item() {
-                    CatalogItem::Index(index) if index.cluster_id == cluster => {
-                        Some(index.global_id())
-                    }
-                    _ => None,
-                })
-                .filter(|id| observed.contains_collection(id))
-                .filter(|id| {
-                    required.is_none_or(|required| {
-                        candidate
-                            .collection_compaction_bounds()
-                            .get(id)
-                            .and_then(|bound| bound.as_option())
-                            .is_some_and(|bound| *bound <= required)
-                            && client.replica_clients(cluster, None).iter().any(|replica| {
-                                replica
-                                    .collection_frontiers(*id)
-                                    .ok()
-                                    .flatten()
-                                    .and_then(|f| f.read_frontier)
-                                    .and_then(|f| f.into_option())
-                                    .is_some_and(|since| since <= required)
-                            })
+            let mut indexes = if let (CatalogItem::MaterializedView(mv), Some(required)) =
+                (entry.item(), required)
+            {
+                client.maintained_indexes_at(&candidate, cluster, mv.target_replica, required)
+            } else {
+                let observed = client.instance_snapshot(self.catalog(), cluster);
+                candidate
+                    .get_entries()
+                    .filter_map(|(_, entry)| match entry.item() {
+                        CatalogItem::Index(index) if index.cluster_id == cluster => {
+                            Some(index.global_id())
+                        }
+                        _ => None,
                     })
-                })
-                .collect();
+                    .filter(|id| observed.contains_collection(id))
+                    .collect()
+            };
             let mut config = OptimizerConfig::from(candidate.system_config())
                 .override_from(&candidate.get_cluster(cluster).config.features())
                 .override_from(&candidate.cluster_scoped_optimizer_overrides(cluster));

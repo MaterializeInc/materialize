@@ -34,7 +34,7 @@ use timely::progress::Antichain;
 use tokio::sync::{OnceCell, oneshot, watch};
 use uuid::Uuid;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::Command;
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
 use crate::peek_client::CoordinatorClient;
@@ -154,6 +154,48 @@ impl QueryClient {
                         .and_then(|frontiers| frontiers.read_frontier)
                         .is_some_and(|frontier| !frontier.is_empty())
                 })
+            })
+            .collect()
+    }
+
+    /// Return indexes eligible for a maintained plan at `read_ts`. Any published
+    /// permission must allow the timestamp, and every selected ready replica must
+    /// report a readable trace. At least one selected replica must be ready.
+    ///
+    /// These cached observations neither wait for replicas nor grant protection.
+    /// Callers must acquire read protection before relying on the selected paths.
+    pub(crate) fn maintained_indexes_at(
+        &self,
+        catalog: &CatalogState,
+        cluster: ComputeInstanceId,
+        target: Option<ReplicaId>,
+        read_ts: Timestamp,
+    ) -> BTreeSet<GlobalId> {
+        let replicas = self.replica_clients(cluster, target);
+        if replicas.is_empty() {
+            return BTreeSet::new();
+        }
+        catalog
+            .get_entries()
+            .filter_map(|(_, entry)| match entry.item() {
+                CatalogItem::Index(index) if index.cluster_id == cluster => Some(index.global_id()),
+                _ => None,
+            })
+            .filter(|id| {
+                catalog
+                    .collection_compaction_bounds()
+                    .get(id)
+                    .is_none_or(|bound| bound.less_equal(&read_ts))
+                    // Maintained dataflows install on every selected replica,
+                    // unlike a peek that can use one readable sibling.
+                    && replicas.iter().all(|replica| {
+                        replica
+                            .collection_frontiers(*id)
+                            .ok()
+                            .flatten()
+                            .and_then(|frontiers| frontiers.read_frontier)
+                            .is_some_and(|since| since.less_equal(&read_ts))
+                    })
             })
             .collect()
     }
