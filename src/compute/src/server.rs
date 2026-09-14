@@ -175,6 +175,7 @@ pub async fn serve(
         mz_timely_util::column_pager::tiered_policy(),
     );
     mz_timely_util::pool_config::metrics::register(metrics_registry);
+    mz_cluster::client::register_exert_policy_metrics(metrics_registry);
 
     let config = Config {
         persist_clients,
