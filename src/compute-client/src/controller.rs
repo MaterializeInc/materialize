@@ -869,13 +869,14 @@ impl ComputeController {
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// Only sink exports are allowed to have a `target_replica`: materialized views, subscribes,
-    /// and metric sinks. A user's `CREATE METRIC SINK` runs untargeted, so every replica renders it
-    /// into its own registry. The coordinator's curated metric sinks are installed per replica and
-    /// do target one, so each replica's series are attributable to it.
-    ///
-    /// Panics if called with a dataflow description that has index exports
-    /// when `target_replica` is set.
+    /// A dataflow with a `target_replica` is installed on that replica only. Sink exports
+    /// (materialized views, subscribes, copy-tos, metric sinks) may be targeted: a user's
+    /// `CREATE METRIC SINK` runs untargeted, so every replica renders it into its own registry,
+    /// while the coordinator's curated metric sinks are installed per replica and do target one,
+    /// so each replica's series are attributable to it. Index exports may be targeted only when
+    /// every reader of the index targets the same replica; the coordinator relies on this for the
+    /// transient index of a replica-targeted slow-path `SELECT`, whose only reader is the peek
+    /// that follows it. Catalog indexes are never targeted.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
@@ -891,10 +892,6 @@ impl ComputeController {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
-            assert!(
-                dataflow.exported_index_ids().next().is_none(),
-                "Replica-targeted indexes are not supported"
-            );
         }
 
         // Validation: as_of
