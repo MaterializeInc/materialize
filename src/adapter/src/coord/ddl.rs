@@ -423,7 +423,15 @@ impl Coordinator {
                     | catalog::Op::ReclaimClientIncarnation { .. }
             )
         });
+        let reclaims_client = ops
+            .iter()
+            .any(|op| matches!(op, catalog::Op::ReclaimClientIncarnation { .. }));
         loop {
+            // A failed CAS can reveal a creation that cannot install yet. Check
+            // on every attempt, after foreign implications as well as initially.
+            if reclaims_client && !self.pending_compute_installations.is_empty() {
+                return Err(AdapterError::DDLTransactionRace);
+            }
             let revision = self.catalog().transient_revision();
             match self.catalog_transact_attempt(conn_id, ops.clone()).await {
                 Err(AdapterError::Catalog(error))
@@ -1200,7 +1208,19 @@ impl Coordinator {
     pub(crate) fn drop_compute_collections(&mut self, collections: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for (cluster_id, gid) in collections {
+            if self.pending_compute_installations.remove(&gid) {
+                continue;
+            }
             by_cluster.entry(cluster_id).or_default().push(gid);
+        }
+        self.metrics.pending_compute_installations.set(
+            self.pending_compute_installations
+                .len()
+                .try_into()
+                .expect("fits u64"),
+        );
+        if self.pending_compute_installations.is_empty() {
+            self.pending_compute_installation_retry = None;
         }
         for (cluster_id, gids) in by_cluster {
             let compute = &mut self.controller.compute;

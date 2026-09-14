@@ -2172,6 +2172,12 @@ pub struct Coordinator {
     /// per replica. See [`Coordinator::plan_metric_sink`].
     metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
 
+    /// Committed maintained exports waiting for selected plans or local imports.
+    /// Publication and reclamation cannot overtake their installation.
+    pending_compute_installations: BTreeSet<GlobalId>,
+    /// Next installation attempt and its backoff, reset by new relevant catalog state.
+    pending_compute_installation_retry: Option<(Instant, Duration)>,
+
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
     /// Plans that are currently deferred and waiting on a write lock.
@@ -2746,11 +2752,11 @@ impl Coordinator {
 
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
-        let write_plans =
-            self.catalog().state().catalog_read_protection_enabled() && !self.read_only_controllers;
+        let protected_plans = self.catalog().state().catalog_read_protection_enabled();
+        let write_plans = protected_plans && !self.read_only_controllers;
         let mut candidates = cached_global_exprs;
         let mut written_ids = BTreeSet::new();
-        if write_plans {
+        if protected_plans {
             let build =
                 Catalog::expression_build_version(self.catalog().config().build_info).to_string();
             let revisions: Vec<_> = self
@@ -4513,7 +4519,9 @@ impl Coordinator {
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
                     // does not depend on the savepoint's publication setting.
                     _ = subscription_timer.as_mut(),
-                        if self.compaction_bound_subscriber.is_some() => {
+                        if self.compaction_bound_subscriber.is_some()
+                            || !self.pending_compute_installations.is_empty() => {
+                        self.install_pending_compute_collections().await;
                         if let Err(error) = self.sync_compute_read_protection().await {
                             warn!(%error, "unable to follow catalog read protection");
                         }
@@ -5979,6 +5987,8 @@ pub fn serve(
                     hydration_history_sweep: None,
                     metric_sinks: BTreeMap::new(),
                     metric_sink_plans: BTreeMap::new(),
+                    pending_compute_installations: BTreeSet::new(),
+                    pending_compute_installation_retry: None,
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),

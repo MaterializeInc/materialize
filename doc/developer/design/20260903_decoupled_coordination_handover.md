@@ -3,10 +3,10 @@
 ## Status and scope
 
 Milestone 2 is incomplete. Lifecycle components still run inside the adapter.
-Written-plan production is partly wired. Protected plan explanations and runtime
-notices consume committed selections, but installation still uses cache/fallback
-planning. Do not report the checkpoint as an adapter-loss demonstration or a
-completed plan-store cutover.
+Protected plan explanations, runtime notices, and the in-progress runtime installer
+consume committed selections. Missing runtime plans/imports enter a retry queue.
+Mixed bootstrap still contains writer planning. Do not report the checkpoint as
+an adapter-loss demonstration or a completed plan-store cutover.
 
 Read the selected decisions in `20260903_decoupled_coordination.md` and the active
 steering in `20260903_decoupled_coordination_prompt.md` before continuing.
@@ -123,12 +123,15 @@ to unprotected readers.
 
 ## Remaining work and risks
 
-1. Complete the written-plan cutover. `prepare_item_plan` still also writes the
-   optional candidate cache. Installation still uses cached-plan validation and
-   fallback planning. Remove these as authorities in protected mode, while
-   preserving unprotected behavior. Missing plans/imports must wait without
-   blocking unrelated maintenance. Bootstrap currently errors on missing selected
-   bytes rather than providing an independent applier wait path.
+1. Complete the written-plan bootstrap split. Protected runtime installation uses
+   selected bytes, while unprotected installation retains cache/fallback planning.
+   Runtime retries revisit physical dependencies and use current catalog identities.
+   Missing selected bytes still error in writer notice refresh and mixed bootstrap.
+   The agreed full-application rule defers all bound publication and client
+   reclamation while runtime installation is pending. Controller servicing and
+   unrelated catalog effects continue. Pending work retries with capped backoff and
+   is exposed through logs and metrics. No scoped exception or durable
+   physical-import protection is implemented.
 2. Exercise selected-plan EXPLAIN and writer-owned runtime notice updates through
    `restart/selected-plan-explain`. Protected installation no longer writes notices.
    The request task holds one catalog snapshot and is cancellable. MV pushdown
@@ -153,8 +156,9 @@ to unprotected readers.
    finalization, and request-side legacy handles remain coupled. Do not use a
    dummy controller or state proxy to bridge them.
    Protected PeekClient/statistics/hydration plumbing no longer requires legacy
-   storage handles. DROP INDEX's physical in-use notice still needs a decision on
-   execution-dependency observations, since selected plans can differ from execution.
+   storage handles. DROP INDEX reports only committed plan rewrites and no longer
+   consults physical controller dependencies. Timestamp and MV pushdown explanations
+   remain request-side controller consumers.
 8. Demonstrate autonomous source-fed maintained work and compaction through adapter
    death/restart. The earlier two-process COPY coexistence CI proof is useful but
    is not this acceptance test. Include isolated request failures and recovery.
@@ -166,7 +170,7 @@ Both have code changes, but still require the coordinator-level regressions abov
 
 ## Verification
 
-These commands passed during the checkpoint work:
+Targeted commands for the existing store, selection, and planning boundaries:
 
 ```sh
 cargo test -p mz-catalog --lib expr_cache::tests --locked
@@ -177,13 +181,10 @@ cargo check -p mz-adapter --all-targets --locked
 cargo clippy -p mz-catalog -p mz-durable-cache -p mz-adapter --all-targets --locked -- -D warnings
 ```
 
-The first four cover five store tests, two durable atomicity/build-isolation tests,
-two adapter selection tests, and four MV-related tests respectively. The real
-optimizer MV test covers plan reuse, alternate index selection, source/view
-fallback, and immutable plan readback. Bypassing its replanning failed the test.
-It is not a live compaction-to-installation race test.
-
-Formatting and whitespace checks have passed. There is no SQL runtime proof for
-the new writer/bootstrap/rewriter integration and no adapter-loss proof. Re-run
-the targeted checks when changing these boundaries, then use the draft PR's CI
-for broader runtime coverage. Keep the PR explicit about unfinished work.
+The MV optimizer test covers access-path selection and immutable readback, not
+an independent installation race. `restart/selected-plan-explain` covers SQL
+rewrites, introspection, and restart. The in-progress environmentd
+`test_peer_index_pending_installation` uses a real cooperative catalog writer to
+exercise missing selection, unrelated installation, and dropping pending work.
+Same-batch physical dependency ordering and reclamation contention need further
+production coverage. Current validation results belong in the draft PR.

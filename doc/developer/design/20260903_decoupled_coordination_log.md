@@ -889,3 +889,24 @@ DROP INDEX names only the objects whose plans the writer rewrote. Client aggrega
 advancement uses the existing coalesced publication cadence with heartbeat bumps
 in that transaction, while heartbeat-only renewal is idle maintenance. Inspect and
 remove unnecessary birth-time protection for new sources.
+
+### 2026-09-14: Pending-installation liveness question
+
+The in-progress runtime installer queues unavailable selections/imports and revisits
+physical dependencies. Dropping an uninstalled export must consume its pending
+marker before physical-drop filtering, and reclamation must recheck pending work
+after CAS contention applies peer DDL.
+
+Asked Aljoscha to clarify unrelated maintenance: the full-application rule pauses
+all bound publication and reclamation while any installation is pending. Controller
+servicing, sources, sinks, and unrelated catalog effects continue. No scoped
+publication exception is proposed or implemented without that clarification.
+
+### 2026-09-14: Literal publication barrier agreed
+
+Aljoscha relayed the designer's decision: any pending installation defers all bound
+publication and client reclamation. Execution and other catalog effects continue.
+Within one build, write-before-select and atomic import rewrites make pending work
+transient. Failures retry with backoff and must be logged, counted, and surfaced.
+Do not build scoped exceptions. Actual stalls may motivate a separate decision to
+scope the rule using committed catalog dependents.

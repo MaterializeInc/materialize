@@ -340,7 +340,7 @@ impl Coordinator {
     }
 
     pub(super) async fn reclaim_client_read_protection(&mut self) -> Result<(), AdapterError> {
-        if self.controller.read_only() {
+        if self.controller.read_only() || !self.pending_compute_installations.is_empty() {
             return Ok(());
         }
         let active: Vec<_> = self
@@ -418,7 +418,9 @@ impl Coordinator {
 
     /// Publishes recovery progress and compatible bounds in enabled, writable environments.
     pub(super) async fn publish_read_protection(&mut self) -> Result<(), AdapterError> {
-        if self.controller.read_only() || !self.catalog().state().catalog_read_protection_enabled()
+        if self.controller.read_only()
+            || !self.catalog().state().catalog_read_protection_enabled()
+            || !self.pending_compute_installations.is_empty()
         {
             return Ok(());
         }

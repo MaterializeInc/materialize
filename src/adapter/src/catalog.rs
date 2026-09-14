@@ -1716,13 +1716,15 @@ impl Catalog {
             item_version: RelationVersion::root(),
         };
         let selection = if self.state.catalog_read_protection_enabled() {
-            self.write_plans(BTreeMap::from([(id, global.clone())]))
-                .await?
+            let selection = self.write_plans(BTreeMap::from([(id, global)])).await?;
+            self.update_expression_cache(local_exprs, Vec::new(), Default::default())
+                .await;
+            selection
         } else {
+            self.update_expression_cache(local_exprs, vec![(id, global)], Default::default())
+                .await;
             Vec::new()
         };
-        self.update_expression_cache(local_exprs, vec![(id, global)], Default::default())
-            .await;
         Ok(selection)
     }
 

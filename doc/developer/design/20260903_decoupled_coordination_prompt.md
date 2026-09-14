@@ -67,6 +67,12 @@ aggregate advances use the existing coalesced publication cadence and bump the
 heartbeat in that transaction. Idle heartbeat renewal and reclamation grace stay
 unchanged. New grants should protect actual read requirements, not gratuitous MIN.
 
+The publisher defers all bounds and client reclamation while any installation is
+pending. Execution, catalog effects, sources, sinks, and queries continue. Pending
+must be transient within one build. Retry with backoff, log and count failures, and
+surface stalls. Do not build dependency-scoped publication exceptions. If real
+stalls appear, bring them before considering that fallback.
+
 Keep per-build selection keys, but defer cross-build follower repair, version
 upgrades, and prewarming-owned selections. Retired-build cleanup is also deferred.
 After a generation is fenced, its survivor may remove older builds' selections

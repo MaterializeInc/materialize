@@ -308,6 +308,13 @@ before publishing bounds or reclaiming client protection. Writer client protecti
 covers preparation through commit. Logical inputs remain the only durable
 maintained requirement inputs, without durable physical-import protection.
 
+While any installation is pending, the publisher defers all bound publication and
+client reclamation. Execution, catalog effects, sources, sinks, and queries continue.
+Pending installation must be transient within one build: plans are written before
+their selections commit, and own-build import rewrites commit atomically with DDL.
+An un-installable committed selection is a bug, retried with backoff and exposed
+through logs and metrics, not a reason to bypass the publication barrier.
+
 Persist critical since handles follow the committed bound only. Every valid read
 requirement is in that bound, so applying it is monotone and needs no per-process
 opaque. Local hold accounting does not drive critical handles. A prewarming
