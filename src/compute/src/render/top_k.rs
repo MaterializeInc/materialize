@@ -157,28 +157,33 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         _,
                         CapacityContainerBuilder<Vec<(Row, T, Diff)>>,
                         _,
-                    >(ok_input.clone(), usize::MAX, {
-                        let mut datum_vec = mz_repr::DatumVec::new();
-                        move |row_datums, time, diff, _ok_session, err_session| {
-                            let temp_storage = mz_repr::RowArena::new();
-                            // `eval` unifies the lifetimes of the expression, the
-                            // datums, and the arena. Copying the datums into a local
-                            // vec lets that lifetime shrink to this call.
-                            let mut datums = datum_vec.borrow();
-                            datums.extend(row_datums.iter());
-                            match expr.eval(&datums[..], &temp_storage) {
-                                Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
-                                    err_session.give((EvalError::NegLimit.into(), time, diff));
-                                    1
-                                }
-                                Ok(_) => 0,
-                                Err(e) => {
-                                    err_session.give((e.into(), time, diff));
-                                    1
+                    >(
+                        ok_input.clone(),
+                        "TopKLimitCheck",
+                        usize::MAX,
+                        {
+                            let mut datum_vec = mz_repr::DatumVec::new();
+                            move |row_datums, time, diff, _ok_session, err_session| {
+                                let temp_storage = mz_repr::RowArena::new();
+                                // `eval` unifies the lifetimes of the expression, the
+                                // datums, and the arena. Copying the datums into a local
+                                // vec lets that lifetime shrink to this call.
+                                let mut datums = datum_vec.borrow();
+                                datums.extend(row_datums.iter());
+                                match expr.eval(&datums[..], &temp_storage) {
+                                    Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                                        err_session.give((EvalError::NegLimit.into(), time, diff));
+                                        1
+                                    }
+                                    Ok(_) => 0,
+                                    Err(e) => {
+                                        err_session.give((e.into(), time, diff));
+                                        1
+                                    }
                                 }
                             }
-                        }
-                    });
+                        },
+                    );
                     err_collection = err_collection.concat(errors.as_collection());
                 }
             }
