@@ -119,10 +119,12 @@ CREATE MATERIALIZED VIEW w AS
 statement ok
 SELECT mz_unsafe.mz_sleep(8)
 
+# The dataflow id counts every dataflow the replica rendered before this one, and the reads
+# above render theirs on the interactive runtime, so only the pairing is asserted.
 query IT
-SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
+SELECT count(DISTINCT id), global_id FROM mz_internal.mz_dataflow_global_ids GROUP BY global_id;
 ----
-11  t<id>
+1  t<id>
 
 
 query TI
