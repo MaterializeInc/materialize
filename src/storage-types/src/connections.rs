@@ -1224,13 +1224,13 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         IcebergStorageProvider::Gcs => {
                             Self::gcs_storage_factory(endpoint, &client, &token, &headers)
                         }
-                        // ADLS takes its credentials from the catalog's config, which
-                        // `iceberg-rust` forwards to `opendal` the same way. OpenDAL's Azure
-                        // service does not go through reqsign's credential provider
-                        // abstraction, so there is no hook to wrap: vended credentials for
-                        // ADLS work only through those static props, and stop working when
-                        // they expire.
-                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls,
+                        // TODO(SS-449): ADLS can now take a loader too, so vended credentials
+                        // here still expire without one. Wiring it needs a `VendedCredential`
+                        // mapping from the catalog's `adls.sas-token.<account>` prop onto
+                        // `Credential::SasToken`.
+                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls {
+                            customized_credential_load: None,
+                        },
                     },
                     // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
                     // This means we ignore auth overrides from `/v1/config` (e.g. `oauth2-server-uri`).
