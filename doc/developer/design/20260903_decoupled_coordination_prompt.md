@@ -26,8 +26,7 @@ decision and the re-cut milestone: following and enactment run in clusterd, at
 the replica, for compute and storage alike. There is no separate lifecycle
 process and no lifecycle connection. Do not extract the controllers into their
 own process, and do not leave the storage controller's enactment as a second
-stack beside the new path. Read `20260903_decoupled_coordination_handover.md` for the implementation
-checkpoint and its outstanding verification and integration work.
+stack beside the new path. The latest log entry is the implementation checkpoint.
 
 The query connection split and generation-scoped cooperating catalog writers are
 implemented in-process. MV and metric-sink compute installation and sink alteration
