@@ -67,8 +67,7 @@ export const NavItem = (props: NavItemProps) => {
             showActiveStyle
               ? {
                   ...NAV_HOVER_STYLES,
-                  // slightly more opaque than colors.background.accent
-                  bg: "rgba(90, 52, 203, 0.2)",
+                  bg: colors.background.accentActive,
                 }
               : undefined
           }
