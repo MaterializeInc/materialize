@@ -1221,7 +1221,7 @@ impl Catalog {
         // planning-visible changes.
         let planning_changed = updates
             .iter()
-            .any(|update| Self::update_affects_planning(&update.kind));
+            .any(|update| Self::update_affects_planning(&state, update));
         if !updates.is_empty() {
             let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
             let (op_builtin_table_updates, op_catalog_updates) = state
@@ -4258,146 +4258,198 @@ mod tests {
     async fn test_collection_metadata_without_controller() {
         use std::collections::BTreeMap;
 
+        use mz_persist_client::PersistClient;
         use mz_repr::SqlScalarType;
+        use uuid::Uuid;
 
         use crate::catalog::state::LocalExpressionCache;
 
-        Catalog::with_debug(|mut catalog| async move {
-            catalog.state.catalog_read_protection_enabled = true;
-            let database = catalog
-                .resolve_database(DEFAULT_DATABASE_NAME)
-                .expect("default database");
-            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
-            let schema = catalog
-                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
-                .expect("default schema");
-            let name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec,
-                    schema_spec: schema.id.clone(),
-                },
-                item: "metadata_table".to_string(),
-            };
-            let sql_name = format!("{}.{}.metadata_table", database.name, schema.name.schema);
-            let (id, global_id) = catalog
-                .allocate_user_id_for_test()
-                .await
-                .expect("table IDs");
-            let item = catalog
-                .state
-                .with_enable_for_item_parsing(|state| {
-                    state.parse_item(
-                        global_id,
-                        &format!("CREATE TABLE {sql_name} (a bigint)"),
-                        &BTreeMap::new(),
-                        None,
-                        false,
-                        None,
-                        &mut LocalExpressionCache::Closed,
-                        None,
-                    )
-                })
-                .expect("valid table definition");
-            let birth = catalog.current_upper().await;
-            catalog
-                .transact(
+        let persist = PersistClient::new_for_tests().await;
+        let organization = Uuid::new_v4();
+        let bootstrap = crate::catalog::test_bootstrap_args();
+        let storage = mz_catalog::durable::TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("open durable catalog");
+        let mut catalog = Catalog::open_debug_catalog_inner(
+            persist.clone(),
+            storage,
+            mz_ore::now::SYSTEM_TIME.clone(),
+            Some(
+                format!("local-az1-{organization}-0")
+                    .parse()
+                    .expect("environment ID"),
+            ),
+            &mz_build_info::DUMMY_BUILD_INFO,
+            BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+            &bootstrap,
+            None,
+            None,
+        )
+        .await
+        .expect("open protected catalog");
+        let database = catalog
+            .resolve_database(DEFAULT_DATABASE_NAME)
+            .expect("default database");
+        let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+        let schema = catalog
+            .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+            .expect("default schema");
+        let name = QualifiedItemName {
+            qualifiers: ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            },
+            item: "metadata_table".to_string(),
+        };
+        let sql_name = format!("{}.{}.metadata_table", database.name, schema.name.schema);
+        let (id, global_id) = catalog
+            .allocate_user_id_for_test()
+            .await
+            .expect("table IDs");
+        let item = catalog
+            .state
+            .with_enable_for_item_parsing(|state| {
+                state.parse_item(
+                    global_id,
+                    &format!("CREATE TABLE {sql_name} (a bigint)"),
+                    &BTreeMap::new(),
                     None,
-                    birth,
+                    false,
                     None,
-                    vec![Op::CreateItem {
-                        id,
-                        name,
-                        item,
-                        owner_id: MZ_SYSTEM_ROLE_ID,
-                    }],
+                    &mut LocalExpressionCache::Closed,
+                    None,
                 )
-                .await
-                .expect("creation allocates metadata without a controller");
-            let shard = catalog.state().storage_metadata().collection_metadata[&global_id];
-            assert_eq!(
-                catalog.state().collection_compaction_bounds()[&global_id],
-                timely::progress::Antichain::from_elem(birth)
-            );
+            })
+            .expect("valid table definition");
+        let birth = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                birth,
+                None,
+                vec![Op::CreateItem {
+                    id,
+                    name,
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("creation allocates metadata without a controller");
+        let shard = catalog.state().storage_metadata().collection_metadata[&global_id];
+        assert_eq!(
+            catalog.state().collection_compaction_bounds()[&global_id],
+            timely::progress::Antichain::from_elem(birth)
+        );
 
-            let (_, new_global_id) = catalog
-                .allocate_user_id_for_test()
-                .await
-                .expect("version ID");
-            let ts = catalog.current_upper().await;
-            catalog
-                .transact(
-                    None,
-                    ts,
-                    None,
-                    vec![Op::AlterAddColumn {
-                        id,
-                        new_global_id,
-                        name: "b".into(),
-                        typ: SqlScalarType::Int64.nullable(true),
-                        sql: mz_sql_parser::parser::parse_data_type("bigint").expect("valid type"),
-                    }],
-                )
-                .await
-                .expect("schema versions register shared metadata without a controller");
-            let metadata = catalog.state().storage_metadata();
-            assert_eq!(metadata.collection_metadata[&global_id], shard);
-            assert_eq!(metadata.collection_metadata[&new_global_id], shard);
-            assert!(!metadata.unfinalized_shards.contains(&shard));
+        let (_, new_global_id) = catalog
+            .allocate_user_id_for_test()
+            .await
+            .expect("version ID");
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::AlterAddColumn {
+                    id,
+                    new_global_id,
+                    name: "b".into(),
+                    typ: SqlScalarType::Int64.nullable(true),
+                    sql: mz_sql_parser::parser::parse_data_type("bigint").expect("valid type"),
+                }],
+            )
+            .await
+            .expect("schema versions register shared metadata without a controller");
+        let metadata = catalog.state().storage_metadata();
+        assert_eq!(metadata.collection_metadata[&global_id], shard);
+        assert_eq!(metadata.collection_metadata[&new_global_id], shard);
+        assert!(!metadata.unfinalized_shards.contains(&shard));
 
-            let ts = catalog.current_upper().await;
-            let incarnation = catalog
-                .transact(None, ts, None, vec![Op::CreateClientIncarnation])
-                .await
-                .expect("client incarnation")
-                .created_client_incarnations[0];
-            let ts = catalog.current_upper().await;
-            catalog
-                .transact(
-                    None,
-                    ts,
-                    None,
-                    vec![Op::PublishClientReadRequirements {
-                        incarnation,
-                        requirements: BTreeMap::from([(global_id, birth)]),
-                    }],
-                )
-                .await
-                .expect("client protection");
-            let ts = catalog.current_upper().await;
-            catalog
-                .transact(
-                    None,
-                    ts,
-                    None,
-                    vec![Op::DropObjects(vec![super::DropObjectInfo::Item(id)])],
-                )
-                .await
-                .expect("SQL drop preserves client-required shared metadata");
-            let metadata = catalog.state().storage_metadata();
-            assert_eq!(metadata.collection_metadata[&global_id], shard);
-            assert!(!metadata.collection_metadata.contains_key(&new_global_id));
-            assert!(!metadata.unfinalized_shards.contains(&shard));
+        let ts = catalog.current_upper().await;
+        let incarnation = catalog
+            .transact(None, ts, None, vec![Op::CreateClientIncarnation])
+            .await
+            .expect("client incarnation")
+            .created_client_incarnations[0];
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements: BTreeMap::from([(global_id, birth)]),
+                }],
+            )
+            .await
+            .expect("client protection");
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::DropObjects(vec![super::DropObjectInfo::Item(id)])],
+            )
+            .await
+            .expect("SQL drop preserves client-required shared metadata");
+        let metadata = catalog.state().storage_metadata();
+        assert_eq!(metadata.collection_metadata[&global_id], shard);
+        assert!(!metadata.collection_metadata.contains_key(&new_global_id));
+        assert!(!metadata.unfinalized_shards.contains(&shard));
 
-            let ts = catalog.current_upper().await;
-            catalog
-                .transact(
-                    None,
-                    ts,
-                    None,
-                    vec![Op::PublishClientReadRequirements {
-                        incarnation,
-                        requirements: BTreeMap::new(),
-                    }],
-                )
-                .await
-                .expect("last client release stages finalization without a controller");
-            let metadata = catalog.state().storage_metadata();
-            assert!(!metadata.collection_metadata.contains_key(&global_id));
-            assert!(!metadata.collection_metadata.contains_key(&new_global_id));
-            assert!(metadata.unfinalized_shards.contains(&shard));
-            catalog.expire().await;
-        })
-        .await;
+        let snapshot = catalog.clone();
+        let revision = catalog.transient_revision();
+        let mut follower = Catalog::open_debug_read_only_catalog(persist, organization, &bootstrap)
+            .await
+            .expect("open follower after SQL drop");
+        assert_eq!(
+            follower.state().storage_metadata().collection_metadata[&global_id],
+            shard
+        );
+        let follower_snapshot = follower.clone();
+        let follower_revision = follower.transient_revision();
+
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements: BTreeMap::new(),
+                }],
+            )
+            .await
+            .expect("last client release stages finalization without a controller");
+        let metadata = catalog.state().storage_metadata();
+        assert!(!metadata.collection_metadata.contains_key(&global_id));
+        assert!(!metadata.collection_metadata.contains_key(&new_global_id));
+        assert!(metadata.unfinalized_shards.contains(&shard));
+        assert_eq!(catalog.transient_revision(), revision);
+        assert!(snapshot.transient_revision_is_current());
+
+        follower
+            .sync_to_current_updates()
+            .await
+            .expect("follow client release");
+        let metadata = follower.state().storage_metadata();
+        assert!(!metadata.collection_metadata.contains_key(&global_id));
+        assert!(!metadata.collection_metadata.contains_key(&new_global_id));
+        assert!(metadata.unfinalized_shards.contains(&shard));
+        assert_eq!(follower.transient_revision(), follower_revision);
+        assert!(follower_snapshot.transient_revision_is_current());
+        follower.expire().await;
+        catalog.expire().await;
     }
 
     #[mz_ore::test(tokio::test)]

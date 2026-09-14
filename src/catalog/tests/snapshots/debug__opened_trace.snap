@@ -1636,6 +1636,9 @@ Trace {
     client_incarnations: CollectionTrace {
         values: [],
     },
+    written_plans: CollectionTrace {
+        values: [],
+    },
     client_read_requirements: CollectionTrace {
         values: [],
     },

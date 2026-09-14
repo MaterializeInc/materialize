@@ -21,8 +21,8 @@ use timely::progress::frontier::MutableAntichain;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 
-/// Publish heartbeat and requirements together at this cadence.
-pub(crate) const CLIENT_PROTECTION_PUBLICATION_INTERVAL: Duration = Duration::from_secs(60);
+/// Renew the heartbeat at this interval when no requirements need publication.
+pub(crate) const CLIENT_PROTECTION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 /// Observe an unchanged heartbeat locally for this long before attempting closure.
 pub(crate) const CLIENT_PROTECTION_UNCHANGED_GRACE: Duration = Duration::from_secs(300);
 
@@ -68,6 +68,18 @@ impl State {
                 || self.committed.contains_key(id)
                 || self.pending.as_ref().is_some_and(|p| p.contains_key(id))
         });
+    }
+
+    fn aggregate(&self, mut extra: BTreeMap<GlobalId, Timestamp>) -> BTreeMap<GlobalId, Timestamp> {
+        for (id, active) in &self.active {
+            if let Some(time) = active.frontier().iter().next() {
+                extra
+                    .entry(*id)
+                    .and_modify(|extra| *extra = (*extra).min(*time))
+                    .or_insert(*time);
+            }
+        }
+        extra
     }
 }
 
@@ -220,20 +232,31 @@ impl ClientReadProtection {
     /// serialization and must finish this publication before starting another.
     pub(crate) fn prepare_publication(
         &self,
-        mut extra: BTreeMap<GlobalId, Timestamp>,
+        extra: BTreeMap<GlobalId, Timestamp>,
     ) -> BTreeMap<GlobalId, Timestamp> {
         let mut state = self.state.lock().expect("read protection mutex poisoned");
         assert!(state.pending.is_none(), "publication already pending");
-        for (id, active) in &state.active {
-            if let Some(time) = active.frontier().iter().next() {
-                extra
-                    .entry(*id)
-                    .and_modify(|extra| *extra = (*extra).min(*time))
-                    .or_insert(*time);
-            }
-        }
+        let extra = state.aggregate(extra);
         state.pending = Some(extra.clone());
         extra
+    }
+
+    /// Prepare changed aggregate requirements, or an idle heartbeat renewal.
+    /// Called on the coalesced publication cadence. An unchanged aggregate needs
+    /// no write until renewal is due. The snapshot installs the same acquisition
+    /// barrier as an explicit grant expansion.
+    pub(crate) fn prepare_publication_if_needed(
+        &self,
+        elapsed: Duration,
+    ) -> Option<BTreeMap<GlobalId, Timestamp>> {
+        let mut state = self.state.lock().expect("read protection mutex poisoned");
+        assert!(state.pending.is_none(), "publication already pending");
+        let requirements = state.aggregate(BTreeMap::new());
+        if requirements == state.committed && elapsed < CLIENT_PROTECTION_HEARTBEAT_INTERVAL {
+            return None;
+        }
+        state.pending = Some(requirements.clone());
+        Some(requirements)
     }
 
     /// Acknowledge durable commit, or discard a definitively failed publication.
@@ -329,6 +352,76 @@ mod tests {
 
     fn publish(client: &ClientReadProtection, extra: BTreeMap<GlobalId, Timestamp>) {
         client.prepare_publication(extra);
+        client.finish_publication(true);
+    }
+
+    #[mz_ore::test]
+    fn coalesced_advancement_and_idle_renewal_preserve_live_tokens() {
+        let client = ClientReadProtection::new(1);
+        let cadence = Duration::from_secs(1);
+        publish(&client, requirements(&[(1, 10), (2, 10)]));
+        let mut window = acquire(&client, 10);
+        let old_query = window.clone();
+        window.downgrade(Timestamp::from(20));
+        window.downgrade(Timestamp::from(30));
+        // Local changes alone are not dirtiness: a live reader still needs 10.
+        assert_eq!(client.prepare_publication_if_needed(cadence), None);
+        assert!(!client.publication_pending());
+        drop(old_query);
+        let advanced = requirements(&[(1, 30), (2, 30)]);
+        assert_eq!(
+            client.prepare_publication_if_needed(cadence),
+            Some(advanced.clone())
+        );
+        assert!(client.publication_pending());
+        assert!(
+            client
+                .try_acquire(
+                    &bundle(),
+                    &requirements(&[(1, 10), (2, 10)]),
+                    &dependencies()
+                )
+                .expect("open")
+                .is_none()
+        );
+        drop(acquire(&client, 30));
+        client.finish_publication(false);
+        assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(10.into()));
+        assert_eq!(
+            client.prepare_publication_if_needed(cadence),
+            Some(advanced.clone()),
+            "failed publication must be retried without waiting for heartbeat"
+        );
+        // Changes during the commit remain eligible for the next cadence.
+        window.downgrade(Timestamp::from(40));
+        client.finish_publication(true);
+        assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(30.into()));
+        let current = requirements(&[(1, 40), (2, 40)]);
+        assert_eq!(
+            client.prepare_publication_if_needed(cadence),
+            Some(current.clone())
+        );
+        client.finish_publication(true);
+        assert_eq!(
+            client.prepare_publication_if_needed(CLIENT_PROTECTION_HEARTBEAT_INTERVAL - cadence),
+            None
+        );
+        assert_eq!(
+            client.prepare_publication_if_needed(CLIENT_PROTECTION_HEARTBEAT_INTERVAL),
+            Some(current)
+        );
+        client.finish_publication(true);
+        drop(window);
+        assert_eq!(
+            client.prepare_publication_if_needed(cadence),
+            Some(BTreeMap::new())
+        );
+        client.finish_publication(true);
+        assert_eq!(client.prepare_publication_if_needed(cadence), None);
+        assert_eq!(
+            client.prepare_publication_if_needed(CLIENT_PROTECTION_HEARTBEAT_INTERVAL),
+            Some(BTreeMap::new())
+        );
         client.finish_publication(true);
     }
 

@@ -71,6 +71,8 @@ pub struct Metrics {
     pub catalog_transact_seconds: HistogramVec,
     pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
+    pub pending_compute_installations: UIntGauge,
+    pub compute_installation_retries: IntCounter,
     pub group_commit_catalog_upper_seconds: Histogram,
     pub occ_retry_count: HistogramVec,
     pub by_cluster: ClusterLabeledMetrics,
@@ -293,6 +295,18 @@ impl Metrics {
                 name: "mz_apply_catalog_implications_seconds",
                 help: "The time it takes to apply catalog implications.",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            pending_compute_installations: registry.register(metric!(
+                name: "mz_maintained_compute_pending_installations",
+                help: "Committed maintained compute exports awaiting installation. Nonzero defers bound publication and client reclamation.",
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
+            )),
+            compute_installation_retries: registry.register(metric!(
+                name: "mz_maintained_compute_installation_retries_total",
+                help: "Installation attempts that left committed maintained compute exports pending.",
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
             )),
             group_commit_catalog_upper_seconds: registry.register(metric!(
                 name: "mz_group_commit_catalog_upper_seconds",

@@ -981,16 +981,11 @@ mod tests {
             // shard identity and its initial permission in the same transaction.
             tx.insert_collection_metadata(BTreeMap::from([(id, shard)]))
                 .expect("can install shard metadata");
-            tx.set_collection_compaction_bound(id, Some(Timestamp::from(40)))
+            tx.set_collection_compaction_bound(id, Some(Timestamp::MIN))
                 .expect("can set initial permission");
             let incarnation = tx
                 .create_client_incarnation()
                 .expect("can create client incarnation");
-            tx.publish_client_read_requirements(
-                incarnation,
-                BTreeMap::from([(id, Timestamp::from(100))]),
-            )
-            .expect("can publish initial grant");
             let _ = tx.get_and_commit_op_updates();
             let ts = tx.upper();
             tx.commit(ts).await.expect("can commit creation");
@@ -1067,6 +1062,60 @@ mod tests {
             .await
             .expect("valid append usage")
             .expect("initial upper matches");
+        let bundle = CollectionIdBundle {
+            storage_ids: BTreeSet::from([id]),
+            compute_ids: BTreeMap::new(),
+        };
+        // A timeline window requests its oracle floor on first acquisition,
+        // even when the collection is readable all the way back to MIN.
+        let initial = client
+            .prepare_read(&catalog, &bundle, |_| Ok(Some(Timestamp::from(100))))
+            .await
+            .expect("can prepare initial oracle window");
+        assert_eq!(
+            initial.frontiers,
+            BTreeMap::from([(id, Timestamp::from(100))])
+        );
+        assert!(
+            client
+                .protection
+                .try_acquire(&bundle, &initial.frontiers, &initial.index_inputs)
+                .expect("open")
+                .is_none(),
+            "observing the oracle window is not a grant"
+        );
+        let requirements = client.protection.prepare_publication(initial.frontiers);
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![
+                    Op::PublishClientReadRequirements {
+                        incarnation,
+                        requirements,
+                    },
+                    Op::SetReadProtection {
+                        requirements: vec![],
+                        bounds: vec![mz_catalog::durable::objects::CollectionCompactionBound {
+                            id,
+                            frontier: Some(Timestamp::from(40)),
+                        }],
+                    },
+                ],
+            )
+            .await
+            .expect("can grant oracle window and advance initial permission");
+        client.protection.finish_publication(true);
+        assert_eq!(
+            client.protection.granted_frontier(id),
+            Some(Timestamp::from(100))
+        );
+        assert_eq!(
+            catalog.state().client_read_requirements()[&(incarnation, id)],
+            Timestamp::from(100)
+        );
         reader.downgrade_since(&frontier(40)).await;
         assert_eq!(
             persist
@@ -1079,14 +1128,6 @@ mod tests {
             catalog.state().collection_compaction_bounds()[&id],
             frontier(40)
         );
-        client
-            .protection
-            .prepare_publication(BTreeMap::from([(id, Timestamp::from(100))]));
-        client.protection.finish_publication(true);
-        let bundle = CollectionIdBundle {
-            storage_ids: BTreeSet::from([id]),
-            compute_ids: BTreeMap::new(),
-        };
         let snapshot = catalog.clone();
         let read = client.acquire_read_holds_and_upper(&snapshot, &bundle, |upper| {
             assert_eq!(upper, &frontier(80));
@@ -1167,13 +1208,16 @@ mod tests {
         assert_eq!(upper, frontier(80));
         drop(holds);
 
-        let ordinary = client
-            .acquire_read_holds_and_upper(&catalog, &bundle, |_| Ok(Some(Timestamp::from(120))));
-        tokio::pin!(ordinary);
-        let (holds, upper) = tokio::select! {
-            biased;
-            command = commands.recv() => panic!("covered read published: {command:?}"),
-            result = &mut ordinary => result.expect("covered acquisition succeeds"),
+        let (holds, upper) = {
+            let ordinary = client.acquire_read_holds_and_upper(&catalog, &bundle, |_| {
+                Ok(Some(Timestamp::from(120)))
+            });
+            tokio::pin!(ordinary);
+            tokio::select! {
+                biased;
+                command = commands.recv() => panic!("covered read published: {command:?}"),
+                result = &mut ordinary => result.expect("covered acquisition succeeds"),
+            }
         };
         assert_eq!(holds.since(&id), frontier(50));
         assert_eq!(upper, frontier(90));
@@ -1181,6 +1225,54 @@ mod tests {
             commands.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
+        let mut holds = holds;
+        holds.downgrade(Timestamp::from(120));
+        // An advancing aggregate and an idle renewal both bump the heartbeat in
+        // the same catalog transaction as the requirements.
+        for elapsed in [
+            std::time::Duration::from_secs(1),
+            read_protection::CLIENT_PROTECTION_HEARTBEAT_INTERVAL,
+        ] {
+            let requirements = client
+                .protection
+                .prepare_publication_if_needed(elapsed)
+                .expect("advancement or renewal is due");
+            assert_eq!(requirements, BTreeMap::from([(id, Timestamp::from(120))]));
+            let heartbeat = catalog.state().client_incarnations()[&incarnation];
+            let ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    ts,
+                    None,
+                    vec![Op::PublishClientReadRequirements {
+                        incarnation,
+                        requirements,
+                    }],
+                )
+                .await
+                .expect("can publish aggregate and heartbeat");
+            client.protection.finish_publication(true);
+            client.published();
+            assert_eq!(
+                catalog.state().client_incarnations()[&incarnation],
+                heartbeat + 1
+            );
+            assert_eq!(
+                client.protection.granted_frontier(id),
+                Some(Timestamp::from(120))
+            );
+            assert_eq!(
+                catalog.state().client_read_requirements()[&(incarnation, id)],
+                Timestamp::from(120)
+            );
+            assert_eq!(
+                client
+                    .protection
+                    .prepare_publication_if_needed(client.last_publication().elapsed()),
+                None
+            );
+        }
         reader.expire().await;
         writer.expire().await;
     }

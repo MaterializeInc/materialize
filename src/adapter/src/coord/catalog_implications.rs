@@ -204,6 +204,14 @@ impl Coordinator {
             }
         }
 
+        if written_plans
+            .iter()
+            .any(|id| self.pending_compute_installations.contains(id))
+            || !cluster_commands.is_empty()
+            || !cluster_replica_commands.is_empty()
+        {
+            self.pending_compute_installation_retry = None;
+        }
         let notice_updates = self.refresh_written_plan_notices(written_plans).await?;
         self.apply_catalog_implications_inner(
             ctx,
@@ -711,11 +719,16 @@ impl Coordinator {
                         let new_window = new_index
                             .custom_logical_compaction_window
                             .unwrap_or(CompactionWindow::Default);
-                        self.update_compute_read_policy(
-                            new_index.cluster_id,
-                            catalog_id,
-                            new_window.into(),
-                        );
+                        if !self
+                            .pending_compute_installations
+                            .contains(&new_index.global_id())
+                        {
+                            self.update_compute_read_policy(
+                                new_index.cluster_id,
+                                catalog_id,
+                                new_window.into(),
+                            );
+                        }
                     }
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Dropped(index, full_name)) => {
@@ -781,7 +794,9 @@ impl Coordinator {
                         );
 
                         let gid = new_mv.global_id_writes();
-                        self.allow_writes(new_mv.cluster_id, gid);
+                        if !self.pending_compute_installations.contains(&gid) {
+                            self.allow_writes(new_mv.cluster_id, gid);
+                        }
 
                         // There will be a separate `Dropped` implication for the old definition of
                         // the target MV. That will drop the old compute collection, as we desire,
@@ -1074,6 +1089,9 @@ impl Coordinator {
             .await;
         }
 
+        if !source_collections_to_create.is_empty() || !table_collections_to_create.is_empty() {
+            self.pending_compute_installation_retry = None;
+        }
         if !source_collections_to_create.is_empty() {
             self.create_source_collections(source_collections_to_create)
                 .await?;
@@ -1094,7 +1112,22 @@ impl Coordinator {
         }
         // Storage exists before compute imports it. Within compute, install indexes
         // immediately after their input so downstream plans can use same-batch indexes.
-        if !compute_items_to_create.is_empty() {
+        if self.catalog().state().catalog_read_protection_enabled() {
+            if !compute_items_to_create.is_empty() {
+                self.pending_compute_installation_retry = None;
+            }
+            for id in compute_items_to_create {
+                let entry = self.catalog().get_entry(&id);
+                let export = match entry.item() {
+                    CatalogItem::Index(index) => index.global_id(),
+                    CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
+                    CatalogItem::MetricSink(sink) => sink.global_id,
+                    _ => unreachable!("maintained compute addition"),
+                };
+                self.pending_compute_installations.insert(export);
+            }
+            self.install_pending_compute_collections().await;
+        } else if !compute_items_to_create.is_empty() {
             // Traverse only these additions' dependencies rather than sorting the entire
             // catalog on each DDL. Views between maintained objects matter to ordering.
             let mut pending = compute_items_to_create.clone();
@@ -1113,14 +1146,15 @@ impl Coordinator {
                 }
                 match entry.item() {
                     CatalogItem::Index(index) => {
-                        self.create_index_from_catalog(entry.id(), index).await?;
+                        self.create_index_from_catalog(entry.id(), index, None)
+                            .await?;
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        self.create_materialized_view_from_catalog(entry.id(), mv)
+                        self.create_materialized_view_from_catalog(entry.id(), mv, None)
                             .await?;
                     }
                     CatalogItem::MetricSink(sink) => {
-                        self.create_metric_sink_from_catalog(entry.id(), sink)
+                        self.create_metric_sink_from_catalog(entry.id(), sink, None)
                             .await?;
                     }
                     _ => unreachable!("only maintained compute additions are queued"),
@@ -1516,6 +1550,155 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Install every ready committed export, revisiting physical dependencies after
+    /// each pass. Pending work retains identities, not stale catalog snapshots, so
+    /// selection changes, drops, and replacement application take effect on retry.
+    pub(super) async fn install_pending_compute_collections(&mut self) {
+        self.metrics.pending_compute_installations.set(
+            self.pending_compute_installations
+                .len()
+                .try_into()
+                .expect("fits u64"),
+        );
+        if self.pending_compute_installations.is_empty() {
+            self.pending_compute_installation_retry = None;
+            return;
+        }
+        if self
+            .pending_compute_installation_retry
+            .is_some_and(|(deadline, _)| Instant::now() < deadline)
+        {
+            return;
+        }
+        let result = self.try_install_pending_compute_collections().await;
+        self.metrics.pending_compute_installations.set(
+            self.pending_compute_installations
+                .len()
+                .try_into()
+                .expect("fits u64"),
+        );
+        if self.pending_compute_installations.is_empty() {
+            self.pending_compute_installation_retry = None;
+            return;
+        }
+        let delay = self
+            .pending_compute_installation_retry
+            .map(|(_, delay)| delay.saturating_mul(2))
+            .unwrap_or(Duration::from_secs(1))
+            .min(Duration::from_secs(30));
+        self.pending_compute_installation_retry = Some((Instant::now() + delay, delay));
+        self.metrics.compute_installation_retries.inc();
+        warn!(
+            pending = ?self.pending_compute_installations,
+            retry_after = ?delay,
+            error = ?result.err(),
+            "committed compute installation remains pending; bound publication and client reclamation are deferred"
+        );
+    }
+
+    async fn try_install_pending_compute_collections(&mut self) -> Result<(), AdapterError> {
+        let build =
+            crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
+                .to_string();
+        let revisions = self
+            .pending_compute_installations
+            .iter()
+            .filter_map(|id| {
+                self.catalog()
+                    .state()
+                    .written_plan(*id, &build)
+                    .map(|revision| (*id, revision))
+            })
+            .collect();
+        let plans = self.catalog().read_written_plans(revisions).await?;
+        let mut first_error = None;
+        loop {
+            let pending: Vec<_> = self.pending_compute_installations.iter().copied().collect();
+            let mut progressed = false;
+            for id in pending {
+                let Some(entry) = self.catalog().try_get_entry_by_global_id(&id).cloned() else {
+                    // The drop path consumes this marker before issuing physical
+                    // drops. Retrying earlier in that batch must not erase it.
+                    continue;
+                };
+                if entry.item().cluster_id().is_some_and(|cluster| {
+                    self.controller
+                        .compute
+                        .collection_frontiers(id, Some(cluster))
+                        .is_ok()
+                }) {
+                    self.pending_compute_installations.remove(&id);
+                    progressed = true;
+                    continue;
+                }
+                let result = match entry.item() {
+                    CatalogItem::Index(index) if index.global_id() == id => {
+                        self.create_index_from_catalog(entry.id(), index, plans.get(&id))
+                            .await
+                    }
+                    CatalogItem::MaterializedView(mv) if mv.global_id_writes() == id => {
+                        self.create_materialized_view_from_catalog(entry.id(), mv, plans.get(&id))
+                            .await
+                    }
+                    CatalogItem::MetricSink(sink) if sink.global_id == id => {
+                        self.create_metric_sink_from_catalog(entry.id(), sink, plans.get(&id))
+                            .await
+                    }
+                    // Retired MV writers can remain as readable aliases. Their
+                    // physical drop likewise owns removing the pending marker.
+                    _ => Ok(false),
+                };
+                match result {
+                    Ok(true) => {
+                        self.pending_compute_installations.remove(&id);
+                        progressed = true;
+                    }
+                    Ok(false) => (),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            if !progressed {
+                return first_error.map_or(Ok(()), Err);
+            }
+        }
+    }
+
+    /// A selected plan is executable only after its physical imports exist in this
+    /// lifecycle instance. Missing selections or imports require retry, not planning.
+    fn written_installation_plan(
+        &self,
+        plan: Option<&GlobalExpressions>,
+        item_version: RelationVersion,
+        cluster: ClusterId,
+    ) -> Option<GlobalExpressions> {
+        if !self.controller.compute.instance_exists(cluster) {
+            return None;
+        }
+        let plan = plan?;
+        if plan.item_version != item_version
+            || !plan
+                .collection_imports()
+                .all(|input| self.catalog().try_get_entry_by_global_id(input).is_some())
+            || !plan.physical_plan.index_imports.keys().all(|input| {
+                self.controller
+                    .compute
+                    .collection_frontiers(*input, Some(cluster))
+                    .is_ok()
+            })
+            || !plan.physical_plan.source_imports.keys().all(|input| {
+                self.controller
+                    .storage_collections
+                    .collection_frontiers(*input)
+                    .is_ok()
+            })
+        {
+            return None;
+        }
+        Some(plan.clone())
+    }
+
     /// Cached plans are optional. Imports must belong to the committed catalog and
     /// to the installation snapshot, not merely to compute's not-yet-dropped state.
     async fn cached_installation_plan(
@@ -1549,39 +1732,49 @@ impl Coordinator {
         &mut self,
         catalog_id: CatalogItemId,
         index: &Index,
-    ) -> Result<(), AdapterError> {
+        written: Option<&GlobalExpressions>,
+    ) -> Result<bool, AdapterError> {
         let global_id = index.global_id();
-        let compute_instance = self
-            .instance_snapshot(index.cluster_id)
-            .expect("index cluster must exist before installation");
-        let optimizer_config = OptimizerConfig::from(self.catalog().system_config())
-            .override_from(
-                &self
-                    .catalog()
-                    .get_cluster(index.cluster_id)
-                    .config
-                    .features(),
-            )
-            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id));
-        let cached = self
-            .cached_installation_plan(
-                global_id,
-                RelationVersion::root(),
-                &compute_instance,
-                &optimizer_config,
-            )
-            .await;
-        let expressions = match cached {
-            Some(expressions) => expressions,
-            None => {
-                let name = self.catalog().get_entry(&catalog_id).name();
-                self.build_index_dataflow_plan(
-                    Arc::new(self.catalog().state().clone()),
-                    name,
-                    index,
-                    compute_instance,
-                    optimizer_config,
-                )?
+        let expressions = if self.catalog().state().catalog_read_protection_enabled() {
+            let Some(plan) =
+                self.written_installation_plan(written, RelationVersion::root(), index.cluster_id)
+            else {
+                return Ok(false);
+            };
+            plan
+        } else {
+            let compute_instance = self
+                .instance_snapshot(index.cluster_id)
+                .expect("index cluster must exist before installation");
+            let optimizer_config = OptimizerConfig::from(self.catalog().system_config())
+                .override_from(
+                    &self
+                        .catalog()
+                        .get_cluster(index.cluster_id)
+                        .config
+                        .features(),
+                )
+                .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id));
+            let cached = self
+                .cached_installation_plan(
+                    global_id,
+                    RelationVersion::root(),
+                    &compute_instance,
+                    &optimizer_config,
+                )
+                .await;
+            match cached {
+                Some(expressions) => expressions,
+                None => {
+                    let name = self.catalog().get_entry(&catalog_id).name();
+                    self.build_index_dataflow_plan(
+                        Arc::new(self.catalog().state().clone()),
+                        name,
+                        index,
+                        compute_instance,
+                        optimizer_config,
+                    )?
+                }
             }
         };
         let GlobalExpressions {
@@ -1605,38 +1798,53 @@ impl Coordinator {
                 .unwrap_or_default()
                 .into(),
         );
-        Ok(())
+        Ok(true)
     }
 
     async fn create_metric_sink_from_catalog(
         &mut self,
         catalog_id: CatalogItemId,
         sink: &MetricSink,
-    ) -> Result<(), AdapterError> {
-        let snapshot = self
-            .instance_snapshot(sink.cluster_id)
-            .expect("metric sink cluster exists before installation");
-        let config = OptimizerConfig::from(self.catalog().system_config())
-            .override_from(
-                &self
-                    .catalog()
-                    .get_cluster(sink.cluster_id)
-                    .config
-                    .features(),
-            )
-            .override_from(&self.cluster_scoped_optimizer_overrides(sink.cluster_id));
-        let expressions = match self
-            .cached_installation_plan(sink.global_id, RelationVersion::root(), &snapshot, &config)
-            .await
-        {
-            Some(expressions) => expressions,
-            None => self.build_metric_sink_dataflow_plan(
-                Arc::new(self.catalog().state().clone()),
-                self.catalog().get_entry(&catalog_id).name(),
-                sink,
-                snapshot,
-                config,
-            )?,
+        written: Option<&GlobalExpressions>,
+    ) -> Result<bool, AdapterError> {
+        let expressions = if self.catalog().state().catalog_read_protection_enabled() {
+            let Some(plan) =
+                self.written_installation_plan(written, RelationVersion::root(), sink.cluster_id)
+            else {
+                return Ok(false);
+            };
+            plan
+        } else {
+            let snapshot = self
+                .instance_snapshot(sink.cluster_id)
+                .expect("metric sink cluster exists before installation");
+            let config = OptimizerConfig::from(self.catalog().system_config())
+                .override_from(
+                    &self
+                        .catalog()
+                        .get_cluster(sink.cluster_id)
+                        .config
+                        .features(),
+                )
+                .override_from(&self.cluster_scoped_optimizer_overrides(sink.cluster_id));
+            match self
+                .cached_installation_plan(
+                    sink.global_id,
+                    RelationVersion::root(),
+                    &snapshot,
+                    &config,
+                )
+                .await
+            {
+                Some(expressions) => expressions,
+                None => self.build_metric_sink_dataflow_plan(
+                    Arc::new(self.catalog().state().clone()),
+                    self.catalog().get_entry(&catalog_id).name(),
+                    sink,
+                    snapshot,
+                    config,
+                )?,
+            }
         };
         let GlobalExpressions {
             global_mir,
@@ -1653,14 +1861,15 @@ impl Coordinator {
         // Metric exports are process-local and need neither historical recovery nor allow_writes.
         self.ship_new_dataflow(&imports, physical_plan, sink.cluster_id, notices)
             .await;
-        Ok(())
+        Ok(true)
     }
 
     async fn create_materialized_view_from_catalog(
         &mut self,
         catalog_id: CatalogItemId,
         mv: &MaterializedView,
-    ) -> Result<(), AdapterError> {
+        written: Option<&GlobalExpressions>,
+    ) -> Result<bool, AdapterError> {
         let global_id = mv.global_id_writes();
         let output = self
             .controller
@@ -1684,42 +1893,53 @@ impl Coordinator {
                 .map(|t| t.step_back().unwrap_or(Timestamp::MIN))
                 .collect()
         };
-        // Equivalent indexes need not retain equivalent history. Restrict both cached
-        // and reconstructed plans to installed paths that can satisfy the output promise.
-        let indexes = self
-            .controller
-            .compute
-            .collection_ids(mv.cluster_id)
-            .expect("MV cluster exists before installation")
-            .filter(|id| self.catalog().try_get_entry_by_global_id(id).is_some())
-            .filter(|id| {
-                self.controller
-                    .compute
-                    .collection_frontiers(*id, Some(mv.cluster_id))
-                    .is_ok_and(|f| PartialOrder::less_equal(&f.read_frontier, &upper))
-            })
-            .collect();
-        let snapshot = ComputeInstanceSnapshot::new_from_parts(mv.cluster_id, indexes);
-        let config = OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog().get_cluster(mv.cluster_id).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(mv.cluster_id));
-        let expressions = match self
-            .cached_installation_plan(
-                global_id,
+        let expressions = if self.catalog().state().catalog_read_protection_enabled() {
+            let Some(plan) = self.written_installation_plan(
+                written,
                 latest_item_version(&mv.collections),
-                &snapshot,
-                &config,
-            )
-            .await
-        {
-            Some(expressions) => expressions,
-            None => self.build_materialized_view_dataflow_plan(
-                Arc::new(self.catalog().state().clone()),
-                self.catalog().get_entry(&catalog_id).name(),
-                mv,
-                snapshot,
-                config,
-            )?,
+                mv.cluster_id,
+            ) else {
+                return Ok(false);
+            };
+            plan
+        } else {
+            // Equivalent indexes need not retain equivalent history. Restrict both cached
+            // and reconstructed plans to installed paths that can satisfy the output promise.
+            let indexes = self
+                .controller
+                .compute
+                .collection_ids(mv.cluster_id)
+                .expect("MV cluster exists before installation")
+                .filter(|id| self.catalog().try_get_entry_by_global_id(id).is_some())
+                .filter(|id| {
+                    self.controller
+                        .compute
+                        .collection_frontiers(*id, Some(mv.cluster_id))
+                        .is_ok_and(|f| PartialOrder::less_equal(&f.read_frontier, &upper))
+                })
+                .collect();
+            let snapshot = ComputeInstanceSnapshot::new_from_parts(mv.cluster_id, indexes);
+            let config = OptimizerConfig::from(self.catalog().system_config())
+                .override_from(&self.catalog().get_cluster(mv.cluster_id).config.features())
+                .override_from(&self.cluster_scoped_optimizer_overrides(mv.cluster_id));
+            match self
+                .cached_installation_plan(
+                    global_id,
+                    latest_item_version(&mv.collections),
+                    &snapshot,
+                    &config,
+                )
+                .await
+            {
+                Some(expressions) => expressions,
+                None => self.build_materialized_view_dataflow_plan(
+                    Arc::new(self.catalog().state().clone()),
+                    self.catalog().get_entry(&catalog_id).name(),
+                    mv,
+                    snapshot,
+                    config,
+                )?,
+            }
         };
         let GlobalExpressions {
             global_mir,
@@ -1761,7 +1981,7 @@ impl Coordinator {
             self.allow_writes(mv.cluster_id, global_id);
         }
         drop(holds);
-        Ok(())
+        Ok(true)
     }
 
     /// Describe adapter-owned table writes from committed shard metadata.

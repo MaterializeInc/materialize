@@ -2101,6 +2101,12 @@ pub struct Coordinator {
     /// per replica. See [`Coordinator::plan_metric_sink`].
     metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
 
+    /// Committed maintained exports waiting for selected plans or local imports.
+    /// Publication and reclamation cannot overtake their installation.
+    pending_compute_installations: BTreeSet<GlobalId>,
+    /// Next installation attempt and its backoff, reset by new relevant catalog state.
+    pending_compute_installation_retry: Option<(Instant, Duration)>,
+
     /// Plans waiting for session-startup builtin table appends.
     deferred_plans: BTreeMap<ConnectionId, DeferredPlan>,
 
@@ -2659,11 +2665,11 @@ impl Coordinator {
 
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
-        let write_plans =
-            self.catalog().state().catalog_read_protection_enabled() && !self.read_only_controllers;
+        let protected_plans = self.catalog().state().catalog_read_protection_enabled();
+        let write_plans = protected_plans && !self.read_only_controllers;
         let mut candidates = cached_global_exprs;
         let mut written_ids = BTreeSet::new();
-        if write_plans {
+        if protected_plans {
             let build =
                 Catalog::expression_build_version(self.catalog().config().build_info).to_string();
             let revisions: Vec<_> = self
@@ -4386,10 +4392,10 @@ impl Coordinator {
             tokio::pin!(publication_timer);
             let subscription_timer = tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL);
             tokio::pin!(subscription_timer);
-            let client_publication_delay =
-                crate::query_client::read_protection::CLIENT_PROTECTION_PUBLICATION_INTERVAL;
-            let client_publication_timer = tokio::time::sleep(client_publication_delay);
-            tokio::pin!(client_publication_timer);
+            let client_heartbeat_delay =
+                crate::query_client::read_protection::CLIENT_PROTECTION_HEARTBEAT_INTERVAL;
+            let client_heartbeat_timer = tokio::time::sleep(client_heartbeat_delay);
+            tokio::pin!(client_heartbeat_timer);
 
             loop {
                 let delay = self
@@ -4412,20 +4418,24 @@ impl Coordinator {
 
                     // Polling the pinned timer is cancel-safe. Renewal and requirement
                     // publication share one transaction before checking abandoned clients.
-                    _ = client_publication_timer.as_mut() => {
-                        if let Err(error) = self.publish_client_read_protection().await {
+                    _ = client_heartbeat_timer.as_mut() => {
+                        if self.query_client.as_ref().is_some_and(|client| {
+                            client.last_publication().elapsed() >= client_heartbeat_delay
+                        }) && let Err(error) = self.publish_client_read_protection().await {
                             warn!(%error, "unable to publish query client protection");
                         }
                         if let Err(error) = self.reclaim_client_read_protection().await {
                             warn!(%error, "unable to reclaim query client protection");
                         }
-                        client_publication_timer.set(tokio::time::sleep(client_publication_delay));
+                        client_heartbeat_timer.set(tokio::time::sleep(client_heartbeat_delay));
                     }
 
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
                     // does not depend on the savepoint's publication setting.
                     _ = subscription_timer.as_mut(),
-                        if self.compaction_bound_subscriber.is_some() => {
+                        if self.compaction_bound_subscriber.is_some()
+                            || !self.pending_compute_installations.is_empty() => {
+                        self.install_pending_compute_collections().await;
                         if let Err(error) = self.sync_compute_read_protection().await {
                             warn!(%error, "unable to follow catalog read protection");
                         }
@@ -4436,8 +4446,12 @@ impl Coordinator {
                     // before this runs. Give publication a turn even under continuous load,
                     // but schedule from completion so a slow commit cannot monopolize us.
                     _ = publication_timer.as_mut(),
-                        if self.catalog().state().catalog_read_protection_enabled()
-                            && !self.controller.read_only() => {
+                        if self.query_client.is_some()
+                            || (self.catalog().state().catalog_read_protection_enabled()
+                                && !self.controller.read_only()) => {
+                        if let Err(error) = self.publish_client_read_protection().await {
+                            warn!(%error, "unable to publish query client protection");
+                        }
                         if let Err(error) = self.publish_read_protection().await {
                             warn!(%error, "unable to publish catalog read protection");
                         }
@@ -5849,6 +5863,8 @@ pub fn serve(
                     hydration_history_sweep: None,
                     metric_sinks: BTreeMap::new(),
                     metric_sink_plans: BTreeMap::new(),
+                    pending_compute_installations: BTreeSet::new(),
+                    pending_compute_installation_retry: None,
                     deferred_plans: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),

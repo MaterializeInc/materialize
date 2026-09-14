@@ -423,7 +423,15 @@ impl Coordinator {
                     | catalog::Op::ReclaimClientIncarnation { .. }
             )
         });
+        let reclaims_client = ops
+            .iter()
+            .any(|op| matches!(op, catalog::Op::ReclaimClientIncarnation { .. }));
         loop {
+            // A failed CAS can reveal a creation that cannot install yet. Check
+            // on every attempt, after foreign implications as well as initially.
+            if reclaims_client && !self.pending_compute_installations.is_empty() {
+                return Err(AdapterError::DDLTransactionRace);
+            }
             let revision = self.catalog().transient_revision();
             match self.catalog_transact_attempt(conn_id, ops.clone()).await {
                 Err(AdapterError::Catalog(error))
@@ -479,7 +487,7 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: &mut Vec<Op>,
         write_ts: mz_repr::Timestamp,
-    ) -> Result<Vec<crate::ReadHolds>, AdapterError> {
+    ) -> Result<(Vec<crate::ReadHolds>, Vec<String>), AdapterError> {
         use crate::optimize::{OptimizerConfig, dataflows::ComputeInstanceSnapshot};
         use mz_repr::optimize::OverrideFrom;
 
@@ -491,7 +499,7 @@ impl Coordinator {
                 )
             })
         {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let planning_revision = self.catalog().transient_revision();
         // Selections are validated after their plans have been repaired. A new
@@ -539,7 +547,7 @@ impl Coordinator {
         }
         revisions.retain(|id, _| candidate.try_get_entry_by_global_id(id).is_some());
         if revisions.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let plans = self
             .catalog()
@@ -717,6 +725,16 @@ impl Coordinator {
         if self.catalog().transient_revision() != planning_revision {
             return Err(AdapterError::DDLTransactionRace);
         }
+        let rewritten_objects = replacements
+            .keys()
+            .map(|id| {
+                candidate
+                    .resolve_full_name(candidate.get_entry_by_global_id(id).name(), conn_id)
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         if !replacements.is_empty() {
             ops.retain(|op| match op {
                 Op::SetWrittenPlan {
@@ -726,7 +744,7 @@ impl Coordinator {
             });
             ops.extend(self.catalog().write_plans(replacements).await?);
         }
-        Ok(protection)
+        Ok((protection, rewritten_objects))
     }
 
     async fn catalog_transact_attempt(
@@ -870,7 +888,7 @@ impl Coordinator {
             }
         }
 
-        let _written_plan_protection =
+        let (_written_plan_protection, rewritten_objects) =
             Box::pin(self.prepare_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
                 .await?;
 
@@ -907,6 +925,20 @@ impl Coordinator {
             .wall_time()
             .observe(phase_seconds.with_label_values(&["transact"]))
             .await?;
+
+        if let Some(conn) = conn
+            && !rewritten_objects.is_empty()
+        {
+            let _ = conn
+                .notice_tx
+                .send(crate::notice::AdapterNotice::RewrittenPlans {
+                    objects: rewritten_objects,
+                });
+            self.metrics
+                .optimization_notices
+                .with_label_values(&["RewrittenPlans"])
+                .inc();
+        }
 
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
             cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
@@ -1187,7 +1219,19 @@ impl Coordinator {
     pub(crate) fn drop_compute_collections(&mut self, collections: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for (cluster_id, gid) in collections {
+            if self.pending_compute_installations.remove(&gid) {
+                continue;
+            }
             by_cluster.entry(cluster_id).or_default().push(gid);
+        }
+        self.metrics.pending_compute_installations.set(
+            self.pending_compute_installations
+                .len()
+                .try_into()
+                .expect("fits u64"),
+        );
+        if self.pending_compute_installations.is_empty() {
+            self.pending_compute_installation_retry = None;
         }
         for (cluster_id, gids) in by_cluster {
             let compute = &mut self.controller.compute;

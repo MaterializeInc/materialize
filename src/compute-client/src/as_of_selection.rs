@@ -1342,6 +1342,9 @@ mod tests {
             "u2" <- ["u1"] => 50,
         ],
         current_time: 90,
+        // A written plan can import an index whose old trace compacted beyond
+        // the pending refresh. Reconstruct it from protected logical history.
+        committed_bounds: { "u1": 80, },
         pending_replacements: { "u2": 50, },
         read_only: true,
         catalog_read_protection: true,
