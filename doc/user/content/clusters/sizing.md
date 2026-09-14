@@ -22,7 +22,7 @@ a cluster](/fundamentals/concepts/clusters/#lifecycle-of-a-cluster).
 
 {{< note >}}
 Hydration rebuilds a dataflow's in-memory state from the storage layer, which
-takes more memory than maintaining that state afterwards. The size that holds a
+can take more memory than maintaining that state afterwards. The size that holds a
 hydrated cluster is therefore not always the size that can rebuild it, and a
 replica that runs out of memory while hydrating restarts and tries again rather
 than running slower.
@@ -32,6 +32,12 @@ than running slower.
 
 This guide assumes you are running Materialize v26.42 or later. v26.42 added
 improvements to allow you to track peak resource usage during hydration.
+
+{{< note >}}
+This guidance applies to single-process replicas, which covers most clusters
+today. A multi-process replica records its peaks per process, and how those
+combine into a size for the replica as a whole is not established here.
+{{< /note >}}
 
 ### 1. Create the cluster at a generous size
 
@@ -97,8 +103,7 @@ it.
 
 Compare `peak_memory` against the replica sizes in
 [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes), and use this to
-determine the ideal cluster size. Both figures are per process, so on a
-multi-process size do not multiply by `processes`.
+determine the ideal cluster size. Both figures are per process.
 
 To find which object dominated the episode, read the per-object table,
 [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history).
@@ -213,9 +218,7 @@ approximate, it is approximate in ways that matter for sizing:
   later episode can inherit an earlier episode's mark. For sizing memory this
   errs the safe way: the recorded value is never below the true hydration peak.
 
-- **`peak_disk_bytes` is a lower bound.** Where a scratch filesystem is in use
-  there is no kernel high-water mark to read, so the value is a maximum over
-  samples and can miss a spike between two of them. Leave more headroom on disk
+- **`peak_disk_bytes` is a lower bound.** Materialize periodically samples this metric and can miss spikes. Leave more headroom on disk
   than the number by itself implies.
 
 - **Timestamps can carry clock skew.** On a multi-process replica the endpoints
