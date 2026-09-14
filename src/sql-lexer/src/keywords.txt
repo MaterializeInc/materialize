@@ -509,6 +509,7 @@ Transactional
 Transform
 Trim
 True
+Try_Cast
 Tunnel
 Type
 Types

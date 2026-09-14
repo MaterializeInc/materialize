@@ -75,7 +75,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
+    AsOf, Assignment, AstInfo, CastFailureMode, CreateWebhookSourceBody, CreateWebhookSourceCheck,
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
     Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
     JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock, MutRecBlockOption,
@@ -3691,7 +3691,9 @@ fn invent_column_name(
             Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
             Expr::Map { .. } | Expr::MapSubquery(_) => Some(("map".into(), NameQuality::High)),
-            Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names)? {
+            Expr::Cast {
+                expr, data_type, ..
+            } => match invent(ecx, expr, table_func_names)? {
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                 _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
             },
@@ -4190,7 +4192,15 @@ fn plan_expr_inner<'a>(
         Expr::Op { op, expr1, expr2 } => {
             Ok(plan_op(ecx, normalize::op(op)?, expr1, expr2.as_deref())?.into())
         }
-        Expr::Cast { expr, data_type } => plan_cast(ecx, expr, data_type),
+        Expr::Cast {
+            expr,
+            data_type,
+            failure_mode: CastFailureMode::Error,
+        } => plan_cast(ecx, expr, data_type),
+        Expr::Cast {
+            failure_mode: CastFailureMode::NullFallback,
+            ..
+        } => bail_unsupported!("TRY_CAST"),
         Expr::Function(func) => Ok(plan_function(ecx, func)?.into()),
 
         // Special functions and operators.

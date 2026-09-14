@@ -185,7 +185,7 @@ Op { op: Op { namespace: None, op: "!~*" }, expr1: Identifier([Ident("a")]), exp
 parse-scalar
 a !x 'foo'
 ----
-Op { op: Op { namespace: None, op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: Name(UnresolvedItemName([Ident("x")])), typ_mod: [] } }) }
+Op { op: Op { namespace: None, op: "!" }, expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: Name(UnresolvedItemName([Ident("x")])), typ_mod: [] }, failure_mode: Error }) }
 
 parse-scalar
 a !x
@@ -208,6 +208,66 @@ parse-scalar roundtrip
 CAST(id AS BIGINT)
 ----
 id::int8
+
+# TRY_CAST has no operator spelling, so it prints in its function-like form and
+# never needs the parenthesization that `::` casts need around their operand.
+parse-scalar roundtrip
+TRY_CAST(id AS BIGINT)
+----
+TRY_CAST(id AS int8)
+
+parse-scalar roundtrip
+try_cast(a + b AS int4)
+----
+TRY_CAST(a + b AS int4)
+
+parse-scalar roundtrip
+-TRY_CAST(2 AS int4)
+----
+- TRY_CAST(2 AS int4)
+
+parse-scalar roundtrip
+TRY_CAST(x AS int4)::text
+----
+TRY_CAST(x AS int4)::text
+
+parse-scalar roundtrip
+TRY_CAST(x::int2 AS int4)
+----
+TRY_CAST(x::int2 AS int4)
+
+parse-scalar roundtrip
+TRY_CAST(CAST(x AS smallint) AS int)
+----
+TRY_CAST(x::int2 AS int4)
+
+parse-scalar roundtrip
+TRY_CAST(x AS int4 list)[1]
+----
+TRY_CAST(x AS int4 list)[1]
+
+parse-scalar roundtrip
+CAST(TRY_CAST(x AS int4 list) AS text)
+----
+TRY_CAST(x AS int4 list)::text
+
+parse-scalar
+TRY_CAST(id AS int4)
+----
+Cast { expr: Identifier([Ident("id")]), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, failure_mode: NullFallback }
+
+parse-scalar
+TRY_CAST(id, int4)
+----
+error: Expected AS, found comma
+TRY_CAST(id, int4)
+           ^
+
+# TRY_CAST is not reserved, so it remains usable as a bare identifier.
+parse-scalar roundtrip
+try_cast + 1
+----
+try_cast + 1
 
 parse-scalar roundtrip
 id::double precision
@@ -761,17 +821,17 @@ address[1:list_length(address) - 1]
 parse-scalar
 ARRAY[]::int[]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }), failure_mode: Error }
 
 parse-scalar
 ARRAY[]::int[][][][]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }), failure_mode: Error }
 
 parse-scalar
 ARRAY[]::int[2][2]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }), failure_mode: Error }
 
 parse-scalar roundtrip
 ARRAY[1, 2, 3][-1]
