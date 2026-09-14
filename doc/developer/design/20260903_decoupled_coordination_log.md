@@ -856,3 +856,21 @@ not controller-state RPC. That path remains unchanged.
 Next: selected-plan-only installation with independent waiting, bootstrap ordering,
 and the lifecycle ownership split. Same-generation orchestration, lifecycle
 connection admission, and introspection reconciliation need narrow enactment fencing.
+
+### 2026-09-14: Fixed-plan protection gap
+
+Logical maintained requirements do not protect physical indexes in a selected
+plan. An uninstalled or rewritten selection can lose required index history after
+its writer's client protection is reclaimed, even while logical storage remains
+readable. Removing installation fallback is paused on this gap.
+
+Proposed to Aljoscha: derive object-owned protection for selected physical imports
+from immutable plans alongside logical requirements, accepting retention for
+selected plans that are not running. No new durable record is proposed. Admission,
+selection changes, and compaction authorization must enforce this atomically.
+
+Also proposed, not yet agreed: publish changed client aggregates in coalesced
+maintenance batches while retaining one-minute idle heartbeat renewal and the
+five-minute reclamation grace. Sharing heartbeat cadence retains obsolete live
+client grants for up to a minute. Earlier aggregate publication increases catalog
+traffic and needs a deliberate retention/traffic choice.

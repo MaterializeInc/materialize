@@ -57,6 +57,14 @@ not milestone acceptance. Remaining work:
    dataflows pause while the adapter is down. Webhook batching and idle ticking
    likewise require a live adapter for this milestone.
 
+Pending decisions raised on 2026-09-14: do not remove installation fallback until
+the selected physical-import protection gap in the log is resolved. The proposal
+is object-owned protection derived from written plans, with extra index retention.
+DROP INDEX's physical in-use notice also needs execution-dependency observations
+or an agreed meaning change. Client aggregate publication currently shares the
+one-minute heartbeat cadence. More timely coalesced advancement, without changing
+the heartbeat/grace rules, is proposed but not yet agreed.
+
 Keep per-build selection keys, but defer cross-build follower repair, version
 upgrades, and prewarming-owned selections. Retired-build cleanup is also deferred.
 After a generation is fenced, its survivor may remove older builds' selections
