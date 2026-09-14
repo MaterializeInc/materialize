@@ -1096,6 +1096,18 @@ def workflow_selected_plan_explain(c: Composition) -> None:
         assert notice_count("selected_import") == 1
         assert notice_count("selected_consumer") == 1
 
+        def sql_notices(sql: str) -> list[tuple[str | None, str | None]]:
+            notices: list[tuple[str | None, str | None]] = []
+            with c.sql_connection() as conn:
+                # Diagnostic fields are only valid during the callback.
+                conn.add_notice_handler(
+                    lambda diag: notices.append(
+                        (diag.message_primary, diag.message_hint)
+                    )
+                )
+                conn.execute(sql.encode())
+            return notices
+
         def plans() -> dict[tuple[str, str], str]:
             return {
                 (object_name, stage): c.sql_query(
@@ -1120,7 +1132,14 @@ def workflow_selected_plan_explain(c: Composition) -> None:
 
         # Dropping an import repairs the durable selection without reinstalling
         # either consumer. EXPLAIN must already show the repaired storage read.
-        c.sql("DROP INDEX selected_import", reuse_connection=False)
+        notices = sql_notices("DROP INDEX selected_import")
+        assert notices == [
+            (
+                "Rewrote plans for the following objects: "
+                "materialize.public.selected_consumer, materialize.public.selected_mv.",
+                None,
+            )
+        ], notices
         assert notice_count("selected_import") == 0
         assert notice_count("selected_consumer") == 1
         rewritten = plans()
@@ -1172,6 +1191,9 @@ def workflow_selected_plan_explain(c: Composition) -> None:
                 5
                 """),
         )
+        notices = sql_notices("DROP INDEX selected_new_import")
+        assert notices == [], notices
+        assert plans() == rewritten
         c.sql("CREATE INDEX selected_spare ON selected_v ()", reuse_connection=False)
         index_ids["selected_spare"] = c.sql_query(
             "SELECT id FROM mz_indexes WHERE name = 'selected_spare'",
@@ -1181,7 +1203,13 @@ def workflow_selected_plan_explain(c: Composition) -> None:
         assert notice_count("selected_spare", duplicate_notice) == 1
         # The dependency drop and selected-plan rewrite must retract this notice
         # exactly once, while preserving the surviving index's own notice.
-        c.sql("DROP INDEX selected_consumer", reuse_connection=False)
+        notices = sql_notices("DROP INDEX selected_consumer")
+        assert notices == [
+            (
+                "Rewrote plans for the following objects: materialize.public.selected_spare.",
+                None,
+            )
+        ], notices
         assert notice_count("selected_consumer") == 0
         assert notice_count("selected_spare", duplicate_notice) == 0
         assert notice_count("selected_spare") == 1
