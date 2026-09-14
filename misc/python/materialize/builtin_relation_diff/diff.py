@@ -31,6 +31,14 @@ NAME_PATTERN = re.compile(
 # position still compare while the value does not.
 AS_OF_PATTERN = re.compile(r"\bAS OF \d+")
 
+# A Postgres source's replication slot name carries a UUID generated per source
+# at creation time. Beyond mz_postgres_sources.replication_slot, which is
+# dropped outright, it reaches the dump hex-encoded inside the protobuf
+# `DETAILS` option of the source's create_sql. "materialize_" encodes to
+# 6d6174657269616c697a655f, followed by the UUID's 32 hex characters, each
+# themselves ASCII-hex-encoded, so 64 digits.
+SLOT_HEX_PATTERN = re.compile(r"6d6174657269616c697a655f[0-9a-f]{64}")
+
 # Columns whose ids live in a namespace other than "object", by convention.
 # A relation's `id_namespace_by_column` overrides this.
 NAMESPACE_BY_COLUMN_NAME = {
@@ -118,6 +126,7 @@ def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
                 if column in config.ignore_columns:
                     continue
                 value = AS_OF_PATTERN.sub("AS OF <TIMESTAMP>", str(value))
+                value = SLOT_HEX_PATTERN.sub("<SLOT_HEX>", value)
                 if ID_PATTERN.match(value):
                     namespace = config.id_namespace_by_column.get(
                         column, NAMESPACE_BY_COLUMN_NAME.get(column, "object")

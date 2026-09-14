@@ -179,6 +179,9 @@ RELATIONS: dict[str, RelationDiffConfig] = {
         id_namespace_by_column={"id": "replica"},
     ),
     "mz_internal.mz_postgres_source_tables": RelationDiffConfig(),
-    "mz_internal.mz_postgres_sources": RelationDiffConfig(),
+    # The slot name carries a UUID generated per source at creation time.
+    "mz_internal.mz_postgres_sources": RelationDiffConfig(
+        ignore_columns=["replication_slot"],
+    ),
     "mz_internal.mz_sql_server_source_tables": RelationDiffConfig(),
 }

@@ -45,22 +45,89 @@ user-created rows:
 """
 
 import argparse
+import random
+from typing import Any
 
 from materialize.builtin_relation_diff.corpus import CORPUS, SYSTEM_CORPUS
 from materialize.builtin_relation_diff.diff import Snapshot, compare, dump
 from materialize.builtin_relation_diff.relations import RELATIONS
 from materialize.docker import commit_to_image_tag, image_registry
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.ui import UIError
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
 )
 from materialize.version_list import resolve_ancestor_image_tag
+from materialize.workload_replay.config import (
+    additional_system_parameter_defaults,
+    cluster_replica_sizes,
+)
+from materialize.workload_replay.executor import test as replay_workload
+from materialize.workload_replay.util import (
+    get_paths,
+    load_workload,
+    update_captured_workloads_repo,
+)
+
+# `replay_workload` unconditionally resolves the console port with
+# `c.port("materialized", 6874)`, which fails unless the port is published.
+# Nothing here serves or reads the console, so it stays disabled.
+WORKLOAD_MZ_PORTS = [6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257]
 
 SERVICES = [
     Materialized(name="mz_old"),  # Overridden below
     Materialized(name="mz_new"),  # Overridden below
+    # Workload replay drives a single service named `materialized` (see
+    # `workload_snapshot`), alongside the external systems a capture's
+    # connections may reference. Mirrors test/workload-replay/mzcompose.py;
+    # the shared config module keeps the sizes and parameters in step.
+    Materialized(
+        cluster_replica_size=cluster_replica_sizes,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
+        ports=WORKLOAD_MZ_PORTS,
+    ),
+    # These mirror test/workload-replay/mzcompose.py rather than using
+    # defaults. The replay framework creates Kafka topics from the host with
+    # confluent_kafka.admin, so the broker needs a published host port and a
+    # HOST advertised listener; Testdrive needs the vars the capture's
+    # generated DDL references.
+    Kafka(
+        auto_create_topics=False,
+        ports=["30123:30123"],
+        allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://127.0.0.1:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
+        environment_extra=[
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        ],
+    ),
+    SchemaRegistry(),
+    Postgres(),
+    MySql(),
+    SqlServer(),
+    SshBastionHost(allow_any_key=True),
+    Testdrive(
+        seed=1,
+        no_reset=True,
+        no_consistency_checks=True,
+        entrypoint_extra=[
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        ],
+    ),
     Mz(app_password=""),
 ]
 
@@ -96,6 +163,75 @@ def snapshot(
         conn.close()
 
 
+def workload_snapshot(
+    c: Composition,
+    image: str | None,
+    workload: dict[str, Any],
+    workload_path: Any,
+    relations: list[str],
+    user_rows_only: bool,
+    seed: str,
+    verbose: bool,
+) -> Snapshot:
+    """Replay a captured workload on `image` and dump the configured relations.
+
+    Only the object-creation phase runs: no initial data, no ingestion, no
+    query load. The relations this harness diffs are catalog metadata, so the
+    objects are the corpus and their contents are irrelevant.
+
+    `replay_workload` brings up a service named `materialized` itself, so the
+    two sides run sequentially here rather than side by side as in corpus
+    mode. The dump is taken from `during_continuous`, which the replay invokes
+    once the objects exist and have hydrated.
+
+    The seed is pinned rather than defaulted to the clock: a diff between two
+    builds is meaningless if the corpus differs between them.
+    """
+    random.seed(seed)
+    captured: dict[str, Snapshot] = {}
+
+    def capture() -> None:
+        conn = c.sql_connection(service="materialized", port=6875)
+        conn.autocommit = True
+        try:
+            captured["snapshot"] = dump(conn.cursor(), relations, user_rows_only)
+        finally:
+            conn.close()
+
+    with c.override(
+        Materialized(
+            image=image,
+            cluster_replica_size=cluster_replica_sizes,
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
+            ports=WORKLOAD_MZ_PORTS,
+            use_default_volumes=False,
+        )
+    ):
+        replay_workload(
+            c,
+            workload,
+            workload_path,
+            factor_initial_data=1,
+            factor_ingestions=1,
+            factor_queries=1,
+            runtime=0,
+            verbose=verbose,
+            create_objects=True,
+            initial_data=False,
+            early_initial_data=False,
+            run_ingestions=False,
+            run_queries=False,
+            max_concurrent_queries=1,
+            during_continuous=capture,
+        )
+
+    if "snapshot" not in captured:
+        raise AssertionError(
+            "workload replay finished without reaching the dump callback"
+        )
+    return captured["snapshot"]
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--old-image",
@@ -122,6 +258,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="for relations configuring it, compare only user-created rows; "
         "use when builtin rows legitimately drift between the two versions",
     )
+    parser.add_argument(
+        "--workload",
+        type=str,
+        default=None,
+        help="replay this captured workload as the corpus instead of CORPUS, "
+        "e.g. 'workload_prod_sandbox' (see test/workload-replay/README.md). "
+        "Richer, but needs the captured-workloads repo and external systems, "
+        "and cannot cover temporary items",
+    )
+    parser.add_argument(
+        "--workload-seed",
+        type=str,
+        default="builtin-relation-diff",
+        help="seed for workload replay; both sides use it, so changing it "
+        "changes the corpus but never introduces a difference between builds",
+    )
+    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
     args: argparse.Namespace = parser.parse_args()
 
     relations = args.relation or sorted(RELATIONS)
@@ -139,27 +292,59 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     sql_port = 6875
     system_port = 6877
 
-    with c.override(
-        Materialized(
-            name="mz_old",
-            image=old_image,
-            ports=[f"16875:{sql_port}", f"16877:{system_port}"],
-            use_default_volumes=False,
-        ),
-        Materialized(
-            name="mz_new",
-            image=None,
-            ports=[f"26875:{sql_port}", f"26877:{system_port}"],
-            use_default_volumes=False,
-        ),
-    ):
-        c.up("mz_old", "mz_new")
-        old = snapshot(
-            c, "mz_old", sql_port, system_port, relations, args.user_rows_only
-        )
-        new = snapshot(
-            c, "mz_new", sql_port, system_port, relations, args.user_rows_only
-        )
+    if args.workload:
+        # Replay drives one `materialized` service, so the sides run one after
+        # the other, each against a freshly reset environment.
+        update_captured_workloads_repo()
+        matches = get_paths([f"{args.workload}.yml"])
+        if len(matches) != 1:
+            raise UIError(
+                f"--workload {args.workload!r} matched {len(matches)} capture files; "
+                "pass the file's basename without the .yml suffix"
+            )
+        workload_path = matches[0]
+        workload = load_workload(workload_path)
+        print(f"Corpus: replay of {workload_path.name}")
+
+        snapshots = []
+        for label, image in (("baseline", old_image), ("new", None)):
+            print(f"--- Replaying workload on the {label} build")
+            snapshots.append(
+                workload_snapshot(
+                    c,
+                    image,
+                    workload,
+                    workload_path,
+                    relations,
+                    args.user_rows_only,
+                    args.workload_seed,
+                    bool(args.verbose),
+                )
+            )
+            c.down(destroy_volumes=True)
+        old, new = snapshots
+    else:
+        with c.override(
+            Materialized(
+                name="mz_old",
+                image=old_image,
+                ports=[f"16875:{sql_port}", f"16877:{system_port}"],
+                use_default_volumes=False,
+            ),
+            Materialized(
+                name="mz_new",
+                image=None,
+                ports=[f"26875:{sql_port}", f"26877:{system_port}"],
+                use_default_volumes=False,
+            ),
+        ):
+            c.up("mz_old", "mz_new")
+            old = snapshot(
+                c, "mz_old", sql_port, system_port, relations, args.user_rows_only
+            )
+            new = snapshot(
+                c, "mz_new", sql_port, system_port, relations, args.user_rows_only
+            )
 
     failures = compare(relations, old, new)
     if failures:
