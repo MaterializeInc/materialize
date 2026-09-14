@@ -187,6 +187,25 @@ pub enum DateTimeField {
     Millennium,
 }
 
+impl From<mz_sql_parser::ast::DateTimeField> for DateTimeField {
+    fn from(field: mz_sql_parser::ast::DateTimeField) -> Self {
+        use mz_sql_parser::ast::DateTimeField::*;
+        match field {
+            Millennium => Self::Millennium,
+            Century => Self::Century,
+            Decade => Self::Decade,
+            Year => Self::Year,
+            Month => Self::Month,
+            Day => Self::Day,
+            Hour => Self::Hour,
+            Minute => Self::Minute,
+            Second => Self::Second,
+            Milliseconds => Self::Milliseconds,
+            Microseconds => Self::Microseconds,
+        }
+    }
+}
+
 impl fmt::Display for DateTimeField {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
