@@ -22,10 +22,11 @@ change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
 Milestone 2 is active. Placement is decided in the design's Lifecycle placement
-decision and the re-cut milestone: following and enactment run in compute
-clusterd, at the replica. There is no separate lifecycle process and no
-lifecycle connection for compute. Do not extract the controllers into their own
-process. Read `20260903_decoupled_coordination_handover.md` for the implementation
+decision and the re-cut milestone: following and enactment run in clusterd, at
+the replica, for compute and storage alike. There is no separate lifecycle
+process and no lifecycle connection. Do not extract the controllers into their
+own process, and do not leave the storage controller's enactment as a second
+stack beside the new path. Read `20260903_decoupled_coordination_handover.md` for the implementation
 checkpoint and its outstanding verification and integration work.
 
 The query connection split and generation-scoped cooperating catalog writers are
@@ -60,11 +61,16 @@ not milestone acceptance. Remaining work:
    its own progress, and advances the requirements of the outputs it writes.
 5. Peeks and query-local dataflows go from the query client straight to
    replicas, with replica choice and response merging in the client.
-6. Storage clusters keep controller-side enactment. DDL and table appends stay
-   with the adapter. Table time stays adapter-driven for now: assume a live
-   adapter ticks transaction-WAL time, and let the demonstration state that
-   table-fed dataflows pause while the adapter is down. Webhook batching and
-   idle ticking likewise require a live adapter for this milestone.
+6. The same follower in storage clusterd for its cluster's sources and sinks,
+   and the StorageCollections split that goes with it: critical since handles
+   follow committed bounds, table registration stays adapter-owned, shard
+   finalization gets an owner or an idempotent rule. Bring the finalization rule
+   and any sink external-write case that is unsafe under two same-generation
+   followers before building them. DDL and table appends stay with the adapter.
+   Table time stays adapter-driven for now: assume a live adapter ticks
+   transaction-WAL time, and let the demonstration state that table-fed
+   dataflows pause while the adapter is down. Webhook batching and idle ticking
+   likewise require a live adapter for this milestone.
 
 Verify the apply-before-publish ordering with fixed written plans, including
 reconstruction from logical inputs after an index compacted past an old bound.
