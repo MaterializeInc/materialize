@@ -333,7 +333,7 @@ impl GlobalLirPlan {
 /// via `Reduce` + `FirstValue`), collapsing the operator to a plain fold over the live set. That
 /// full move is deferred: the tiebreak fidelity that logic needs is easier to keep correct
 /// hand-written and unit-tested for now.
-fn shape_metric_sink_source(
+pub(crate) fn shape_metric_sink_source(
     source: MirRelationExpr,
     source_desc: &RelationDesc,
     prefix: &str,

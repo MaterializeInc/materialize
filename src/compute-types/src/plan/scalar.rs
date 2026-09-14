@@ -771,22 +771,62 @@ impl TryFrom<&MirScalarExpr> for LirScalarExpr {
 ///
 /// Panics if any expression contains unmaterializable functions.
 pub fn mfp_mir_to_lir(mfp: MapFilterProject<MirScalarExpr>) -> MapFilterProject<LirScalarExpr> {
-    let expressions = lses_from_mses(&mfp.expressions);
-    let predicates = mfp
-        .predicates
-        .iter()
-        .map(|(pos, pred)| {
-            (
-                *pos,
-                LirScalarExpr::try_from(pred).expect("unmaterializable in MFP predicate"),
-            )
-        })
-        .collect();
-    MapFilterProject::<LirScalarExpr> {
+    try_mfp_mir_to_lir(mfp).expect("unmaterializable in MFP")
+}
+
+/// Convert a MIR `MapFilterProject` to LIR, reporting every unmaterializable
+/// function that prevents it.
+pub fn try_mfp_mir_to_lir(
+    mfp: MapFilterProject<MirScalarExpr>,
+) -> Result<MapFilterProject<LirScalarExpr>, Vec<UnmaterializableFunc>> {
+    let MapFilterProject {
         expressions,
         predicates,
-        projection: mfp.projection,
-        input_arity: mfp.input_arity,
+        projection,
+        input_arity,
+    } = mfp;
+    let mut unmaterializable = Vec::new();
+    let mut lower = |expr: &MirScalarExpr| match LirScalarExpr::try_from(expr) {
+        Ok(expr) => Some(expr),
+        Err(funcs) => {
+            unmaterializable.extend(funcs);
+            None
+        }
+    };
+    let expressions: Vec<_> = expressions.iter().filter_map(&mut lower).collect();
+    let predicates: Vec<_> = predicates
+        .iter()
+        .filter_map(|(pos, pred)| lower(pred).map(|pred| (*pos, pred)))
+        .collect();
+    if !unmaterializable.is_empty() {
+        return Err(unmaterializable);
+    }
+    Ok(MapFilterProject::<LirScalarExpr> {
+        expressions,
+        predicates,
+        projection,
+        input_arity,
+    })
+}
+
+/// Convert an LIR `MapFilterProject` to MIR.
+///
+/// Total: LIR scalar expressions are a subset of MIR scalar expressions.
+pub fn mfp_lir_to_mir(mfp: MapFilterProject<LirScalarExpr>) -> MapFilterProject<MirScalarExpr> {
+    let MapFilterProject {
+        expressions,
+        predicates,
+        projection,
+        input_arity,
+    } = mfp;
+    MapFilterProject::<MirScalarExpr> {
+        expressions: expressions.iter().map(MirScalarExpr::from).collect(),
+        predicates: predicates
+            .iter()
+            .map(|(pos, pred)| (*pos, MirScalarExpr::from(pred)))
+            .collect(),
+        projection,
+        input_arity,
     }
 }
 

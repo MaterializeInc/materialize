@@ -38,6 +38,7 @@ use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
+pub mod pinned;
 
 pub mod interpret;
 pub mod join;
@@ -211,7 +212,7 @@ impl std::fmt::Display for LirId {
 ///
 /// Once a version has shipped, meaning a released Materialize durably stores
 /// pinned plans in it, bump this when the serialized representation of
-/// [`LirRelationExpr`] or anything it transitively contains changes, or when
+/// `PinnedDataflow` or anything it transitively contains changes, or when
 /// a scalar function's declared properties change. Whether the current
 /// version has shipped is recorded in [`LIR_VERSION_POLICY`]. Two snapshot
 /// tests key off it: the schema snapshot in `tests/lir_schema.rs` against
