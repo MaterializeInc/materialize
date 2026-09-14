@@ -151,6 +151,27 @@ fn column(round: u64, rows: u64) -> Column<Update> {
     column
 }
 
+/// Send one round, as a single message or split into `message_rows`-row messages.
+fn send_round(input: &mut InputPort, round: u64, rows: u64, message_rows: usize) {
+    let mut column = column(round, rows);
+    if message_rows == 0 || message_rows >= usize::try_from(rows).unwrap() {
+        input.send_batch(&mut column);
+        return;
+    }
+    let view = column.borrow();
+    let len = view.len();
+    let mut start = 0;
+    while start < len {
+        let end = (start + message_rows).min(len);
+        let mut part: Column<Update> = Column::default();
+        for i in start..end {
+            part.push_into(&Update::into_owned(view.get(i)));
+        }
+        input.send_batch(&mut part);
+        start = end;
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Config {
     rounds: u64,
@@ -167,6 +188,7 @@ struct Measurement {
     elapsed: Duration,
     batches: usize,
     trace_batches: usize,
+    grants: usize,
     stats: PoolStats,
 }
 
@@ -182,6 +204,9 @@ fn run(config: Config) -> Measurement {
     let draining = Arc::new(AtomicBool::new(false));
     let hydrated_workers = Arc::new(AtomicUsize::new(0));
     let policy_draining = Arc::clone(&draining);
+    // Optional grants during ingestion, counted identically for both spines.
+    let grants = Arc::new(AtomicUsize::new(0));
+    let policy_grants = Arc::clone(&grants);
     // Match the storage TimelyConfig in mz_controller::clusters.
     let exert_proportionality = parameter("MZ_BENCH_EXERT_PROPORTIONALITY", 1337);
     let logic: ExertionLogic = Arc::new(move |levels| {
@@ -204,6 +229,7 @@ fn run(config: Config) -> Measurement {
             .skip_while(|(_, count, _)| *count == 0)
         {
             if count > 1 || (!first && proportionality > 0 && len > 0) {
+                policy_grants.fetch_add(1, Ordering::Relaxed);
                 return Some(1000);
             }
             first = false;
@@ -282,10 +308,18 @@ fn run(config: Config) -> Measurement {
                         check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
                     }
                 } else {
+                    let message_rows = parameter("MZ_BENCH_MESSAGE_ROWS", 0);
+                    let tick_steps = parameter("MZ_BENCH_TICK_STEPS", 0);
                     for round in 0..config.rounds {
                         for input in &mut inputs {
-                            input.send_batch(&mut column(round, config.rows));
+                            send_round(input, round, config.rows, message_rows);
                             input.advance_to(round + 1);
+                        }
+                        // Activations per input tick, independent of wall-clock
+                        // speed. Both spines receive one exertion turn per step.
+                        for _ in 0..tick_steps {
+                            worker.step();
+                            check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
                         }
                         if usize::try_from(round + 1).unwrap() % config.burst == 0 {
                             worker.step();
@@ -309,6 +343,7 @@ fn run(config: Config) -> Measurement {
                     check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
                 }
                 let hydrated = start.elapsed();
+                let ingestion_grants = grants.load(Ordering::Relaxed);
                 // Normalize the terminal trace shape without changing the ingestion policy.
                 if hydrated_workers.fetch_add(1, Ordering::Relaxed) + 1 == workers {
                     draining.store(true, Ordering::Relaxed);
@@ -359,6 +394,7 @@ fn run(config: Config) -> Measurement {
                     elapsed,
                     batches: observed.batches.len(),
                     trace_batches,
+                    grants: ingestion_grants,
                     stats: pool.stats(),
                 };
                 drop(tokens);
@@ -392,6 +428,7 @@ fn run(config: Config) -> Measurement {
         result.hydrated = result.hydrated.max(next.hydrated);
         result.batches += next.batches;
         result.trace_batches += next.trace_batches;
+        result.grants = result.grants.max(next.grants);
     }
     result.stats = pool.stats();
     result
@@ -467,10 +504,13 @@ fn operator_microbench() {
                     }
                 }
                 eprintln!(
-                    "OPERATOR trace_batches={} workers={} idle_ms={} sample={sample} async={asynchronous} burst={burst} sources={} rows={} pool={} direct={} ms={} hydrated_ms={} batches={} inserts={} bytes={} reads={}",
+                    "OPERATOR trace_batches={} workers={} idle_ms={} tick_steps={} message_rows={} grants={} sample={sample} async={asynchronous} burst={burst} sources={} rows={} pool={} direct={} ms={} hydrated_ms={} batches={} inserts={} bytes={} reads={}",
                     m.trace_batches,
                     parameter("MZ_BENCH_WORKERS", 1),
                     parameter("MZ_BENCH_IDLE_MS", 0),
+                    parameter("MZ_BENCH_TICK_STEPS", 0),
+                    parameter("MZ_BENCH_MESSAGE_ROWS", 0),
+                    m.grants,
                     config.sources,
                     config.rounds * config.rows,
                     config.pool_bytes,
