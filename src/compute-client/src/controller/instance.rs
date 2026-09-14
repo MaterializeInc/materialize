@@ -1112,13 +1112,18 @@ impl Instance {
     /// Sends a command to replicas of this instance.
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand) {
+        let target_replica = self.target_replica(&cmd);
+        self.send_to(cmd, target_replica);
+    }
+
+    /// Sends a command to the given replica of this instance, or to all replicas if
+    /// `target_replica` is `None`.
+    fn send_to(&mut self, cmd: ComputeCommand, target_replica: Option<ReplicaId>) {
         // Record the command so that new replicas can be brought up to speed.
         // We record the *base* (un-specialized) command, so that the per-replica
         // dyncfg overrides are re-applied at replay time in `add_replica` rather
         // than baked into the shared history.
         self.history.push(cmd.clone());
-
-        let target_replica = self.target_replica(&cmd);
 
         // Borrow the overrides and dyncfg separately from `self.replicas` so the per-replica
         // specialization below does not conflict with the mutable replica borrow.
@@ -1187,6 +1192,9 @@ impl Instance {
     /// collection named by the command, and returns the target replica if
     /// it is set, and None if not set, or the command doesn't name a collection.
     ///
+    /// For `Peek` and `CancelPeek`, the target replica is resolved through the pending peek
+    /// registered in `self.peeks`, since these commands don't otherwise name a collection.
+    ///
     /// Panics if a create-dataflow command names collections that have different
     /// target replicas. It is an error to construct such an object and would
     /// indicate a bug in [`Self::create_dataflow`].
@@ -1209,13 +1217,16 @@ impl Instance {
                 }
                 target_replica
             }
-            // Skip Peek as we don't allow replica-targeted indexes.
-            ComputeCommand::Peek(_)
-            | ComputeCommand::Hello { .. }
+            // `Instance::peek` inserts the `PendingPeek` into `self.peeks` before calling
+            // `send`, so the lookup here always finds the entry.
+            ComputeCommand::Peek(peek) => self.peeks.get(&peek.uuid).and_then(|p| p.target_replica),
+            ComputeCommand::CancelPeek { uuid } => {
+                self.peeks.get(uuid).and_then(|p| p.target_replica)
+            }
+            ComputeCommand::Hello { .. }
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
-            | ComputeCommand::UpdateConfiguration(_)
-            | ComputeCommand::CancelPeek { .. } => None,
+            | ComputeCommand::UpdateConfiguration(_) => None,
         }
     }
 
@@ -2014,9 +2025,17 @@ impl Instance {
         // The recipient might not be interested in the peek response anymore, which is fine.
         let _ = peek.peek_response_tx.send(response);
 
+        // The peek is already removed from `self.peeks`, so `target_replica` can no longer
+        // resolve it. Capture the target here and route the cancellation explicitly.
+        let target_replica = peek.target_replica;
+
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
         // (by dropping it), to avoid the edge case that caused database-issues#4812.
-        self.send(ComputeCommand::CancelPeek { uuid });
+        //
+        // If the target replica was just removed (`remove_replica` calls `finish_peek` for peeks
+        // targeting it), `send_to` finds no replica with that ID and sends nothing, which is fine
+        // since there is no replica left to cancel the peek on.
+        self.send_to(ComputeCommand::CancelPeek { uuid }, target_replica);
 
         drop(peek.read_hold);
     }
@@ -2113,9 +2132,15 @@ impl Instance {
             return;
         };
 
-        // If the peek is targeting a replica, ignore responses from other replicas.
+        // If the peek is targeting a replica, ignore responses from other replicas. `Peek` is
+        // only ever sent to its target replica (see `target_replica`), so a response from a
+        // different replica indicates a routing bug.
         let target_replica = peek.target_replica.unwrap_or(replica_id);
         if target_replica != replica_id {
+            soft_panic_or_log!(
+                "peek response from non-target replica (uuid={uuid}, replica_id={replica_id}, \
+                 target_replica={target_replica})"
+            );
             return;
         }
 
@@ -3061,9 +3086,10 @@ impl RefreshIntrospectionState {
 /// A note of an outstanding peek response.
 #[derive(Debug)]
 struct PendingPeek {
-    /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
+    /// For replica-targeted peeks, this specifies the only replica the peek is sent to.
     ///
-    /// If this value is `None`, we pass on the first response.
+    /// If this value is `None`, the peek is broadcast to all replicas and the first response
+    /// wins.
     target_replica: Option<ReplicaId>,
     /// The OpenTelemetry context for this peek.
     otel_ctx: OpenTelemetryContext,
