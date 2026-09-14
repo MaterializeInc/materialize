@@ -2140,6 +2140,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_try_cast,
+        desc: "TRY_CAST(<expr> AS <type>) syntax",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_mz_notices,
         desc: "Populate the contents of `mz_internal.mz_notices`",
         default: true,
