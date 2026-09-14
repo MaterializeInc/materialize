@@ -185,7 +185,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
-use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
+use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, OpenCatalogResult};
 use crate::client::{Client, Handle, truncate_sql_for_logging};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{
@@ -2659,7 +2659,64 @@ impl Coordinator {
 
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
-        let uncached_global_exps = self.bootstrap_dataflow_plans(&entries, cached_global_exprs)?;
+        let write_plans =
+            self.catalog().state().catalog_read_protection_enabled() && !self.read_only_controllers;
+        let mut candidates = cached_global_exprs;
+        let mut written_ids = BTreeSet::new();
+        if write_plans {
+            let build =
+                Catalog::expression_build_version(self.catalog().config().build_info).to_string();
+            let revisions: Vec<_> = self
+                .catalog()
+                .state()
+                .written_plans()
+                .iter()
+                .filter(|((id, version), _)| {
+                    version == &build && self.catalog().try_get_entry_by_global_id(id).is_some()
+                })
+                .map(|((id, _), revision)| (*id, *revision))
+                .collect();
+            let written = self.catalog().read_written_plans(revisions.clone()).await?;
+            if written.len() != revisions.len() {
+                return Err(AdapterError::internal(
+                    "bootstrap written plans",
+                    "selected plan is missing",
+                ));
+            }
+            written_ids.extend(written.keys().copied());
+            candidates.extend(written);
+        }
+        let mut prepared = if write_plans {
+            candidates.clone()
+        } else {
+            BTreeMap::new()
+        };
+        let uncached_global_exps =
+            self.bootstrap_dataflow_plans(&entries, candidates, &written_ids)?;
+        if write_plans {
+            prepared.extend(uncached_global_exps.clone());
+            prepared.retain(|id, _| {
+                !written_ids.contains(id)
+                    && self.catalog().try_get_physical_plan(id).is_some()
+                    && self.catalog().try_get_entry_by_global_id(id).is_some_and(
+                        |entry| match entry.item() {
+                            CatalogItem::Index(index) => index.global_id() == *id,
+                            CatalogItem::MaterializedView(mv) => mv.global_id_writes() == *id,
+                            CatalogItem::MetricSink(sink) => sink.global_id == *id,
+                            _ => false,
+                        },
+                    )
+            });
+            if !prepared.is_empty() {
+                let selections = self.catalog().write_plans(prepared).await?;
+                let write_ts = self.get_catalog_write_ts().await;
+                let result = self
+                    .catalog_mut()
+                    .transact(None, write_ts, None, selections)
+                    .await?;
+                builtin_table_updates.extend(result.builtin_table_updates);
+            }
+        }
         info!(
             "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
             optimize_dataflows_start.elapsed()
@@ -3718,10 +3775,13 @@ impl Coordinator {
 
     /// Builds an index plan and rendered notices from its catalog definition.
     ///
-    /// The snapshot must contain the compute collections available for imports.
+    /// All catalog reads, including notice rendering, use `catalog`. The compute
+    /// snapshot must contain the collections available for imports. The coordinator
+    /// supplies only optimizer metrics and transient IDs.
     /// This does not select an `as_of`, install the dataflow, or cache the result.
     fn build_index_dataflow_plan(
         &self,
+        catalog: Arc<CatalogState>,
         name: &QualifiedItemName,
         index: &Index,
         compute_instance: ComputeInstanceSnapshot,
@@ -3729,7 +3789,7 @@ impl Coordinator {
     ) -> Result<GlobalExpressions, AdapterError> {
         let global_id = index.global_id();
         let mut optimizer = optimize::index::Optimizer::new(
-            self.owned_catalog(),
+            Arc::<CatalogState>::clone(&catalog),
             compute_instance,
             global_id,
             optimizer_config.clone(),
@@ -3744,9 +3804,13 @@ impl Coordinator {
             .map(|(_item_id, gid)| gid)
             .take(metainfo.optimizer_notices.len())
             .collect::<Vec<_>>();
-        let dataflow_metainfos =
-            self.catalog()
-                .render_notices(metainfo, notice_ids, Some(global_id));
+        let dataflow_metainfos = CatalogState::render_notices_core(
+            &catalog.for_system_session(),
+            (catalog.config().now)(),
+            &metainfo,
+            notice_ids,
+            Some(global_id),
+        );
         Ok(GlobalExpressions {
             global_mir,
             physical_plan,
@@ -3776,10 +3840,13 @@ impl Coordinator {
 
     /// Builds a materialized view plan and rendered notices from its catalog definition.
     ///
-    /// The snapshot must contain the compute collections available for imports.
+    /// All catalog reads, including notice rendering, use `catalog`. The compute
+    /// snapshot must contain the collections available for imports. The coordinator
+    /// supplies only optimizer metrics and transient IDs.
     /// This does not select an `as_of`, install the dataflow, or cache the result.
     fn build_materialized_view_dataflow_plan(
         &self,
+        catalog: Arc<CatalogState>,
         name: &QualifiedItemName,
         mv: &MaterializedView,
         compute_instance: ComputeInstanceSnapshot,
@@ -3787,9 +3854,9 @@ impl Coordinator {
     ) -> Result<GlobalExpressions, AdapterError> {
         let global_id = mv.global_id_writes();
         let (_, internal_view_id) = self.allocate_transient_id();
-        let debug_name = self.catalog().resolve_full_name(name, None).to_string();
+        let debug_name = catalog.resolve_full_name(name, None).to_string();
         let mut optimizer = optimize::materialized_view::Optimizer::new(
-            self.owned_catalog().as_optimizer_catalog(),
+            Arc::<CatalogState>::clone(&catalog),
             compute_instance,
             global_id,
             internal_view_id,
@@ -3813,9 +3880,13 @@ impl Coordinator {
             .map(|(_item_id, gid)| gid)
             .take(metainfo.optimizer_notices.len())
             .collect::<Vec<_>>();
-        let dataflow_metainfos =
-            self.catalog()
-                .render_notices(metainfo, notice_ids, Some(global_id));
+        let dataflow_metainfos = CatalogState::render_notices_core(
+            &catalog.for_system_session(),
+            (catalog.config().now)(),
+            &metainfo,
+            notice_ids,
+            Some(global_id),
+        );
         Ok(GlobalExpressions {
             global_mir,
             physical_plan,
@@ -3825,9 +3896,15 @@ impl Coordinator {
         })
     }
 
-    /// Builds a metric sink from its committed definition without selecting a timestamp or installing it.
+    /// Builds a metric sink plan and rendered notices from its catalog definition.
+    ///
+    /// All catalog reads, including notice rendering, use `catalog`. The compute
+    /// snapshot must contain the collections available for imports. The coordinator
+    /// supplies only optimizer metrics and transient IDs.
+    /// This does not select an `as_of`, install the dataflow, or cache the result.
     fn build_metric_sink_dataflow_plan(
         &self,
+        catalog: Arc<CatalogState>,
         name: &QualifiedItemName,
         metric_sink: &MetricSink,
         compute_instance: ComputeInstanceSnapshot,
@@ -3844,7 +3921,7 @@ impl Coordinator {
 
         let (optimized_plan, global_lir_plan) = {
             let mut optimizer = optimize::metric_sink::Optimizer::new(
-                self.owned_catalog(),
+                Arc::<CatalogState>::clone(&catalog),
                 compute_instance,
                 view_id,
                 global_id,
@@ -3854,7 +3931,7 @@ impl Coordinator {
 
             // MIR ⇒ MIR optimization (global)
             let metric_sink_plan = optimize::metric_sink::MetricSink::new(
-                self.catalog().resolve_full_name(name, None).to_string(),
+                catalog.resolve_full_name(name, None).to_string(),
                 optimize::metric_sink::MetricSinkFrom::Id(metric_sink.from),
                 metric_sink.prefix.clone(),
                 None,
@@ -3876,8 +3953,13 @@ impl Coordinator {
                 .take(metainfo.optimizer_notices.len())
                 .collect::<Vec<_>>();
             // Return a metainfo with rendered notices.
-            self.catalog()
-                .render_notices(metainfo, notice_ids, Some(global_id))
+            CatalogState::render_notices_core(
+                &catalog.for_system_session(),
+                (catalog.config().now)(),
+                &metainfo,
+                notice_ids,
+                Some(global_id),
+            )
         };
         Ok(GlobalExpressions {
             global_mir: optimized_plan,
@@ -3903,6 +3985,7 @@ impl Coordinator {
         &mut self,
         ordered_catalog_entries: &[CatalogEntry],
         mut cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
+        written_ids: &BTreeSet<GlobalId>,
     ) -> Result<BTreeMap<GlobalId, GlobalExpressions>, AdapterError> {
         // The optimizer expects to be able to query its `ComputeInstanceSnapshot` for
         // collections the current dataflow can depend on. But since we don't yet install anything
@@ -3948,8 +4031,9 @@ impl Coordinator {
                     let (optimized_plan, physical_plan, metainfo) =
                         match cached_global_exprs.remove(&global_id) {
                             Some(global_expressions)
-                                if global_expressions.optimizer_features
-                                    == optimizer_config.features =>
+                                if written_ids.contains(&global_id)
+                                    || global_expressions.optimizer_features
+                                        == optimizer_config.features =>
                             {
                                 debug!("global expression cache hit for {global_id:?}");
                                 (
@@ -3960,6 +4044,7 @@ impl Coordinator {
                             }
                             Some(_) | None => {
                                 let expressions = self.build_index_dataflow_plan(
+                                    Arc::new(self.catalog().state().clone()),
                                     entry.name(),
                                     idx,
                                     compute_instance.clone(),
@@ -3995,8 +4080,9 @@ impl Coordinator {
                     let (optimized_plan, physical_plan, metainfo) =
                         match cached_global_exprs.remove(&global_id) {
                             Some(global_expressions)
-                                if global_expressions.optimizer_features
-                                    == optimizer_config.features =>
+                                if written_ids.contains(&global_id)
+                                    || global_expressions.optimizer_features
+                                        == optimizer_config.features =>
                             {
                                 debug!("global expression cache hit for {global_id:?}");
                                 (
@@ -4007,6 +4093,7 @@ impl Coordinator {
                             }
                             Some(_) | None => {
                                 let expressions = self.build_materialized_view_dataflow_plan(
+                                    Arc::new(self.catalog().state().clone()),
                                     entry.name(),
                                     mv,
                                     compute_instance.clone(),
@@ -4042,8 +4129,9 @@ impl Coordinator {
                     let (optimized_plan, physical_plan, metainfo) =
                         match cached_global_exprs.remove(&global_id) {
                             Some(global_expressions)
-                                if global_expressions.optimizer_features
-                                    == optimizer_config.features =>
+                                if written_ids.contains(&global_id)
+                                    || global_expressions.optimizer_features
+                                        == optimizer_config.features =>
                             {
                                 debug!("global expression cache hit for {global_id:?}");
                                 (
@@ -4054,6 +4142,7 @@ impl Coordinator {
                             }
                             Some(_) | None => {
                                 let expressions = self.build_metric_sink_dataflow_plan(
+                                    Arc::new(self.catalog().state().clone()),
                                     entry.name(),
                                     metric_sink,
                                     compute_instance.clone(),
@@ -4833,6 +4922,9 @@ impl Coordinator {
     /// Persist already-rendered optimizer notices for a newly created
     /// non-transient dataflow.
     ///
+    /// Protected writers publish notices from committed plan selections instead.
+    /// Installation must not overwrite that metadata or append those notices again.
+    ///
     /// This:
     /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
     /// - stores the rendered metainfo on the catalog object via
@@ -4844,6 +4936,9 @@ impl Coordinator {
         df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
         export_id: GlobalId,
     ) -> Option<BuiltinTableAppendNotify> {
+        if self.catalog().state().catalog_read_protection_enabled() {
+            return None;
+        }
         // Attend to optimization notice builtin tables and save the metainfo in the catalog's
         // in-memory state.
         if self.catalog().state().system_config().enable_mz_notices()

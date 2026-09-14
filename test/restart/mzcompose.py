@@ -1030,6 +1030,163 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
         c.sql("DROP CLUSTER uncached_replace_target", reuse_connection=False)
 
 
+def workflow_selected_plan_explain(c: Composition) -> None:
+    """EXPLAIN follows selected import rewrites, not the still-running dataflows."""
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_catalog_read_protection": "true",
+                "enable_expression_cache": "false",
+                "enable_mz_notices": "true",
+            },
+        )
+    ):
+        c.up("materialized", Service("testdrive_no_reset", idle=True))
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent("""
+                > CREATE TABLE selected_t (a int);
+                > INSERT INTO selected_t VALUES (1), (2);
+                > CREATE INDEX selected_import ON selected_t ();
+                """),
+        )
+        # The writer only offers an index after query-protocol observations arrive.
+        # Wait for that production planning path before freezing consumers' plans.
+        deadline = time.monotonic() + 60
+        while True:
+            plan = c.sql_query(
+                "EXPLAIN SELECT a FROM selected_t", reuse_connection=False
+            )[0][0]
+            if "selected_import" in plan:
+                break
+            assert time.monotonic() < deadline, plan
+            time.sleep(0.1)
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent("""
+                > CREATE MATERIALIZED VIEW selected_mv AS SELECT sum(a) AS total FROM selected_t;
+                > CREATE VIEW selected_v AS SELECT a + 1 AS b FROM selected_t;
+                > CREATE INDEX selected_consumer ON selected_v ();
+
+                > SELECT total FROM selected_mv;
+                3
+                > SELECT b FROM selected_v ORDER BY b;
+                2
+                3
+                """),
+        )
+
+        index_ids = dict(
+            c.sql_query(
+                "SELECT name, id FROM mz_indexes WHERE name IN ('selected_import', 'selected_consumer')",
+                reuse_connection=False,
+            )
+        )
+
+        def notice_count(name: str, kind: str = "Empty index key") -> int:
+            return c.sql_query(
+                "SELECT count(*) FROM mz_internal.mz_optimizer_notices "
+                f"WHERE object_id = '{index_ids[name]}' AND notice_type = '{kind}'",
+                user="mz_system",
+                port=6877,
+                reuse_connection=False,
+            )[0][0]
+
+        assert notice_count("selected_import") == 1
+        assert notice_count("selected_consumer") == 1
+
+        def plans() -> dict[tuple[str, str], str]:
+            return {
+                (object_name, stage): c.sql_query(
+                    f"EXPLAIN {stage} PLAN WITH(no notices) FOR {object_name}",
+                    reuse_connection=False,
+                )[0][0]
+                for object_name in (
+                    "MATERIALIZED VIEW selected_mv",
+                    "INDEX selected_consumer",
+                )
+                for stage in ("OPTIMIZED", "PHYSICAL")
+            }
+
+        original = plans()
+        for (object_name, stage), plan in original.items():
+            if stage == "OPTIMIZED":
+                assert re.search(
+                    r"ReadIndex on=(?:materialize\.public\.)?selected_t "
+                    r"selected_import=\[\*\*\* full scan \*\*\*\]",
+                    plan,
+                ), (object_name, plan)
+
+        # Dropping an import repairs the durable selection without reinstalling
+        # either consumer. EXPLAIN must already show the repaired storage read.
+        c.sql("DROP INDEX selected_import", reuse_connection=False)
+        assert notice_count("selected_import") == 0
+        assert notice_count("selected_consumer") == 1
+        rewritten = plans()
+        for (object_name, stage), plan in rewritten.items():
+            assert plan != original[object_name, stage], (object_name, stage, plan)
+            if stage == "OPTIMIZED":
+                assert "ReadStorage materialize.public.selected_t" in plan, (
+                    object_name,
+                    plan,
+                )
+                assert "ReadIndex" not in plan, (object_name, plan)
+
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent("""
+                > INSERT INTO selected_t VALUES (3);
+                > SELECT total FROM selected_mv;
+                6
+                > SELECT b FROM selected_v ORDER BY b;
+                2
+                3
+                4
+
+                > CREATE INDEX selected_new_import ON selected_t (a);
+                """),
+        )
+        assert plans() == rewritten
+        c.kill("materialized")
+        c.up("materialized")
+        assert plans() == rewritten
+        assert notice_count("selected_consumer") == 1
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent("""
+                > SELECT total FROM selected_mv;
+                6
+                > SELECT b FROM selected_v ORDER BY b;
+                2
+                3
+                4
+
+                > INSERT INTO selected_t VALUES (4);
+                > SELECT total FROM selected_mv;
+                10
+                > SELECT b FROM selected_v ORDER BY b;
+                2
+                3
+                4
+                5
+                """),
+        )
+        c.sql("CREATE INDEX selected_spare ON selected_v ()", reuse_connection=False)
+        index_ids["selected_spare"] = c.sql_query(
+            "SELECT id FROM mz_indexes WHERE name = 'selected_spare'",
+            reuse_connection=False,
+        )[0][0]
+        duplicate_notice = "An identical index already exists"
+        assert notice_count("selected_spare", duplicate_notice) == 1
+        # The dependency drop and selected-plan rewrite must retract this notice
+        # exactly once, while preserving the surviving index's own notice.
+        c.sql("DROP INDEX selected_consumer", reuse_connection=False)
+        assert notice_count("selected_consumer") == 0
+        assert notice_count("selected_spare", duplicate_notice) == 0
+        assert notice_count("selected_spare") == 1
+
+
 def _catalog_protection_metrics(text: str, shard: str) -> dict:
     names = (
         "mz_persist_shard_diff_size_bytes",

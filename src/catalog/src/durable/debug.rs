@@ -77,6 +77,7 @@ pub enum CollectionType {
     CollectionCompactionBound,
     MaintainedReadRequirement,
     ClientIncarnation,
+    WrittenPlan,
     ClientReadRequirement,
     StorageCollectionMetadata,
     UnfinalizedShard,
@@ -320,6 +321,14 @@ collection_impl!({
     update: StateUpdateKind::ClientIncarnation,
 });
 collection_impl!({
+    name: WrittenPlanCollection,
+    key: proto::WrittenPlanKey,
+    value: proto::WrittenPlanValue,
+    collection_type: CollectionType::WrittenPlan,
+    trace_field: written_plans,
+    update: StateUpdateKind::WrittenPlan,
+});
+collection_impl!({
     name: ClientReadRequirementCollection,
     key: proto::ClientReadRequirementKey,
     value: proto::ClientReadRequirementValue,
@@ -406,6 +415,7 @@ pub struct Trace {
     pub collection_compaction_bounds: CollectionTrace<CollectionCompactionBoundCollection>,
     pub maintained_read_requirements: CollectionTrace<MaintainedReadRequirementCollection>,
     pub client_incarnations: CollectionTrace<ClientIncarnationCollection>,
+    pub written_plans: CollectionTrace<WrittenPlanCollection>,
     pub client_read_requirements: CollectionTrace<ClientReadRequirementCollection>,
     pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
     pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
@@ -466,6 +476,7 @@ impl Trace {
             collection_compaction_bounds: CollectionTrace::new(),
             maintained_read_requirements: CollectionTrace::new(),
             client_incarnations: CollectionTrace::new(),
+            written_plans: CollectionTrace::new(),
             client_read_requirements: CollectionTrace::new(),
             storage_collection_metadata: CollectionTrace::new(),
             unfinalized_shards: CollectionTrace::new(),
@@ -499,6 +510,7 @@ impl Trace {
             collection_compaction_bounds,
             maintained_read_requirements,
             client_incarnations,
+            written_plans,
             client_read_requirements,
             storage_collection_metadata,
             unfinalized_shards,
@@ -528,6 +540,7 @@ impl Trace {
         collection_compaction_bounds.sort();
         maintained_read_requirements.sort();
         client_incarnations.sort();
+        written_plans.sort();
         client_read_requirements.sort();
         storage_collection_metadata.sort();
         unfinalized_shards.sort();

@@ -2508,13 +2508,37 @@ impl Coordinator {
                 let result = self.explain_view(&ctx, plan);
                 ctx.retire(result);
             }
-            plan::Explainee::MaterializedView(_) => {
-                let result = self.explain_materialized_view(&ctx, plan);
-                ctx.retire(result);
-            }
-            plan::Explainee::Index(_) => {
-                let result = self.explain_index(&ctx, plan);
-                ctx.retire(result);
+            plan::Explainee::MaterializedView(_) | plan::Explainee::Index(_) => {
+                // The selection and its humanization must use one catalog snapshot.
+                // Persist reads run outside the coordinator so slow storage cannot
+                // block unrelated requests or cancellation.
+                let catalog = self.owned_catalog();
+                let (cancel_tx, mut cancel_rx) = watch::channel(false);
+                if let Some((_, previous)) = self.connection_cancel_watches.insert(
+                    ctx.session().conn_id().clone(),
+                    (cancel_tx, cancel_rx.clone()),
+                ) && *previous.borrow()
+                {
+                    ctx.retire(Err(AdapterError::Canceled));
+                    return;
+                }
+                spawn(|| "explain stored plan", async move {
+                    let result = tokio::select! {
+                        result = async {
+                            match &plan.explainee {
+                                plan::Explainee::MaterializedView(_) => {
+                                    Self::explain_materialized_view(&catalog, &ctx, plan).await
+                                }
+                                plan::Explainee::Index(_) => {
+                                    Self::explain_index(&catalog, &ctx, plan).await
+                                }
+                                _ => unreachable!("stored maintained plan"),
+                            }
+                        } => result,
+                        _ = cancel_rx.wait_for(|canceled| *canceled) => Err(AdapterError::Canceled),
+                    };
+                    ctx.retire(result);
+                });
             }
             plan::Explainee::ReplanView(_) => {
                 self.explain_replan_view(ctx, plan).await;
@@ -2596,7 +2620,9 @@ impl Coordinator {
         super::explain_pushdown_future_inner(
             session,
             &self.catalog,
-            &self.controller.storage_collections,
+            self.query_client
+                .is_none()
+                .then(|| self.controller.storage_collections.as_ref()),
             self.query_client.as_ref(),
             as_of,
             mz_now,
@@ -4547,7 +4573,9 @@ impl Coordinator {
             query_as_of,
             is_oneshot,
             self.catalog().system_config(),
-            self.controller.storage_collections.as_ref(),
+            self.query_client
+                .is_none()
+                .then(|| self.controller.storage_collections.as_ref()),
             self.query_client
                 .as_deref()
                 .map(|client| (client, self.catalog())),

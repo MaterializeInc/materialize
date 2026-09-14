@@ -1170,7 +1170,9 @@ impl crate::coord::Coordinator {
                 metrics: self.metrics.clone(),
             },
             catalog,
-            Arc::clone(&self.controller.storage_collections),
+            self.query_client
+                .is_none()
+                .then(|| Arc::clone(&self.controller.storage_collections)),
             self.query_client.clone(),
             Arc::clone(&self.transient_id_gen),
             self.optimizer_metrics.clone(),
@@ -1178,7 +1180,7 @@ impl crate::coord::Coordinator {
             self.statement_logging.create_frontend(build_version),
             Arc::clone(&self.occ_write_semaphore),
             self.group_commit_tx.clone(),
-            self.controller.read_only(),
+            self.read_only_controllers,
         )
     }
 

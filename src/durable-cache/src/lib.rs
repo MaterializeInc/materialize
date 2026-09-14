@@ -216,6 +216,12 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         self.local.get(key).map(|val| &val.decoded_val)
     }
 
+    /// Observe all writes committed before this call without inserting a missing value.
+    pub async fn synchronize(&mut self) {
+        let upper = self.write.fetch_recent_upper().await.as_option().copied();
+        self.sync_to(upper).await;
+    }
+
     /// Get and return the value associated with `key`, syncing with the durable store if
     /// necessary. If `key` does not exist, then a value is computed via `val_fn` and durably
     /// stored in the cache.

@@ -185,7 +185,7 @@ impl Coordinator {
         // collector must do no background work at all. Retention is part of the
         // sweep, so disabling collection also suspends it once any in-flight
         // sweep finishes. This makes zero a break-glass setting for the subsystem.
-        if collection_interval.is_zero() || self.controller.read_only() {
+        if collection_interval.is_zero() || self.read_only_controllers {
             self.schedule_hydration_history_collection();
             return;
         }
@@ -195,15 +195,22 @@ impl Coordinator {
             .clusters()
             .flat_map(|cluster| cluster.replicas())
             .filter(|replica| replica.config.compute.logging.enabled())
-            .filter(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(_) => {
-                    self.cluster_replica_statuses
-                        .get_cluster_replica_status(replica.cluster_id, replica.replica_id)
-                        == ClusterStatus::Online
+            .filter(|replica| {
+                if let Some(client) = self.query_client.as_ref() {
+                    return !client
+                        .replica_clients(replica.cluster_id, Some(replica.replica_id))
+                        .is_empty();
                 }
-                // Unmanaged replicas have no orchestrator status and are only
-                // used by tests. Their bounded mutation determines readiness.
-                ReplicaLocation::Unmanaged(_) => true,
+                match &replica.config.location {
+                    ReplicaLocation::Managed(_) => {
+                        self.cluster_replica_statuses
+                            .get_cluster_replica_status(replica.cluster_id, replica.replica_id)
+                            == ClusterStatus::Online
+                    }
+                    // Unmanaged replicas have no orchestrator status and are only
+                    // used by tests. Their bounded mutation determines readiness.
+                    ReplicaLocation::Unmanaged(_) => true,
+                }
             })
             .map(|replica| ReplicaTarget {
                 cluster_id: replica.cluster_id,

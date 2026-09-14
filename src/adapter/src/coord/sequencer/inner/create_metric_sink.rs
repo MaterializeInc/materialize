@@ -213,7 +213,7 @@ impl Coordinator {
         self.ensure_metric_sink_prefix_is_free(&name, cluster_id, &metric_sink.prefix)?;
 
         let owner_id = *ctx.session().current_role_id();
-        let ops = vec![catalog::Op::CreateItem {
+        let mut ops = vec![catalog::Op::CreateItem {
             id: item_id,
             name: name.clone(),
             item: CatalogItem::MetricSink(MetricSink {
@@ -240,12 +240,10 @@ impl Coordinator {
             .expect("can only create a metric sink on items with a valid description");
         let df_meta = self.render_create_item_notices(&name, global_id, &from_desc, &raw_df_meta);
 
-        // Populate the durable expression cache before the catalog transaction and await the
-        // write. This way any other envd (or a subsequent bootstrap here) will observe the cached
-        // plans + rendered notices as soon as the item becomes visible. Metric sinks have no local
-        // MIR (the pipeline starts from a `GlobalId`), so there is no local expression to cache.
-        self.catalog()
-            .cache_expressions(
+        // Write the plan before committing the object and its selection together.
+        let selection = self
+            .catalog()
+            .prepare_item_plan(
                 global_id,
                 None,
                 global_mir_plan.df_desc().clone(),
@@ -253,7 +251,8 @@ impl Coordinator {
                 df_meta.clone(),
                 optimizer_features,
             )
-            .await;
+            .await?;
+        ops.extend(selection);
 
         let transact_result = self
             .catalog_transact_with_context(None, Some(ctx), ops)

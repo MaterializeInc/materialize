@@ -155,6 +155,7 @@ impl StateUpdate {
             collection_compaction_bounds,
             maintained_read_requirements,
             client_incarnations,
+            written_plans,
             client_read_requirements,
             storage_collection_metadata,
             unfinalized_shards,
@@ -204,6 +205,7 @@ impl StateUpdate {
         );
         let client_incarnations =
             from_batch(client_incarnations, StateUpdateKind::ClientIncarnation);
+        let written_plans = from_batch(written_plans, StateUpdateKind::WrittenPlan);
         let client_read_requirements = from_batch(
             client_read_requirements,
             StateUpdateKind::ClientReadRequirement,
@@ -239,6 +241,7 @@ impl StateUpdate {
             .chain(collection_compaction_bounds)
             .chain(maintained_read_requirements)
             .chain(client_incarnations)
+            .chain(written_plans)
             .chain(client_read_requirements)
             .chain(storage_collection_metadata)
             .chain(unfinalized_shards)
@@ -297,6 +300,7 @@ pub enum StateUpdateKind {
         proto::MaintainedReadRequirementValue,
     ),
     ClientIncarnation(proto::ClientIncarnationKey, proto::ClientIncarnationValue),
+    WrittenPlan(proto::WrittenPlanKey, proto::WrittenPlanValue),
     ClientReadRequirement(
         proto::ClientReadRequirementKey,
         proto::ClientReadRequirementValue,
@@ -347,6 +351,7 @@ impl StateUpdateKind {
                 Some(CollectionType::MaintainedReadRequirement)
             }
             StateUpdateKind::ClientIncarnation(_, _) => Some(CollectionType::ClientIncarnation),
+            StateUpdateKind::WrittenPlan(_, _) => Some(CollectionType::WrittenPlan),
             StateUpdateKind::ClientReadRequirement(_, _) => {
                 Some(CollectionType::ClientReadRequirement)
             }
@@ -576,6 +581,10 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     client_incarnations,
                 ))
             }
+            StateUpdateKind::WrittenPlan(key, value) => {
+                let written_plans = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::WrittenPlan(written_plans))
+            }
             StateUpdateKind::ClientReadRequirement(key, value) => {
                 let client_read_requirements = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::ClientReadRequirement(
@@ -777,6 +786,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::ClientIncarnation(key, value) => {
                 proto::StateUpdateKind::ClientIncarnation(proto::ClientIncarnation { key, value })
             }
+            StateUpdateKind::WrittenPlan(key, value) => {
+                proto::StateUpdateKind::WrittenPlan(proto::WrittenPlan { key, value })
+            }
             StateUpdateKind::ClientReadRequirement(key, value) => {
                 proto::StateUpdateKind::ClientReadRequirement(proto::ClientReadRequirement {
                     key,
@@ -875,6 +887,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::ClientIncarnation(proto::ClientIncarnation { key, value }) => {
                 StateUpdateKind::ClientIncarnation(key, value)
             }
+            proto::StateUpdateKind::WrittenPlan(proto::WrittenPlan { key, value }) => {
+                StateUpdateKind::WrittenPlan(key, value)
+            }
             proto::StateUpdateKind::ClientReadRequirement(proto::ClientReadRequirement {
                 key,
                 value,
@@ -936,6 +951,32 @@ mod tests {
     use crate::durable::objects::FenceToken;
     use crate::durable::objects::serialization::proto;
     use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
+
+    #[mz_ore::test]
+    fn written_plan_serialization() {
+        use mz_proto::RustType;
+
+        use crate::durable::objects::{DurableType, WrittenPlan};
+
+        let plan = WrittenPlan {
+            id: mz_repr::GlobalId::User(42),
+            build_version: "26.43.0-dev (build hash)".into(),
+            revision: uuid::Uuid::new_v4(),
+        };
+        let (key, value) = plan.clone().into_key_value();
+        let update = StateUpdateKind::WrittenPlan(key.into_proto(), value.into_proto());
+        let raw = StateUpdateKindJson::from(update.clone());
+        assert_eq!(raw.kind(), "WrittenPlan");
+        let decoded = StateUpdateKind::try_from(raw).expect("decode written plan selection");
+        assert_eq!(decoded, update);
+        let memory: Option<crate::memory::objects::StateUpdateKind> = (&decoded)
+            .try_into()
+            .expect("convert written plan selection to memory update");
+        assert_eq!(
+            memory,
+            Some(crate::memory::objects::StateUpdateKind::WrittenPlan(plan))
+        );
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]

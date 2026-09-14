@@ -266,7 +266,7 @@ impl Coordinator {
         };
         let cluster_id = target_cluster.id;
         let query_execution = if let Some(client) = self.query_client.clone() {
-            if self.controller.read_only() {
+            if self.read_only_controllers {
                 return ctx.retire(Err(AdapterError::ReadOnly));
             }
             let metadata = return_if_err!(

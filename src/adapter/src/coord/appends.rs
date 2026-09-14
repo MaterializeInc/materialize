@@ -933,7 +933,7 @@ impl Coordinator {
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        if self.controller.read_only() {
+        if self.read_only_controllers {
             panic!(
                 "attempting table write in read-only mode: {:?}",
                 pending_write_txn
@@ -1011,7 +1011,7 @@ impl<'a> BuiltinTableAppend<'a> {
     /// Note: When in read-only mode, this will buffer the update and return
     /// immediately.
     pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.controller.read_only() {
+        if self.coord.read_only_controllers {
             self.coord
                 .buffered_builtin_table_updates
                 .as_mut()
@@ -1039,7 +1039,7 @@ impl<'a> BuiltinTableAppend<'a> {
     /// returned future will resolve immediately, without the update actually
     /// having been written.
     pub fn defer(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.controller.read_only() {
+        if self.coord.read_only_controllers {
             self.coord
                 .buffered_builtin_table_updates
                 .as_mut()
@@ -1063,7 +1063,7 @@ impl<'a> BuiltinTableAppend<'a> {
     ///
     /// In read-only mode, buffers the update and returns a ready future.
     pub fn execute(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
-        if self.coord.controller.read_only() {
+        if self.coord.read_only_controllers {
             self.coord
                 .buffered_builtin_table_updates
                 .as_mut()

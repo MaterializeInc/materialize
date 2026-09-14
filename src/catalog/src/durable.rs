@@ -38,7 +38,7 @@ pub use crate::durable::objects::{
     ReconfigurationStatus, ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
     ReplicaSystemConfiguration, Role, RoleAuth, Schema, SourceReference, SourceReferences,
     StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
-    UnfinalizedShard, managed_cluster_replica_name,
+    UnfinalizedShard, WrittenPlan, managed_cluster_replica_name,
 };
 pub use crate::durable::persist::{CatalogSnapshotReader, shard_id};
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};

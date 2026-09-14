@@ -227,9 +227,6 @@ impl ComputeState {
         action: impl FnOnce(&mut ActiveComputeState<'_>, &mut QueryState),
     ) {
         query.exchange(self);
-        // Collection logs have no connection namespace. Keep query-private IDs out of
-        // lifecycle logging, while retaining the worker's Timely logger and CPU budget.
-        let logger = self.compute_logger.take();
         let max_result_size = self.max_result_size;
         self.max_result_size = max_result_size.min(query.max_result_size);
         self.active_query = Some(nonce);
@@ -245,7 +242,6 @@ impl ComputeState {
         self.peek_passed_over |= passed_over;
         self.active_query = None;
         self.max_result_size = max_result_size;
-        self.compute_logger = logger;
         query.exchange(self);
     }
 

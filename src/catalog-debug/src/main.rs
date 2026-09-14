@@ -346,6 +346,9 @@ macro_rules! for_collection {
             CollectionType::MaintainedReadRequirement => {
                 $fn::<MaintainedReadRequirementCollection>($($arg),*).await?
             }
+            CollectionType::WrittenPlan => {
+                $fn::<mz_catalog::durable::debug::WrittenPlanCollection>($($arg),*).await?
+            }
             CollectionType::ClientIncarnation => {
                 $fn::<ClientIncarnationCollection>($($arg),*).await?
             }
@@ -513,6 +516,7 @@ async fn dump(
         collection_compaction_bounds,
         maintained_read_requirements,
         client_incarnations,
+        written_plans,
         client_read_requirements,
         storage_collection_metadata,
         unfinalized_shards,
@@ -620,6 +624,7 @@ async fn dump(
         stats_only,
         consolidate,
     );
+    dump_col(&mut data, written_plans, &ignore, stats_only, consolidate);
     dump_col(
         &mut data,
         client_incarnations,

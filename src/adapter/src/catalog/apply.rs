@@ -478,6 +478,14 @@ impl CatalogState {
                     diff,
                 );
             }
+            StateUpdateKind::WrittenPlan(plan) => {
+                apply_inverted_lookup(
+                    &mut self.written_plans,
+                    &(plan.id, plan.build_version),
+                    plan.revision,
+                    diff,
+                );
+            }
             StateUpdateKind::ClientIncarnation(incarnation) => {
                 apply_inverted_lookup(
                     &mut self.client_incarnations,
@@ -1645,6 +1653,7 @@ impl CatalogState {
             | StateUpdateKind::CollectionCompactionBound(_)
             | StateUpdateKind::MaintainedReadRequirement(_)
             | StateUpdateKind::ClientIncarnation(_)
+            | StateUpdateKind::WrittenPlan(_)
             | StateUpdateKind::ClientReadRequirement(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
@@ -1704,6 +1713,24 @@ impl CatalogState {
         id: GlobalId,
         metainfo: DataflowMetainfo<Arc<OptimizerNotice>>,
     ) {
+        // A selected-plan rewrite replaces the notices even while the dataflow
+        // keeps running. Remove its reverse entries before indexing the replacement.
+        let previous = self
+            .get_entry_by_global_id(&id)
+            .item()
+            .dataflow_metainfo()
+            .map(|meta| meta.optimizer_notices.clone())
+            .unwrap_or_default();
+        for notice in previous {
+            for dependency in &notice.dependencies {
+                if let Some(notices) = self.notices_by_dep_id.get_mut(dependency) {
+                    notices.retain(|candidate| candidate != &notice);
+                    if notices.is_empty() {
+                        self.notices_by_dep_id.remove(dependency);
+                    }
+                }
+            }
+        }
         // Add entries to the `notices_by_dep_id` lookup map.
         for notice in metainfo.optimizer_notices.iter() {
             for dep_id in notice.dependencies.iter() {
@@ -2412,6 +2439,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::CollectionCompactionBound(_)
             | StateUpdateKind::MaintainedReadRequirement(_)
             | StateUpdateKind::ClientIncarnation(_)
+            | StateUpdateKind::WrittenPlan(_)
             | StateUpdateKind::ClientReadRequirement(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => push_update(
@@ -2650,6 +2678,7 @@ impl ApplyState {
             | CollectionCompactionBound(_)
             | MaintainedReadRequirement(_)
             | ClientIncarnation(_)
+            | WrittenPlan(_)
             | ClientReadRequirement(_)
             | StorageCollectionMetadata(_)
             | UnfinalizedShard(_) => Self::Updates(vec![update]),

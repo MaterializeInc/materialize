@@ -766,8 +766,8 @@ pub struct ExportState {
     /// The cluster this export is associated with.
     pub cluster_id: StorageInstanceId,
 
-    /// The current since frontier, derived from `write_frontier` using
-    /// `hold_policy`.
+    /// Monotone accounting floor initialized or raised by dependency readability.
+    /// The read policy advances it as reported write progress catches up.
     pub derived_since: Antichain<Timestamp>,
 
     /// The read holds that this export has on its dependencies (its input and itself). When
