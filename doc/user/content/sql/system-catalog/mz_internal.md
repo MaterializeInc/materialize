@@ -1595,6 +1595,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`timestamp with time zone`]: /sql/types/timestamp
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->
