@@ -167,7 +167,7 @@ Treating `CLONE OBJECTS` and `EXPLAIN REPLAN` as orthogonal but complementary fe
 ## Minimal Viable Prototype
 
 Clusters will pin LIR plans (`DataflowDescription<LirRelationExpr>`s) by default.
-These plans will be stored in persist shards, referenced in the catalog.
+These plans will be stored in a designated persist shard, referenced in the catalog.
 When a cluster starts up, it will attempt to read existing LIR plans and deploy _those_, rather than recompiling plans.
 
 ### What is the SLA?
@@ -179,7 +179,7 @@ A possible success metric for plan pinning (beyond e.g., overall usage/number of
 
 ### What happens at an upgrade?
 
-During a 0dt upgrade, the new environmentd will read the catalog and spin up dataflows for the plans recorded in persist shards.
+During a 0dt upgrade, the new environmentd will read the catalog and spin up dataflows for the plans recorded in a designated persist shard.
 This way, the new environment will continue to operate with the existing plans---stability!
 We may need to migrate these plans if, e.g., there was a change in the LIR definition.
 (We use a [schema registry](https://github.com/MaterializeInc/materialize/pull/37814) to track the need for these migrations.)
@@ -316,6 +316,9 @@ There are several constraints on `CLONE OBJECTS`:
 
 There is also a new corner case: a cloned index might now be in a different schema than the object it indexes.
 This breaks an existing invariant, but it is not clear if it is important or not---if not, we should relax it; if so, we should require that we clone upstream objects as well.
+This is desirable for a separate reason: allowing indexes to live in schemas separate from the objects they index.
+
+We should be sure to test with large numbers of objects (~10k) to make sure we aren't overloading DDL processing.
 
 ### How do users get improvements?
 
@@ -385,8 +388,3 @@ I think the best approach here is to improve the default LIR-based `EXPLAIN PLAN
 ### How does this interact with the expression cache?
 
 We will likely be able to use pinned LIR to deprecate the expression cache, but there should be no interference at first---though we will want to carefully prioritize which we consult (LIR first, then fall back to the cache).
-
-### What granularity should pinned plans have persist shards?
-
-We do not want to write all of our plans into the shard for all of our durable state, as that makes reading and writing our durable catalog scale with object count and plan size, rather than just object count.
-But do we have a separate shard for every plannable object, or just parts within some designated shard?
