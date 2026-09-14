@@ -71,9 +71,9 @@ export interface DataflowGraphViewProps {
   // needs it, to decorate). Computing it again here would repeat the same
   // work every render.
   visible: VisibleGraph;
-  // The scope whose direct children this view renders. Double-clicking a
-  // region box navigates to a new view rooted there rather than expanding it
-  // in place.
+  // The scope whose direct children this view renders. A region's label
+  // navigates to a new view rooted there; its chevron gutter expands it in
+  // place instead.
   focusedScope: NodeId;
   onNavigate: (scope: NodeId) => void;
   cacheKey: string;
@@ -86,10 +86,9 @@ export interface DataflowGraphViewProps {
   onNodeClick?: (node: VisibleNode, connectedEdges: SelectedEdge[]) => void;
   onEdgeClick?: (edge: SelectedEdge) => void;
   onPaneClick?: () => void;
-  // Double-clicking a port with exactly one peer jumps straight there. With
-  // zero or several peers it's ambiguous (or there's nothing to jump to), so
-  // the preceding click/click of the double-click has already opened the
-  // port's own detail panel instead, same as a single click would.
+  // A port's label jumps straight here when it has exactly one peer. With
+  // several the label is still a link but selects instead, leaving the
+  // choice to the detail panel; with none it isn't a link at all.
   onJumpToPeer?: (peer: PortPeer) => void;
   // Nodes to fit the viewport around (e.g. every operator belonging to one
   // LIR id, or a region and its children right after expanding it). Fitting
@@ -370,6 +369,8 @@ export const DataflowGraphView = ({
           activeMatch: n.id === activeMatchId,
           expanded: n.kind === "region" && (n.expanded ?? false),
           onToggleExpand,
+          onNavigate,
+          onJumpToPeer,
         },
       };
     });
@@ -385,6 +386,8 @@ export const DataflowGraphView = ({
     activeMatchId,
     colors,
     onToggleExpand,
+    onNavigate,
+    onJumpToPeer,
   ]);
 
   const edges: Edge[] = React.useMemo(
@@ -481,8 +484,17 @@ export const DataflowGraphView = ({
         onlyRenderVisibleElements
         fitView
         minZoom={0.05}
-        // Double-click navigates into a region, so it must not also zoom.
+        // No gesture on this canvas carries meaning: every action has a
+        // visible control (see nodes.tsx). Zooming on double-click would
+        // therefore only ever fire by accident, while clicking through
+        // several nodes in a row to inspect them.
         zoomOnDoubleClick={false}
+        // Both default to 0, so any tremor during a click suppresses it.
+        // The chevron gutter and the label links are small enough targets
+        // that a shaky click would otherwise silently do nothing, while
+        // still leaving a drag free to pan the canvas.
+        paneClickDistance={4}
+        nodeClickDistance={4}
         onNodeClick={(_, node) => {
           if (node.type === "lirGroup") {
             onLirGroupClick?.((node.data as { group: LirGroupNodeData }).group);
@@ -510,19 +522,6 @@ export const DataflowGraphView = ({
           });
         }}
         onPaneClick={onPaneClick}
-        onNodeDoubleClick={(_, node) => {
-          // Groups aren't scopes: no drill-down, no jump, nothing happens.
-          if (node.type === "lirGroup") return;
-          const visibleNode = (node.data as { node: VisibleNode }).node;
-          if (visibleNode.kind === "region") {
-            onNavigate(visibleNode.id);
-          } else if (
-            visibleNode.kind === "port" &&
-            visibleNode.peers.length === 1
-          ) {
-            onJumpToPeer?.(visibleNode.peers[0]);
-          }
-        }}
         proOptions={{ hideAttribution: true }}
       >
         <Background />

@@ -10,7 +10,7 @@
 import colors from "~/theme/colors";
 import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
-import type { LirGroupNode, VisibleNode } from "./dataflowGraph";
+import type { LirGroupNode, PortPeer, VisibleNode } from "./dataflowGraph";
 
 // Selection/match highlights read the same in light and dark mode (a bright
 // ring reads fine against either canvas background), so these pin to the
@@ -191,8 +191,17 @@ export type FlowNodeData = {
   // In-place expansion: true when this region's children are rendered inside
   // it. Always false for non-region nodes.
   expanded: boolean;
-  // Toggles this region's in-place expansion. Undefined for non-region nodes.
+  // The canvas has exactly two secondary actions, and each is reached by its
+  // own visible control rather than by a gesture (see nodes.tsx): the
+  // chevron gutter expands a region here, a link-styled label navigates
+  // somewhere else. Both are undefined on nodes that can't do them.
   onToggleExpand?: (id: string) => void;
+  // Makes this region the view root. Regions only.
+  onNavigate?: (id: string) => void;
+  // Jumps to a port's peer on the far side of a scope boundary. Ports only,
+  // and only where the peer is unambiguous: with several peers the port's
+  // link selects instead, so the detail panel can offer the choice.
+  onJumpToPeer?: (peer: PortPeer) => void;
 };
 
 export type FlowGroupData = {

@@ -36,49 +36,76 @@ const fitViewSpy = vi.hoisted(() => vi.fn());
 // jsdom lacks ResizeObserver/DOMMatrixReadOnly, so replace @xyflow/react with a
 // flat renderer that preserves the decision under test (whether the canvas and
 // its nodes exist). This mirrors src/test/mockReactFlow.tsx but also stubs
-// useReactFlow, which DataflowDetailPage's centering helper reads and the
-// shared helper does not provide. Click/double-click are wired through so
-// selection and drill-down navigation can be driven from tests too.
+// useReactFlow, which the view's fit helper reads. Node clicks and the
+// per-node controls are wired through so selection, expansion and
+// navigation can all be driven from tests.
 vi.mock("@xyflow/react", () => ({
   ReactFlow: ({
     nodes,
     children,
     onNodeClick,
-    onNodeDoubleClick,
   }: {
     nodes: {
       id: string;
       type?: string;
       data: {
-        node?: { label: string };
+        node?: { label: string; peers?: { label: string }[] };
         label?: string;
         onToggleExpand?: (id: string) => void;
+        onNavigate?: (id: string) => void;
+        onJumpToPeer?: (peer: unknown) => void;
       };
     }[];
     children?: React.ReactNode;
     onNodeClick?: (e: unknown, node: unknown) => void;
-    onNodeDoubleClick?: (e: unknown, node: unknown) => void;
   }) => (
     <div data-testid="react-flow">
       {nodes.map((n) => {
         const node = n.data.node;
+        const peers = node?.peers ?? [];
         return (
           <div
             key={n.id}
             data-testid={`node-${n.id}`}
             onClick={() => onNodeClick?.(null, n)}
-            onDoubleClick={() => onNodeDoubleClick?.(null, n)}
           >
-            {/* Mirrors RegionNode's own disclosure triangle (nodes.tsx),
-                just enough to drive the toggle from a test: the flat
-                renderer above never instantiates the real node components. */}
+            {/* Mirrors the two controls RegionNode and PortNode render
+                (nodes.tsx): the chevron gutter that expands a region in
+                place, and the label link that navigates. The flat renderer
+                above never instantiates the real node components, so the
+                callbacks have to be reached through node data. */}
             {n.type === "region" && node && (
+              <>
+                <button
+                  type="button"
+                  data-testid="region-toggle"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    n.data.onToggleExpand?.(n.id);
+                  }}
+                />
+                <button
+                  type="button"
+                  data-testid="region-enter"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    n.data.onNavigate?.(n.id);
+                  }}
+                />
+              </>
+            )}
+            {/* A port's label is a link whenever it has peers at all, but
+                it only jumps when there is exactly one. With several it
+                lets the click through to the node, selecting it so the
+                panel can offer the choice. */}
+            {n.type === "port" && peers.length > 0 && (
               <button
                 type="button"
-                data-testid="region-toggle"
+                data-testid="port-jump"
                 onClick={(e) => {
+                  if (peers.length !== 1) return;
                   e.stopPropagation();
-                  n.data.onToggleExpand?.(n.id);
+                  n.data.onJumpToPeer?.(peers[0]);
                 }}
               />
             )}
@@ -419,7 +446,11 @@ describe("DataflowDetailPage", () => {
     // Drill into RegionA: its only channel is its own output (port 0)
     // reaching sibling RegionB, which isn't part of this view, so it
     // should surface as a dangling "out" port.
-    await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+    await userEvent.click(
+      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
+        "region-enter",
+      ),
+    );
     const outPortId = `${regionAId}:out:0`;
     const outPortNode = await screen.findByTestId(`node-${outPortId}`);
 
@@ -442,7 +473,7 @@ describe("DataflowDetailPage", () => {
   // A 1:1 port doesn't need the detail panel detour: double-clicking it
   // jumps directly, the same destination as clicking through to its Jump
   // button.
-  it("double-clicking a port with exactly one peer jumps directly", async () => {
+  it("a port with exactly one peer jumps straight to it", async () => {
     await renderComponent(
       <Routes>
         <Route
@@ -458,11 +489,15 @@ describe("DataflowDetailPage", () => {
     const regionAId = nodeIdOf([8, 1]);
     const regionBId = nodeIdOf([8, 2]);
     await screen.findByTestId(`node-${regionAId}`);
-    await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+    await userEvent.click(
+      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
+        "region-enter",
+      ),
+    );
 
     const outPortId = `${regionAId}:out:0`;
     const outPortNode = await screen.findByTestId(`node-${outPortId}`);
-    await userEvent.dblClick(outPortNode);
+    await userEvent.click(within(outPortNode).getByTestId("port-jump"));
 
     const regionBInPortId = `${regionBId}:in:0`;
     expect(await screen.findByTestId(`node-${regionBInPortId}`)).toBeVisible();
@@ -494,7 +529,11 @@ describe("DataflowDetailPage", () => {
     // A fresh, undrilled link carries no scope param at all.
     expect(screen.getByTestId("location-search").textContent).toBe("");
 
-    await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+    await userEvent.click(
+      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
+        "region-enter",
+      ),
+    );
     await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`);
     const search = screen.getByTestId("location-search").textContent;
     expect(search).toBe("?scope=8.1");
@@ -572,7 +611,11 @@ describe("DataflowDetailPage", () => {
     // covers first load.
     expect(fitViewSpy).not.toHaveBeenCalled();
 
-    await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+    await userEvent.click(
+      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
+        "region-enter",
+      ),
+    );
     const leafAId = nodeIdOf([8, 1, 1]);
     await screen.findByTestId(`node-${leafAId}`);
     expect(fitViewSpy).toHaveBeenCalledTimes(1);
@@ -584,7 +627,7 @@ describe("DataflowDetailPage", () => {
   // A 1:n port (RegionA's single output feeding both RegionB and RegionC)
   // can't pick a jump target on its own; double-clicking it should behave
   // like a plain click (open its own detail panel) rather than guess.
-  it("double-clicking a fanned-out port selects it instead of guessing a peer", async () => {
+  it("a fanned-out port selects instead of guessing a peer", async () => {
     await renderComponent(
       <Routes>
         <Route
@@ -599,11 +642,15 @@ describe("DataflowDetailPage", () => {
 
     const regionAId = nodeIdOf([9, 1]);
     await screen.findByTestId(`node-${regionAId}`);
-    await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+    await userEvent.click(
+      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
+        "region-enter",
+      ),
+    );
 
     const outPortId = `${regionAId}:out:0`;
     const outPortNode = await screen.findByTestId(`node-${outPortId}`);
-    await userEvent.dblClick(outPortNode);
+    await userEvent.click(within(outPortNode).getByTestId("port-jump"));
 
     // Still inside RegionA: neither RegionB nor RegionC drilled into.
     expect(screen.queryByTestId(`node-${nodeIdOf([9, 2])}:in:0`)).toBeNull();
@@ -641,7 +688,11 @@ describe("DataflowDetailPage", () => {
 
     const regionAId = nodeIdOf([8, 1]);
     await screen.findByTestId(`node-${regionAId}`);
-    await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+    await userEvent.click(
+      within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
+        "region-enter",
+      ),
+    );
     // Drilled in: RegionA's own id no longer names anything in dataflow 7.
     await screen.findByTestId(`node-${regionAId}:out:0`);
 
@@ -681,12 +732,10 @@ describe("DataflowDetailPage", () => {
     const groupNode = screen.getByTestId("node-u7/1");
     expect(groupNode).toHaveTextContent("Join::Differential");
 
-    // Regression check for the onNodeDoubleClick guard added in Step 4:
-    // double-clicking a group must not throw (it read `.data.node.kind`
-    // unconditionally before the guard, which crashes on a group node) and
-    // must not navigate anywhere, since groups aren't scopes.
-    await userEvent.dblClick(groupNode);
-    expect(screen.getByTestId("node-u7/1")).toBeInTheDocument();
+    // A group is a label over its members, not a scope, so it carries
+    // neither of the canvas's two navigation controls.
+    expect(within(groupNode).queryByTestId("region-enter")).toBeNull();
+    expect(within(groupNode).queryByTestId("region-toggle")).toBeNull();
 
     await userEvent.click(screen.getByLabelText("Show LIR groups"));
     expect(
@@ -781,7 +830,11 @@ describe("DataflowDetailPage", () => {
 
       const regionAId = nodeIdOf([8, 1]);
       await screen.findByTestId(`node-${regionAId}`);
-      await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+      await userEvent.click(
+        within(screen.getByTestId(`node-${regionAId}`)).getByTestId(
+          "region-enter",
+        ),
+      );
 
       await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`);
       expect(screen.getByTestId("location-search").textContent).toBe(
