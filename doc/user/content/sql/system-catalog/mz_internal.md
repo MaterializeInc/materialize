@@ -783,6 +783,13 @@ is recorded. Resource peaks cover the replica processes' lifetimes through
 collection, not only the hydration episode. On a multi-process replica, the
 table records the largest peak reported by any process.
 
+{{< note >}}
+**Multi-process replicas.** `peak_memory_bytes` is a single process's
+high-water mark, not the replica's. On a multi-process size it does not capture
+the replica's true peak, and no way to combine the per-process marks into one is
+established. Size from these peaks only on a single-process size.
+{{< /note >}}
+
 Because memory and disk limits apply to each replica process independently,
 compare `peak_memory_bytes` against
 [`mz_cluster_replica_sizes.memory_bytes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes),

@@ -34,9 +34,10 @@ This guide assumes you are running Materialize v26.42 or later. v26.42 added
 improvements to allow you to track peak resource usage during hydration.
 
 {{< note >}}
-This guidance applies to single-process replicas, which covers most clusters
-today. A multi-process replica records its peaks per process, and how those
-combine into a size for the replica as a whole is not established here.
+**Multi-process replicas.** `peak_memory_bytes` is a single process's
+high-water mark, not the replica's. On a multi-process size it does not capture
+the replica's true peak, and no way to combine the per-process marks into one is
+established. This guide assumes a single-process size.
 {{< /note >}}
 
 ### 1. Create the cluster at a generous size
