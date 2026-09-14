@@ -27,6 +27,7 @@ explicitly with `$<skill-name>` in Codex and `/<skill-name>` in Claude Code.
 | Skill | When to use | What it does |
 |---|---|---|
 | **mz-benchmark** | Adding or debugging benchmark scenarios | Three measurement frameworks: Feature Benchmark (micro-benchmarks), Scalability Test (throughput under concurrency), Parallel Benchmark (sustained latency) |
+| **mz-perf-movements** | Asking what performance moved in CI | Ranks regressions and improvements across the nightly, release-qualification and spec-sheet pipelines, reading the self-comparing steps' own tables and reconstructing a baseline for the spec sheet |
 | **mz-profile** | Something is slow or using too much memory | CPU profiling with samply, memory profiling with heaptrack, binary size analysis |
 | **mz-query-tracing** | Understanding where time goes in SQL execution | Distributed tracing with OpenTelemetry/Tempo to get a latency breakdown of any SQL statement |
 
