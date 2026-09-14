@@ -104,3 +104,30 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > FETCH c
 <TIMESTAMP> 1 1
 > COMMIT
+
+# Test that replica-targeted peeks are only sent to the target replica.
+#
+# `mz_peek_durations_histogram_raw` records every peek a replica has completed.
+# Replica r2 never receives a query until the final check, which is a fast-path
+# peek against the raw log itself and is therefore not yet recorded when it is
+# served. Any peek issued on r1 that also reached r2 would show up here.
+
+> DROP CLUSTER test CASCADE
+> CREATE CLUSTER test REPLICAS (
+      r1 (SIZE 'scale=1,workers=1'),
+      r2 (SIZE 'scale=1,workers=1')
+  )
+> SET cluster = test
+> SET cluster_replica = r1
+
+> SELECT count(*) >= 0 FROM mz_introspection.mz_compute_frontiers_per_worker
+true
+> SELECT count(*) >= 0 FROM mz_introspection.mz_compute_frontiers_per_worker
+true
+> SELECT count(*) >= 0 FROM mz_introspection.mz_compute_frontiers_per_worker
+true
+
+> SET cluster_replica = r2
+
+> SELECT count(*) FROM mz_introspection.mz_peek_durations_histogram_raw
+0
