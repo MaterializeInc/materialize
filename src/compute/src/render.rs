@@ -170,7 +170,7 @@ use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::columnar::{
-    CollectionEdge, RecTimestamp, columnar_consolidate, columnar_leave_dynamic, columnar_negate,
+    ColCollection, RecTimestamp, columnar_consolidate, columnar_leave_dynamic, columnar_negate,
     concat_many, flat_map_datums,
 };
 use crate::render::context::{ArrangementFlavor, Context};
@@ -612,7 +612,7 @@ where
         arranged: Arranged<'outer, Tr>,
         start_signal: StartSignal,
         mut logic: impl FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>, &mut Row) + 'static,
-    ) -> CollectionEdge<'g, T>
+    ) -> ColCollection<'g, T>
     where
         Tr: TraceReader<Time = mz_repr::Timestamp, Batch: Navigable> + Clone,
         mz_repr::Timestamp: TotalOrder,
