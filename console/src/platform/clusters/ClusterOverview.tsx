@@ -40,6 +40,7 @@ import { useAllClusters } from "~/store/allClusters";
 import { MaterializeTheme } from "~/theme";
 import { assert } from "~/util";
 
+import ClusterImpactBanner from "./ClusterImpactBanner";
 import ClusterFreshness from "./ClusterOverview/ClusterFreshness";
 import { DataPoint } from "./ClusterOverview/types";
 import {
@@ -146,6 +147,7 @@ const ClusterOverview = () => {
   return (
     <MainContentContainer mt="10">
       <VStack spacing="6">
+        <ClusterImpactBanner clusterId={clusterId} />
         {cluster && <ClusterInfoBox cluster={cluster} />}
         <Box
           border={`solid 1px ${colors.border.primary}`}
