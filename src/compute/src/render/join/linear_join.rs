@@ -43,7 +43,7 @@ use timely::dataflow::{Scope, Stream};
 
 use crate::extensions::arrange::{ArrangementBatcher, MzArrangeCore};
 use crate::render::RenderTimestamp;
-use crate::render::columnar::{CollectionEdge, flat_map_datums};
+use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
@@ -225,11 +225,11 @@ fn apply_closure<'a>(
 /// The closure borrows the row it reads, so reading the edge costs nothing, whereas
 /// decoding it would cost an owned [`Row`] per record.
 fn apply_closure_to_edge<'s, T>(
-    edge: CollectionEdge<'s, T>,
+    edge: ColCollection<'s, T>,
     name: &str,
     closure: JoinClosure,
 ) -> (
-    CollectionEdge<'s, T>,
+    ColCollection<'s, T>,
     VecCollection<'s, T, DataflowErrorSer, Diff>,
 )
 where
@@ -270,7 +270,7 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// The join's source input, before it enters the first stage.
     /// `differential_join` forms its arrangement key off the edge, so a columnar source
     /// needs no decode.
-    Collection(CollectionEdge<'scope, T>),
+    Collection(ColCollection<'scope, T>),
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
@@ -601,7 +601,7 @@ where
 fn demux_join_results<'s, T>(
     results: Stream<'s, T, Vec<(Result<Row, DataflowErrorSer>, T, Diff)>>,
 ) -> (
-    CollectionEdge<'s, T>,
+    ColCollection<'s, T>,
     VecCollection<'s, T, DataflowErrorSer, Diff>,
 )
 where
@@ -700,7 +700,7 @@ where
 /// consumes, so the ok path holds no owned `Row` per record. Only the error path owns a
 /// time and diff.
 fn arrange_join_input<'s, T>(
-    edge: CollectionEdge<'s, T>,
+    edge: ColCollection<'s, T>,
     stream_key: Vec<LirScalarExpr>,
     stream_thinning: Vec<usize>,
     batcher: ArrangementBatcher,

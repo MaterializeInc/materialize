@@ -39,7 +39,7 @@ use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
-use crate::render::columnar::{CollectionEdge, flat_map_datums, vec_to_columnar};
+use crate::render::columnar::{ColCollection, flat_map_datums, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
@@ -873,7 +873,7 @@ where
 /// first relation can be seeded from a raw collection, since the as-of filtering that the other
 /// paths rely on is only available from an arrangement's times. We assert that here.
 fn build_update_stream_stream<'scope, T>(
-    edge: CollectionEdge<'scope, T>,
+    edge: ColCollection<'scope, T>,
     _as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
