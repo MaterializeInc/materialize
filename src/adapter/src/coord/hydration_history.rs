@@ -9,7 +9,7 @@
 
 //! Durable history collection for completed object and replica hydration episodes.
 //!
-//! One sweep visits a single user replica, installs a replica-targeted
+//! One sweep visits a single replica, installs a replica-targeted
 //! subscribe that diffs that replica's live hydration timestamps against the
 //! durable history tables, and appends what is missing through the timestamped
 //! OCC write path. Including each history table in its read expression is what
@@ -198,7 +198,8 @@ impl Coordinator {
 
         let replicas = self
             .catalog()
-            .user_cluster_replicas()
+            .clusters()
+            .flat_map(|cluster| cluster.replicas())
             .filter(|replica| replica.config.compute.logging.enabled())
             .filter(|replica| match &replica.config.location {
                 ReplicaLocation::Managed(_) => {
@@ -295,7 +296,7 @@ impl Coordinator {
     }
 }
 
-/// A user replica eligible for one collection step.
+/// A replica eligible for one collection step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplicaTarget {
     cluster_id: ClusterId,
