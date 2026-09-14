@@ -38,18 +38,18 @@ use mz_sql_parser::ast::visit::{Visit, visit_function};
 use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption, CreateSubsourceOptionName,
-    CreateTableFromSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
-    DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption, GlueAvroSeed, Ident,
-    KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
-    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, SourceEnvelope, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
-    UnresolvedItemName,
+    CastFailureMode, ColumnName, CreateMaterializedViewStatement, CreateSinkConnection,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateTableFromSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption,
+    GlueAvroSeed, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, SqlServerConfigOption,
+    SqlServerConfigOptionName, Statement, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -3139,6 +3139,7 @@ impl VisitMut<'_, Aug> for MzNowPurifierVisitor {
                 *expr = Expr::Cast {
                     expr: Box::new(Expr::Value(Value::Number(mz_now.to_string()))),
                     data_type: self.mz_timestamp_type.clone(),
+                    failure_mode: CastFailureMode::Error,
                 };
                 self.introduced_mz_timestamp = true;
             }
