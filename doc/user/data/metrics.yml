@@ -3001,6 +3001,12 @@ metrics:
   - table_name
   source: src/storage/src/metrics/source/postgres.rs
   visibility: internal
+- name: mz_query_policy_queries_total
+  help: Queries rejected by an enforced query policy or only warned by observe-only policies. Each query is counted once.
+  labels:
+  - outcome
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_query_total
   help: The total number of queries issued of the given type since process start.
   labels:

@@ -20,6 +20,7 @@ use mz_controller_types::ReplicaId;
 use mz_proto::{ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{
@@ -30,7 +31,8 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     AutoScalingStrategy, ClusterSchedule, NetworkPolicyRule, NetworkPolicyRuleAction,
-    NetworkPolicyRuleDirection, OnHydration, OnTimeoutAction, PolicyAddress,
+    NetworkPolicyRuleDirection, OnHydration, OnTimeoutAction, PolicyAddress, QueryPlanFeature,
+    QueryPolicyMode, QueryPolicyRule,
 };
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
@@ -176,7 +178,10 @@ impl RustType<crate::objects::RoleVars> for RoleVars {
             })
             .collect();
 
-        crate::objects::RoleVars { entries }
+        crate::objects::RoleVars {
+            entries,
+            query_policy: self.query_policy.into_proto(),
+        }
     }
 
     fn from_proto(proto: crate::objects::RoleVars) -> Result<Self, TryFromProtoError> {
@@ -189,7 +194,64 @@ impl RustType<crate::objects::RoleVars> for RoleVars {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(RoleVars { map })
+        Ok(RoleVars {
+            map,
+            query_policy: proto.query_policy.into_rust()?,
+        })
+    }
+}
+
+impl RustType<crate::objects::QueryPolicyId> for QueryPolicyId {
+    fn into_proto(&self) -> crate::objects::QueryPolicyId {
+        match self {
+            Self::User(id) => crate::objects::QueryPolicyId::User(*id),
+            Self::System(id) => crate::objects::QueryPolicyId::System(*id),
+        }
+    }
+
+    fn from_proto(proto: crate::objects::QueryPolicyId) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            crate::objects::QueryPolicyId::User(id) => Self::User(id),
+            crate::objects::QueryPolicyId::System(id) => Self::System(id),
+        })
+    }
+}
+
+impl RustType<crate::objects::QueryPolicyMode> for QueryPolicyMode {
+    fn into_proto(&self) -> crate::objects::QueryPolicyMode {
+        match self {
+            Self::Warn => crate::objects::QueryPolicyMode::Warn,
+            Self::Enforce => crate::objects::QueryPolicyMode::Enforce,
+        }
+    }
+
+    fn from_proto(proto: crate::objects::QueryPolicyMode) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            crate::objects::QueryPolicyMode::Warn => Self::Warn,
+            crate::objects::QueryPolicyMode::Enforce => Self::Enforce,
+        })
+    }
+}
+
+impl RustType<crate::objects::QueryPolicyRule> for QueryPolicyRule {
+    fn into_proto(&self) -> crate::objects::QueryPolicyRule {
+        crate::objects::QueryPolicyRule {
+            name: self.name.clone(),
+            value: match self.value {
+                QueryPlanFeature::SlowPathQuery => crate::objects::QueryPlanFeature::SlowPathQuery,
+                QueryPlanFeature::PersistRead => crate::objects::QueryPlanFeature::PersistRead,
+            },
+        }
+    }
+
+    fn from_proto(proto: crate::objects::QueryPolicyRule) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            name: proto.name,
+            value: match proto.value {
+                crate::objects::QueryPlanFeature::SlowPathQuery => QueryPlanFeature::SlowPathQuery,
+                crate::objects::QueryPlanFeature::PersistRead => QueryPlanFeature::PersistRead,
+            },
+        })
     }
 }
 
@@ -268,6 +330,7 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Func => crate::objects::ObjectType::Func,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
             ObjectType::MetricSink => crate::objects::ObjectType::MetricSink,
+            ObjectType::QueryPolicy => crate::objects::ObjectType::QueryPolicy,
         }
     }
 
@@ -290,6 +353,7 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             crate::objects::ObjectType::Func => Ok(ObjectType::Func),
             crate::objects::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
             crate::objects::ObjectType::MetricSink => Ok(ObjectType::MetricSink),
+            crate::objects::ObjectType::QueryPolicy => Ok(ObjectType::QueryPolicy),
             crate::objects::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -453,6 +517,9 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             CommentObjectId::NetworkPolicy(network_policy_id) => {
                 crate::objects::CommentObject::NetworkPolicy(network_policy_id.into_proto())
             }
+            CommentObjectId::QueryPolicy(id) => {
+                crate::objects::CommentObject::QueryPolicy(id.into_proto())
+            }
             CommentObjectId::Schema((database, schema)) => {
                 crate::objects::CommentObject::Schema(crate::objects::ResolvedSchema {
                     database: database.into_proto(),
@@ -509,6 +576,9 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             }
             crate::objects::CommentObject::NetworkPolicy(global_id) => {
                 CommentObjectId::NetworkPolicy(global_id.into_rust()?)
+            }
+            crate::objects::CommentObject::QueryPolicy(id) => {
+                CommentObjectId::QueryPolicy(id.into_rust()?)
             }
             crate::objects::CommentObject::Role(role_id) => {
                 CommentObjectId::Role(role_id.into_rust()?)

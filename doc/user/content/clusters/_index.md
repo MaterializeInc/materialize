@@ -12,4 +12,5 @@ Clusters provide the compute resources for running dataflows in Materialize.
 
 - Learn about [clusters](/fundamentals/concepts/clusters/).
 - Follow the [operational guidelines](/clusters/operational-guidelines/).
+- [Protect a production cluster](/clusters/protect-a-production-cluster/) with query policies.
 - Understand [system clusters](/clusters/system-clusters/).

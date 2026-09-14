@@ -976,6 +976,10 @@ impl PeekClient {
 
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
+        if !caller.is_background() {
+            crate::query_policy::check_query_policies(catalog, session, cluster_id, &df_desc)?;
+        }
+
         // The coordinator sequences this statement's read as a real peek, so the
         // optimizer's notices and the timestamp notice reach the session there.
         // Emit both here for the same statement to look the same on either path.

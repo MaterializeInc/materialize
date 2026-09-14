@@ -18,6 +18,9 @@ use std::iter;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use crate::plan::{
+    AlterQueryPolicyPlan, CreateQueryPolicyPlan, QueryPlanFeature, QueryPolicyMode, QueryPolicyRule,
+};
 use chrono::DateTime;
 use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
@@ -37,6 +40,7 @@ use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
@@ -84,6 +88,10 @@ use mz_sql_parser::ast::{
     TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
     UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
     ViewDefinition, WithOptionValue,
+};
+use mz_sql_parser::ast::{
+    AlterQueryPolicyStatement, CreateQueryPolicyStatement, QueryPolicyOption,
+    QueryPolicyRuleDefinition, QueryPolicyRuleOption, QueryPolicyRuleOptionName,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -4746,6 +4754,7 @@ generate_extracted_config!(
 pub enum PlannedAlterRoleOption {
     Attributes(PlannedRoleAttributes),
     Variable(PlannedRoleVariable),
+    QueryPolicy(Option<QueryPolicyId>),
 }
 
 #[derive(Debug, Clone)]
@@ -4909,6 +4918,112 @@ pub fn plan_create_role(
     }))
 }
 
+generate_extracted_config!(
+    QueryPolicyRuleOption,
+    (Action, String),
+    (Metric, String),
+    (Value, String)
+);
+
+fn plan_query_policy_options(
+    options: Vec<QueryPolicyOption<Aug>>,
+) -> Result<(Option<QueryPolicyMode>, Option<Vec<QueryPolicyRule>>), PlanError> {
+    let mut mode = None;
+    let mut rules = None;
+    for option in options {
+        match option {
+            QueryPolicyOption::Mode(value) => {
+                if mode.is_some() {
+                    sql_bail!("MODE specified more than once");
+                }
+                mode = Some(match value {
+                    Value::String(value) if value.eq_ignore_ascii_case("warn") => {
+                        QueryPolicyMode::Warn
+                    }
+                    Value::String(value) if value.eq_ignore_ascii_case("enforce") => {
+                        QueryPolicyMode::Enforce
+                    }
+                    _ => sql_bail!("query policy MODE must be 'warn' or 'enforce'"),
+                });
+            }
+            QueryPolicyOption::Rules(definitions) => {
+                if rules.is_some() {
+                    sql_bail!("RULES specified more than once");
+                }
+                let mut names = BTreeSet::new();
+                let mut planned = Vec::new();
+                for QueryPolicyRuleDefinition { name, options } in definitions {
+                    let name = normalize::ident(name);
+                    if !names.insert(name.clone()) {
+                        sql_bail!("duplicate query policy rule name {name}");
+                    }
+                    let QueryPolicyRuleOptionExtracted {
+                        action,
+                        metric,
+                        value,
+                        ..
+                    } = options.try_into()?;
+                    let (Some(action), Some(metric), Some(value)) = (action, metric, value) else {
+                        sql_bail!(
+                            "ACTION, METRIC, and VALUE must be specified for each query policy rule"
+                        );
+                    };
+                    if !action.eq_ignore_ascii_case("reject") {
+                        sql_bail!(
+                            "unsupported query policy action: {action}. Only 'reject' is supported"
+                        );
+                    }
+                    if !metric.eq_ignore_ascii_case("query_plan_includes") {
+                        sql_bail!(
+                            "unsupported query policy metric: {metric}. Only 'query_plan_includes' is supported"
+                        );
+                    }
+                    let value = match value.to_ascii_lowercase().as_str() {
+                        "slow_path_query" => QueryPlanFeature::SlowPathQuery,
+                        "persist_read" => QueryPlanFeature::PersistRead,
+                        _ => sql_bail!("unsupported query policy value: {value}"),
+                    };
+                    planned.push(QueryPolicyRule { name, value });
+                }
+                rules = Some(planned);
+            }
+        }
+    }
+    Ok((mode, rules))
+}
+
+pub fn plan_create_query_policy(
+    scx: &StatementContext,
+    CreateQueryPolicyStatement { name, options }: CreateQueryPolicyStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+    let (mode, rules) = plan_query_policy_options(options)?;
+    let Some(rules) = rules else {
+        sql_bail!("RULES must be specified when creating query policies");
+    };
+    Ok(Plan::CreateQueryPolicy(CreateQueryPolicyPlan {
+        name: normalize::ident(name),
+        mode: mode.unwrap_or_default(),
+        rules,
+    }))
+}
+
+pub fn plan_alter_query_policy(
+    scx: &StatementContext,
+    AlterQueryPolicyStatement { name, options }: AlterQueryPolicyStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+    let name = normalize::ident(name);
+    let policy = scx.catalog.resolve_query_policy(&name)?;
+    let (mode, rules) = plan_query_policy_options(options)?;
+    Ok(Plan::AlterQueryPolicy(AlterQueryPolicyPlan {
+        id: policy.id(),
+        name,
+        mode: mode.unwrap_or_else(|| policy.mode()),
+        rules: rules.unwrap_or_else(|| policy.rules().to_vec()),
+    }))
+}
+
 pub fn plan_create_network_policy(
     ctx: &StatementContext,
     CreateNetworkPolicyStatement { name, options }: CreateNetworkPolicyStatement<Aug>,
@@ -5045,7 +5160,8 @@ generate_extracted_config!(
     (ReplicationFactor, u32),
     (Size, String),
     (Schedule, ClusterScheduleOptionValue),
-    (WorkloadClass, OptionalString)
+    (WorkloadClass, OptionalString),
+    (QueryPolicy, OptionalString)
 );
 
 generate_extracted_config!(
@@ -5151,6 +5267,7 @@ pub fn plan_create_cluster_inner(
         disk,
         schedule,
         workload_class,
+        query_policy,
     }: ClusterOptionExtracted = options.try_into()?;
 
     let managed = managed.unwrap_or_else(|| replicas.is_none());
@@ -5166,6 +5283,15 @@ pub fn plan_create_cluster_inner(
 
     let schedule = schedule.unwrap_or(ClusterScheduleOptionValue::Manual);
     let workload_class = workload_class.and_then(|v| v.0);
+    let query_policy = match query_policy {
+        Some(name) => {
+            scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+            name.0
+                .map(|name| scx.catalog.resolve_query_policy(&name).map(|p| p.id()))
+                .transpose()?
+        }
+        None => None,
+    };
 
     if managed {
         if replicas.is_some() {
@@ -5274,6 +5400,7 @@ pub fn plan_create_cluster_inner(
             }),
             workload_class,
             if_not_exists,
+            query_policy,
         })
     } else {
         let Some(replica_defs) = replicas else {
@@ -5322,6 +5449,7 @@ pub fn plan_create_cluster_inner(
             variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
             workload_class,
             if_not_exists,
+            query_policy,
         })
     }
 }
@@ -5339,6 +5467,7 @@ pub fn unplan_create_cluster(
         variant,
         workload_class,
         if_not_exists,
+        query_policy,
     }: CreateClusterPlan,
 ) -> Result<CreateClusterStatement<Aug>, PlanError> {
     match variant {
@@ -5434,6 +5563,9 @@ pub fn unplan_create_cluster(
                 size: Some(size),
                 schedule: Some(schedule),
                 workload_class,
+                query_policy: query_policy.map(|id| {
+                    OptionalString(Some(scx.catalog.get_query_policy(&id).name().to_string()))
+                }),
             };
             let options = options_extracted.into_values(scx.catalog);
             let name = Ident::new_unchecked(name);
@@ -5977,6 +6109,14 @@ pub fn plan_drop_objects(
             UnresolvedObjectName::NetworkPolicy(name) => {
                 plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
             }
+            UnresolvedObjectName::QueryPolicy(name) => {
+                scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+                match scx.catalog.resolve_query_policy(name.as_str()) {
+                    Ok(policy) => Some(ObjectId::QueryPolicy(policy.id())),
+                    Err(_) if if_exists => None,
+                    Err(error) => return Err(error.into()),
+                }
+            }
         };
         match id {
             Some(id) => referenced_ids.push(id),
@@ -6240,7 +6380,8 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => match dep.item_type() {
+        | ObjectType::NetworkPolicy
+        | ObjectType::QueryPolicy => match dep.item_type() {
             CatalogItemType::Func
             | CatalogItemType::Table
             | CatalogItemType::Source
@@ -6464,6 +6605,19 @@ pub fn plan_drop_owned(
     }
 
     // System
+    for policy in scx.catalog.get_query_policies() {
+        if role_ids.contains(&policy.owner_id()) {
+            scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+            drop_ids.push(ObjectId::QueryPolicy(policy.id()));
+        }
+        update_privilege_revokes(
+            SystemObjectId::Object(ObjectId::QueryPolicy(policy.id())),
+            policy.privileges(),
+            &role_ids,
+            &mut privilege_revokes,
+        );
+    }
+
     update_privilege_revokes(
         SystemObjectId::System,
         scx.catalog.get_system_privileges(),
@@ -6730,6 +6884,7 @@ pub fn plan_alter_cluster(
                 disk,
                 schedule,
                 workload_class,
+                query_policy,
             }: ClusterOptionExtracted = set_options.try_into()?;
 
             if !scx.catalog.active_role_id().is_system() {
@@ -6961,6 +7116,15 @@ pub fn plan_alter_cluster(
             if let Some(workload_class) = workload_class {
                 options.workload_class = AlterOptionParameter::Set(workload_class.0);
             }
+            if let Some(query_policy) = query_policy {
+                scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+                options.query_policy = AlterOptionParameter::Set(
+                    query_policy
+                        .0
+                        .map(|name| scx.catalog.resolve_query_policy(&name).map(|p| p.id()))
+                        .transpose()?,
+                );
+            }
         }
         AlterClusterAction::ResetOptions(reset_options) => {
             use AlterOptionParameter::Reset;
@@ -6993,6 +7157,10 @@ pub fn plan_alter_cluster(
                     Size => options.size = Reset,
                     Schedule => options.schedule = Reset,
                     WorkloadClass => options.workload_class = Reset,
+                    QueryPolicy => {
+                        scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+                        options.query_policy = Reset;
+                    }
                 }
             }
         }
@@ -7042,7 +7210,8 @@ pub fn plan_alter_item_set_cluster(
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => {
+        | ObjectType::NetworkPolicy
+        | ObjectType::QueryPolicy => {
             bail_never_supported!(
                 format!("ALTER {object_type} SET CLUSTER"),
                 "sql/alter-set-cluster/",
@@ -7485,7 +7654,8 @@ pub fn plan_alter_object_swap(
             | ObjectType::Connection
             | ObjectType::Database
             | ObjectType::Func
-            | ObjectType::NetworkPolicy,
+            | ObjectType::NetworkPolicy
+            | ObjectType::QueryPolicy,
             _,
             _,
         ) => Err(PlanError::Unsupported {
@@ -8181,8 +8351,34 @@ pub fn plan_alter_role(
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {
+            let is_query_policy = match &variable {
+                SetRoleVar::Set { name, .. } | SetRoleVar::Reset { name } => {
+                    name.as_str().eq_ignore_ascii_case("query_policy")
+                }
+            };
             let var = plan_role_variable(scx, variable)?;
-            PlannedAlterRoleOption::Variable(var)
+            if is_query_policy {
+                scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+                let policy = match var {
+                    PlannedRoleVariable::Reset { .. } => None,
+                    PlannedRoleVariable::Set {
+                        value: VariableValue::Default,
+                        ..
+                    } => None,
+                    PlannedRoleVariable::Set {
+                        value: VariableValue::Values(values),
+                        ..
+                    } => {
+                        let [name] = values.as_slice() else {
+                            sql_bail!("query_policy requires one policy name");
+                        };
+                        Some(scx.catalog.resolve_query_policy(name)?.id())
+                    }
+                };
+                PlannedAlterRoleOption::QueryPolicy(policy)
+            } else {
+                PlannedAlterRoleOption::Variable(var)
+            }
         }
     };
 
@@ -8460,6 +8656,13 @@ pub fn plan_comment(
         CommentObjectType::NetworkPolicy { name } => {
             (CommentObjectId::NetworkPolicy(name.id), None)
         }
+        CommentObjectType::QueryPolicy { name } => {
+            scx.require_feature_flag(&vars::ENABLE_QUERY_POLICIES)?;
+            (
+                CommentObjectId::QueryPolicy(scx.catalog.resolve_query_policy(name.as_str())?.id()),
+                None,
+            )
+        }
     };
 
     // Note: the `mz_comments` table uses an `Int4` for the column position, but in the catalog storage we
@@ -8579,7 +8782,8 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => scx.catalog.resolve_item(&name),
+        | ObjectType::NetworkPolicy
+        | ObjectType::QueryPolicy => scx.catalog.resolve_item(&name),
     };
 
     match catalog_item {

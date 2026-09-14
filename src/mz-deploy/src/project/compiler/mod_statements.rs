@@ -36,6 +36,7 @@ fn comment_object_type_name(obj: &CommentObjectType<Raw>) -> &'static str {
         CommentObjectType::Cluster { .. } => "CLUSTER",
         CommentObjectType::ClusterReplica { .. } => "CLUSTER REPLICA",
         CommentObjectType::NetworkPolicy { .. } => "NETWORK POLICY",
+        CommentObjectType::QueryPolicy { .. } => "QUERY POLICY",
     }
 }
 

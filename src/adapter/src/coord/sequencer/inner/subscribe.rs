@@ -505,6 +505,12 @@ impl Coordinator {
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let (df_desc, df_meta) = global_lir_plan.unapply();
+        crate::query_policy::check_query_policies(
+            self.catalog(),
+            ctx.session(),
+            cluster_id,
+            &df_desc,
+        )?;
         emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
         let conn_id = ctx.session.conn_id().clone();
         let session_uuid = ctx.session().uuid();

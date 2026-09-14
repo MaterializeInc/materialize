@@ -298,6 +298,12 @@ impl CatalogState {
                             .push(CommentInconsistency::Dangling(comment_object_id));
                     }
                 }
+                CommentObjectId::QueryPolicy(id) => {
+                    if !self.query_policies_by_id.contains_key(&id) {
+                        comment_inconsistencies
+                            .push(CommentInconsistency::Dangling(comment_object_id));
+                    }
+                }
 
                 CommentObjectId::Role(role_id) => {
                     if !self.roles_by_id.contains_key(&role_id) {

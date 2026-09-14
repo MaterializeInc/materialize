@@ -32,8 +32,8 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    NetworkPolicy, QueryPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
@@ -54,6 +54,7 @@ use mz_repr::namespaces::{
 };
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
@@ -135,6 +136,9 @@ pub struct CatalogState {
     pub(super) network_policies_by_name: imbl::OrdMap<String, NetworkPolicyId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) network_policies_by_id: imbl::OrdMap<NetworkPolicyId, NetworkPolicy>,
+    pub(super) query_policies_by_name: imbl::OrdMap<String, QueryPolicyId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) query_policies_by_id: imbl::OrdMap<QueryPolicyId, QueryPolicy>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) role_auth_by_id: imbl::OrdMap<RoleId, RoleAuth>,
 
@@ -451,6 +455,8 @@ impl CatalogState {
             roles_by_name: Default::default(),
             roles_by_id: Default::default(),
             network_policies_by_id: Default::default(),
+            query_policies_by_name: Default::default(),
+            query_policies_by_id: Default::default(),
             role_auth_by_id: Default::default(),
             config: CatalogConfig {
                 start_time: Default::default(),
@@ -656,7 +662,7 @@ impl CatalogState {
                 ObjectId::NetworkPolicy(id) => {
                     dependents.extend_from_slice(&self.network_policy_dependents(*id, seen));
                 }
-                id @ ObjectId::Role(_) => {
+                id @ (ObjectId::Role(_) | ObjectId::QueryPolicy(_)) => {
                     let unseen = seen.insert(id.clone());
                     if unseen {
                         dependents.push(id.clone());
@@ -1185,6 +1191,42 @@ impl CatalogState {
 
     pub fn get_network_policies(&self) -> impl Iterator<Item = &NetworkPolicyId> {
         self.network_policies_by_id.keys()
+    }
+
+    pub fn get_query_policy(&self, id: &QueryPolicyId) -> &QueryPolicy {
+        self.query_policies_by_id
+            .get(id)
+            .expect("catalog out of sync")
+    }
+
+    pub(super) fn try_get_query_policy_by_name(&self, name: &str) -> Option<&QueryPolicy> {
+        self.query_policies_by_name
+            .get(name)
+            .map(|id| self.get_query_policy(id))
+    }
+
+    /// Both attachments constrain a query. Shared attachments are evaluated once.
+    pub fn query_policies_for(&self, cluster_id: ClusterId, role_id: RoleId) -> Vec<&QueryPolicy> {
+        let cluster_policy = self.get_cluster(cluster_id).config.query_policy;
+        let role_policy = self.get_role(&role_id).vars.query_policy;
+        [cluster_policy, role_policy]
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|id| self.get_query_policy(&id))
+            .collect()
+    }
+
+    /// Attachments must be removed explicitly, including for DROP ... CASCADE.
+    pub(super) fn query_policy_is_attached(&self, id: QueryPolicyId) -> bool {
+        self.clusters_by_id
+            .values()
+            .any(|cluster| cluster.config.query_policy == Some(id))
+            || self
+                .roles_by_id
+                .values()
+                .any(|role| role.vars.query_policy == Some(id))
     }
 
     /// Returns the URL for POST-ing data to a webhook source, if `id` corresponds to a webhook
@@ -2501,6 +2543,7 @@ impl CatalogState {
             ObjectId::NetworkPolicy(network_policy_id) => {
                 CommentObjectId::NetworkPolicy(network_policy_id)
             }
+            ObjectId::QueryPolicy(id) => CommentObjectId::QueryPolicy(id),
         }
     }
 
@@ -2812,6 +2855,7 @@ impl CatalogState {
             ObjectId::Item(id) => Some(*self.get_entry(id).owner_id()),
             ObjectId::Role(_) => None,
             ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(id).owner_id.clone()),
+            ObjectId::QueryPolicy(id) => Some(self.get_query_policy(id).owner_id),
         }
     }
 
@@ -2824,6 +2868,7 @@ impl CatalogState {
             ObjectId::Role(_) => mz_sql::catalog::ObjectType::Role,
             ObjectId::Item(id) => self.get_entry(id).item_type().into(),
             ObjectId::NetworkPolicy(_) => mz_sql::catalog::ObjectType::NetworkPolicy,
+            ObjectId::QueryPolicy(_) => mz_sql::catalog::ObjectType::QueryPolicy,
         }
     }
 
@@ -2921,6 +2966,7 @@ impl CatalogState {
             | CommentObjectId::Schema(_)
             | CommentObjectId::Cluster(_)
             | CommentObjectId::ClusterReplica(_)
+            | CommentObjectId::QueryPolicy(_)
             | CommentObjectId::NetworkPolicy(_) => None,
         }
     }
@@ -2967,6 +3013,7 @@ impl CatalogState {
                 .to_string()
             }
             CommentObjectId::NetworkPolicy(id) => self.get_network_policy(&id).name.clone(),
+            CommentObjectId::QueryPolicy(id) => self.get_query_policy(&id).name.clone(),
         }
     }
 

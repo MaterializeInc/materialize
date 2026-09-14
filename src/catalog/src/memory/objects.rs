@@ -30,6 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
@@ -55,7 +56,7 @@ use mz_sql::plan::{
     AutoScalingStrategy, ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
     ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant,
     CreateSourcePlan, HirRelationExpr, NetworkPolicyRule, OnTimeoutAction, PlanError,
-    WebhookBodyFormat, WebhookHeaders, WebhookValidation,
+    QueryPolicyMode, QueryPolicyRule, WebhookBodyFormat, WebhookHeaders, WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
@@ -468,6 +469,7 @@ impl Cluster {
             name,
             variant,
             workload_class,
+            query_policy: self.config.query_policy,
             // Nothing about `IF NOT EXISTS` is stored. It only ever affected how
             // the original statement handled a name collision, so the rebuilt
             // statement never shows it.
@@ -1691,6 +1693,51 @@ impl Connection {
     /// The single [`GlobalId`] used to reference this connection.
     pub fn global_id(&self) -> GlobalId {
         self.global_id
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct QueryPolicy {
+    pub name: String,
+    pub id: QueryPolicyId,
+    pub oid: u32,
+    pub mode: QueryPolicyMode,
+    pub rules: Vec<QueryPolicyRule>,
+    pub owner_id: RoleId,
+    pub privileges: PrivilegeMap,
+}
+
+impl From<QueryPolicy> for durable::QueryPolicy {
+    fn from(policy: QueryPolicy) -> Self {
+        Self {
+            name: policy.name,
+            id: policy.id,
+            oid: policy.oid,
+            mode: policy.mode,
+            rules: policy.rules,
+            owner_id: policy.owner_id,
+            privileges: policy.privileges.into_all_values().collect(),
+        }
+    }
+}
+
+impl From<durable::QueryPolicy> for QueryPolicy {
+    fn from(policy: durable::QueryPolicy) -> Self {
+        Self {
+            name: policy.name,
+            id: policy.id,
+            oid: policy.oid,
+            mode: policy.mode,
+            rules: policy.rules,
+            owner_id: policy.owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(policy.privileges),
+        }
+    }
+}
+
+impl UpdateFrom<durable::QueryPolicy> for QueryPolicy {
+    fn update_from(&mut self, policy: durable::QueryPolicy) {
+        *self = policy.into();
     }
 }
 
@@ -3448,6 +3495,8 @@ impl DefaultPrivileges {
 pub struct ClusterConfig {
     pub variant: ClusterVariant,
     pub workload_class: Option<String>,
+    #[serde(default)]
+    pub query_policy: Option<QueryPolicyId>,
 }
 
 impl ClusterConfig {
@@ -3464,6 +3513,7 @@ impl From<ClusterConfig> for durable::ClusterConfig {
         Self {
             variant: config.variant.into(),
             workload_class: config.workload_class,
+            query_policy: config.query_policy,
         }
     }
 }
@@ -3473,6 +3523,7 @@ impl From<durable::ClusterConfig> for ClusterConfig {
         Self {
             variant: config.variant.into(),
             workload_class: config.workload_class,
+            query_policy: config.query_policy,
         }
     }
 }
@@ -4028,6 +4079,27 @@ impl mz_sql::catalog::CatalogNetworkPolicy for NetworkPolicy {
     }
 }
 
+impl mz_sql::catalog::CatalogQueryPolicy for QueryPolicy {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn id(&self) -> QueryPolicyId {
+        self.id
+    }
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
+    }
+    fn privileges(&self) -> &PrivilegeMap {
+        &self.privileges
+    }
+    fn mode(&self) -> QueryPolicyMode {
+        self.mode
+    }
+    fn rules(&self) -> &[QueryPolicyRule] {
+        &self.rules
+    }
+}
+
 impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn name(&self) -> &str {
         &self.name
@@ -4314,6 +4386,7 @@ pub enum StateUpdateKind {
     Cluster(durable::objects::Cluster),
     ClusterSystemConfiguration(durable::objects::ClusterSystemConfiguration),
     NetworkPolicy(durable::objects::NetworkPolicy),
+    QueryPolicy(durable::objects::QueryPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
     ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),

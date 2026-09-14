@@ -883,6 +883,8 @@ mz_pending_cluster_replicas
 mz_postgres_source_tables
 mz_postgres_sources
 mz_prepared_statement_history
+mz_query_policies
+mz_query_policy_rules
 mz_recent_activity_log
 mz_recent_activity_log_redacted
 mz_recent_activity_log_thinned
@@ -915,6 +917,7 @@ mz_show_my_schema_privileges
 mz_show_my_system_privileges
 mz_show_network_policies
 mz_show_object_privileges
+mz_show_query_policies
 mz_show_role_members
 mz_show_roles
 mz_show_schema_privileges

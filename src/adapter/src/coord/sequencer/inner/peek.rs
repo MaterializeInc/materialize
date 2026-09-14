@@ -90,7 +90,9 @@ impl Staged for PeekStage {
             PeekStage::ExplainPushdown(stage) => {
                 coord.peek_explain_pushdown(ctx.session(), stage).await
             }
-            PeekStage::CopyToPreflight(stage) => coord.peek_copy_to_preflight(stage).await,
+            PeekStage::CopyToPreflight(stage) => {
+                coord.peek_copy_to_preflight(ctx.session(), stage).await
+            }
             PeekStage::CopyToDataflow(stage) => coord.peek_copy_to_dataflow(ctx, stage).await,
         }
     }
@@ -772,6 +774,8 @@ impl Coordinator {
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
         let source_arity = typ.arity();
 
+        crate::query_policy::check_query_policies(self.catalog(), session, cluster_id, &peek_plan)?;
+
         emit_optimizer_notices(&*self.catalog, &*session, &df_meta.optimizer_notices);
 
         if let Some(trace) = plan_insights_optimizer_trace {
@@ -860,8 +864,15 @@ impl Coordinator {
     #[instrument]
     async fn peek_copy_to_preflight(
         &self,
+        session: &Session,
         copy_to: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
+        crate::query_policy::check_query_policies(
+            self.catalog(),
+            session,
+            copy_to.optimizer.cluster_id(),
+            copy_to.global_lir_plan.df_desc(),
+        )?;
         let connection_context = self.connection_context().clone();
         let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
             .get(self.controller.storage.config().config_set());

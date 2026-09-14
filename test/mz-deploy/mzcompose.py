@@ -1330,6 +1330,8 @@ def workflow_avro_record_type(c: Composition, parser: WorkflowArgumentParser) ->
         # What a version 1 lock file holds for this column: the pseudo-type
         # token, with no way to rebuild the record. It has to load, and
         # reconstruction has to say what to do about it.
+        # The container-created file can be owned by root, so replace it.
+        types_lock.unlink()
         types_lock.write_text(
             'version = 1\n\n[[table]]\nname = "app.ingest.ledger_entry"\ncolumns = [\n'
             '    { name = "record", type = "record", nullable = true },\n]\n'

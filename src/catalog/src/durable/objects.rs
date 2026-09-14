@@ -38,6 +38,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{
@@ -46,6 +47,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::plan::{AutoScalingStrategy, ClusterSchedule, NetworkPolicyRule, OnTimeoutAction};
+use mz_sql::plan::{QueryPolicyMode, QueryPolicyRule};
 #[cfg(test)]
 use proptest_derive::Arbitrary;
 use uuid::Uuid;
@@ -258,6 +260,52 @@ impl DurableType for RoleAuth {
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct QueryPolicy {
+    pub name: String,
+    pub id: QueryPolicyId,
+    pub oid: u32,
+    pub mode: QueryPolicyMode,
+    pub rules: Vec<QueryPolicyRule>,
+    pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
+}
+
+impl DurableType for QueryPolicy {
+    type Key = QueryPolicyKey;
+    type Value = QueryPolicyValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            QueryPolicyKey { id: self.id },
+            QueryPolicyValue {
+                name: self.name,
+                oid: self.oid,
+                mode: self.mode,
+                rules: self.rules,
+                owner_id: self.owner_id,
+                privileges: self.privileges,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            name: value.name,
+            oid: value.oid,
+            mode: value.mode,
+            rules: value.rules,
+            owner_id: value.owner_id,
+            privileges: value.privileges,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        QueryPolicyKey { id: self.id }
+    }
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct NetworkPolicy {
     pub name: String,
     pub id: NetworkPolicyId,
@@ -344,6 +392,7 @@ impl DurableType for Cluster {
 pub struct ClusterConfig {
     pub variant: ClusterVariant,
     pub workload_class: Option<String>,
+    pub query_policy: Option<QueryPolicyId>,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
@@ -1339,6 +1388,7 @@ pub struct Snapshot {
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
     pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
+    pub query_policies: BTreeMap<proto::QueryPolicyKey, proto::QueryPolicyValue>,
     pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
     pub introspection_sources: BTreeMap<
         proto::ClusterIntrospectionSourceIndexKey,
@@ -1596,6 +1646,21 @@ pub struct RoleValue {
     pub(crate) attributes: RoleAttributes,
     pub(crate) membership: RoleMembership,
     pub(crate) vars: RoleVars,
+    pub(crate) oid: u32,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+pub struct QueryPolicyKey {
+    pub(crate) id: QueryPolicyId,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
+pub struct QueryPolicyValue {
+    pub(crate) name: String,
+    pub(crate) mode: QueryPolicyMode,
+    pub(crate) rules: Vec<QueryPolicyRule>,
+    pub(crate) owner_id: RoleId,
+    pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
 }
 

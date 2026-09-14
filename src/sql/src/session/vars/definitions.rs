@@ -2260,6 +2260,18 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_query_policies,
+        desc: "Enable creating and managing query policies and their attachments.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_query_policy_enforcement,
+        desc: "Enable checking attached query policies during query admission.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_create_table_from_source,
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
         default: true,

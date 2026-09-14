@@ -79,6 +79,15 @@ pub fn plan_alter_owner(
         (ObjectType::NetworkPolicy, UnresolvedObjectName::NetworkPolicy(name)) => {
             plan_alter_network_policy_owner(scx, if_exists, name, new_owner.id)
         }
+        (ObjectType::QueryPolicy, UnresolvedObjectName::QueryPolicy(name)) => {
+            scx.require_feature_flag(&crate::session::vars::ENABLE_QUERY_POLICIES)?;
+            let policy = scx.catalog.resolve_query_policy(name.as_str())?;
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::QueryPolicy(policy.id()),
+                object_type,
+                new_owner: new_owner.id,
+            }))
+        }
         // The parser should have rejected this.
         (ObjectType::Role, UnresolvedObjectName::Role(_)) => {
             bail_internal!("cannot ALTER OWNER of a role")
@@ -98,6 +107,7 @@ pub fn plan_alter_owner(
             | name @ UnresolvedObjectName::Database(_)
             | name @ UnresolvedObjectName::Schema(_)
             | name @ UnresolvedObjectName::NetworkPolicy(_)
+            | name @ UnresolvedObjectName::QueryPolicy(_)
             | name @ UnresolvedObjectName::Role(_),
         ) => {
             // The parser should not have produced this combination.
@@ -442,6 +452,9 @@ fn plan_update_privilege(
                 }
             }
             let object_type = object_type.into();
+            if object_type == ObjectType::QueryPolicy {
+                scx.require_feature_flag(&crate::session::vars::ENABLE_QUERY_POLICIES)?;
+            }
             let object_ids: Vec<ObjectId> = match object_spec_inner {
                 GrantTargetSpecificationInner::All(GrantTargetAllSpecification::All) => {
                     let cluster_ids = scx
@@ -470,11 +483,17 @@ fn plan_update_privilege(
                         .get_network_policies()
                         .into_iter()
                         .map(|network_policy| ObjectId::NetworkPolicy(network_policy.id()));
+                    let query_policy_ids = scx
+                        .catalog
+                        .get_query_policies()
+                        .into_iter()
+                        .map(|policy| ObjectId::QueryPolicy(policy.id()));
                     cluster_ids
                         .chain(database_ids)
                         .chain(schema_ids)
                         .chain(item_ids)
                         .chain(network_policy_ids)
+                        .chain(query_policy_ids)
                         .filter(|object_id| object_type_filter(object_id, &object_type, scx))
                         .filter(|object_id| object_id.is_user())
                         .collect()
@@ -646,6 +665,7 @@ fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
         Privilege::CREATEDB => AclMode::CREATE_DB,
         Privilege::CREATECLUSTER => AclMode::CREATE_CLUSTER,
         Privilege::CREATENETWORKPOLICY => AclMode::CREATE_NETWORK_POLICY,
+        Privilege::CREATEQUERYPOLICY => AclMode::CREATE_QUERY_POLICY,
     }
 }
 
@@ -701,7 +721,8 @@ pub fn plan_alter_default_privileges(
         | ObjectType::Cluster
         | ObjectType::Database
         | ObjectType::Schema
-        | ObjectType::NetworkPolicy => {}
+        | ObjectType::NetworkPolicy
+        | ObjectType::QueryPolicy => {}
     }
 
     let acl_mode = privilege_spec_to_acl_mode(
@@ -832,6 +853,12 @@ pub fn plan_reassign_owned(
     for network_policy in scx.catalog.get_network_policies() {
         if old_roles.contains(&network_policy.owner_id()) {
             reassign_ids.push(ObjectId::NetworkPolicy(network_policy.id()));
+        }
+    }
+    for policy in scx.catalog.get_query_policies() {
+        if old_roles.contains(&policy.owner_id()) {
+            scx.require_feature_flag(&crate::session::vars::ENABLE_QUERY_POLICIES)?;
+            reassign_ids.push(ObjectId::QueryPolicy(policy.id()));
         }
     }
 

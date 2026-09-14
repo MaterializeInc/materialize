@@ -576,6 +576,8 @@ def compileFastSltConfig() -> SltRunConfig:
     }
 
     tests_without_views = {
+        # Indexed-view wrappers change the plan features that admission checks.
+        "test/sqllogictest/query_policy.slt",
         "test/sqllogictest/alter.slt",
         "test/sqllogictest/ambiguous_rename.slt",
         "test/sqllogictest/arithmetic.slt",
@@ -1085,6 +1087,8 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/replacement-materialized-views.slt",
     }
     tests_no_auto_index_selects = {
+        # Indexed-view wrappers change the plan features that admission checks.
+        "test/sqllogictest/query_policy.slt",
         # Selects from temporary objects, which cannot be wrapped in the
         # persistent indexed views that --auto-index-selects creates.
         "test/sqllogictest/rename.slt",

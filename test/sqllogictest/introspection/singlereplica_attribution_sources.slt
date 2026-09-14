@@ -34,11 +34,12 @@ CREATE INDEX v_idx_x ON v(x);
 statement ok
 SELECT mz_unsafe.mz_sleep(8)
 
+# Normalize allocated IDs while preserving whether objects share a dataflow.
 query IT
-SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
+SELECT dense_rank() OVER (ORDER BY id), global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-6  u2
-6  u3
+1  u2
+1  u3
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
@@ -120,9 +121,9 @@ statement ok
 SELECT mz_unsafe.mz_sleep(8)
 
 query IT
-SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
+SELECT dense_rank() OVER (ORDER BY id), global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-11  t<id>
+1  t<id>
 
 
 query TI

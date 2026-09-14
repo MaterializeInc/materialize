@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 513
 expression: audit_log
 ---
 [
@@ -207,7 +206,7 @@ expression: audit_log
                     object_id: "SYSTEM",
                     grantee_id: "s1",
                     grantor_id: "s1",
-                    privileges: "RBNP",
+                    privileges: "RBNPQ",
                 },
             ),
             user: None,
