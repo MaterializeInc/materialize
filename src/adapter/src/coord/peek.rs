@@ -879,9 +879,12 @@ impl crate::coord::Coordinator {
                     }
 
                     // Very important: actually create the dataflow (here, so we can destructure).
+                    // Targeted at the same replica as the peek issued below: the index's only
+                    // reader is that peek, so shipping it everywhere would be wasted work, and a
+                    // mismatched target would panic the other replica's `handle_peek`.
                     self.controller
                         .compute
-                        .create_dataflow(compute_instance, dataflow, None)
+                        .create_dataflow(compute_instance, dataflow, target_replica)
                         .map_err(
                             AdapterError::concurrent_dependency_drop_from_dataflow_creation_error,
                         )?;

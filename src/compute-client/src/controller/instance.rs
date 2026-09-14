@@ -1438,6 +1438,21 @@ impl Instance {
             }
         }
 
+        // A dataflow that reads an index absent from its own replica cannot be rendered there:
+        // the imported index's target replica must agree with the dataflow's own target. The
+        // adapter never constructs such a dataflow, so a mismatch here is a bug, not a runtime
+        // condition to recover from.
+        for &id in dataflow.index_imports.keys() {
+            if let Some(import_target) = self.expect_collection(id).target_replica {
+                assert_eq!(
+                    Some(import_target),
+                    target_replica,
+                    "dataflow imports index {id} targeted at replica {import_target}, \
+                     but the dataflow itself targets {target_replica:?}",
+                );
+            }
+        }
+
         // Simple sanity checks around `as_of`
         let as_of = dataflow.as_of.as_ref().ok_or(MissingAsOf)?;
         if as_of.is_empty() && dataflow.subscribe_ids().next().is_some() {
@@ -1790,6 +1805,21 @@ impl Instance {
         if let Some(target) = target_replica {
             if !self.replica_exists(target) {
                 return Err(ReplicaMissing(target));
+            }
+        }
+
+        // Sending a peek for an index to a replica that does not host it panics that replica: the
+        // replica side (`handle_peek`) unwraps the trace lookup unconditionally. The adapter only
+        // targets a peek at the same replica as the transient index it reads, so a mismatch here
+        // is a programming error, not a user error.
+        if let PeekTarget::Index { id } = &peek_target {
+            if let Some(index_target) = self.expect_collection(*id).target_replica {
+                assert_eq!(
+                    Some(index_target),
+                    target_replica,
+                    "peek of index {id} targeted at replica {index_target}, \
+                     but the peek itself targets {target_replica:?}",
+                );
             }
         }
 
