@@ -654,14 +654,9 @@ creating indexes, see [Index Best Practices](/fundamentals/concepts/indexes/#bes
   ```
 
 - To let your agent query your data and inspect your deployment, connect it to
-  Materialize's built-in [MCP servers](/developer-tools/mcp-server/):
-
-  - [MCP Server for agents](/developer-tools/mcp-server/mcp-agent/) to discover and
-    query your data products.
-
-  - [MCP Server for developers](/developer-tools/mcp-server/mcp-developer/) to
-    troubleshoot and observe your deployment through the `mz_*` system catalog
-    tables, and to run queries on your objects.
+  the built-in [Materialize MCP server](/developer-tools/mcp-server/). One
+  endpoint serves both curated data products and the `mz_*` system catalog,
+  governed by your existing roles and grants.
 
 - For help getting started with your data or other questions about Materialize,
   you can schedule a [free guided

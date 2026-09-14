@@ -486,10 +486,11 @@ is established, it persists until disconnected, regardless of token expiry.
 
 *OAuth sign-in for MCP clients is available starting in v26.31.*
 
-Materialize provides built-in [MCP servers](/developer-tools/mcp-server/) at
-`/api/mcp/agent` and `/api/mcp/developer`. When SSO is enabled, MCP clients
-can authenticate with OAuth instead of an [MCP
-token](/developer-tools/mcp-server/mcp-agent/#method-2-token-based-authentication).
+Materialize provides a built-in [MCP server](/developer-tools/mcp-server/) at
+`/api/mcp` (the legacy `/api/mcp/agent` and `/api/mcp/developer` endpoints are
+also served). When SSO is enabled, MCP clients can authenticate with OAuth
+instead of a [service account
+token](/developer-tools/mcp-server/access-control/#service-accounts).
 Materialize publishes OAuth 2.0 Protected Resource Metadata ([RFC
 9728](https://datatracker.ietf.org/doc/html/rfc9728)) at
 `/.well-known/oauth-protected-resource`, which MCP-aware clients use to
@@ -554,19 +555,19 @@ requirements:
 
 ### Configure your MCP client
 
-1. **Connect.** For example, to connect Claude Code to the
-   `materialize-agent` MCP server with a pre-registered client:
+1. **Connect.** For example, to connect Claude Code to the Materialize MCP
+   server with a pre-registered client:
 
    ```shell
-   claude mcp add --transport http materialize-agent \
-     https://<host>:6876/api/mcp/agent \
+   claude mcp add --transport http materialize \
+     https://<host>:6876/api/mcp \
      --client-id <YOUR_CLIENT_ID> --callback-port 8080
    ```
 
    The `--callback-port` value must match the port in the
    `http://localhost:<port>/callback` redirect URI registered on the OIDC
-   client. For more information, see
-   [MCP servers](/developer-tools/mcp-server/).
+   client. For more information, see [Set up MCP for your organization on
+   Self-Managed](/developer-tools/mcp-server/setup-self-managed/).
 
 {{< note >}}
 Deployments behind a load balancer or proxy that rewrites the `Host` header

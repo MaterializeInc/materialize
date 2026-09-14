@@ -123,26 +123,24 @@ Skills](/developer-tools/mcp-server/coding-agent-skills/).
 
 #### Connect to the MCP server
 
-The Materialize Emulator includes a built-in `materialize-developer` [MCP
-server](/developer-tools/mcp-server/mcp-developer/) for troubleshooting and
-observability. The Emulator does not require authentication, so your MCP
-client only needs the MCP server URL
-`http://localhost:6876/api/mcp/developer`.
+The Materialize Emulator includes the built-in [Materialize MCP
+server](/developer-tools/mcp-server/) for querying your data and
+troubleshooting your deployment. The Emulator does not require authentication,
+so your MCP client only needs the MCP server URL `http://localhost:6876/api/mcp`.
 
 1. Configure your MCP client with the Emulator's MCP server URL. For example,
    if using [Claude Code](https://docs.anthropic.com/en/docs/claude-code):
 
    ```sh
-   claude mcp add --transport http materialize-developer \
-     http://localhost:6876/api/mcp/developer
+   claude mcp add --transport http materialize http://localhost:6876/api/mcp
    ```
 
 1. Restart your MCP client to pick up the new setting. Once connected, you can
    ask questions like *Why is my materialized view stale?* or *How much memory
    is my cluster using?*
 
-For more details, including instructions for other MCP clients, see [MCP Server
-for Developers](/developer-tools/mcp-server/mcp-developer/).
+For more details, including instructions for other MCP clients, see the
+[Materialize MCP server](/developer-tools/mcp-server/) documentation.
 
 ### Next steps
 
