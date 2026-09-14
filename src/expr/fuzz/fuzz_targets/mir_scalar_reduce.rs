@@ -66,7 +66,7 @@
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_expr::func::variadic::{And, Or};
-use mz_expr::{Eval, EvalError, MirScalarExpr, VariadicFunc, func};
+use mz_expr::{Eval, EvalError, MirScalarExpr, UnaryFunc, VariadicFunc, func};
 use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena};
 
 // Column layout: a contiguous block per type. Columns are nullable.
@@ -273,6 +273,24 @@ fn gen_wide_and_or(u: &mut Unstructured, depth: u32) -> arbitrary::Result<MirSca
     })
 }
 
+/// A cast as the planner emits it: strict, or, half the time, wrapped in
+/// `TryCast` the way `TRY_CAST` wraps every stage of a cast chain. The wrapper
+/// is strict in its argument and never errors, so it needs no special handling
+/// in the oracle; generating it checks that `reduce` treats it that way.
+fn maybe_try_cast(
+    u: &mut Unstructured,
+    cast: impl Into<UnaryFunc>,
+) -> arbitrary::Result<UnaryFunc> {
+    let cast = cast.into();
+    Ok(if bool::arbitrary(u)? {
+        UnaryFunc::TryCast(func::TryCast {
+            inner: Box::new(cast),
+        })
+    } else {
+        cast
+    })
+}
+
 fn gen_expr(u: &mut Unstructured, ty: Ty, depth: u32) -> arbitrary::Result<MirScalarExpr> {
     if depth == 0 || u.ratio(2u8, 5u8)? {
         return gen_leaf(u, ty);
@@ -297,8 +315,10 @@ fn gen_expr(u: &mut Unstructured, ty: Ty, depth: u32) -> arbitrary::Result<MirSc
             6 => Ok(gen_expr(u, Ty::Int, d)?.call_unary(func::AbsInt32)),
             // Casts that produce an int4.
             _ => match u.int_in_range(0u8..=2)? {
-                0 => Ok(gen_expr(u, Ty::Long, d)?.call_unary(func::CastInt64ToInt32)),
-                1 => Ok(gen_expr(u, Ty::Str, d)?.call_unary(func::CastStringToInt32)),
+                0 => Ok(gen_expr(u, Ty::Long, d)?
+                    .call_unary(maybe_try_cast(u, func::CastInt64ToInt32)?)),
+                1 => Ok(gen_expr(u, Ty::Str, d)?
+                    .call_unary(maybe_try_cast(u, func::CastStringToInt32)?)),
                 _ => Ok(gen_expr(u, Ty::Str, d)?.call_unary(func::ByteLengthString)),
             },
         },
@@ -324,8 +344,10 @@ fn gen_expr(u: &mut Unstructured, ty: Ty, depth: u32) -> arbitrary::Result<MirSc
                 6 => Ok(gen_expr(u, Ty::Long, d)?.call_unary(func::AbsInt64)),
                 // Casts that produce an int8.
                 _ => match u.int_in_range(0u8..=1)? {
-                    0 => Ok(gen_expr(u, Ty::Int, d)?.call_unary(func::CastInt32ToInt64)),
-                    _ => Ok(gen_expr(u, Ty::Str, d)?.call_unary(func::CastStringToInt64)),
+                    0 => Ok(gen_expr(u, Ty::Int, d)?
+                        .call_unary(maybe_try_cast(u, func::CastInt32ToInt64)?)),
+                    _ => Ok(gen_expr(u, Ty::Str, d)?
+                        .call_unary(maybe_try_cast(u, func::CastStringToInt64)?)),
                 },
             }
         }
@@ -361,20 +383,24 @@ fn gen_expr(u: &mut Unstructured, ty: Ty, depth: u32) -> arbitrary::Result<MirSc
                 Ok(gen_expr(u, t, d)?.call_is_null())
             }
             // int4 -> bool cast.
-            _ => Ok(gen_expr(u, Ty::Int, d)?.call_unary(func::CastInt32ToBool)),
+            _ => Ok(gen_expr(u, Ty::Int, d)?.call_unary(maybe_try_cast(u, func::CastInt32ToBool)?)),
         },
-        Ty::Str => match u.int_in_range(0u8..=3)? {
-            0 => {
-                let cond = gen_expr(u, Ty::Bool, d)?;
-                let then = gen_expr(u, Ty::Str, d)?;
-                let els = gen_expr(u, Ty::Str, d)?;
-                Ok(cond.if_then_else(then, els))
+        Ty::Str => {
+            match u.int_in_range(0u8..=3)? {
+                0 => {
+                    let cond = gen_expr(u, Ty::Bool, d)?;
+                    let then = gen_expr(u, Ty::Str, d)?;
+                    let els = gen_expr(u, Ty::Str, d)?;
+                    Ok(cond.if_then_else(then, els))
+                }
+                1 => Ok(gen_expr(u, Ty::Str, d)?
+                    .call_binary(gen_expr(u, Ty::Str, d)?, func::TextConcatBinary)),
+                2 => Ok(gen_expr(u, Ty::Int, d)?
+                    .call_unary(maybe_try_cast(u, func::CastInt32ToString)?)),
+                _ => Ok(gen_expr(u, Ty::Bool, d)?
+                    .call_unary(maybe_try_cast(u, func::CastBoolToString)?)),
             }
-            1 => Ok(gen_expr(u, Ty::Str, d)?
-                .call_binary(gen_expr(u, Ty::Str, d)?, func::TextConcatBinary)),
-            2 => Ok(gen_expr(u, Ty::Int, d)?.call_unary(func::CastInt32ToString)),
-            _ => Ok(gen_expr(u, Ty::Bool, d)?.call_unary(func::CastBoolToString)),
-        },
+        }
     }
 }
 
