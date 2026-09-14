@@ -182,12 +182,16 @@ fn test_server_error() {
         // Server has disconnected.
         assert_eq!(
             client.recv().await.map_err(|e| e.to_string()),
-            Err("unexpected end of file".into()),
+            Err("recv error: unexpected end of file".into()),
         );
+        // Give the send task time to fail on the closed connection as well. The first error is
+        // the one that explains what happened, so it must not be overwritten by the second.
+        tokio::time::sleep(TIMEOUT).await;
+
         // Trying to receive on a failed connection yields more errors.
         assert_eq!(
             client.recv().await.map_err(|e| e.to_string()),
-            Err("unexpected end of file".into()),
+            Err("recv error: unexpected end of file".into()),
         );
 
         Ok(())
@@ -350,7 +354,7 @@ fn test_idle_timeout() {
         // Connection timed out.
         assert_eq!(
             client.recv().await.map_err(|e| e.to_string()),
-            Err("timed out".into()),
+            Err("recv error: timed out".into()),
         );
 
         Ok(())
@@ -442,7 +446,7 @@ fn test_connection_cancelation() {
         // Connection canceled.
         assert_eq!(
             client.recv().await.map_err(|e| e.to_string()),
-            Err("unexpected end of file".into()),
+            Err("recv error: unexpected end of file".into()),
         );
 
         Ok(())
