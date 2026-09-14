@@ -28,23 +28,24 @@ use timely::order::TotalOrder;
 use timely::progress::{Timestamp, frontier::Antichain};
 type BatchRef<D, T, R> = Rc<ChunkBatch<ColumnChunk<D, T, R>>>;
 
-/// Quiet time on the input before unfunded consolidation may start.
-///
-/// The exertion policy grants effort per scheduling turn, and turns are not
-/// proportional to input: an operator that is woken often while ingesting can
-/// otherwise fund enough virtual introductions to merge each published batch into
-/// its largest batch. Inserted updates fund consolidation while input flows, and
-/// this quiet interval, well below a source tick and well above a turn, marks a
-/// genuinely idle input where the configured policy may run without limit.
-const IDLE_CONSOLIDATION_AFTER: std::time::Duration = std::time::Duration::from_millis(100);
-
 /// Arrange a local stream using asynchronous batch and trace merges.
 ///
 /// The caller owns the shutdown token. The input must already have the desired
 /// worker partitioning. All clones of `budget` share decoded-input admission.
+///
+/// `idle_after` is the quiet time on the input, with no data and no frontier
+/// progress, before the exertion policy may consolidate without limit. While
+/// input flows, optional consolidation is funded by inserted updates. The
+/// exertion policy grants effort per scheduling turn, and turns are not
+/// proportional to input, so an operator woken often while ingesting could
+/// otherwise merge each published batch into its largest batch. Input from a
+/// ticking source arrives in bursts, so this interval must exceed several
+/// ticks, not merely a turn, or every gap between bursts opens the unbounded
+/// drain.
 pub fn arrange<'scope, D, T, R>(
     stream: Stream<'scope, T, Column<(D, T, R)>>,
     budget: ReadBudget,
+    idle_after: std::time::Duration,
     name: &str,
 ) -> (
     Arranged<'scope, TraceAgent<Spine<D, T, R>>>,
@@ -85,7 +86,7 @@ where
         let mut deferred = false;
         const INPUT_EVENTS_PER_TURN: usize = 32;
         loop {
-            let idle_at = last_input + IDLE_CONSOLIDATION_AFTER;
+            let idle_at = last_input + idle_after;
             let mut event = tokio::select! {
                 biased;
                 _ = input.ready(), if !upper.is_empty() => input.next_sync(),
@@ -151,7 +152,7 @@ where
             // consolidation while input flows, and only a quiet input lifts that bound.
             let exertion = if !input.is_empty() {
                 Exertion::Merges
-            } else if upper.is_empty() || last_input.elapsed() >= IDLE_CONSOLIDATION_AFTER {
+            } else if upper.is_empty() || last_input.elapsed() >= idle_after {
                 Exertion::Idle
             } else {
                 Exertion::Funded

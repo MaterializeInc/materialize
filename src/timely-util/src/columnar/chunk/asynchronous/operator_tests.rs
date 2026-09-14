@@ -101,7 +101,10 @@ fn install(
 ) -> (InputPort, Option<super::PressOnDropButton>) {
     let (input, stream) = scope.new_input::<Column<Update>>();
     let token = if asynchronous {
-        let (arranged, token) = super::arrange(stream, budget, "Async");
+        let idle_after = Duration::from_millis(
+            u64::try_from(parameter("MZ_BENCH_IDLE_CONSOLIDATION_MS", 5000)).unwrap(),
+        );
+        let (arranged, token) = super::arrange(stream, budget, idle_after, "Async");
         let notify = Arc::clone(&arranged.trace.trace_box_unstable().borrow().trace().notify);
         observed
             .borrow_mut()
