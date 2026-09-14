@@ -9,6 +9,7 @@
 
 """The relations under test and their per-relation diff configuration."""
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -44,6 +45,62 @@ def is_dropped_element_ref_edge(
     )
 
 
+# A `REFRESH AT` time or `ALIGNED TO` alignment as it appears in create_sql:
+# the literal the corpus writes, or the `<millis>::[<id> AS
+# "mz_catalog"."mz_timestamp"]` form the current build stores it as after
+# folding. The redacted create_sql spells both as `'<REDACTED>'`, the folded
+# one keeping its cast.
+REFRESH_TIME_PATTERN = re.compile(
+    r"\b(AT|ALIGNED TO) (?:'[^']*'|[0-9]+)(?:::\[[^\]]*\])?"
+)
+
+
+def mask_refresh_times(create_sql: str) -> str:
+    return REFRESH_TIME_PATTERN.sub(r"\1 <time>", create_sql)
+
+
+def is_folded_refresh_time_row(
+    row: Row, old_rows: list[Row], new_rows: list[Row]
+) -> bool:
+    """Expected one-sided rows of mz_materialized_views.
+
+    Purification now folds `REFRESH AT` and `ALIGNED TO` expressions to
+    `mz_timestamp` literals before a statement is stored, so the create_sql of
+    a REFRESH materialized view differs from the baseline in exactly those
+    expressions. A one-sided row is expected when the other side has the same
+    row up to the refresh times of its create_sql columns.
+
+    Only the literal times the corpus writes are recognised. A time given as
+    an expression with operators needs its own allowance.
+    """
+    for other in old_rows + new_rows:
+        if other is row or other["id"] != row["id"]:
+            continue
+        if all(
+            (
+                mask_refresh_times(row[column]) == mask_refresh_times(other[column])
+                if column in ("create_sql", "redacted_create_sql")
+                else row[column] == other[column]
+            )
+            for column in row
+        ):
+            return True
+    return False
+
+
+def is_folded_refresh_time_edge(
+    row: Row, old_rows: list[Row], new_rows: list[Row]
+) -> bool:
+    """Expected new-only rows of mz_object_dependencies.
+
+    Folding a refresh time to an `mz_timestamp` literal (see
+    `is_folded_refresh_time_row`) makes the materialized view reference the
+    `mz_timestamp` type, which the baseline, having stored the expression as
+    written, did not record.
+    """
+    return row["referenced_object_id"] == "mz_catalog.mz_timestamp"
+
+
 @dataclass
 class RelationDiffConfig:
     """Per-relation knobs for the diff."""
@@ -62,10 +119,13 @@ class RelationDiffConfig:
     # the cell is rewritten with its elements sorted before diffing.
     sort_array_columns: list[str] = field(default_factory=list)
     # Whether the relation's builtin rows legitimately differ between versions
-    # (builtin view definitions, builtin comments, builtin indexes). Under
-    # --user-rows-only such a relation compares only rows whose id starts
-    # with "u".
+    # (builtin view definitions, builtin comments, builtin indexes, and which
+    # builtins are materialized views). Under --user-rows-only such a relation
+    # compares only rows whose `id_column` starts with "u".
     builtin_rows_drift: bool = False
+    # The column holding the catalog id of the row's object, for the
+    # --user-rows-only filter.
+    id_column: str = "id"
 
 
 # Covers every builtin-table-to-materialized-view conversion recorded in
@@ -115,6 +175,8 @@ RELATIONS: dict[str, RelationDiffConfig] = {
     "mz_catalog.mz_materialized_views": RelationDiffConfig(
         id_namespace_by_column={"cluster_id": "cluster", "owner_id": "role"},
         sort_array_columns=["privileges"],
+        allow_old_only=is_folded_refresh_time_row,
+        allow_new_only=is_folded_refresh_time_row,
         builtin_rows_drift=True,
     ),
     "mz_catalog.mz_role_members": RelationDiffConfig(
@@ -162,18 +224,35 @@ RELATIONS: dict[str, RelationDiffConfig] = {
     "mz_internal.mz_comments": RelationDiffConfig(
         builtin_rows_drift=True,
     ),
+    # Retained-metrics builtin tables, sources and indexes follow
+    # `metrics_retention`, and which builtins carry that flag changes between
+    # versions.
+    "mz_internal.mz_history_retention_strategies": RelationDiffConfig(
+        builtin_rows_drift=True,
+    ),
     "mz_internal.mz_internal_cluster_replicas": RelationDiffConfig(
         id_namespace_by_column={"id": "replica"},
     ),
     "mz_internal.mz_kafka_source_tables": RelationDiffConfig(),
+    # Every builtin materialized view refreshes on commit, but which builtins
+    # are materialized views differs between versions.
+    "mz_internal.mz_materialized_view_refresh_strategies": RelationDiffConfig(
+        builtin_rows_drift=True,
+        id_column="materialized_view_id",
+    ),
     "mz_internal.mz_mysql_source_tables": RelationDiffConfig(),
     "mz_internal.mz_network_policies": RelationDiffConfig(
         id_namespace_by_column={"owner_id": "role"},
         sort_array_columns=["privileges"],
     ),
     "mz_internal.mz_network_policy_rules": RelationDiffConfig(),
+    # A builtin's edges follow its definition: a builtin table that becomes a
+    # materialized view gains the edges of its query.
     "mz_internal.mz_object_dependencies": RelationDiffConfig(
         allow_old_only=is_dropped_element_ref_edge,
+        allow_new_only=is_folded_refresh_time_edge,
+        builtin_rows_drift=True,
+        id_column="object_id",
     ),
     # `global_id` is canonicalized in its own namespace: a `GlobalId` and a
     # `CatalogItemId` with the same digits denote different objects, so
@@ -189,9 +268,15 @@ RELATIONS: dict[str, RelationDiffConfig] = {
         id_namespace_by_column={"id": "replica"},
     ),
     "mz_internal.mz_postgres_source_tables": RelationDiffConfig(),
+    "mz_internal.mz_replacements": RelationDiffConfig(),
     # The slot name carries a UUID generated per source at creation time.
     "mz_internal.mz_postgres_sources": RelationDiffConfig(
         ignore_columns=["replication_slot"],
+    ),
+    # `updated_at` records when the source last refreshed its references, so
+    # it differs between the two environments by construction.
+    "mz_internal.mz_source_references": RelationDiffConfig(
+        ignore_columns=["updated_at"],
     ),
     "mz_internal.mz_sql_server_source_tables": RelationDiffConfig(),
 }

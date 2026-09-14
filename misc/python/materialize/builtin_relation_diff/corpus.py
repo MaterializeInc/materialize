@@ -10,11 +10,13 @@
 """The user-object corpus applied to both sides in corpus mode."""
 
 # Statements that need the system account, applied before CORPUS: network
-# policy creation is flag-gated on older versions, and workload classes are
-# settable only by system users.
+# policy creation, index options and a disabled compaction window are
+# flag-gated, and workload classes are settable only by system users.
 SYSTEM_CORPUS = [
     "ALTER SYSTEM SET enable_network_policies = true",
     "ALTER SYSTEM SET enable_alter_table_add_column = true",
+    "ALTER SYSTEM SET enable_index_options = true",
+    "ALTER SYSTEM SET enable_unlimited_retain_history = true",
     "ALTER CLUSTER quickstart SET (WORKLOAD CLASS 'corpus_wc')",
 ]
 
@@ -84,6 +86,43 @@ CORPUS = [
         SECRET ACCESS KEY = SECRET pw,
         REGION = 'us-east-1'
     ) WITH (VALIDATE = false)""",
+    # Rows for mz_history_retention_strategies: every RETAIN HISTORY spelling
+    # planning accepts (a string, an interval literal, a bare number of
+    # seconds, a disabled window) on each item kind that has a compaction
+    # window, plus a window set and one reset after creation. The items
+    # created above cover the default window.
+    "CREATE TABLE t_retain (a int) WITH (RETAIN HISTORY FOR '1h')",
+    "CREATE TABLE t_retain_interval (a int) WITH (RETAIN HISTORY FOR INTERVAL '2' DAY)",
+    "CREATE TABLE t_retain_seconds (a int) WITH (RETAIN HISTORY FOR 90)",
+    "CREATE TABLE t_retain_disabled (a int) WITH (RETAIN HISTORY FOR '0')",
+    """CREATE SOURCE counter_retain IN CLUSTER quickstart
+        FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '2h')""",
+    "CREATE INDEX v_retain_idx ON v (a_abs) WITH (RETAIN HISTORY FOR '3h')",
+    """CREATE MATERIALIZED VIEW mv_retain IN CLUSTER quickstart
+        WITH (RETAIN HISTORY FOR '4h') AS SELECT a FROM t""",
+    "ALTER TABLE t SET (RETAIN HISTORY FOR '5h')",
+    "ALTER INDEX t_idx SET (RETAIN HISTORY FOR '6h')",
+    "ALTER INDEX t_idx RESET (RETAIN HISTORY)",
+    # Rows for mz_materialized_view_refresh_strategies: REFRESH AT and REFRESH
+    # EVERY with literal times, and several options on one view. Times derived
+    # from mz_now() (REFRESH AT CREATION, an omitted ALIGNED TO) are absent on
+    # purpose: they are wall-clock values that differ between the two
+    # environments by construction.
+    """CREATE MATERIALIZED VIEW mv_refresh_at IN CLUSTER quickstart
+        WITH (REFRESH AT '2999-01-01 00:00:00+00') AS SELECT a FROM t""",
+    """CREATE MATERIALIZED VIEW mv_refresh_every IN CLUSTER quickstart
+        WITH (REFRESH EVERY '1 day' ALIGNED TO '2000-01-01 00:00:00+00')
+        AS SELECT a FROM t""",
+    """CREATE MATERIALIZED VIEW mv_refresh_many IN CLUSTER quickstart
+        WITH (
+            REFRESH AT '2999-06-01 00:00:00+00',
+            REFRESH AT '2999-07-01 00:00:00+00',
+            REFRESH EVERY '90 minutes' ALIGNED TO '2000-01-01 00:00:00+00'
+        )
+        AS SELECT a FROM t""",
+    # A row for mz_replacements: a replacement that has not been applied.
+    """CREATE REPLACEMENT MATERIALIZED VIEW mv_replacement FOR mv IN CLUSTER quickstart
+        AS SELECT count(*) AS c FROM v WHERE a_abs > 0""",
     "CREATE TEMPORARY TABLE tmp_t (a int)",
     "CREATE TEMPORARY VIEW tmp_v AS SELECT * FROM t",
 ]

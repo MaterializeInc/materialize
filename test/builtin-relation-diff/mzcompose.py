@@ -18,19 +18,23 @@ builtin objects double as a large free test corpus.
 System ids are not stable across builds (adding any builtin shifts
 fresh-install id assignment), so dumps are canonicalized before diffing: any
 cell whose value looks like a catalog id is rewritten to the qualified name of
-the object it denotes on that side.
+the object it denotes on that side, and an id inside a `[<id> AS <name>]`
+reference in a create_sql is dropped in favour of the name.
 
-For an exact diff, run against the merge base of your branch:
+For an exact diff, run against the merge base of your branch with
+MaterializeInc/materialize main (`upstream` in the fork-based setup that
+doc/developer/guide-changes.md describes):
 
     bin/mzcompose --find builtin-relation-diff run default \\
-        --old-commit $(git merge-base HEAD origin/main)
+        --old-commit $(git merge-base HEAD upstream/main)
 
 Without --old-commit or --old-image the common-ancestor release image is
 used. Builtins that were added or changed on main since that release then
 show up as one-sided rows. Rows naming an object that does not exist on the
-other side at all are tolerated automatically, but changes to a builtin
-view's definition between the two versions are reported and need human
-judgement.
+other side at all, or that is an object of another kind there (a builtin
+table that became a materialized view), are tolerated automatically, but
+changes to a builtin view's definition between the two versions are reported
+and need human judgement.
 
 To validate an already-shipped table-to-view conversion, diff against the
 last release before the conversion version (see the MIGRATIONS list in

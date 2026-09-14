@@ -31,6 +31,11 @@ NAME_PATTERN = re.compile(
 # position still compare while the value does not.
 AS_OF_PATTERN = re.compile(r"\bAS OF \d+")
 
+# A `[<id> AS <name>]` reference inside a create_sql already carries the name,
+# and a system id there shifts whenever a builtin is added ahead of the object
+# it denotes, so only the name is kept.
+ID_REF_PATTERN = re.compile(r"\[[ust]\d+ AS ")
+
 # A Postgres source's replication slot name carries a UUID generated per source
 # at creation time. Beyond mz_postgres_sources.replication_slot, which is
 # dropped outright, it reaches the dump hex-encoded inside the protobuf
@@ -38,6 +43,11 @@ AS_OF_PATTERN = re.compile(r"\bAS OF \d+")
 # 6d6174657269616c697a655f, followed by the UUID's 32 hex characters, each
 # themselves ASCII-hex-encoded, so 64 digits.
 SLOT_HEX_PATTERN = re.compile(r"6d6174657269616c697a655f[0-9a-f]{64}")
+
+# An SSH tunnel connection's keypair is generated per environment. Beyond the
+# public key columns of mz_ssh_tunnel_connections, which are dropped outright,
+# the keys reach the dump inside the connection's create_sql.
+SSH_KEY_PATTERN = re.compile(r"ssh-ed25519 [A-Za-z0-9+/=]+")
 
 # Columns whose ids live in a namespace other than "object", by convention.
 # A relation's `id_namespace_by_column` overrides this.
@@ -58,6 +68,10 @@ class Snapshot:
     # names plus the cluster:, replica: and role: namespaces), used to
     # tolerate rows naming an object the other side does not have at all.
     known_names: set[str]
+    # Qualified object name -> `mz_objects.type`. A builtin that is a table on
+    # one side and a materialized view on the other is two different objects
+    # sharing a name, so rows about it are one-sided by construction.
+    object_kinds: dict[str, str]
 
 
 def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
@@ -72,12 +86,14 @@ def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
         "global_id": {},
     }
     cursor.execute(b"""
-        SELECT o.id, coalesce(d.name || '.', '') || s.name || '.' || o.name
+        SELECT o.id, coalesce(d.name || '.', '') || s.name || '.' || o.name, o.type
         FROM mz_objects o
         JOIN mz_schemas s ON o.schema_id = s.id
         LEFT JOIN mz_databases d ON s.database_id = d.id
         """)
-    namespaces["object"] = {row[0]: row[1] for row in cursor.fetchall()}
+    objects = cursor.fetchall()
+    namespaces["object"] = {row[0]: row[1] for row in objects}
+    object_kinds = {row[1]: row[2] for row in objects}
     cursor.execute(b"SELECT id, 'cluster:' || name FROM mz_clusters")
     namespaces["cluster"] = {row[0]: row[1] for row in cursor.fetchall()}
     cursor.execute(b"""
@@ -116,7 +132,7 @@ def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
     for relation, config in ((r, RELATIONS[r]) for r in relations):
         query = f"SELECT * FROM {relation}"
         if user_rows_only and config.builtin_rows_drift:
-            query += " WHERE id LIKE 'u%'"
+            query += f" WHERE {config.id_column} LIKE 'u%'"
         cursor.execute(query.encode())
         columns = [d[0] for d in cursor.description]
         rows = []
@@ -126,7 +142,9 @@ def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
                 if column in config.ignore_columns:
                     continue
                 value = AS_OF_PATTERN.sub("AS OF <TIMESTAMP>", str(value))
+                value = ID_REF_PATTERN.sub("[<id> AS ", value)
                 value = SLOT_HEX_PATTERN.sub("<SLOT_HEX>", value)
+                value = SSH_KEY_PATTERN.sub("<SSH_KEY>", value)
                 if ID_PATTERN.match(value):
                     namespace = config.id_namespace_by_column.get(
                         column, NAMESPACE_BY_COLUMN_NAME.get(column, "object")
@@ -146,7 +164,7 @@ def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
     known_names = set()
     for namespace in namespaces.values():
         known_names.update(namespace.values())
-    return Snapshot(dumps=dumps, known_names=known_names)
+    return Snapshot(dumps=dumps, known_names=known_names, object_kinds=object_kinds)
 
 
 def one_sided(rows: list[Row], other: list[Row]) -> list[Row]:
@@ -160,10 +178,23 @@ def one_sided(rows: list[Row], other: list[Row]) -> list[Row]:
     return result
 
 
-def names_object_absent_from(row: Row, known_names: set[str]) -> bool:
-    return any(
-        NAME_PATTERN.match(value) and value not in known_names for value in row.values()
-    )
+def names_object_absent_from(row: Row, this: Snapshot, other: Snapshot) -> bool:
+    """Whether `row`, from `this` side, names an object the other side lacks.
+
+    An object of another kind on the other side counts as lacking: a builtin
+    table that became a materialized view keeps its name, but every row about
+    it (its own catalog rows, its dependency edges, its comments) belongs to
+    the new object and has no counterpart on the other side.
+    """
+    for value in row.values():
+        if not NAME_PATTERN.match(value):
+            continue
+        if value not in other.known_names:
+            return True
+        kind = this.object_kinds.get(value)
+        if kind is not None and other.object_kinds.get(value) != kind:
+            return True
+    return False
 
 
 def compare(relations: list[str], old: Snapshot, new: Snapshot) -> list[str]:
@@ -181,18 +212,18 @@ def compare(relations: list[str], old: Snapshot, new: Snapshot) -> list[str]:
         for row in old_only:
             if config.allow_old_only and config.allow_old_only(row, old_rows, new_rows):
                 continue
-            if names_object_absent_from(row, new.known_names):
+            if names_object_absent_from(row, old, new):
                 print(
-                    f"{relation}: tolerating old-only row naming an object absent from the new build: {row}"
+                    f"{relation}: tolerating old-only row naming an object absent from, or of another kind on, the new build: {row}"
                 )
                 continue
             unexplained.append(("old-only", row))
         for row in new_only:
             if config.allow_new_only and config.allow_new_only(row, old_rows, new_rows):
                 continue
-            if names_object_absent_from(row, old.known_names):
+            if names_object_absent_from(row, new, old):
                 print(
-                    f"{relation}: tolerating new-only row naming an object absent from the baseline: {row}"
+                    f"{relation}: tolerating new-only row naming an object absent from, or of another kind on, the baseline: {row}"
                 )
                 continue
             unexplained.append(("new-only", row))
