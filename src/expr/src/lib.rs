@@ -46,7 +46,9 @@ pub use relation::{
     RowSetFinishing, RowSetFinishingIncremental, WindowFrame, WindowFrameBound, WindowFrameUnits,
     canonicalize, compare_columns, non_nullable_columns,
 };
-pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+pub use scalar::func::{
+    self, BinaryFunc, CastFailureMode, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+};
 pub use scalar::{
     Columns, DomainLimit, Eval, EvalError, FilterCharacteristics, MirScalarExpr, OptimizableExpr,
     ProtoDomainLimit, ProtoEvalError, StableEvalError, StableEvalErrorRef, like_pattern,
