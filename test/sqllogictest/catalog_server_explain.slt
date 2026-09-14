@@ -8301,19 +8301,19 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_aws_privatelink_connection_statuses";
 ----
 Explained Query:
-  →Differential Join %0[#1] » %1:mz_connections[#0{id}]
+  →Differential Join %0[#0] » %1:mz_connections[#0{id}]
     →Monotonic Top1
-      Group By #1
-      Order By #0 desc nulls_first
+      Group By #0
+      Order By #1 desc nulls_first
       →Map/Filter/Project
-        Project: #5, #3, #4
-        Map: record_get[1](#1), record_get[1](#2), record_get[2](#2), record_get[0](#2)
+        Project: #0, #4, #3
+        Map: record_get[1](#1), record_get[1](#2), record_get[0](#2)
           →Fused with Child Map/Filter/Project
-            Filter: (record_get[1](#2)) IS NOT NULL AND ((#3) IS NULL OR (#3 != record_get[2](#2)))
-            Map: record_get[1](#1), record_get[0](#1)
+            Filter: ((#2) IS NULL OR (#2 != record_get[1](record_get[1](#1))))
+            Map: record_get[0](#1)
               →Fused with Child Table Function unnest_list
                 →Non-incremental GroupAggregate
-                  Aggregation: lag[value=orig_row[2], offset=1, default=null, order_by=[#0 asc nulls_last] from=orig_row[0]](row(row(row(#0, #1, #2))))
+                  Aggregation: lag[value=orig_row[1], offset=1, default=null, order_by=[#0 asc nulls_last] from=orig_row[0]](row(row(row(#0, #2))))
                 Key:
                   Project: #1
                 →Stream mz_internal.mz_aws_privatelink_connection_status_history
@@ -18013,13 +18013,13 @@ Explained Query:
         →Distinct GroupAggregate
           Key:
             Project: #1
-            Map: record_get[1](record_get[1](#0))
+            Map: record_get[0](record_get[1](#0))
           →Fused with Child Map/Filter/Project
-            Filter: ({null, null, "pg_tables"} = record_get[0](#1)) AND (record_get[1](#1)) IS NOT NULL AND (record_get[0](#0) = record_get[4](#1))
+            Filter: (record_get[0](#1)) IS NOT NULL AND (record_get[0](#0) = record_get[3](#1))
             Map: record_get[1](#0)
               →Fused with Child Table Function unnest_list
                 →Non-incremental GroupAggregate
-                  Aggregation: window_agg[min order_by=[]](row(row(row({null, null, "pg_tables"}, #0, #1, #2, #3), #3{schema_pref})))
+                  Aggregation: window_agg[min order_by=[]](row(row(row(#0, #1, #2, #3), #3{schema_pref})))
                 Key:
                   Project: ()
                 →Distinct GroupAggregate
@@ -18136,13 +18136,13 @@ Explained Query:
         →Distinct GroupAggregate
           Key:
             Project: #1
-            Map: record_get[1](record_get[1](#0))
+            Map: record_get[0](record_get[1](#0))
           →Fused with Child Map/Filter/Project
-            Filter: ({null, null, "pg_views"} = record_get[0](#1)) AND (record_get[1](#1)) IS NOT NULL AND (record_get[0](#0) = record_get[4](#1))
+            Filter: (record_get[0](#1)) IS NOT NULL AND (record_get[0](#0) = record_get[3](#1))
             Map: record_get[1](#0)
               →Fused with Child Table Function unnest_list
                 →Non-incremental GroupAggregate
-                  Aggregation: window_agg[min order_by=[]](row(row(row({null, null, "pg_views"}, #0, #1, #2, #3), #3{schema_pref})))
+                  Aggregation: window_agg[min order_by=[]](row(row(row(#0, #1, #2, #3), #3{schema_pref})))
                 Key:
                   Project: ()
                 →Distinct GroupAggregate
@@ -18253,13 +18253,13 @@ Explained Query:
         →Distinct GroupAggregate
           Key:
             Project: #1
-            Map: record_get[1](record_get[1](#0))
+            Map: record_get[0](record_get[1](#0))
           →Fused with Child Map/Filter/Project
-            Filter: ({null, null, "pg_matviews"} = record_get[0](#1)) AND (record_get[1](#1)) IS NOT NULL AND (record_get[0](#0) = record_get[4](#1))
+            Filter: (record_get[0](#1)) IS NOT NULL AND (record_get[0](#0) = record_get[3](#1))
             Map: record_get[1](#0)
               →Fused with Child Table Function unnest_list
                 →Non-incremental GroupAggregate
-                  Aggregation: window_agg[min order_by=[]](row(row(row({null, null, "pg_matviews"}, #0, #1, #2, #3), #3{schema_pref})))
+                  Aggregation: window_agg[min order_by=[]](row(row(row(#0, #1, #2, #3), #3{schema_pref})))
                 Key:
                   Project: ()
                 →Distinct GroupAggregate
@@ -18381,13 +18381,13 @@ Explained Query:
         →Distinct GroupAggregate
           Key:
             Project: #1
-            Map: record_get[1](record_get[1](#0))
+            Map: record_get[0](record_get[1](#0))
           →Fused with Child Map/Filter/Project
-            Filter: ({null, null, "pg_index"} = record_get[0](#1)) AND (record_get[1](#1)) IS NOT NULL AND (record_get[0](#0) = record_get[4](#1))
+            Filter: (record_get[0](#1)) IS NOT NULL AND (record_get[0](#0) = record_get[3](#1))
             Map: record_get[1](#0)
               →Fused with Child Table Function unnest_list
                 →Non-incremental GroupAggregate
-                  Aggregation: window_agg[min order_by=[]](row(row(row({null, null, "pg_index"}, #0, #1, #2, #3), #3{schema_pref})))
+                  Aggregation: window_agg[min order_by=[]](row(row(row(#0, #1, #2, #3), #3{schema_pref})))
                 Key:
                   Project: ()
                 →Distinct GroupAggregate

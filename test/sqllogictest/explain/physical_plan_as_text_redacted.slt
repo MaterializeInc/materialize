@@ -1493,13 +1493,13 @@ Explained Query:
     map=(record_get[0](#2))
     input_key=#0, #1
     Reduce::Basic
-      aggr=(lag[value=orig_row[1], offset=█, default=█, ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1)), (#1{b} + █), (#0{a} - █))), fused_unnest_list=true)
+      aggr=(lag[offset=█, default=█, ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(█, #1{b}), (#1{b} + █), (#0{a} - █))), fused_unnest_list=true)
       input_key=#0{a}
       key_plan
         project=(#1, #0)
       val_plan
         project=(#2)
-        map=(row(row(row(#0, #1)), (#1{b} + █), (#0{a} - █)))
+        map=(row(row(█, #1{b}), (#1{b} + █), (#0{a} - █)))
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }

@@ -1206,7 +1206,7 @@ impl HirScalarExpr {
                          original_row_record,
                          original_row_record_type: SqlScalarType,
                          _mir_aggr_func: &mut AggregateFunc,
-                         _input_arity: usize| {
+                         _original_row: &[OriginalRowColumn]| {
                             let agg_input = MirScalarExpr::call_variadic(
                                 variadic::ListCreate {
                                     elem_type: original_row_record_type.clone(),
@@ -1254,7 +1254,7 @@ impl HirScalarExpr {
                          original_row_record,
                          original_row_record_type,
                          mir_aggr_func: &mut AggregateFunc,
-                         input_arity: usize| {
+                         original_row: &[OriginalRowColumn]| {
                             // Creates [((OriginalRow, EncodedArgs?), OrderByExprs...)]
 
                             // Compute the encoded args for all rows
@@ -1269,7 +1269,7 @@ impl HirScalarExpr {
                             let mir_encoded_args = Self::describe_window_args(
                                 mir_aggr_func,
                                 mir_encoded_args,
-                                input_arity,
+                                original_row,
                             );
 
                             // Build a record holding the original row, plus
@@ -1397,26 +1397,24 @@ impl HirScalarExpr {
     ///
     /// A `lag`/`lead` whose `offset` and `default` are already described in the
     /// function (see [`mz_expr::LagLeadArgs`]) has the bare `value` argument
-    /// left per row. When that `value` is one of the window function's input
-    /// columns, the row's `OriginalRow` record already holds it, so the
-    /// function records which field to read and nothing is encoded per row.
-    ///
-    /// `input_arity` bounds the columns `OriginalRow` covers. Lowering the
-    /// arguments may have mapped further columns onto the input, for a
-    /// subquery in an argument, and those are not in the record.
+    /// left per row. When that `value` is one of the columns the row's
+    /// `OriginalRow` record holds, the function records which field to read
+    /// and nothing is encoded per row.
     ///
     /// Returns the arguments still encoded per row, `None` when none are.
     fn describe_window_args(
         mir_aggr_func: &mut AggregateFunc,
         encoded_args: MirScalarExpr,
-        input_arity: usize,
+        original_row: &[OriginalRowColumn],
     ) -> Option<MirScalarExpr> {
         match mir_aggr_func {
             AggregateFunc::LagLead {
                 args: Some(args), ..
             } => match encoded_args {
-                MirScalarExpr::Column(column, _name) if column < input_arity => {
-                    args.value = Some(column);
+                MirScalarExpr::Column(column, _name)
+                    if OriginalRowColumn::field(original_row, column).is_some() =>
+                {
+                    args.value = OriginalRowColumn::field(original_row, column);
                     None
                 }
                 encoded_args => Some(encoded_args),
@@ -1442,7 +1440,7 @@ impl HirScalarExpr {
                     .zip_eq(exprs)
                     .zip_eq(funcs.iter_mut())
                     .filter_map(|((field_name, expr), func)| {
-                        Self::describe_window_args(func, expr, input_arity)
+                        Self::describe_window_args(func, expr, original_row)
                             .map(|expr| (field_name, expr))
                     })
                     .unzip();
@@ -1457,25 +1455,24 @@ impl HirScalarExpr {
     /// Moves a window function's ORDER BY values into the function itself where
     /// it can find them without a copy in every row.
     ///
-    /// The `OriginalRow` record the per-row value leads with holds every input
-    /// column, so an ORDER BY expression that is one of those columns needs no
-    /// appended copy. This is all or nothing: a window function reads its
-    /// ORDER BY values from one place, so a single expression that is not an
-    /// input column keeps all of them appended.
-    ///
-    /// `input_arity` bounds the columns `OriginalRow` covers, as in
-    /// [`Self::describe_window_args`].
+    /// An ORDER BY expression that is one of the columns the row's
+    /// `OriginalRow` record holds needs no appended copy. This is all or
+    /// nothing: a window function reads its ORDER BY values from one place, so
+    /// a single expression the record does not hold keeps all of them
+    /// appended.
     ///
     /// Returns the ORDER BY values still appended per row, empty when none are.
     fn describe_window_order_by(
         mir_aggr_func: &mut AggregateFunc,
         order_by_mir: Vec<MirScalarExpr>,
-        input_arity: usize,
+        original_row: &[OriginalRowColumn],
     ) -> Vec<MirScalarExpr> {
         let fields = order_by_mir
             .iter()
             .map(|expr| match expr {
-                MirScalarExpr::Column(column, _name) if *column < input_arity => Some(*column),
+                MirScalarExpr::Column(column, _name) => {
+                    OriginalRowColumn::field(original_row, *column)
+                }
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()
@@ -1555,7 +1552,7 @@ impl HirScalarExpr {
             MirScalarExpr,
             SqlScalarType,
             &mut AggregateFunc,
-            usize,
+            &[OriginalRowColumn],
         ) -> Result<(MirScalarExpr, SqlColumnType), PlanError>,
     {
         // Example MIRs for a window function (specifically, a window aggregation):
@@ -1662,20 +1659,57 @@ impl HirScalarExpr {
                 }
 
                 get_inner.let_in(id_gen, |id_gen, mut get_inner| {
-                    // Original columns of the relation
-                    let fields: Box<_> = input_type
-                        .column_types
+                    // A group-key column the ORDER BY reads stays in the
+                    // record. Leaving it out would only move the copy from the
+                    // record to the appended ORDER BY values, and it would take
+                    // the other ORDER BY columns with it, since a window
+                    // function reads them all from one place.
+                    let order_by_columns = order_by_mir
                         .iter()
-                        .take(input_arity)
-                        .map(|t| (ColumnName::from(UNKNOWN_COLUMN_NAME), t.clone()))
-                        .collect();
+                        .map(|expr| match expr {
+                            MirScalarExpr::Column(column, _name) => Some(*column),
+                            _ => None,
+                        })
+                        .collect::<Option<BTreeSet<_>>>()
+                        .unwrap_or_default();
+
+                    // Where each input column ends up. The record holds the
+                    // ones the reduce's group key does not already carry.
+                    let mut original_row = Vec::with_capacity(input_arity);
+                    let mut record_columns = Vec::with_capacity(input_arity);
+                    for column in 0..input_arity {
+                        let group_key = group_key
+                            .iter()
+                            .position(|key| *key == column)
+                            .filter(|_| !order_by_columns.contains(&column));
+                        match group_key {
+                            Some(key) => original_row.push(OriginalRowColumn::GroupKey(key)),
+                            None => {
+                                original_row.push(OriginalRowColumn::Field(record_columns.len()));
+                                record_columns.push(column);
+                            }
+                        }
+                    }
 
                     // Original row made into a record
+                    let fields: Box<_> = record_columns
+                        .iter()
+                        .map(|column| {
+                            (
+                                ColumnName::from(UNKNOWN_COLUMN_NAME),
+                                input_type.column_types[*column].clone(),
+                            )
+                        })
+                        .collect();
                     let original_row_record = MirScalarExpr::call_variadic(
                         variadic::RecordCreate {
                             field_names: fields.iter().map(|(name, _)| name.clone()).collect_vec(),
                         },
-                        (0..input_arity).map(MirScalarExpr::column).collect_vec(),
+                        record_columns
+                            .iter()
+                            .copied()
+                            .map(MirScalarExpr::column)
+                            .collect_vec(),
                     );
                     let original_row_record_type = SqlScalarType::Record {
                         fields,
@@ -1689,7 +1723,7 @@ impl HirScalarExpr {
                     let order_by_mir = Self::describe_window_order_by(
                         &mut mir_aggr_func,
                         order_by_mir,
-                        input_arity,
+                        &original_row,
                     );
                     let (agg_input, agg_input_type) = lower_args(
                         id_gen,
@@ -1701,7 +1735,7 @@ impl HirScalarExpr {
                         original_row_record,
                         original_row_record_type,
                         &mut mir_aggr_func,
-                        input_arity,
+                        &original_row,
                     )?;
 
                     let aggregate = mz_expr::AggregateExpr {
@@ -1728,15 +1762,25 @@ impl HirScalarExpr {
                         );
                     let record_col = reduce.arity() - 1;
 
-                    // Unpack the record output by the window function
-                    for c in 0..input_arity {
-                        reduce = reduce.take_dangerous().map_one(MirScalarExpr::CallUnary {
-                            func: mz_expr::UnaryFunc::RecordGet(mz_expr::func::RecordGet(c)),
-                            expr: Box::new(MirScalarExpr::CallUnary {
-                                func: mz_expr::UnaryFunc::RecordGet(mz_expr::func::RecordGet(1)),
-                                expr: Box::new(MirScalarExpr::column(record_col)),
-                            }),
-                        });
+                    // Put the original row back together: the record the
+                    // window function passed through for the columns it holds,
+                    // the reduce's own group-key columns for the rest.
+                    for column in &original_row {
+                        let expr = match column {
+                            OriginalRowColumn::Field(field) => MirScalarExpr::CallUnary {
+                                func: mz_expr::UnaryFunc::RecordGet(mz_expr::func::RecordGet(
+                                    *field,
+                                )),
+                                expr: Box::new(MirScalarExpr::CallUnary {
+                                    func: mz_expr::UnaryFunc::RecordGet(mz_expr::func::RecordGet(
+                                        1,
+                                    )),
+                                    expr: Box::new(MirScalarExpr::column(record_col)),
+                                }),
+                            },
+                            OriginalRowColumn::GroupKey(key) => MirScalarExpr::column(*key),
+                        };
+                        reduce = reduce.take_dangerous().map_one(expr);
                     }
 
                     // Append the column with the result of the window function.
@@ -1932,6 +1976,41 @@ impl HirScalarExpr {
                 );
             }
         })
+    }
+}
+
+/// Where one of a window function's input columns is found after the reduce
+/// that computes the window function.
+///
+/// The `OriginalRow` record the per-row value leads with leaves out the input
+/// columns that are also reduce group keys: the reduce's output carries those
+/// as its leading columns, so the original row can be put back together from
+/// both halves rather than repeating the partition key in every row the reduce
+/// arranges.
+///
+/// Everything that addresses `OriginalRow` by field goes through
+/// [`OriginalRowColumn::field`], because a field index is no longer an input
+/// column index once anything is left out.
+#[derive(Debug)]
+enum OriginalRowColumn {
+    /// This field of the `OriginalRow` record.
+    Field(usize),
+    /// This column of the reduce's output, one of its group keys.
+    GroupKey(usize),
+}
+
+impl OriginalRowColumn {
+    /// The `OriginalRow` field holding `column`, or `None` where the record
+    /// leaves it out or `column` is not an input column at all.
+    ///
+    /// Lowering a window function's arguments or ORDER BY expressions can map
+    /// further columns onto the input, for a subquery in one of them, and
+    /// those are past the end of `original_row`.
+    fn field(original_row: &[OriginalRowColumn], column: usize) -> Option<usize> {
+        match original_row.get(column) {
+            Some(OriginalRowColumn::Field(field)) => Some(*field),
+            Some(OriginalRowColumn::GroupKey(_)) | None => None,
+        }
     }
 }
 
