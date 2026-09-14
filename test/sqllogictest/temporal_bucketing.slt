@@ -283,7 +283,7 @@ EOF
 # is one fixture per site that applies bucketing, because each site hands the
 # bucketer a differently shaped stream: the keyed `(key, val)` stream in
 # `render_reduce`, the TopK input, a consolidating `Union` whose legs carry
-# different strategies, and an arrangement built by `ensure_collections`.
+# different strategies, and the arrangement loop in `ensure_collections`.
 # -----------------------------------------------------------------------------
 
 simple conn=mz_system,user=mz_system
@@ -295,13 +295,16 @@ statement ok
 CREATE TABLE rt_events (k INT NOT NULL, event_time TIMESTAMP NOT NULL)
 
 # Far-future event times so the temporal predicates hold regardless of the
-# wall clock at query time, keeping the results deterministic.
+# wall clock at query time, keeping the results deterministic. The k=4 row
+# expired long ago, so every fixture must drop it: its retraction time precedes
+# the dataflow's as_of, which is the case a leaking bucketer would get wrong.
 statement ok
 INSERT INTO rt_events VALUES
   (1, '2999-01-01 00:00:00'),
   (1, '2999-01-02 00:00:00'),
   (2, '2999-01-03 00:00:00'),
-  (3, '2999-01-04 00:00:00')
+  (3, '2999-01-04 00:00:00'),
+  (4, '2000-01-01 00:00:00')
 
 statement ok
 CREATE TABLE rt_other (k INT NOT NULL)
@@ -391,8 +394,9 @@ SELECT * FROM rt_union
 
 # Bucketed arrangement: an index on a temporal-filtered view. `ensure_collections`
 # buckets in the loop that builds the requested arrangements, and hands the result
-# to `arrange_collection`, whose passthrough then serves as the bundle's collection
-# for every later consumer. The plan is pinned because the site is only reached
+# to `arrange_collection`. The index is the terminal consumer, so this covers the
+# bucketer feeding the arrangement and not the passthrough collection, which has
+# no reader in this shape. The plan is pinned because the site is only reached
 # while the `ArrangeBy` carries `strategy=TemporalBucketing`.
 statement ok
 CREATE VIEW rt_indexed AS
