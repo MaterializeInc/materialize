@@ -44,9 +44,12 @@ rows:
     Guide(s) or Example(s): |
       - [Sink to Iceberg](/export-data/iceberg/)
 
+  - External system: "PostgreSQL"
+    Method: "Use `SUBSCRIBE`"
+    Guide(s) or Example(s): |
+      - [Sink to PostgreSQL](/export-data/postgres/)
 
   - External system: "Various"
     Method: "Use `SUBSCRIBE`"
     Guide(s) or Example(s): |
-      - [Sink to Postgres](https://github.com/MaterializeInc/mz-catalog-sync)
       - [Sink to Redis](https://github.com/MaterializeIncLabs/mz-redis-sync)
