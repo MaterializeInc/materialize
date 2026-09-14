@@ -4472,10 +4472,10 @@ impl Coordinator {
             tokio::pin!(publication_timer);
             let subscription_timer = tokio::time::sleep(CATALOG_SUBSCRIPTION_INTERVAL);
             tokio::pin!(subscription_timer);
-            let client_publication_delay =
-                crate::query_client::read_protection::CLIENT_PROTECTION_PUBLICATION_INTERVAL;
-            let client_publication_timer = tokio::time::sleep(client_publication_delay);
-            tokio::pin!(client_publication_timer);
+            let client_heartbeat_delay =
+                crate::query_client::read_protection::CLIENT_PROTECTION_HEARTBEAT_INTERVAL;
+            let client_heartbeat_timer = tokio::time::sleep(client_heartbeat_delay);
+            tokio::pin!(client_heartbeat_timer);
 
             loop {
                 let delay = self
@@ -4498,14 +4498,16 @@ impl Coordinator {
 
                     // Polling the pinned timer is cancel-safe. Renewal and requirement
                     // publication share one transaction before checking abandoned clients.
-                    _ = client_publication_timer.as_mut() => {
-                        if let Err(error) = self.publish_client_read_protection().await {
+                    _ = client_heartbeat_timer.as_mut() => {
+                        if self.query_client.as_ref().is_some_and(|client| {
+                            client.last_publication().elapsed() >= client_heartbeat_delay
+                        }) && let Err(error) = self.publish_client_read_protection().await {
                             warn!(%error, "unable to publish query client protection");
                         }
                         if let Err(error) = self.reclaim_client_read_protection().await {
                             warn!(%error, "unable to reclaim query client protection");
                         }
-                        client_publication_timer.set(tokio::time::sleep(client_publication_delay));
+                        client_heartbeat_timer.set(tokio::time::sleep(client_heartbeat_delay));
                     }
 
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
@@ -4522,8 +4524,12 @@ impl Coordinator {
                     // before this runs. Give publication a turn even under continuous load,
                     // but schedule from completion so a slow commit cannot monopolize us.
                     _ = publication_timer.as_mut(),
-                        if self.catalog().state().catalog_read_protection_enabled()
-                            && !self.controller.read_only() => {
+                        if self.query_client.is_some()
+                            || (self.catalog().state().catalog_read_protection_enabled()
+                                && !self.controller.read_only()) => {
+                        if let Err(error) = self.publish_client_read_protection().await {
+                            warn!(%error, "unable to publish query client protection");
+                        }
                         if let Err(error) = self.publish_read_protection().await {
                             warn!(%error, "unable to publish catalog read protection");
                         }

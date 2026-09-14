@@ -187,11 +187,15 @@ impl Coordinator {
                 *ids = client.readable_indexes(*cluster, ids);
             }
             if !ready.is_empty() {
+                // Protect the oracle window in the initial durable grant, rather
+                // than publishing unused history below it. This is maintenance,
+                // not a cached timestamp for subsequent queries.
+                let read_ts = oracle.read_ts().await;
                 match self
                     .acquire_client_read_protection(
                         client.protection.incarnation(),
                         ready.clone(),
-                        |_| Ok(None),
+                        |_| Ok(Some(read_ts)),
                     )
                     .await
                 {
@@ -203,7 +207,7 @@ impl Coordinator {
                         // Index tokens keep their derived leaf protection. Do not
                         // insert a second direct leaf token already in the window.
                         let mut holds = holds.subset(&ready);
-                        holds.downgrade(oracle.read_ts().await);
+                        holds.downgrade(read_ts);
                         if let Some(state) = self.global_timelines.get_mut(&timeline) {
                             let missing = ready.difference(&state.read_holds.id_bundle());
                             state.read_holds.extend(holds.subset(&missing));
@@ -305,15 +309,16 @@ impl Coordinator {
 
     /// Publishes the client aggregate and heartbeat through the same transaction path.
     pub(super) async fn publish_client_read_protection(&mut self) -> Result<(), AdapterError> {
-        use crate::query_client::read_protection::CLIENT_PROTECTION_PUBLICATION_INTERVAL;
         let Some(client) = self.query_client.clone() else {
             return Ok(());
         };
-        if client.last_publication().elapsed() < CLIENT_PROTECTION_PUBLICATION_INTERVAL {
+        let Some(requirements) = client
+            .protection
+            .prepare_publication_if_needed(client.last_publication().elapsed())
+        else {
             return Ok(());
-        }
+        };
         let incarnation = client.protection.incarnation();
-        let requirements = client.protection.prepare_publication(BTreeMap::new());
         let result = self
             .transact_client_protection(Op::PublishClientReadRequirements {
                 incarnation,
