@@ -8313,7 +8313,7 @@ Explained Query:
             Map: record_get[1](#1), record_get[0](#1)
               →Fused with Child Table Function unnest_list
                 →Non-incremental GroupAggregate
-                  Aggregation: lag[offset=1, default=null, order_by=[#0 asc nulls_last]](row(row(row(#0, #1, #2), #2{status}), #0{occurred_at}))
+                  Aggregation: lag[value=orig_row[2], offset=1, default=null, order_by=[#0 asc nulls_last]](row(row(row(#0, #1, #2)), #0{occurred_at}))
                 Key:
                   Project: #1
                 →Stream mz_internal.mz_aws_privatelink_connection_status_history

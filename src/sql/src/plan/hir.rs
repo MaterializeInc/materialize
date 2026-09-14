@@ -877,19 +877,22 @@ impl ValueWindowFunc {
         }
     }
 
-    /// Builds a `lag`/`lead` aggregate, hoisting a literal `offset` and
-    /// `default` out of `args` when both are literals.
+    /// Builds a `lag`/`lead` aggregate, describing a literal `offset` and
+    /// `default` in the function rather than encoding them per row.
     ///
-    /// Hoisting requires both: the encoded-argument shape is either the full
-    /// `(value, offset, default)` record or the bare `value`, with nothing in
-    /// between, so one non-literal argument keeps all three per row.
+    /// Describing them needs both to be literals: the encoded-argument shape
+    /// is either the full `(value, offset, default)` record or the bare
+    /// `value`, with nothing in between, so one non-literal argument keeps all
+    /// three per row. Lowering narrows the shape further where it can, once
+    /// the argument's MIR form is known; see
+    /// `HirScalarExpr::describe_window_args`.
     fn into_lag_lead_expr(
         lag_lead: mz_expr::LagLeadType,
-        args: HirScalarExpr,
+        encoded_args: HirScalarExpr,
         order_by: Vec<ColumnOrder>,
         ignore_nulls: bool,
     ) -> (HirScalarExpr, mz_expr::AggregateFunc) {
-        let (args, constant_args) = match args {
+        let (encoded_args, args) = match encoded_args {
             HirScalarExpr::CallVariadic {
                 func: mz_expr::VariadicFunc::RecordCreate(record_create),
                 exprs,
@@ -897,21 +900,19 @@ impl ValueWindowFunc {
             } => {
                 let [value, offset, default] = <[HirScalarExpr; 3]>::try_from(exprs)
                     .expect("lag/lead encode exactly three arguments");
-                let constant_args = match (offset.as_literal(), default.as_literal()) {
-                    (Some(offset_datum), Some(default_datum)) => {
-                        let offset = match offset_datum {
+                let args = match (offset.as_literal(), default.as_literal()) {
+                    (Some(offset_datum), Some(default_datum)) => Some(mz_expr::LagLeadArgs {
+                        offset: match offset_datum {
                             Datum::Null => None,
                             offset => Some(offset.unwrap_int32()),
-                        };
-                        Some(mz_expr::ConstantLagLeadArgs {
-                            offset,
-                            default: StableRow(Row::pack([default_datum])),
-                        })
-                    }
+                        },
+                        default: StableRow(Row::pack([default_datum])),
+                        value: None,
+                    }),
                     _ => None,
                 };
-                match constant_args {
-                    Some(constant_args) => (value, Some(constant_args)),
+                match args {
+                    Some(args) => (value, Some(args)),
                     // Rebuild the record we destructured.
                     None => (
                         HirScalarExpr::CallVariadic {
@@ -923,15 +924,15 @@ impl ValueWindowFunc {
                     ),
                 }
             }
-            args => (args, None),
+            encoded_args => (encoded_args, None),
         };
         (
-            args,
+            encoded_args,
             mz_expr::AggregateFunc::LagLead {
                 order_by,
                 lag_lead,
                 ignore_nulls,
-                constant_args,
+                args,
             },
         )
     }

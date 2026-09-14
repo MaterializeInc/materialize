@@ -176,9 +176,9 @@
       },
       "LagLead": {
         "STRUCT": {
-          "constant_args": {
+          "args": {
             "OPTION": {
-              "TYPENAME": "ConstantLagLeadArgs"
+              "TYPENAME": "LagLeadArgs"
             }
           },
           "ignore_nulls": "BOOL",
@@ -2062,16 +2062,6 @@
   },
   "Concat": "UNITSTRUCT",
   "ConcatWs": "UNITSTRUCT",
-  "ConstantLagLeadArgs": {
-    "STRUCT": {
-      "default": {
-        "TYPENAME": "StableRow"
-      },
-      "offset": {
-        "OPTION": "I32"
-      }
-    }
-  },
   "ConstantRows": {
     "ENUM": {
       "Err": {
@@ -2462,6 +2452,19 @@
       },
       "val_plan": {
         "TYPENAME": "SafeMfpPlan"
+      }
+    }
+  },
+  "LagLeadArgs": {
+    "STRUCT": {
+      "default": {
+        "TYPENAME": "StableRow"
+      },
+      "offset": {
+        "OPTION": "I32"
+      },
+      "value": {
+        "OPTION": "U64"
       }
     }
   },
