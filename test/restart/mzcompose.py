@@ -1038,6 +1038,7 @@ def workflow_selected_plan_explain(c: Composition) -> None:
             additional_system_parameter_defaults={
                 "enable_catalog_read_protection": "true",
                 "enable_expression_cache": "false",
+                "enable_mz_notices": "true",
             },
         )
     ):
@@ -1047,7 +1048,7 @@ def workflow_selected_plan_explain(c: Composition) -> None:
             input=dedent("""
                 > CREATE TABLE selected_t (a int);
                 > INSERT INTO selected_t VALUES (1), (2);
-                > CREATE INDEX selected_import ON selected_t (a);
+                > CREATE INDEX selected_import ON selected_t ();
                 """),
         )
         # The writer only offers an index after query-protocol observations arrive.
@@ -1066,7 +1067,7 @@ def workflow_selected_plan_explain(c: Composition) -> None:
             input=dedent("""
                 > CREATE MATERIALIZED VIEW selected_mv AS SELECT sum(a) AS total FROM selected_t;
                 > CREATE VIEW selected_v AS SELECT a + 1 AS b FROM selected_t;
-                > CREATE INDEX selected_consumer ON selected_v (b);
+                > CREATE INDEX selected_consumer ON selected_v ();
 
                 > SELECT total FROM selected_mv;
                 3
@@ -1076,10 +1077,29 @@ def workflow_selected_plan_explain(c: Composition) -> None:
                 """),
         )
 
+        index_ids = dict(
+            c.sql_query(
+                "SELECT name, id FROM mz_indexes WHERE name IN ('selected_import', 'selected_consumer')",
+                reuse_connection=False,
+            )
+        )
+
+        def notice_count(name: str, kind: str = "Empty index key") -> int:
+            return c.sql_query(
+                "SELECT count(*) FROM mz_internal.mz_optimizer_notices "
+                f"WHERE object_id = '{index_ids[name]}' AND notice_type = '{kind}'",
+                user="mz_system",
+                port=6877,
+                reuse_connection=False,
+            )[0][0]
+
+        assert notice_count("selected_import") == 1
+        assert notice_count("selected_consumer") == 1
+
         def plans() -> dict[tuple[str, str], str]:
             return {
                 (object_name, stage): c.sql_query(
-                    f"EXPLAIN {stage} PLAN FOR {object_name}",
+                    f"EXPLAIN {stage} PLAN WITH(no notices) FOR {object_name}",
                     reuse_connection=False,
                 )[0][0]
                 for object_name in (
@@ -1101,6 +1121,8 @@ def workflow_selected_plan_explain(c: Composition) -> None:
         # Dropping an import repairs the durable selection without reinstalling
         # either consumer. EXPLAIN must already show the repaired storage read.
         c.sql("DROP INDEX selected_import", reuse_connection=False)
+        assert notice_count("selected_import") == 0
+        assert notice_count("selected_consumer") == 1
         rewritten = plans()
         for (object_name, stage), plan in rewritten.items():
             assert plan != original[object_name, stage], (object_name, stage, plan)
@@ -1129,6 +1151,7 @@ def workflow_selected_plan_explain(c: Composition) -> None:
         c.kill("materialized")
         c.up("materialized")
         assert plans() == rewritten
+        assert notice_count("selected_consumer") == 1
         c.testdrive(
             service="testdrive_no_reset",
             input=dedent("""
@@ -1149,6 +1172,19 @@ def workflow_selected_plan_explain(c: Composition) -> None:
                 5
                 """),
         )
+        c.sql("CREATE INDEX selected_spare ON selected_v ()", reuse_connection=False)
+        index_ids["selected_spare"] = c.sql_query(
+            "SELECT id FROM mz_indexes WHERE name = 'selected_spare'",
+            reuse_connection=False,
+        )[0][0]
+        duplicate_notice = "An identical index already exists"
+        assert notice_count("selected_spare", duplicate_notice) == 1
+        # The dependency drop and selected-plan rewrite must retract this notice
+        # exactly once, while preserving the surviving index's own notice.
+        c.sql("DROP INDEX selected_consumer", reuse_connection=False)
+        assert notice_count("selected_consumer") == 0
+        assert notice_count("selected_spare", duplicate_notice) == 0
+        assert notice_count("selected_spare") == 1
 
 
 def _catalog_protection_metrics(text: str, shard: str) -> dict:

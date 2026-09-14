@@ -3266,7 +3266,8 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
-    async fn written_plan_selection_is_visible_without_installation_implications() {
+    async fn written_plan_selection_emits_notice_implications_without_installation() {
+        use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdateKind;
         use mz_catalog::durable::objects::WrittenPlan;
         use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -3283,6 +3284,7 @@ mod tests {
         ] {
             let expected = changes.last().expect("selection update is nonempty").0;
             let updates = changes
+                .clone()
                 .into_iter()
                 .map(|(revision, diff)| StateUpdate {
                     kind: StateUpdateKind::WrittenPlan(WrittenPlan {
@@ -3298,7 +3300,19 @@ mod tests {
                 .apply_updates(updates, &mut LocalExpressionCache::Closed)
                 .await;
             assert!(builtin_updates.is_empty());
-            assert!(implications.is_empty());
+            let observed: Vec<_> = implications
+                .into_iter()
+                .map(|update| {
+                    let ParsedStateUpdateKind::WrittenPlan(plan) = update.kind else {
+                        panic!("selection changes must not install dataflows");
+                    };
+                    assert_eq!(plan.id, id);
+                    assert_eq!(plan.build_version, "build-a");
+                    assert_eq!(update.ts, Timestamp::MIN);
+                    (plan.revision, update.diff)
+                })
+                .collect();
+            assert_eq!(observed, changes);
             assert_eq!(state.written_plan(id, "build-a"), Some(expected));
             assert_eq!(state.written_plan(id, "build-b"), None);
         }

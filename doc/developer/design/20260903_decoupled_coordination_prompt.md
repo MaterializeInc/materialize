@@ -33,8 +33,10 @@ implemented in-process. MV and metric-sink compute installation and sink alterat
 derive from committed state. Remote COPY staging uses request-owned storage query
 connections, while its row commitment stays in the adapter. Webhook and statement
 history writes are adapter-owned. Request statistics, real-time recency and progress
-use metadata/Persist and the query protocol. These are in-process checkpoints, not
-milestone acceptance. Remaining work:
+use metadata/Persist and the query protocol. Protected plan explanations read the
+committed selection, and runtime notice publication is writer-owned. Protected
+request plumbing carries no legacy storage handles. These are in-process checkpoints,
+not milestone acceptance. Remaining work:
 
 1. Finish replacing the adapter's direct use of controller frontiers and holds
    with the query client: storage frontiers from persist, compute
@@ -44,8 +46,8 @@ milestone acceptance. Remaining work:
 2. Finish Written plans for one adapter and one build. Writer DDL commits plan
    selections with creates, unselects on drops, and rewrites its affected plans
    when an import is removed. Lifecycle components install the written plan or
-   wait, without planning. EXPLAIN reads the selection and the writer owns
-   `mz_notices` appends and retractions. Verify same-batch dependencies and pending
+   wait, without planning. Verify selected-plan explanations and writer-owned
+   notice appends/retractions, same-batch dependencies, and pending
    replacements. Use separate commits where they form coherent implementation or
    review boundaries. An intermediate commit is not a reason to stop the work.
 3. Move the lifecycle components into their own process, with catalog following,

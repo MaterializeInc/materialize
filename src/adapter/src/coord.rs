@@ -5020,6 +5020,9 @@ impl Coordinator {
     /// Persist already-rendered optimizer notices for a newly created
     /// non-transient dataflow.
     ///
+    /// Protected writers publish notices from committed plan selections instead.
+    /// Installation must not overwrite that metadata or append those notices again.
+    ///
     /// This:
     /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
     /// - stores the rendered metainfo on the catalog object via
@@ -5031,6 +5034,9 @@ impl Coordinator {
         df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
         export_id: GlobalId,
     ) -> Option<BuiltinTableAppendNotify> {
+        if self.catalog().state().catalog_read_protection_enabled() {
+            return None;
+        }
         // Attend to optimization notice builtin tables and save the metainfo in the catalog's
         // in-memory state.
         if self.catalog().state().system_config().enable_mz_notices()

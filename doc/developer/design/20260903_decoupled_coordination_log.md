@@ -840,3 +840,19 @@ must include the installed as-of lower bound, and fresh notification subscriptio
 must not replay old changes. Remaining extraction includes selected-plan/notice
 publication, startup protection ordering, and separating maintained enactment from
 the request-serving event loop. Naming does not require an extra wrapper.
+
+### 2026-09-14: Selected-plan introspection and request handles
+
+Protected index/MV plan explanations read selected immutable plans with a fixed
+catalog snapshot. Runtime notice publication follows committed own-build selections,
+independently of installation. Protected request plumbing no longer carries legacy
+storage handles, and MV creation and rewrites share replica eligibility.
+
+Pending Aljoscha's decision: DROP INDEX currently names still-running physical
+dependents, which selected plans cannot describe after a rewrite. The proposal is
+to preserve that meaning through best-effort compute query-protocol observations,
+not controller-state RPC. That path remains unchanged.
+
+Next: selected-plan-only installation with independent waiting, bootstrap ordering,
+and the lifecycle ownership split. Same-generation orchestration, lifecycle
+connection admission, and introspection reconciliation need narrow enactment fencing.

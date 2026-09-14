@@ -1715,6 +1715,24 @@ impl CatalogState {
         id: GlobalId,
         metainfo: DataflowMetainfo<Arc<OptimizerNotice>>,
     ) {
+        // A selected-plan rewrite replaces the notices even while the dataflow
+        // keeps running. Remove its reverse entries before indexing the replacement.
+        let previous = self
+            .get_entry_by_global_id(&id)
+            .item()
+            .dataflow_metainfo()
+            .map(|meta| meta.optimizer_notices.clone())
+            .unwrap_or_default();
+        for notice in previous {
+            for dependency in &notice.dependencies {
+                if let Some(notices) = self.notices_by_dep_id.get_mut(dependency) {
+                    notices.retain(|candidate| candidate != &notice);
+                    if notices.is_empty() {
+                        self.notices_by_dep_id.remove(dependency);
+                    }
+                }
+            }
+        }
         // Add entries to the `notices_by_dep_id` lookup map.
         for notice in metainfo.optimizer_notices.iter() {
             for dep_id in notice.dependencies.iter() {

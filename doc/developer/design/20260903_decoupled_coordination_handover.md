@@ -3,9 +3,10 @@
 ## Status and scope
 
 Milestone 2 is incomplete. Lifecycle components still run inside the adapter.
-Written-plan production is partly wired, but installation and SQL introspection
-are not yet consistently consumers of the committed selection. Do not report
-the checkpoint as an adapter-loss demonstration or a completed plan-store cutover.
+Written-plan production is partly wired. Protected plan explanations and runtime
+notices consume committed selections, but installation still uses cache/fallback
+planning. Do not report the checkpoint as an adapter-loss demonstration or a
+completed plan-store cutover.
 
 Read the selected decisions in `20260903_decoupled_coordination.md` and the active
 steering in `20260903_decoupled_coordination_prompt.md` before continuing.
@@ -30,8 +31,9 @@ steering in `20260903_decoupled_coordination_prompt.md` before continuing.
 
 The workspace is jj-managed. Preserve the user's design commits and rewritten
 history. The draft PR is https://github.com/MaterializeInc/materialize/pull/38696.
-The bookmark is `decoupled-coordination`. This handover checkpoint is local,
-not pushed, and has no new runtime CI evidence.
+The bookmark is `decoupled-coordination`. The immutable store, writer selection,
+and plan-explanation checkpoints are pushed. Current validation status is in the
+draft PR.
 
 - `a6ace2b0`: request-side storage, history/webhook writers, metadata-backed reads,
   real-time recency, request progress, and logical maintained admission.
@@ -115,8 +117,9 @@ Pending proposal work remains queued on failure. This addresses a code-level
 overlapping-controller counterexample, but has no runtime race demonstration.
 
 Request append paths use adapter-local read-only state. Protected hydration-history
-collection uses query-connection readiness instead of controller status. Its
-legacy PeekClient storage handle dependency has not been removed.
+collection uses query-connection readiness instead of controller status. Protected
+PeekClient construction omits legacy storage access, which remains available only
+to unprotected readers.
 
 ## Remaining work and risks
 
@@ -126,18 +129,18 @@ legacy PeekClient storage handle dependency has not been removed.
    preserving unprotected behavior. Missing plans/imports must wait without
    blocking unrelated maintenance. Bootstrap currently errors on missing selected
    bytes rather than providing an independent applier wait path.
-2. Make EXPLAIN read the selected immutable plan, and make the writer append and
-   retract `mz_notices`. `persist_dataflow_metainfo` remains installation-owned.
-   Preserve all EXPLAIN stages, redaction, notice identities, and drop retractions.
-   Avoid double retractions when catalog drop handling already removed a notice.
+2. Exercise selected-plan EXPLAIN and writer-owned runtime notice updates through
+   `restart/selected-plan-explain`. Protected installation no longer writes notices.
+   The request task holds one catalog snapshot and is cancellable. MV pushdown
+   explanations and timestamp explanations still have controller dependencies.
 3. Exercise dependent rewrites at the coordinator/SQL boundary. Compilation is
    not proof of the new rewrite routine. Include multiple equivalent indexes,
    same-batch new storage inputs, create/select/drop of one owner, replacements,
    failed CAS, and CREATE INDEX leaving existing selections unchanged.
-4. Reconcile the two eligibility implementations. MV creation checks all ready
-   selected replicas. The DROP rewrite routine currently checks any ready replica.
-   Neither a cached frontier nor a catalog bound is itself a hold. Test loss of
-   permission/readability between filtering and acquisition. Acquisition errors
+4. MV creation and DROP rewrites share all-ready-selected-replica eligibility,
+   including target selection. Neither a cached frontier nor a catalog bound is
+   itself a hold. Test loss of permission/readability between filtering and
+   acquisition. Acquisition errors
    currently abort rather than necessarily retrying with an alternative path.
 5. Validate birth protection for new inputs excluded from live-catalog acquisition,
    especially aliases sharing existing shards. The review finding was addressed
@@ -149,6 +152,9 @@ legacy PeekClient storage handle dependency has not been removed.
    following, controller configuration/status effects, read policies, physical
    finalization, and request-side legacy handles remain coupled. Do not use a
    dummy controller or state proxy to bridge them.
+   Protected PeekClient/statistics/hydration plumbing no longer requires legacy
+   storage handles. DROP INDEX's physical in-use notice still needs a decision on
+   execution-dependency observations, since selected plans can differ from execution.
 8. Demonstrate autonomous source-fed maintained work and compaction through adapter
    death/restart. The earlier two-process COPY coexistence CI proof is useful but
    is not this acceptance test. Include isolated request failures and recovery.

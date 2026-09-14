@@ -72,6 +72,7 @@ pub enum ParsedStateUpdateKind {
         durable: durable::objects::SystemConfiguration,
     },
     CollectionCompactionBound(durable::objects::CollectionCompactionBound),
+    WrittenPlan(durable::objects::WrittenPlan),
     /// Storage lifetime can end after the SQL drop when the final reader releases it.
     StorageCollectionMetadata {
         id: GlobalId,
@@ -118,6 +119,7 @@ pub fn parse_state_update(
         StateUpdateKind::CollectionCompactionBound(bound) => {
             Some(ParsedStateUpdateKind::CollectionCompactionBound(bound))
         }
+        StateUpdateKind::WrittenPlan(plan) => Some(ParsedStateUpdateKind::WrittenPlan(plan)),
         StateUpdateKind::StorageCollectionMetadata(metadata) => {
             Some(ParsedStateUpdateKind::StorageCollectionMetadata { id: metadata.id })
         }

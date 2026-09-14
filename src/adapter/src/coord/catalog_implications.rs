@@ -51,7 +51,7 @@ use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
 use mz_sql::plan::ConnectionDetails;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
@@ -66,12 +66,12 @@ use timely::progress::Antichain;
 use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
-use crate::coord::Coordinator;
 use crate::coord::catalog_implications::parsed_state_updates::{
     ParsedStateUpdate, ParsedStateUpdateKind,
 };
 use crate::coord::peek::DroppedDependency;
 use crate::coord::timestamp_selection::TimestampProvider;
+use crate::coord::{BuiltinTableAppendNotify, Coordinator};
 use crate::optimize::OptimizerConfig;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, dataflow_import_id_bundle};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
@@ -116,6 +116,10 @@ impl Coordinator {
         let mut system_config_changed = false;
         let mut compaction_bounds = BTreeMap::new();
         let mut retired_storage_metadata = BTreeSet::new();
+        let mut written_plans = BTreeSet::new();
+        let build =
+            crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
+                .to_string();
 
         // Whether to wake the cluster controller once the implications below are
         // applied. Decided from the committed diff, see the method.
@@ -192,9 +196,15 @@ impl Coordinator {
                         retired_storage_metadata.insert(*id);
                     }
                 }
+                ParsedStateUpdateKind::WrittenPlan(plan) => {
+                    if plan.build_version == build {
+                        written_plans.insert(plan.id);
+                    }
+                }
             }
         }
 
+        let notice_updates = self.refresh_written_plan_notices(written_plans).await?;
         self.apply_catalog_implications_inner(
             ctx,
             catalog_implications.into_iter().collect_vec(),
@@ -206,6 +216,9 @@ impl Coordinator {
             compaction_bounds,
         )
         .await?;
+        if let Some(notice_updates) = notice_updates {
+            notice_updates.await;
+        }
 
         // A client can release the final reference after the SQL object's drop.
         // Retire storage from that committed metadata removal as well. Apply this
@@ -247,6 +260,77 @@ impl Coordinator {
             .observe(start.elapsed().as_secs_f64());
 
         Ok(())
+    }
+
+    /// The writer publishes notices from committed selections, independently of
+    /// installation. Catalog drop application already retracts affected notices.
+    async fn refresh_written_plan_notices(
+        &mut self,
+        mut ids: BTreeSet<GlobalId>,
+    ) -> Result<Option<BuiltinTableAppendNotify>, AdapterError> {
+        if !self.catalog().state().catalog_read_protection_enabled() || ids.is_empty() {
+            return Ok(None);
+        }
+        ids.retain(|id| {
+            self.catalog()
+                .try_get_entry_by_global_id(id)
+                .is_some_and(|entry| match entry.item() {
+                    CatalogItem::Index(index) => index.global_id() == *id,
+                    CatalogItem::MaterializedView(mv) => mv.global_id_writes() == *id,
+                    CatalogItem::MetricSink(sink) => sink.global_id == *id,
+                    _ => false,
+                })
+        });
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        let build =
+            crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
+                .to_string();
+        let revisions: Vec<_> = ids
+            .iter()
+            .filter_map(|id| {
+                self.catalog()
+                    .state()
+                    .written_plan(*id, &build)
+                    .map(|revision| (*id, revision))
+            })
+            .collect();
+        let mut selected = self.catalog().read_written_plans(revisions.clone()).await?;
+        if selected.len() != revisions.len() {
+            return Err(AdapterError::internal(
+                "publish written plan notices",
+                "selected plan is missing",
+            ));
+        }
+        let mut updates = Vec::new();
+        for id in ids {
+            let previous: BTreeSet<_> = self
+                .catalog()
+                .try_get_dataflow_metainfo(&id)
+                .into_iter()
+                .flat_map(|meta| meta.optimizer_notices.iter().cloned())
+                .collect();
+            let metainfo = selected
+                .remove(&id)
+                .map(|plan| plan.dataflow_metainfos)
+                .unwrap_or_default();
+            let current: BTreeSet<_> = metainfo.optimizer_notices.iter().cloned().collect();
+            if self.catalog().system_config().enable_mz_notices() {
+                self.catalog().state().pack_optimizer_notices(
+                    &mut updates,
+                    previous.difference(&current),
+                    Diff::MINUS_ONE,
+                );
+                self.catalog().state().pack_optimizer_notices(
+                    &mut updates,
+                    current.difference(&previous),
+                    Diff::ONE,
+                );
+            }
+            self.catalog_mut().set_dataflow_metainfo(id, metainfo);
+        }
+        Ok((!updates.is_empty()).then(|| self.builtin_table_update().execute(updates)))
     }
 
     /// Refreshes runtime consumers from the committed global configuration.
@@ -2560,6 +2644,9 @@ impl CatalogImplication {
             }
             ParsedStateUpdateKind::CollectionCompactionBound(_) => {
                 unreachable!("CollectionCompactionBound should not be passed to absorb");
+            }
+            ParsedStateUpdateKind::WrittenPlan(_) => {
+                unreachable!("WrittenPlan should not be passed to absorb");
             }
             ParsedStateUpdateKind::StorageCollectionMetadata { .. } => {
                 unreachable!("StorageCollectionMetadata should not be passed to absorb");
