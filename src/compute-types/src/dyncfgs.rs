@@ -115,7 +115,10 @@ pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
 /// installation of the process buffer pool (`mz_ore::pool`): the first
 /// configuration tick with either gate on reserves the pool's virtual
 /// address space and spawns its spill threads. Turning the gates back off
-/// stops retuning but does not tear the installed pool down.
+/// stops retuning but does not tear the installed pool down. The pool's
+/// chunk spill gate is the OR of the two flags, and every chunk consumer in
+/// the process reads it: the column-paged batcher and the MV sink correction
+/// buffer's chunk bodies spill while either flag is on.
 ///
 /// Off by default, even when the batcher path itself is on, so the
 /// no-pressure case stays a pure resident operation. Tune the budget via
@@ -123,8 +126,9 @@ pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
 pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     "enable_column_paged_batcher_spill",
     false,
-    "Allow the column-paged batcher's pager to evict chunks under memory pressure. Only \
-     meaningful when `enable_column_paged_batcher = true`.",
+    "Allow chunks to spill under memory pressure: the column-paged batcher's (only meaningful \
+     when `enable_column_paged_batcher = true`) and the MV sink correction buffer's chunk \
+     bodies. Either this flag or `enable_upsert_paged_spill` enables both.",
     ParameterScope::Replica,
 );
 
@@ -294,11 +298,13 @@ pub const CORRECTION_V2_CHAIN_PROPORTIONALITY: Config<f64> = Config::new(
     ParameterScope::Replica,
 );
 
-/// The byte size of chunks in the correction V2 buffer.
+/// The byte size of the correction V2 buffer's staging area.
 pub const CORRECTION_V2_CHUNK_SIZE: Config<usize> = Config::new(
     "compute_correction_v2_chunk_size",
-    8 * 1024,
-    "The byte size of chunks in the correction V2 buffer.",
+    2 * 1024 * 1024,
+    "The byte size of the staging area in the correction V2 buffer, heap bytes of the staged \
+     updates included, which sets how much it accumulates before minting a chain (the name \
+     predates that meaning; chunk bodies themselves are fixed at the columnar ship size).",
     ParameterScope::Replica,
 );
 
