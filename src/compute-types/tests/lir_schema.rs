@@ -10,7 +10,7 @@
 //! Schema registry for the stable LIR serialization format.
 //!
 //! These tests trace the serde serialization surface reachable from
-//! [`LirRelationExpr`] into a [`serde_reflection::Registry`] and compare it
+//! [`PinnedDataflow`] into a [`serde_reflection::Registry`] and compare it
 //! against a checked-in snapshot, `tests/snapshots/lir_v{LIR_VERSION}.json`.
 //! Any change to the serialized format of LIR (including the `*Func` enums
 //! and everything else in the graph) changes the traced schema and fails
@@ -45,12 +45,13 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use mz_compute_types::plan::join::JoinPlan;
+use mz_compute_types::plan::pinned::{PinnedDataflow, PinnedSinkKind};
 use mz_compute_types::plan::reduce::{BasicPlan, HierarchicalPlan, ReducePlan};
 use mz_compute_types::plan::scalar::{LirScalarExpr, LiteralValue};
 use mz_compute_types::plan::threshold::ThresholdPlan;
 use mz_compute_types::plan::top_k::TopKPlan;
 use mz_compute_types::plan::{
-    ArrangementStrategy, ConstantRows, GetPlan, LIR_VERSION, LirRelationExpr, LirRelationNode,
+    ArrangementStrategy, ConstantRows, GetPlan, LIR_VERSION, LirRelationNode,
 };
 use mz_expr::func::{TimezoneTime, ToCharTimestamp};
 use mz_expr::like_pattern::Matcher;
@@ -255,7 +256,7 @@ fn diagnose(context: &str, err: serde_reflection::Error) -> ! {
     );
 }
 
-/// Traces the full serde type graph reachable from [`LirRelationExpr`].
+/// Traces the full serde type graph reachable from [`PinnedDataflow`].
 ///
 /// Whatever happens, the traced state lands at [`CURRENT_PATH`]: the complete
 /// schema on success, the partial registry on failure. Failures panic with
@@ -349,8 +350,8 @@ fn run_traces(
         .map_err(|err| ("StableEvalError sample".to_string(), err))?;
 
     tracer
-        .trace_type::<LirRelationExpr>(samples)
-        .map_err(|err| ("LirRelationExpr".to_string(), err))?;
+        .trace_type::<PinnedDataflow>(samples)
+        .map_err(|err| ("PinnedDataflow".to_string(), err))?;
 
     // Tracing a struct explores nested enums one variant per pass, so every
     // enum in the graph needs its own trace_type call to cover all variants.
@@ -397,6 +398,7 @@ fn run_traces(
         WindowFrameUnits,
         Timezone,
         CatalogItemId,
+        PinnedSinkKind,
     ];
 
     // Some enums in the graph are private (MatcherImpl in like_pattern, and
@@ -510,7 +512,7 @@ fn lir_schema_snapshot() {
     if expected != actual {
         panic!(
             "The serialized stable LIR schema changed!\n\n\
-             The serde type graph reachable from LirRelationExpr no longer matches\n\
+             The serde type graph reachable from PinnedDataflow no longer matches\n\
              '{path}'. This affects any durably stored LIR plan.\n\n\
              What changed:\n{diff}\n\n\
              Full detail: diff '{path}' against the freshly traced schema at\n\
@@ -534,6 +536,14 @@ fn lir_schema_snapshot() {
 fn lir_schema_contains_expected_types() {
     let registry = trace_lir_registry();
     const EXPECTED: &[&str] = &[
+        // The pinned dataflow and its import and export entries.
+        "PinnedDataflow",
+        "PinnedSourceImport",
+        "PinnedIndexImport",
+        "PinnedSink",
+        "PinnedSinkKind",
+        "BuildDesc",
+        "IndexDesc",
         // The LIR AST itself.
         "LirRelationExpr",
         "LirRelationNode",
@@ -566,6 +576,8 @@ fn lir_schema_contains_expected_types() {
         "StableRow",
         "ReprScalarType",
         "ReprColumnType",
+        "ReprRelationType",
+        "SqlRelationType",
         "StableEvalError",
         "LetRecLimit",
         "Regex",
@@ -587,7 +599,10 @@ fn lir_schema_contains_expected_types() {
 /// the same for aggregates, and the `UnaryFunc<E>` parameter does the same
 /// for the cast funcs that store a nested cast expression (for example
 /// CastArrayToArray's cast_expr, which is a LirScalarExpr in the traced
-/// instantiation).
+/// instantiation). `PinnedDataflow` does the same at the dataflow level: it
+/// stores index keys and source operators as LIR and leaves the MIR-typed
+/// `DataflowDescription`, along with the runtime frontiers and catalog
+/// descriptors it carries, to be rebuilt at instantiation.
 #[mz_ore::test]
 fn lir_schema_contains_only_stable_types() {
     let registry = trace_lir_registry();
@@ -612,7 +627,10 @@ fn lir_schema_contains_only_stable_types() {
     // Row and EvalError are forbidden because their serde impls track
     // unstable Rust definitions (the in-memory datum encoding, the error
     // enum's variants). The stable surface must go through StableRow and
-    // StableEvalError, which serialize as proto-encoded bytes.
+    // StableEvalError, which serialize as proto-encoded bytes. The dataflow
+    // wrapper types are forbidden because they carry runtime frontiers,
+    // catalog descriptors, and one-shot sink configuration that the pinned
+    // form deliberately leaves to instantiation.
     for forbidden in [
         "MirScalarExpr",
         "UnmaterializableFunc",
@@ -620,10 +638,15 @@ fn lir_schema_contains_only_stable_types() {
         "MirRelationExpr",
         "Row",
         "EvalError",
+        "DataflowDescription",
+        "ComputeSinkDesc",
+        "ComputeSinkConnection",
+        "RelationDesc",
+        "Antichain",
     ] {
         assert!(
             !registry.contains_key(forbidden),
-            "unstable type '{forbidden}' is reachable from LirRelationExpr"
+            "unstable type '{forbidden}' is reachable from PinnedDataflow"
         );
     }
 
