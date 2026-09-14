@@ -127,6 +127,17 @@ true
 > SELECT count(*) >= 0 FROM mz_introspection.mz_compute_frontiers_per_worker
 true
 
+# `mz_peek_durations_histogram_raw` is populated by each replica's own
+# introspection logging, which publishes on a periodic interval rather than
+# immediately after a peek retires. Waiting for r1's own count to catch up to
+# the three peeks issued above is a deterministic barrier (backed by
+# testdrive's retry-on-mismatch) for that publish interval to have elapsed,
+# so the check below isn't racing the same interval on r2.
+> SELECT count(*) >= 3 FROM mz_introspection.mz_peek_durations_histogram_raw
+true
+> SELECT mz_unsafe.mz_sleep(2)
+<null>
+
 > SET cluster_replica = r2
 
 > SELECT count(*) FROM mz_introspection.mz_peek_durations_histogram_raw
