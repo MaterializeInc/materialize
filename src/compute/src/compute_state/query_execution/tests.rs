@@ -201,6 +201,186 @@ fn build_index_exports(dataflow: &mut DataflowDescription<RenderPlan, Collection
 }
 
 #[mz_ore::test(tokio::test)]
+async fn query_subscribe_logs_frontiers_without_disturbing_maintained_logging() {
+    use columnar::{Columnar, Index};
+    use mz_compute_types::sinks::{
+        ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
+    };
+    use mz_persist_client::Diagnostics;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_storage_types::sources::SourceData;
+    use mz_timely_util::columnar::Column;
+
+    const MAINTAINED: GlobalId = GlobalId::User(2);
+    let mut h = Harness::new();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let captured = Rc::clone(&events);
+    let logger = logging::compute::Logger::new(
+        Instant::now(),
+        Duration::ZERO,
+        move |_, batch: &mut Option<Column<(Duration, ComputeEvent)>>| {
+            if let Some(batch) = batch.take() {
+                captured.borrow_mut().extend(
+                    batch
+                        .borrow()
+                        .into_index_iter()
+                        .map(|(_, event)| ComputeEvent::into_owned(event)),
+                );
+            }
+        },
+    );
+    h.state.compute_logger = Some(logger.clone());
+    let drain = || {
+        logger.flush();
+        std::mem::take(&mut *events.borrow_mut())
+    };
+    let frontier_events = |events: &[ComputeEvent], id| {
+        // Intermediate frontier advances can cancel within a batch of differential updates.
+        let mut frontiers = events
+            .iter()
+            .filter_map(|event| match event {
+                ComputeEvent::Frontier(f) if f.export_id == id => Some((f.time, i64::from(f.diff))),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        differential_dataflow::consolidation::consolidate(&mut frontiers);
+        frontiers
+    };
+
+    let metadata = source_metadata();
+    let client = h
+        .state
+        .persist_clients
+        .open(metadata.persist_location.clone())
+        .await
+        .unwrap();
+    let mut writer = client
+        .open_writer::<SourceData, (), Timestamp, i64>(
+            metadata.data_shard,
+            Arc::new(metadata.relation_desc.clone()),
+            Arc::new(UnitSchema),
+            Diagnostics {
+                shard_name: "query-logging".into(),
+                handle_purpose: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut subscribe = alias(Timestamp::MIN);
+    let import = subscribe.index_imports.remove(&CATALOG).unwrap();
+    subscribe.index_imports.insert(MAINTAINED, import);
+    subscribe.index_exports.clear();
+    subscribe.sink_exports.insert(
+        EXPORT,
+        ComputeSinkDesc {
+            from: EXPORT,
+            from_desc: metadata.relation_desc.clone(),
+            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                output: vec![],
+            }),
+            with_snapshot: true,
+            up_to: Antichain::new(),
+            non_null_assertions: vec![],
+            refresh_schedule: None,
+        },
+    );
+    {
+        let mut active = ActiveComputeState {
+            timely_worker: &mut h.worker,
+            compute_state: &mut h.state,
+            response_tx: &mut h.sender,
+        };
+        active.handle_create_dataflow(source_dataflow(metadata, MAINTAINED));
+        active.handle_schedule(MAINTAINED);
+    }
+    h.open(A);
+    h.command(
+        A,
+        ComputeCommand::CreateQueryDataflow {
+            request_id: B,
+            dataflow: Box::new(subscribe),
+        },
+    );
+    h.command(A, ComputeCommand::Schedule(EXPORT));
+    let initial = drain();
+    for id in [MAINTAINED, EXPORT] {
+        assert!(
+            initial
+                .iter()
+                .any(|e| matches!(e, ComputeEvent::Export(e) if e.export_id == id)),
+            "missing export log for {id}: {initial:?}"
+        );
+        assert_eq!(frontier_events(&initial, id), vec![(Timestamp::MIN, 1)]);
+    }
+
+    // Advance both exports, disconnect the query, then advance the maintained export alone.
+    for (lower, upper) in [(0, 10), (10, 20)] {
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, i64)>::new(),
+                Antichain::from_elem(Timestamp::from(lower)),
+                Antichain::from_elem(Timestamp::from(upper)),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut progress = Vec::new();
+        loop {
+            h.worker.step();
+            h.poll();
+            ActiveComputeState {
+                timely_worker: &mut h.worker,
+                compute_state: &mut h.state,
+                response_tx: &mut h.sender,
+            }
+            .report_frontiers();
+            progress.extend(drain());
+            let advanced =
+                |id| frontier_events(&progress, id).contains(&(Timestamp::from(upper), 1));
+            if advanced(MAINTAINED) && (lower != 0 || advanced(EXPORT)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "missing progress logs: {progress:?}"
+            );
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            frontier_events(&progress, MAINTAINED),
+            vec![(Timestamp::from(lower), -1), (Timestamp::from(upper), 1)]
+        );
+        if lower == 0 {
+            assert_eq!(
+                frontier_events(&progress, EXPORT),
+                frontier_events(&progress, MAINTAINED)
+            );
+            h.state
+                .handle_query_command(&mut h.worker, None, A, &mut h.sender);
+            let dropped = drain();
+            assert_eq!(
+                frontier_events(&dropped, EXPORT),
+                vec![(Timestamp::from(upper), -1)]
+            );
+            assert!(
+                dropped
+                    .iter()
+                    .any(|e| matches!(e, ComputeEvent::ExportDropped(e) if e.export_id == EXPORT))
+            );
+            assert!(frontier_events(&dropped, MAINTAINED).is_empty());
+            assert!(
+                !dropped.iter().any(
+                    |e| matches!(e, ComputeEvent::ExportDropped(e) if e.export_id == MAINTAINED)
+                )
+            );
+        } else {
+            assert!(frontier_events(&progress, EXPORT).is_empty());
+        }
+    }
+}
+
+#[mz_ore::test(tokio::test)]
 async fn drop_before_reader_acquisition_resolves_creation_once() {
     let mut h = Harness::new();
     h.open(A);
