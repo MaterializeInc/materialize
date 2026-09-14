@@ -65,7 +65,7 @@ use crate::durable::objects::{
     SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
     StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
     SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
-    UnfinalizedShardKey,
+    UnfinalizedShardKey, WrittenPlan, WrittenPlanKey, WrittenPlanValue,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
@@ -123,6 +123,7 @@ pub struct Transaction<'a> {
     maintained_read_requirements:
         TableTransaction<MaintainedReadRequirementKey, MaintainedReadRequirementValue>,
     client_incarnations: TableTransaction<ClientIncarnationKey, ClientIncarnationValue>,
+    written_plans: TableTransaction<WrittenPlanKey, WrittenPlanValue>,
     client_read_requirements:
         TableTransaction<ClientReadRequirementKey, ClientReadRequirementValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
@@ -227,6 +228,7 @@ impl<'a> Transaction<'a> {
             collection_compaction_bounds,
             maintained_read_requirements,
             client_incarnations,
+            written_plans,
             client_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
@@ -323,6 +325,7 @@ impl<'a> Transaction<'a> {
             collection_compaction_bounds: TableTransaction::new(collection_compaction_bounds)?,
             maintained_read_requirements: TableTransaction::new(maintained_read_requirements)?,
             client_incarnations: TableTransaction::new(client_incarnations)?,
+            written_plans: TableTransaction::new(written_plans)?,
             client_read_requirements: TableTransaction::new(client_read_requirements)?,
             unfinalized_shards: TableTransaction::new(unfinalized_shards)?,
             // Uniqueness violations for this value occur at the key rather than
@@ -334,6 +337,44 @@ impl<'a> Transaction<'a> {
             op_id: 0,
             commit_capability: None,
         })
+    }
+
+    /// Reads this transaction's selected revision for exactly one build.
+    pub fn get_written_plan(&self, id: GlobalId, build_version: &str) -> Option<Uuid> {
+        self.written_plans
+            .get(&WrittenPlanKey {
+                id,
+                build_version: build_version.to_owned(),
+            })
+            .map(|value| value.revision)
+    }
+
+    /// Returns all selections, including other builds, without changing them.
+    pub fn get_written_plans(&self) -> impl Iterator<Item = WrittenPlan> + use<'_> {
+        self.written_plans
+            .items()
+            .into_iter()
+            .map(|(key, value)| DurableType::from_key_value(key.clone(), value.clone()))
+    }
+
+    /// Selects already-written immutable expression-shard bytes, or removes the selection.
+    /// The caller must name its own build. This changes only the specified key,
+    /// atomically with the rest of the transaction, and never cleans up other builds.
+    pub fn set_written_plan(
+        &mut self,
+        id: GlobalId,
+        build_version: &str,
+        revision: Option<Uuid>,
+    ) -> Result<(), CatalogError> {
+        self.written_plans.set(
+            WrittenPlanKey {
+                id,
+                build_version: build_version.to_owned(),
+            },
+            revision.map(|revision| WrittenPlanValue { revision }),
+            self.op_id,
+        )?;
+        Ok(())
     }
 
     pub fn get_item(&self, id: &CatalogItemId) -> Option<Item> {
@@ -1266,6 +1307,7 @@ impl<'a> Transaction<'a> {
             collection_compaction_bounds: self.collection_compaction_bounds.current_items_proto(),
             maintained_read_requirements: self.maintained_read_requirements.current_items_proto(),
             client_incarnations: self.client_incarnations.current_items_proto(),
+            written_plans: self.written_plans.current_items_proto(),
             client_read_requirements: self.client_read_requirements.current_items_proto(),
             unfinalized_shards: self.unfinalized_shards.current_items_proto(),
             txn_wal_shard: self.txn_wal_shard.current_items_proto(),
@@ -2648,6 +2690,7 @@ impl<'a> Transaction<'a> {
             collection_compaction_bounds,
             maintained_read_requirements,
             client_incarnations,
+            written_plans,
             client_read_requirements,
             unfinalized_shards,
             // Not representable as a `StateUpdate`.
@@ -2764,6 +2807,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 client_incarnations,
                 StateUpdateKind::ClientIncarnation,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                written_plans,
+                StateUpdateKind::WrittenPlan,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -3348,6 +3396,7 @@ impl<'a> Transaction<'a> {
             collection_compaction_bounds: self.collection_compaction_bounds.pending(),
             maintained_read_requirements: self.maintained_read_requirements.pending(),
             client_incarnations: self.client_incarnations.pending(),
+            written_plans: self.written_plans.pending(),
             client_read_requirements: self.client_read_requirements.pending(),
             unfinalized_shards: self.unfinalized_shards.pending(),
             txn_wal_shard: self.txn_wal_shard.pending(),
@@ -3413,6 +3462,7 @@ impl<'a> Transaction<'a> {
             collection_compaction_bounds,
             maintained_read_requirements,
             client_incarnations,
+            written_plans,
             client_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
@@ -3446,6 +3496,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(collection_compaction_bounds);
         differential_dataflow::consolidation::consolidate_updates(maintained_read_requirements);
         differential_dataflow::consolidation::consolidate_updates(client_incarnations);
+        differential_dataflow::consolidation::consolidate_updates(written_plans);
         differential_dataflow::consolidation::consolidate_updates(client_read_requirements);
         differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
@@ -3717,6 +3768,7 @@ pub struct TransactionBatch {
         proto::ClientIncarnationValue,
         Diff,
     )>,
+    pub(crate) written_plans: Vec<(proto::WrittenPlanKey, proto::WrittenPlanValue, Diff)>,
     pub(crate) client_read_requirements: Vec<(
         proto::ClientReadRequirementKey,
         proto::ClientReadRequirementValue,
@@ -3759,6 +3811,7 @@ impl TransactionBatch {
             collection_compaction_bounds,
             maintained_read_requirements,
             client_incarnations,
+            written_plans,
             client_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
@@ -3790,6 +3843,7 @@ impl TransactionBatch {
             && collection_compaction_bounds.is_empty()
             && maintained_read_requirements.is_empty()
             && client_incarnations.is_empty()
+            && written_plans.is_empty()
             && client_read_requirements.is_empty()
             && unfinalized_shards.is_empty()
             && txn_wal_shard.is_empty()
@@ -3869,6 +3923,7 @@ mod unique_name {
         CollectionCompactionBoundValue,
         MaintainedReadRequirementValue,
         ClientIncarnationValue,
+        WrittenPlanValue,
         ClientReadRequirementValue,
         SystemPrivilegesValue,
         TxnWalShardValue,

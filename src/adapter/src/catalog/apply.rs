@@ -478,6 +478,14 @@ impl CatalogState {
                     diff,
                 );
             }
+            StateUpdateKind::WrittenPlan(plan) => {
+                apply_inverted_lookup(
+                    &mut self.written_plans,
+                    &(plan.id, plan.build_version),
+                    plan.revision,
+                    diff,
+                );
+            }
             StateUpdateKind::ClientIncarnation(incarnation) => {
                 apply_inverted_lookup(
                     &mut self.client_incarnations,
@@ -1647,6 +1655,7 @@ impl CatalogState {
             | StateUpdateKind::CollectionCompactionBound(_)
             | StateUpdateKind::MaintainedReadRequirement(_)
             | StateUpdateKind::ClientIncarnation(_)
+            | StateUpdateKind::WrittenPlan(_)
             | StateUpdateKind::ClientReadRequirement(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
@@ -2414,6 +2423,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::CollectionCompactionBound(_)
             | StateUpdateKind::MaintainedReadRequirement(_)
             | StateUpdateKind::ClientIncarnation(_)
+            | StateUpdateKind::WrittenPlan(_)
             | StateUpdateKind::ClientReadRequirement(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => push_update(
@@ -2652,6 +2662,7 @@ impl ApplyState {
             | CollectionCompactionBound(_)
             | MaintainedReadRequirement(_)
             | ClientIncarnation(_)
+            | WrittenPlan(_)
             | ClientReadRequirement(_)
             | StorageCollectionMetadata(_)
             | UnfinalizedShard(_) => Self::Updates(vec![update]),

@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
 use mz_catalog::durable::objects::MaintainedReadRequirement;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
@@ -31,7 +32,8 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_transform::notice::OptimizerNoticeApi;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -48,10 +50,43 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
+use crate::optimize::dataflows::{ComputeInstanceSnapshot, dataflow_import_id_bundle};
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider, catalog};
+
+/// Reuses a compatible candidate, or replaces both global plans and their raw
+/// notices using an optimizer restricted to `indexes`. The caller must protect
+/// the final imports at its frozen timestamp before writing the candidate.
+fn ensure_materialized_view_access_paths(
+    indexes: &BTreeSet<GlobalId>,
+    local_mir: &optimize::materialized_view::LocalMirPlan,
+    global_mir: &mut optimize::materialized_view::GlobalMirPlan,
+    global_lir: &mut optimize::materialized_view::GlobalLirPlan,
+    optimizer: impl FnOnce() -> optimize::materialized_view::Optimizer,
+) -> Result<(), AdapterError> {
+    if global_lir
+        .df_desc()
+        .index_imports
+        .keys()
+        .chain(global_mir.df_desc().index_imports.keys())
+        .all(|id| indexes.contains(id))
+    {
+        return Ok(());
+    }
+    let mut optimizer = optimizer();
+    let mir = optimizer.catch_unwind_optimize(local_mir.clone())?;
+    let lir = optimizer.catch_unwind_optimize(mir.clone())?;
+    if lir.desc() != global_lir.desc() {
+        return Err(AdapterError::internal(
+            "create materialized view",
+            "access-path planning changed the output schema",
+        ));
+    }
+    *global_mir = mir;
+    *global_lir = lir;
+    Ok(())
+}
 
 impl Staged for CreateMaterializedViewStage {
     type Ctx = ExecuteContext;
@@ -446,11 +481,14 @@ impl Coordinator {
                         ));
                     }
                 }
-                // Also check that no new id has appeared in `sufficient_collections` (e.g. a new
-                // index), otherwise we might be missing some read holds.
-                let ids = self
-                    .index_oracle(*cluster_id)
-                    .sufficient_collections(query_ids.collections().copied());
+                // Purification must cover the admission inputs. In protected
+                // mode these are logical dependencies, independent of indexes.
+                let ids = if self.catalog().state().catalog_read_protection_enabled() {
+                    self.materialized_view_logical_inputs(query_ids.collections().copied())?
+                } else {
+                    self.index_oracle(*cluster_id)
+                        .sufficient_collections(query_ids.collections().copied())
+                };
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \
@@ -646,8 +684,8 @@ impl Coordinator {
                 },
             resolved_ids,
             local_mir_plan,
-            global_mir_plan,
-            global_lir_plan,
+            mut global_mir_plan,
+            mut global_lir_plan,
             optimizer_features,
             ..
         } = stage;
@@ -677,7 +715,7 @@ impl Coordinator {
                 .chain(raw_expr.depends_on()),
         )?;
         // Admission promises logical input history, not the availability of a
-        // candidate index. Installation validates or replans those access paths.
+        // candidate index. Physical paths are selected at that timestamp below.
         let id_bundle = if self.catalog().state().catalog_read_protection_enabled() {
             logical_inputs.clone()
         } else {
@@ -791,6 +829,156 @@ impl Coordinator {
             });
         }
 
+        // Physical protection bridges writing the candidate and installation's
+        // acquisition of execution holds in catalog implications. Logical holds
+        // alone cannot preserve an index trace at the chosen historical AS OF.
+        let physical_read_holds = if let Some(client) = self.query_client.clone() {
+            let planning_revision = self.catalog().transient_revision();
+            let (candidate, _) = match self
+                .catalog()
+                .transact_incremental_dry_run(
+                    self.catalog().state(),
+                    ops.clone(),
+                    None,
+                    None,
+                    initial_as_of.as_option().copied().unwrap_or(Timestamp::MIN),
+                )
+                .await
+            {
+                Ok(candidate) => candidate,
+                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                })) if if_not_exists => {
+                    ctx.session()
+                        .add_notice(AdapterNotice::ObjectAlreadyExists {
+                            name: name.item,
+                            ty: "materialized view",
+                        });
+                    return Ok(StageResult::Response(
+                        ExecuteResponse::CreatedMaterializedView,
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let candidate = Arc::new(candidate);
+            let mv = candidate
+                .get_entry(&item_id)
+                .materialized_view()
+                .expect("created MV");
+            let read_ts = *dataflow_as_of.as_option().expect("readable MV timestamp");
+            let replicas = client.replica_clients(cluster_id, target_replica);
+            // A catalog declaration or bound does not establish that an index
+            // trace exists at this timestamp. Missing native observations make
+            // that path ineligible, not the logical CREATE inadmissible.
+            let mut indexes: BTreeSet<_> = candidate
+                .get_entries()
+                .filter_map(|(_, entry)| {
+                    let CatalogItem::Index(index) = entry.item() else {
+                        return None;
+                    };
+                    if index.cluster_id != cluster_id {
+                        return None;
+                    }
+                    let id = index.global_id();
+                    if candidate
+                        .collection_compaction_bounds()
+                        .get(&id)
+                        .is_some_and(|bound| !bound.less_equal(&read_ts))
+                    {
+                        return None;
+                    }
+                    // Maintained dataflows install on every selected replica, not
+                    // just one readable replica as a peek can.
+                    (!replicas.is_empty()
+                        && replicas.iter().all(|replica| {
+                            replica
+                                .collection_frontiers(id)
+                                .ok()
+                                .flatten()
+                                .and_then(|frontiers| frontiers.read_frontier)
+                                .is_some_and(|since| since.less_equal(&read_ts))
+                        }))
+                    .then_some(id)
+                })
+                .collect();
+            let mut optimizer_config = optimize::OptimizerConfig::from(candidate.system_config());
+            // Keep the features selected for this statement, including session
+            // and cluster overrides, when only its access paths change.
+            optimizer_config.features = optimizer_features.clone();
+            loop {
+                ensure_materialized_view_access_paths(
+                    &indexes,
+                    &local_mir_plan,
+                    &mut global_mir_plan,
+                    &mut global_lir_plan,
+                    || {
+                        let (_, view_id) = self.allocate_transient_id();
+                        optimize::materialized_view::Optimizer::new(
+                            Arc::<CatalogState>::clone(&candidate),
+                            ComputeInstanceSnapshot::new_from_parts(cluster_id, indexes.clone()),
+                            global_id,
+                            view_id,
+                            column_names.clone(),
+                            mv.non_null_assertions.clone(),
+                            refresh_schedule.clone(),
+                            candidate.resolve_full_name(&name, None).to_string(),
+                            optimizer_config.clone(),
+                            self.optimizer_metrics(),
+                        )
+                    },
+                )?;
+                let bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+                let prepared = client
+                    .prepare_read(self.catalog(), &bundle, |_| Ok(Some(read_ts)))
+                    .await?;
+                let incompatible: BTreeSet<_> = prepared
+                    .frontiers
+                    .iter()
+                    .filter_map(|(id, since)| (*since > read_ts).then_some(*id))
+                    .collect();
+                if !incompatible.is_empty() {
+                    if incompatible.iter().any(|id| !indexes.contains(id)) {
+                        return Err(AdapterError::internal(
+                            "create materialized view",
+                            "logical input protection does not cover the written plan",
+                        ));
+                    }
+                    indexes.retain(|id| !incompatible.contains(id));
+                    continue;
+                }
+                let (holds, _) = self
+                    .acquire_client_read_protection(client.protection.incarnation(), bundle, |_| {
+                        Ok(Some(read_ts))
+                    })
+                    .await?;
+                if self.catalog().transient_revision() != planning_revision {
+                    return Err(AdapterError::DDLTransactionRace);
+                }
+                if holds.least_valid_read().less_equal(&read_ts) {
+                    break Some(holds);
+                }
+                // Acquisition resamples native frontiers and permission. If
+                // either advanced, reselect paths without advancing AS OF.
+                if holds
+                    .storage_holds
+                    .values()
+                    .any(|hold| !hold.since().less_equal(&read_ts))
+                {
+                    return Err(AdapterError::internal(
+                        "create materialized view",
+                        "logical input protection does not cover the written plan",
+                    ));
+                }
+                for ((_, id), hold) in &holds.compute_holds {
+                    if !hold.since().less_equal(&read_ts) {
+                        indexes.remove(id);
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
             .map(|(_item_id, global_id)| global_id)
@@ -829,12 +1017,10 @@ impl Coordinator {
             )
         };
 
-        // Populate the durable expression cache before the catalog
-        // transaction and await the write. This way any other envd (or a
-        // subsequent bootstrap here) will observe the cached plans +
-        // rendered notices as soon as the item becomes visible.
-        self.catalog()
-            .cache_expressions(
+        // Write the plan before committing the object and its selection together.
+        let selection = self
+            .catalog()
+            .prepare_item_plan(
                 global_id,
                 Some(local_mir_for_cache),
                 global_mir_plan.df_desc().clone(),
@@ -842,11 +1028,13 @@ impl Coordinator {
                 df_meta.clone(),
                 optimizer_features,
             )
-            .await;
+            .await?;
+        ops.extend(selection);
 
         let transact_result = self
             .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
+        drop(physical_read_holds);
 
         match transact_result {
             Ok(_) => {
@@ -1123,5 +1311,124 @@ impl Coordinator {
                 .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_catalog::SYSTEM_CONN_ID;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_sql::catalog::CatalogDatabase;
+    use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
+    use mz_sql::optimizer_metrics::OptimizerMetrics;
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+
+    #[mz_ore::test(tokio::test)]
+    async fn historical_materialized_view_access_paths() {
+        catalog::Catalog::with_debug(|catalog| async move {
+            let database = catalog.resolve_database(crate::session::DEFAULT_DATABASE_NAME).expect("default database");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog.resolve_schema_in_database(
+                &database_spec, mz_sql::DEFAULT_SCHEMA, &SYSTEM_CONN_ID,
+            ).expect("default schema");
+            let qualifiers = ItemQualifiers { database_spec, schema_spec: schema.id.clone() };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let birth = catalog.current_upper().await;
+            let mut state = catalog.state().clone();
+            let mut snapshot = None;
+            let mut ids = BTreeMap::new();
+            for (name, sql) in [
+                ("input", format!("CREATE TABLE {prefix}.input (a int)")),
+                ("v", format!("CREATE VIEW {prefix}.v AS SELECT * FROM {prefix}.input")),
+                ("early", format!("CREATE INDEX early IN CLUSTER quickstart ON {prefix}.v (a)")),
+                ("late", format!("CREATE INDEX late IN CLUSTER quickstart ON {prefix}.v (a)")),
+                ("mv", format!("CREATE MATERIALIZED VIEW {prefix}.mv IN CLUSTER quickstart AS SELECT * FROM {prefix}.v")),
+            ] {
+                let (id, gid) = catalog.allocate_user_id_for_test().await.expect("allocate fixture IDs");
+                let (item, _) = state.with_enable_for_item_parsing(|state| state.parse_item_inner(
+                    gid, &sql, &BTreeMap::new(), None, false, None,
+                    None, None,
+                )).expect("parse fixture definition");
+                ids.insert(name, (id, gid));
+                let (next, next_snapshot) = catalog.transact_incremental_dry_run(
+                    &state,
+                    vec![catalog::Op::CreateItem {
+                        id,
+                        name: QualifiedItemName {
+                            qualifiers: qualifiers.clone(),
+                            item: name.into(),
+                        },
+                        item, owner_id: MZ_SYSTEM_ROLE_ID,
+                    }],
+                    None, snapshot, birth,
+                ).await.expect("apply fixture definition");
+                state = next;
+                snapshot = Some(next_snapshot);
+            }
+            let state = Arc::new(state);
+            let mv = state.get_entry(&ids["mv"].0).materialized_view().expect("fixture MV");
+            let metrics = OptimizerMetrics::register_into(
+                &MetricsRegistry::new(), std::time::Duration::ZERO,
+            );
+            let optimizer = |indexes: BTreeSet<_>| optimize::materialized_view::Optimizer::new(
+                Arc::<CatalogState>::clone(&state),
+                ComputeInstanceSnapshot::new_from_parts(mv.cluster_id, indexes),
+                ids["mv"].1, GlobalId::Transient(1),
+                mv.desc.latest().iter_names().cloned().collect(),
+                mv.non_null_assertions.clone(), mv.refresh_schedule.clone(),
+                "historical MV".into(), optimize::OptimizerConfig::from(state.system_config()), metrics.clone(),
+            );
+            // The initial optimization chose a trace that will be excluded at
+            // the historical timestamp. Exercise the real global planner, not
+            // hand-constructed MIR/LIR import maps.
+            let late = BTreeSet::from([ids["late"].1]);
+            let mut initial = optimizer(late.clone());
+            let local = initial.optimize(mv.raw_expr.as_ref().clone()).expect("optimize local MIR");
+            let mut mir = initial.optimize(local.clone()).expect("optimize global MIR");
+            let mut lir = initial.optimize(mir.clone()).expect("optimize physical plan");
+            assert_eq!(lir.df_desc().index_imports.keys().copied().collect::<BTreeSet<_>>(), late);
+            ensure_materialized_view_access_paths(&late, &local, &mut mir, &mut lir, || panic!("compatible plan must be reused")).expect("reuse compatible plan");
+
+            let early = BTreeSet::from([ids["early"].1]);
+            ensure_materialized_view_access_paths(&early, &local, &mut mir, &mut lir, || optimizer(early.clone())).expect("select readable index");
+            assert_eq!(lir.df_desc().index_imports.keys().copied().collect::<BTreeSet<_>>(), early);
+            assert_eq!(mir.df_desc().index_imports.keys().copied().collect::<BTreeSet<_>>(), early);
+            assert_eq!(
+                lir.df_meta().index_usage_types.keys().copied().collect::<BTreeSet<_>>(),
+                early,
+            );
+
+            // Pin the writer boundary too: the immutable candidate must contain
+            // this optimization's MIR, LIR, and rendered metadata together.
+            let written = mz_catalog::expr_cache::GlobalExpressions {
+                global_mir: mir.df_desc().clone(),
+                physical_plan: lir.df_desc().clone(),
+                dataflow_metainfos: CatalogState::render_notices_core(
+                    &state.for_system_session(), 0, lir.df_meta(),
+                    (100u64..).map(GlobalId::Transient)
+                        .take(lir.df_meta().optimizer_notices.len()).collect(),
+                    Some(ids["mv"].1),
+                ),
+                optimizer_features: optimize::OptimizerConfig::from(state.system_config()).features,
+                item_version: RelationVersion::root(),
+            };
+            let selections = catalog.write_plans(BTreeMap::from([(ids["mv"].1, written.clone())])).await.expect("write immutable plan");
+            let [catalog::Op::SetWrittenPlan {
+                revision: Some(revision), imports, ..
+            }] = selections.as_slice() else {
+                panic!("expected one immutable plan selection");
+            };
+            assert_eq!(imports, &early);
+            let stored = catalog.read_written_plans(vec![(ids["mv"].1, *revision)]).await.expect("read immutable plan");
+            assert_eq!(stored[&ids["mv"].1], written);
+
+            ensure_materialized_view_access_paths(&BTreeSet::new(), &local, &mut mir, &mut lir, || optimizer(BTreeSet::new())).expect("fall back to logical inputs");
+            assert!(lir.df_desc().index_imports.is_empty());
+            assert!(mir.df_desc().index_imports.is_empty());
+            assert!(lir.df_meta().index_usage_types.is_empty());
+            assert!(lir.df_desc().source_imports.contains_key(&ids["input"].1));
+            assert_eq!(lir.desc(), &mv.desc.latest());
+        }).await;
     }
 }

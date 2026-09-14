@@ -1209,3 +1209,31 @@ mod tests {
         }
     }
 }
+
+impl RustType<proto::WrittenPlanKey> for super::WrittenPlanKey {
+    fn into_proto(&self) -> proto::WrittenPlanKey {
+        proto::WrittenPlanKey {
+            id: self.id.into_proto(),
+            build_version: self.build_version.clone(),
+        }
+    }
+    fn from_proto(proto: proto::WrittenPlanKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id.into_rust()?,
+            build_version: proto.build_version,
+        })
+    }
+}
+
+impl RustType<proto::WrittenPlanValue> for super::WrittenPlanValue {
+    fn into_proto(&self) -> proto::WrittenPlanValue {
+        proto::WrittenPlanValue {
+            revision: self.revision,
+        }
+    }
+    fn from_proto(proto: proto::WrittenPlanValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            revision: proto.revision,
+        })
+    }
+}

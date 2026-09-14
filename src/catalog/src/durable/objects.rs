@@ -1644,6 +1644,7 @@ pub struct Snapshot {
     pub maintained_read_requirements:
         BTreeMap<proto::MaintainedReadRequirementKey, proto::MaintainedReadRequirementValue>,
     pub client_incarnations: BTreeMap<proto::ClientIncarnationKey, proto::ClientIncarnationValue>,
+    pub written_plans: BTreeMap<proto::WrittenPlanKey, proto::WrittenPlanValue>,
     pub client_read_requirements:
         BTreeMap<proto::ClientReadRequirementKey, proto::ClientReadRequirementValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
@@ -2126,5 +2127,57 @@ mod test {
         };
 
         assert!(ft4 > ft1);
+    }
+}
+
+/// Selects immutable plan bytes in the expression shard for one build.
+/// Selection changes do not change the maintained object's physical installation.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct WrittenPlan {
+    pub id: GlobalId,
+    pub build_version: String,
+    pub revision: Uuid,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct WrittenPlanKey {
+    pub id: GlobalId,
+    pub build_version: String,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct WrittenPlanValue {
+    pub revision: Uuid,
+}
+
+impl DurableType for WrittenPlan {
+    type Key = WrittenPlanKey;
+    type Value = WrittenPlanValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            WrittenPlanKey {
+                id: self.id,
+                build_version: self.build_version,
+            },
+            WrittenPlanValue {
+                revision: self.revision,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            build_version: key.build_version,
+            revision: value.revision,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        WrittenPlanKey {
+            id: self.id,
+            build_version: self.build_version.clone(),
+        }
     }
 }

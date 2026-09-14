@@ -1491,7 +1491,13 @@ impl Coordinator {
             Some(expressions) => expressions,
             None => {
                 let name = self.catalog().get_entry(&catalog_id).name();
-                self.build_index_dataflow_plan(name, index, compute_instance, optimizer_config)?
+                self.build_index_dataflow_plan(
+                    Arc::new(self.catalog().state().clone()),
+                    name,
+                    index,
+                    compute_instance,
+                    optimizer_config,
+                )?
             }
         };
         let GlobalExpressions {
@@ -1541,6 +1547,7 @@ impl Coordinator {
         {
             Some(expressions) => expressions,
             None => self.build_metric_sink_dataflow_plan(
+                Arc::new(self.catalog().state().clone()),
                 self.catalog().get_entry(&catalog_id).name(),
                 sink,
                 snapshot,
@@ -1623,6 +1630,7 @@ impl Coordinator {
         {
             Some(expressions) => expressions,
             None => self.build_materialized_view_dataflow_plan(
+                Arc::new(self.catalog().state().clone()),
                 self.catalog().get_entry(&catalog_id).name(),
                 mv,
                 snapshot,

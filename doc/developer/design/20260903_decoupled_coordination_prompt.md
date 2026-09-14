@@ -21,8 +21,10 @@ Check which of these review findings remain unresolved, then choose one coherent
 change. Remove resolved steering from this prompt. These are implementation
 priorities, not additional design requirements.
 
-Milestone 2 is active. The controller-bundle placement question is decided in the
+Milestone 2 is active. Placement of lifecycle components is decided in the
 design's Lifecycle placement and Query client decisions and the re-cut milestone.
+Read `20260903_decoupled_coordination_handover.md` for the implementation checkpoint
+and its outstanding verification and integration work.
 Order the work so each step lands and is verified in-process before the process
 boundary moves:
 
@@ -39,15 +41,24 @@ milestone acceptance. Remaining work:
    frontiers from fast-protocol `Frontiers` responses, peeks and query-local
    dataflows through it, durable client protection as its only protection. The
    client records and reclamation rule are agreed. No remote controller access API.
-2. Verify committed maintained installation, including cache rejection, same-batch
-   dependencies, and pending replacements. Exercise suspended-target replacement
-   recovery in both protection modes.
+2. Finish Written plans for one adapter and one build. Writer DDL commits plan
+   selections with creates, unselects on drops, and rewrites its affected plans
+   when an import is removed. Lifecycle components install the written plan or
+   wait, without planning. EXPLAIN reads the selection and the writer owns
+   `mz_notices` appends and retractions. Verify same-batch dependencies and pending
+   replacements. Use separate commits where they form coherent implementation or
+   review boundaries. An intermediate commit is not a reason to stop the work.
 3. Move the lifecycle components into their own process, with catalog following,
    enactment, and publication as its interface. DDL and table appends stay with
    the adapter. Table time stays adapter-driven for now: assume a live adapter
    ticks transaction-WAL time, and let the demonstration state that table-fed
    dataflows pause while the adapter is down. Webhook batching and idle ticking
    likewise require a live adapter for this milestone.
+
+Keep per-build selection keys, but defer cross-build follower repair, version
+upgrades, and prewarming-owned selections. Retired-build cleanup is also deferred.
+After a generation is fenced, its survivor may remove older builds' selections
+and entries. An unfenced owner's entries are off limits.
 
 Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
 shared-view index topology and diagnostics. Larger-scale work and the known

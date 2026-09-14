@@ -4331,6 +4331,7 @@ pub enum StateUpdateKind {
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
+    WrittenPlan(durable::objects::WrittenPlan),
     // Storage updates.
     CollectionCompactionBound(durable::objects::CollectionCompactionBound),
     MaintainedReadRequirement(durable::objects::MaintainedReadRequirement),

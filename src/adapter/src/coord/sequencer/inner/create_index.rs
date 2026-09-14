@@ -456,7 +456,7 @@ impl Coordinator {
         let on_entry = self.catalog().get_entry_by_global_id(&on);
         let owner_id = *on_entry.owner_id();
 
-        let ops = vec![catalog::Op::CreateItem {
+        let mut ops = vec![catalog::Op::CreateItem {
             id: item_id,
             name: name.clone(),
             item: CatalogItem::Index(Index {
@@ -485,12 +485,10 @@ impl Coordinator {
             .expect("can only create indexes on items with a valid description");
         let df_meta = self.render_create_item_notices(&name, global_id, &on_desc, &raw_df_meta);
 
-        // Populate the durable expression cache before the catalog
-        // transaction and await the write. This way any other envd (or a
-        // subsequent bootstrap here) will observe the cached plans +
-        // rendered notices as soon as the item becomes visible.
-        self.catalog()
-            .cache_expressions(
+        // Write the plan before committing the object and its selection together.
+        let selection = self
+            .catalog()
+            .prepare_item_plan(
                 global_id,
                 None,
                 global_mir_plan.df_desc().clone(),
@@ -498,7 +496,8 @@ impl Coordinator {
                 df_meta,
                 optimizer_features,
             )
-            .await;
+            .await?;
+        ops.extend(selection);
 
         let transact_result = self
             .catalog_transact_with_context(None, Some(ctx), ops)

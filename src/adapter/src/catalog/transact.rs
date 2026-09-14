@@ -109,6 +109,15 @@ pub struct InjectedAuditEvent {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    /// Select immutable bytes written by this build. The expected selection and imports
+    /// are checked in the same transaction as the accompanying DDL.
+    SetWrittenPlan {
+        id: GlobalId,
+        build_version: String,
+        expected_revision: Option<uuid::Uuid>,
+        revision: Option<uuid::Uuid>,
+        imports: BTreeSet<GlobalId>,
+    },
     AlterRetainHistory {
         id: CatalogItemId,
         value: Option<Value>,
@@ -1030,8 +1039,19 @@ impl Catalog {
         let mut born_mvs = BTreeSet::new();
         let mut updated_requirements = BTreeSet::new();
         let mut created_client_incarnations = Vec::new();
+        let mut selected_plans = BTreeMap::new();
 
         for op in ops {
+            if let Op::SetWrittenPlan {
+                id,
+                build_version,
+                revision,
+                imports,
+                ..
+            } = &op
+            {
+                selected_plans.insert((*id, build_version.clone()), (*revision, imports.clone()));
+            }
             if preliminary_state.catalog_read_protection_enabled() {
                 match &op {
                     Op::CreateItem {
@@ -1073,6 +1093,22 @@ impl Catalog {
                     .await;
             }
             updates.append(&mut op_updates);
+        }
+
+        // Later operations can remove an import or supersede a selection. Validate
+        // the surviving selections against the complete candidate, not an op prefix.
+        for ((id, build_version), (revision, imports)) in selected_plans {
+            if let Some(revision) = revision
+                && preliminary_state.written_plan(id, &build_version) == Some(revision)
+                && (preliminary_state.try_get_entry_by_global_id(&id).is_none()
+                    || imports.iter().any(|input| {
+                        preliminary_state
+                            .try_get_entry_by_global_id(input)
+                            .is_none()
+                    }))
+            {
+                return Err(AdapterError::DDLTransactionRace);
+            }
         }
 
         // Validate the final requirement, including a creator's optional frontier
@@ -1227,6 +1263,18 @@ impl Catalog {
         created_client_incarnations: &mut Vec<u64>,
     ) -> Result<(), AdapterError> {
         match op {
+            Op::SetWrittenPlan {
+                id,
+                build_version,
+                expected_revision,
+                revision,
+                imports: _,
+            } => {
+                if tx.get_written_plan(id, &build_version) != expected_revision {
+                    return Err(AdapterError::DDLTransactionRace);
+                }
+                tx.set_written_plan(id, &build_version, revision)?;
+            }
             Op::CreateClientIncarnation => {
                 if !state.catalog_read_protection_enabled() {
                     return Err(AdapterError::internal(
@@ -2270,6 +2318,14 @@ impl Catalog {
 
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
+
+                    let build =
+                        Self::expression_build_version(state.config().build_info).to_string();
+                    for id in entry.global_ids() {
+                        if tx.get_written_plan(id, &build).is_some() {
+                            tx.set_written_plan(id, &build, None)?;
+                        }
+                    }
 
                     if entry.item().is_storage_collection() {
                         storage_collections_to_drop.extend(entry.global_ids());
@@ -4060,6 +4116,142 @@ mod tests {
     use crate::AdapterError;
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test(tokio::test)]
+    async fn written_plan_selection_validates_transaction_state() {
+        use std::collections::BTreeSet;
+
+        use mz_repr::GlobalId;
+        use uuid::Uuid;
+
+        Catalog::with_debug(|catalog| async move {
+            let base = catalog.state().clone();
+            let index_id = base.resolve_builtin_object(&mz_catalog::builtin::Builtin::<
+                mz_sql::catalog::IdReference,
+            >::Index(
+                &mz_catalog::builtin::MZ_TABLES_IND
+            ));
+            let CatalogItem::Index(index) = base.get_entry(&index_id).item() else {
+                unreachable!("resolved a builtin index");
+            };
+            let id = index.global_id();
+            let revision = Uuid::new_v4();
+            let select = |expected_revision, revision, imports| Op::SetWrittenPlan {
+                id,
+                build_version: "test-build".into(),
+                expected_revision,
+                revision,
+                imports,
+            };
+            let (selected, snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &base,
+                    vec![select(None, Some(revision), BTreeSet::new())],
+                    None,
+                    None,
+                    1.into(),
+                )
+                .await
+                .expect("select written revision");
+            assert_eq!(selected.written_plan(id, "test-build"), Some(revision));
+            assert_eq!(base.written_plan(id, "test-build"), None);
+
+            // Validate against the accumulated transaction, not just the writer's
+            // initial snapshot. A stale selector cannot replace its predecessor.
+            let stale = catalog
+                .transact_incremental_dry_run(
+                    &selected,
+                    vec![select(None, Some(Uuid::new_v4()), BTreeSet::new())],
+                    None,
+                    Some(snapshot.clone()),
+                    1.into(),
+                )
+                .await;
+            assert!(matches!(stale, Err(AdapterError::DDLTransactionRace)));
+            let missing_import = catalog
+                .transact_incremental_dry_run(
+                    &selected,
+                    vec![select(
+                        Some(revision),
+                        Some(Uuid::new_v4()),
+                        BTreeSet::from([GlobalId::Transient(u64::MAX)]),
+                    )],
+                    None,
+                    Some(snapshot),
+                    1.into(),
+                )
+                .await;
+            assert!(matches!(
+                missing_import,
+                Err(AdapterError::DDLTransactionRace)
+            ));
+            assert_eq!(catalog.state().written_plan(id, "test-build"), None);
+
+            let entry = base.get_entry_by_global_id(&id);
+            let CatalogItem::Index(mut input) = entry.item().clone() else {
+                unreachable!("selected an index");
+            };
+            let input_id = mz_repr::CatalogItemId::User(1_000_000);
+            let input_gid = GlobalId::User(1_000_000);
+            input.global_id = input_gid;
+            let cluster = catalog.user_clusters().next().expect("user cluster");
+            input.cluster_id = cluster.id;
+            input.create_sql = format!(
+                "CREATE INDEX written_plan_input IN CLUSTER {} ON mz_catalog.mz_tables (schema_id)",
+                mz_sql::ast::Ident::new(cluster.name.clone()).expect("valid cluster name"),
+            );
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema");
+            let create_input = Op::CreateItem {
+                id: input_id,
+                name: QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec,
+                        schema_spec: schema.id.clone(),
+                    },
+                    item: "written_plan_input".into(),
+                },
+                item: CatalogItem::Index(input),
+                owner_id: *entry.owner_id(),
+            };
+            catalog
+                .transact_incremental_dry_run(
+                    &base,
+                    vec![
+                        create_input.clone(),
+                        select(None, Some(revision), BTreeSet::from([input_gid])),
+                    ],
+                    None,
+                    None,
+                    1.into(),
+                )
+                .await
+                .expect("a surviving index import is valid");
+            for selection_first in [true, false] {
+                let selection = select(None, Some(Uuid::new_v4()), BTreeSet::from([input_gid]));
+                let drop_input = Op::DropObjects(vec![super::DropObjectInfo::Item(input_id)]);
+                let mut ops = vec![create_input.clone()];
+                if selection_first {
+                    ops.extend([selection, drop_input]);
+                } else {
+                    ops.extend([drop_input, selection]);
+                }
+                let result = catalog
+                    .transact_incremental_dry_run(&base, ops, None, None, 1.into())
+                    .await;
+                assert!(
+                    matches!(result, Err(AdapterError::DDLTransactionRace)),
+                    "selection_first={selection_first}: {result:?}"
+                );
+            }
+        })
+        .await;
+    }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]

@@ -260,6 +260,7 @@ impl Catalog {
             storage_metadata: Arc::new(StorageMetadata::default()),
             collection_compaction_bounds: Default::default(),
             maintained_read_requirements: Default::default(),
+            written_plans: Default::default(),
             client_incarnations: Default::default(),
             client_read_requirements: Default::default(),
             client_collection_requirements: Default::default(),
@@ -434,6 +435,7 @@ impl Catalog {
                 StateUpdateKind::Comment(_)
                 | StateUpdateKind::CollectionCompactionBound(_)
                 | StateUpdateKind::MaintainedReadRequirement(_)
+                | StateUpdateKind::WrittenPlan(_)
                 | StateUpdateKind::ClientIncarnation(_)
                 | StateUpdateKind::ClientReadRequirement(_)
                 | StateUpdateKind::StorageCollectionMetadata(_)
@@ -504,7 +506,8 @@ impl Catalog {
         let expr_cache_enabled = config
             .enable_expression_cache_override
             .unwrap_or(enable_expr_cache_dyncfg);
-        let (expr_cache_handle, cached_local_exprs, cached_global_exprs) = if expr_cache_enabled {
+        let (mut expr_cache_handle, cached_local_exprs, cached_global_exprs) = if expr_cache_enabled
+        {
             info!(
                 ?config.enable_expression_cache_override,
                 ?enable_expr_cache_dyncfg,
@@ -524,22 +527,13 @@ impl Catalog {
                 )
                 .collect();
             let dyncfgs = config.persist_client.dyncfgs().clone();
-            let build_version = if config.build_info.is_dev() {
-                // A single dev version can be used for many different builds, so we need to use
-                // the build version that is also enriched with build metadata.
-                config
-                    .build_info
-                    .semver_version_build()
-                    .expect("build ID is not available on your platform!")
-            } else {
-                config.build_info.semver_version()
-            };
+            let build_version = Self::expression_build_version(config.build_info);
             let expr_cache_config = ExpressionCacheConfig {
                 build_version,
                 shard_id: txn
                     .get_expression_cache_shard()
                     .expect("expression cache shard should exist for opened catalogs"),
-                persist: config.persist_client,
+                persist: config.persist_client.clone(),
                 current_items,
                 remove_prior_versions: !config.read_only,
                 compact_shard: config.read_only,
@@ -585,6 +579,18 @@ impl Catalog {
                 enabled
             }
         };
+
+        if state.catalog_read_protection_enabled() && expr_cache_handle.is_none() {
+            expr_cache_handle = Some(
+                ExpressionCacheHandle::open_plan_store(
+                    Self::expression_build_version(config.build_info),
+                    &config.persist_client,
+                    txn.get_expression_cache_shard()
+                        .expect("opened catalog has an expression shard"),
+                )
+                .await,
+            );
+        }
 
         let mz_authentication_mock_nonce =
             txn.get_authentication_mock_nonce().ok_or_else(|| {

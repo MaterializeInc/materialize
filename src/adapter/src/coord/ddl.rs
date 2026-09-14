@@ -412,11 +412,13 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>, Vec<u64>), AdapterError> {
-        let metadata_only = ops.iter().all(|op| {
+        // Compaction proposals depend on sampled execution holds. Enacting newly
+        // observed DDL can add holds, so that producer must resample after a
+        // planning change rather than retrying its original SetReadProtection.
+        let retry_after_planning_change = ops.iter().all(|op| {
             matches!(
                 op,
-                catalog::Op::SetReadProtection { .. }
-                    | catalog::Op::CreateClientIncarnation
+                catalog::Op::CreateClientIncarnation
                     | catalog::Op::PublishClientReadRequirements { .. }
                     | catalog::Op::ReclaimClientIncarnation { .. }
             )
@@ -457,7 +459,9 @@ impl Coordinator {
                         }
                     }
                     notify.await;
-                    if !metadata_only && self.catalog().transient_revision() != revision {
+                    if !retry_after_planning_change
+                        && self.catalog().transient_revision() != revision
+                    {
                         return Err(AdapterError::DDLTransactionRace);
                     }
                     // Rebuild the transaction, including admission checks, against
@@ -466,6 +470,275 @@ impl Coordinator {
                 result => return result,
             }
         }
+    }
+
+    /// Prepare own-build replacements against the post-DDL catalog. These selections
+    /// change recovery and EXPLAIN state, not the running dataflows.
+    async fn prepare_written_plan_rewrites(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        ops: &mut Vec<Op>,
+        write_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<crate::ReadHolds>, AdapterError> {
+        use crate::optimize::{OptimizerConfig, dataflows::ComputeInstanceSnapshot};
+        use mz_repr::optimize::OverrideFrom;
+
+        if !self.catalog().state().catalog_read_protection_enabled()
+            || !ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Op::DropObjects(_) | Op::AlterMaterializedViewApplyReplacement { .. }
+                )
+            })
+        {
+            return Ok(Vec::new());
+        }
+        let planning_revision = self.catalog().transient_revision();
+        // Selections are validated after their plans have been repaired. A new
+        // object's first candidate can itself import something removed by this DDL.
+        let candidate_ops = ops
+            .iter()
+            .filter(|op| !matches!(op, Op::SetWrittenPlan { .. }))
+            .cloned()
+            .collect();
+        let conn = conn_id.map(|id| self.active_conns.get(id).expect("connection exists"));
+        let (candidate, _) = self
+            .catalog()
+            .transact_incremental_dry_run(
+                self.catalog().state(),
+                candidate_ops,
+                conn,
+                None,
+                write_ts,
+            )
+            .await?;
+        let candidate = Arc::new(candidate);
+        let build =
+            catalog::Catalog::expression_build_version(candidate.config().build_info).to_string();
+        let mut revisions: BTreeMap<_, _> = candidate
+            .written_plans()
+            .iter()
+            .filter(|((_, version), _)| version == &build)
+            .map(|((id, _), revision)| (*id, *revision))
+            .collect();
+        for op in ops.iter() {
+            if let Op::SetWrittenPlan {
+                id,
+                build_version,
+                revision,
+                ..
+            } = op
+                && build_version == &build
+            {
+                if let Some(revision) = revision {
+                    revisions.insert(*id, *revision);
+                } else {
+                    revisions.remove(id);
+                }
+            }
+        }
+        revisions.retain(|id, _| candidate.try_get_entry_by_global_id(id).is_some());
+        if revisions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let plans = self
+            .catalog()
+            .read_written_plans(
+                revisions
+                    .iter()
+                    .map(|(&id, &revision)| (id, revision))
+                    .collect(),
+            )
+            .await?;
+        if plans.len() != revisions.len() {
+            return Err(AdapterError::internal(
+                "rewrite maintained plans",
+                "selected plan is missing",
+            ));
+        }
+        let client = self
+            .query_client
+            .clone()
+            .expect("protected writer has a query client");
+        let mut replacements = BTreeMap::new();
+        let mut protection = Vec::new();
+        for (id, mut plan) in plans {
+            let entry = candidate.get_entry_by_global_id(&id);
+            if let CatalogItem::MaterializedView(mv) = entry.item()
+                && mv.global_id_writes() != id
+            {
+                ops.push(Op::SetWrittenPlan {
+                    id,
+                    build_version: build.clone(),
+                    expected_revision: Some(revisions[&id]),
+                    revision: None,
+                    imports: BTreeSet::new(),
+                });
+                continue;
+            }
+            let version = match entry.item() {
+                CatalogItem::MaterializedView(mv) => {
+                    mz_catalog::expr_cache::latest_item_version(&mv.collections)
+                }
+                _ => mz_repr::RelationVersion::root(),
+            };
+            let version_changed = plan.item_version != version;
+            plan.item_version = version;
+            if plan
+                .collection_imports()
+                .all(|input| candidate.try_get_entry_by_global_id(input).is_some())
+            {
+                let previous = plan.dataflow_metainfos.optimizer_notices.len();
+                plan.dataflow_metainfos.optimizer_notices.retain(|notice| {
+                    notice.dependencies.iter().all(|input| {
+                        candidate
+                            .try_get_entry_by_global_id(input)
+                            .is_some_and(|current| {
+                                // Replacement can retain a GlobalId under another item.
+                                // The writer has both catalog states and retracts the
+                                // old item's notices while committing the replacement.
+                                self.catalog()
+                                    .try_get_entry_by_global_id(input)
+                                    .is_none_or(|previous| previous.id() == current.id())
+                            })
+                    })
+                });
+                if version_changed || plan.dataflow_metainfos.optimizer_notices.len() != previous {
+                    replacements.insert(id, plan);
+                }
+                continue;
+            }
+            let (cluster, required) = match entry.item() {
+                CatalogItem::Index(index) => (index.cluster_id, None),
+                CatalogItem::MaterializedView(mv) => (
+                    mv.cluster_id,
+                    candidate
+                        .maintained_read_requirements()
+                        .get(&id)
+                        .and_then(|r| r.frontier),
+                ),
+                CatalogItem::MetricSink(sink) => (sink.cluster_id, None),
+                _ => continue,
+            };
+            let observed = client.instance_snapshot(self.catalog(), cluster);
+            let mut indexes: BTreeSet<_> = candidate
+                .get_entries()
+                .filter_map(|(_, entry)| match entry.item() {
+                    CatalogItem::Index(index) if index.cluster_id == cluster => {
+                        Some(index.global_id())
+                    }
+                    _ => None,
+                })
+                .filter(|id| observed.contains_collection(id))
+                .filter(|id| {
+                    required.is_none_or(|required| {
+                        candidate
+                            .collection_compaction_bounds()
+                            .get(id)
+                            .and_then(|bound| bound.as_option())
+                            .is_some_and(|bound| *bound <= required)
+                            && client.replica_clients(cluster, None).iter().any(|replica| {
+                                replica
+                                    .collection_frontiers(*id)
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|f| f.read_frontier)
+                                    .and_then(|f| f.into_option())
+                                    .is_some_and(|since| since <= required)
+                            })
+                    })
+                })
+                .collect();
+            let mut config = OptimizerConfig::from(candidate.system_config())
+                .override_from(&candidate.get_cluster(cluster).config.features())
+                .override_from(&candidate.cluster_scoped_optimizer_overrides(cluster));
+            if matches!(entry.item(), CatalogItem::Index(_)) {
+                // A set of rewritten indexes must not select themselves or each
+                // other cyclically. Reuse the optimizer's reconstruction ordering.
+                config.replan = Some(id);
+            }
+            loop {
+                let snapshot = ComputeInstanceSnapshot::new_from_parts(cluster, indexes.clone());
+                let replacement = match entry.item() {
+                    CatalogItem::Index(index) => self.build_index_dataflow_plan(
+                        Arc::clone(&candidate),
+                        entry.name(),
+                        index,
+                        snapshot,
+                        config.clone(),
+                    )?,
+                    CatalogItem::MaterializedView(mv) => self
+                        .build_materialized_view_dataflow_plan(
+                            Arc::clone(&candidate),
+                            entry.name(),
+                            mv,
+                            snapshot,
+                            config.clone(),
+                        )?,
+                    CatalogItem::MetricSink(sink) => self.build_metric_sink_dataflow_plan(
+                        Arc::clone(&candidate),
+                        entry.name(),
+                        sink,
+                        snapshot,
+                        config.clone(),
+                    )?,
+                    _ => unreachable!("filtered maintained object"),
+                };
+                if let Some(required) = required {
+                    let mut imports = crate::optimize::dataflows::dataflow_import_id_bundle(
+                        &replacement.physical_plan,
+                        cluster,
+                    );
+                    // Collections born in this transaction cannot be opened through
+                    // the live catalog. Their birth permissions and the consumer's
+                    // requirement commit together. Only existing inputs need a
+                    // client grant across preparation and commit.
+                    imports
+                        .storage_ids
+                        .retain(|id| self.catalog().try_get_entry_by_global_id(id).is_some());
+                    if imports.is_empty() {
+                        replacements.insert(id, replacement);
+                        break;
+                    }
+                    let (holds, _) = self
+                        .acquire_client_read_protection(
+                            client.protection.incarnation(),
+                            imports,
+                            |_| Ok(Some(required)),
+                        )
+                        .await?;
+                    if !holds
+                        .least_valid_read()
+                        .as_option()
+                        .is_some_and(|since| *since <= required)
+                    {
+                        let previous = indexes.len();
+                        indexes
+                            .retain(|id| !replacement.physical_plan.index_imports.contains_key(id));
+                        if indexes.len() == previous {
+                            return Err(AdapterError::DDLTransactionRace);
+                        }
+                        continue;
+                    }
+                    protection.push(holds);
+                }
+                replacements.insert(id, replacement);
+                break;
+            }
+        }
+        if self.catalog().transient_revision() != planning_revision {
+            return Err(AdapterError::DDLTransactionRace);
+        }
+        if !replacements.is_empty() {
+            ops.retain(|op| match op {
+                Op::SetWrittenPlan {
+                    id, build_version, ..
+                } => build_version != &build || !replacements.contains_key(id),
+                _ => true,
+            });
+            ops.extend(self.catalog().write_plans(replacements).await?);
+        }
+        Ok(protection)
     }
 
     async fn catalog_transact_attempt(
@@ -585,6 +858,26 @@ impl Coordinator {
             .observe(phase_seconds.with_label_values(&["write_ts"]))
             .await;
 
+        // Candidate planning and commit must resolve the same temporary namespace.
+        if let Some(conn_id) = conn_id {
+            let creates_temp_item = ops.iter().any(
+                |op| matches!(op, catalog::Op::CreateItem { item, .. } if item.is_temporary()),
+            );
+            if creates_temp_item && !self.catalog().state().has_temporary_namespace(conn_id) {
+                let uuid = self
+                    .active_conns
+                    .get(conn_id)
+                    .expect("connection must exist")
+                    .uuid();
+                self.catalog_mut()
+                    .register_temporary_namespace(conn_id, uuid);
+            }
+        }
+
+        let _written_plan_protection =
+            Box::pin(self.prepare_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
+                .await?;
+
         let Coordinator {
             catalog,
             active_conns,
@@ -594,17 +887,6 @@ impl Coordinator {
         } = self;
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
-
-        // Register the session as an ephemeral owner (its uuid <-> connection
-        // mapping) at its first temporary-item creation.
-        if let Some(conn) = conn {
-            let creates_temp_item = ops.iter().any(
-                |op| matches!(op, catalog::Op::CreateItem { item, .. } if item.is_temporary()),
-            );
-            if creates_temp_item && !catalog.state().has_temporary_namespace(conn.conn_id()) {
-                catalog.register_temporary_namespace(conn.conn_id(), conn.uuid());
-            }
-        }
 
         // NOTE: This phase contains every durable `sync` and `commit` a catalog
         // transaction performs, which is what makes `transact` minus those two
@@ -1306,6 +1588,7 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::SetReadProtection { .. }
+                | Op::SetWrittenPlan { .. }
                 | Op::CreateClientIncarnation
                 | Op::PublishClientReadRequirements { .. }
                 | Op::ReclaimClientIncarnation { .. }

@@ -107,6 +107,7 @@ impl Debug for StableSnapshot<'_> {
             collection_compaction_bounds,
             maintained_read_requirements,
             client_incarnations,
+            written_plans,
             client_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
@@ -148,6 +149,7 @@ impl Debug for StableSnapshot<'_> {
             .field("collection_compaction_bounds", collection_compaction_bounds)
             .field("maintained_read_requirements", maintained_read_requirements)
             .field("client_incarnations", client_incarnations)
+            .field("written_plans", written_plans)
             .field("client_read_requirements", client_read_requirements)
             .field("unfinalized_shards", unfinalized_shards)
             .field("txn_wal_shard", txn_wal_shard)

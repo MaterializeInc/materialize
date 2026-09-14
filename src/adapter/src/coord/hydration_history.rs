@@ -191,7 +191,7 @@ impl Coordinator {
         // the table can only be non-empty if collection ran at some point, and
         // the alternative is an always-on subscribe in the default (disabled)
         // production configuration.
-        if collection_interval.is_zero() || self.controller.read_only() {
+        if collection_interval.is_zero() || self.read_only_controllers {
             self.schedule_hydration_history_collection();
             return;
         }
@@ -200,15 +200,22 @@ impl Coordinator {
             .catalog()
             .user_cluster_replicas()
             .filter(|replica| replica.config.compute.logging.enabled())
-            .filter(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(_) => {
-                    self.cluster_replica_statuses
-                        .get_cluster_replica_status(replica.cluster_id, replica.replica_id)
-                        == ClusterStatus::Online
+            .filter(|replica| {
+                if let Some(client) = self.query_client.as_ref() {
+                    return !client
+                        .replica_clients(replica.cluster_id, Some(replica.replica_id))
+                        .is_empty();
                 }
-                // Unmanaged replicas have no orchestrator status and are only
-                // used by tests. Their bounded mutation determines readiness.
-                ReplicaLocation::Unmanaged(_) => true,
+                match &replica.config.location {
+                    ReplicaLocation::Managed(_) => {
+                        self.cluster_replica_statuses
+                            .get_cluster_replica_status(replica.cluster_id, replica.replica_id)
+                            == ClusterStatus::Online
+                    }
+                    // Unmanaged replicas have no orchestrator status and are only
+                    // used by tests. Their bounded mutation determines readiness.
+                    ReplicaLocation::Unmanaged(_) => true,
+                }
             })
             .map(|replica| ReplicaTarget {
                 cluster_id: replica.cluster_id,
@@ -282,7 +289,7 @@ impl Coordinator {
             Arc::clone(&self.occ_write_semaphore),
             FRONTEND_READ_THEN_WRITE.get(self.catalog().system_config().dyncfgs()),
             self.group_commit_tx.clone(),
-            self.controller.read_only(),
+            self.read_only_controllers,
         );
         Sweep {
             client,

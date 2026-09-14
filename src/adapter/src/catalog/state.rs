@@ -164,6 +164,8 @@ pub struct CatalogState {
     pub(super) collection_compaction_bounds: imbl::OrdMap<GlobalId, Antichain<Timestamp>>,
     #[serde(serialize_with = "serialize_maintained_read_requirements")]
     pub(super) maintained_read_requirements: imbl::OrdMap<GlobalId, MaintainedReadRequirement>,
+    #[serde(serialize_with = "serialize_written_plans")]
+    pub(super) written_plans: imbl::OrdMap<(GlobalId, String), uuid::Uuid>,
     pub(super) client_incarnations: imbl::OrdMap<u64, u64>,
     #[serde(serialize_with = "serialize_client_read_requirements")]
     pub(super) client_read_requirements: imbl::OrdMap<(u64, GlobalId), Timestamp>,
@@ -504,6 +506,7 @@ impl CatalogState {
             storage_metadata: Arc::new(StorageMetadata::default()),
             collection_compaction_bounds: Default::default(),
             maintained_read_requirements: Default::default(),
+            written_plans: Default::default(),
             client_incarnations: Default::default(),
             client_read_requirements: Default::default(),
             client_collection_requirements: Default::default(),
@@ -2944,6 +2947,18 @@ impl CatalogState {
         &self.maintained_read_requirements
     }
 
+    /// The selected immutable plan revision for this object and build.
+    pub fn written_plan(&self, id: GlobalId, build_version: &str) -> Option<uuid::Uuid> {
+        self.written_plans
+            .get(&(id, build_version.to_owned()))
+            .copied()
+    }
+
+    /// All durable plan selections, including other builds.
+    pub fn written_plans(&self) -> &imbl::OrdMap<(GlobalId, String), uuid::Uuid> {
+        &self.written_plans
+    }
+
     /// Returns the durable client incarnations and their heartbeat sequences.
     pub fn client_incarnations(&self) -> &imbl::OrdMap<u64, u64> {
         &self.client_incarnations
@@ -3224,6 +3239,17 @@ fn serialize_maintained_read_requirements<S: serde::Serializer>(
     serializer.collect_map(entries)
 }
 
+fn serialize_written_plans<S: serde::Serializer>(
+    plans: &imbl::OrdMap<(GlobalId, String), uuid::Uuid>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(
+        plans
+            .iter()
+            .map(|((id, build), revision)| (id, build, revision)),
+    )
+}
+
 fn serialize_client_read_requirements<S: serde::Serializer>(
     requirements: &imbl::OrdMap<(u64, GlobalId), Timestamp>,
     serializer: S,
@@ -3238,6 +3264,50 @@ fn serialize_client_read_requirements<S: serde::Serializer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn written_plan_selection_is_visible_without_installation_implications() {
+        use mz_catalog::durable::objects::WrittenPlan;
+        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+
+        let id = GlobalId::User(42);
+        let revision = uuid::Uuid::new_v4();
+        let replacement = uuid::Uuid::new_v4();
+        let mut state = CatalogState::empty_test();
+        for changes in [
+            vec![(revision, StateDiff::Addition)],
+            vec![
+                (revision, StateDiff::Retraction),
+                (replacement, StateDiff::Addition),
+            ],
+        ] {
+            let expected = changes.last().expect("selection update is nonempty").0;
+            let updates = changes
+                .into_iter()
+                .map(|(revision, diff)| StateUpdate {
+                    kind: StateUpdateKind::WrittenPlan(WrittenPlan {
+                        id,
+                        build_version: "build-a".into(),
+                        revision,
+                    }),
+                    ts: Timestamp::MIN,
+                    diff,
+                })
+                .collect();
+            let (builtin_updates, implications) = state
+                .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                .await;
+            assert!(builtin_updates.is_empty());
+            assert!(implications.is_empty());
+            assert_eq!(state.written_plan(id, "build-a"), Some(expected));
+            assert_eq!(state.written_plan(id, "build-b"), None);
+        }
+        let dump = serde_json::to_value(&state).expect("serialize catalog with written selections");
+        assert_eq!(
+            dump["written_plans"],
+            serde_json::json!([[id, "build-a", replacement]])
+        );
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn client_requirements_replay_preserves_other_clients() {

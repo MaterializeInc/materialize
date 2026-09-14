@@ -955,6 +955,9 @@ impl PersistCatalogState {
                     StateUpdateKind::ClientIncarnation(key, value) => {
                         apply(&mut snapshot.client_incarnations, key, value, diff);
                     }
+                    StateUpdateKind::WrittenPlan(key, value) => {
+                        apply(&mut snapshot.written_plans, key, value, diff);
+                    }
                     StateUpdateKind::ClientReadRequirement(key, value) => {
                         apply(&mut snapshot.client_read_requirements, key, value, diff);
                     }
@@ -2507,6 +2510,9 @@ impl Trace {
                     .push(((k, v), ts, diff)),
                 StateUpdateKind::ClientIncarnation(k, v) => {
                     trace.client_incarnations.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::WrittenPlan(k, v) => {
+                    trace.written_plans.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::ClientReadRequirement(k, v) => trace
                     .client_read_requirements

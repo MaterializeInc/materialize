@@ -1666,18 +1666,21 @@ impl Catalog {
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
     }
 
-    /// Cache global and, optionally, local expressions for the given
-    /// `GlobalId` of an item being created, whose only version is therefore
-    /// the root [`RelationVersion`].
-    ///
-    /// Takes the plans and metainfo directly as parameters (rather than
-    /// fishing them out of catalog state), so this can be called **before**
-    /// the catalog transaction that creates the item. Returns the future
-    /// returned by [`Catalog::update_expression_cache`]; callers should
-    /// `.await` it before the catalog transaction commits, so the durable
-    /// expression cache is observed to contain the entries by the time any
-    /// other process (or a subsequent bootstrap on this process) reads them.
-    pub(crate) fn cache_expressions(
+    pub(crate) fn expression_build_version(
+        build_info: &mz_build_info::BuildInfo,
+    ) -> semver::Version {
+        if build_info.is_dev() {
+            build_info
+                .semver_version_build()
+                .expect("build ID is not available on this platform")
+        } else {
+            build_info.semver_version()
+        }
+    }
+
+    /// Durably prepares a new item's plan and returns the selection to commit with its DDL.
+    /// Unprotected environments use the optional expression cache and return no selection.
+    pub(crate) async fn prepare_item_plan(
         &self,
         id: GlobalId,
         local_mir: Option<OptimizedMirRelationExpr>,
@@ -1685,7 +1688,7 @@ impl Catalog {
         mut physical_plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
         optimizer_features: OptimizerFeatures,
-    ) -> BoxFuture<'static, ()> {
+    ) -> Result<Vec<Op>, AdapterError> {
         // Make sure we're not caching the result of timestamp selection, as
         // it will almost certainly be wrong if we re-install the dataflow at
         // a later time.
@@ -1705,17 +1708,77 @@ impl Catalog {
                 },
             ));
         }
-        let global_exprs = vec![(
-            id,
-            GlobalExpressions {
-                global_mir,
-                physical_plan,
-                dataflow_metainfos,
-                optimizer_features,
-                item_version: RelationVersion::root(),
-            },
-        )];
-        self.update_expression_cache(local_exprs, global_exprs, Default::default())
+        let global = GlobalExpressions {
+            global_mir,
+            physical_plan,
+            dataflow_metainfos,
+            optimizer_features,
+            item_version: RelationVersion::root(),
+        };
+        let selection = if self.state.catalog_read_protection_enabled() {
+            self.write_plans(BTreeMap::from([(id, global.clone())]))
+                .await?
+        } else {
+            Vec::new()
+        };
+        self.update_expression_cache(local_exprs, vec![(id, global)], Default::default())
+            .await;
+        Ok(selection)
+    }
+
+    /// Writes immutable candidates as one batch before selecting them in a catalog transaction.
+    /// The transaction must validate their imports and predecessors against its final state.
+    pub(crate) async fn write_plans(
+        &self,
+        plans: BTreeMap<GlobalId, GlobalExpressions>,
+    ) -> Result<Vec<Op>, AdapterError> {
+        let store = self.expr_cache_handle.as_ref().ok_or_else(|| {
+            AdapterError::internal("write maintained plan", "expression store is not open")
+        })?;
+        let build_version =
+            Self::expression_build_version(self.state.config().build_info).to_string();
+        let mut entries = Vec::with_capacity(plans.len());
+        let mut selections = Vec::with_capacity(plans.len());
+        for (id, mut plan) in plans {
+            // Installation and recovery select timestamps from current protected history.
+            plan.global_mir.as_of = None;
+            plan.global_mir.until = Default::default();
+            plan.physical_plan.as_of = None;
+            plan.physical_plan.until = Default::default();
+            let expected_revision = self.state.written_plan(id, &build_version);
+            let revision = Uuid::new_v4();
+            let imports = plan.collection_imports().copied().collect();
+            entries.push((id, revision, plan));
+            selections.push(Op::SetWrittenPlan {
+                id,
+                build_version: build_version.clone(),
+                expected_revision,
+                revision: Some(revision),
+                imports,
+            });
+        }
+        store
+            .write_plans(entries)
+            .await
+            .map_err(|error| AdapterError::internal("write maintained plan", error.to_string()))?;
+        Ok(selections)
+    }
+
+    /// Reads specified immutable revisions for this build. Missing entries are omitted.
+    pub(crate) async fn read_written_plans(
+        &self,
+        revisions: Vec<(GlobalId, Uuid)>,
+    ) -> Result<BTreeMap<GlobalId, GlobalExpressions>, AdapterError> {
+        let store = self.expr_cache_handle.as_ref().ok_or_else(|| {
+            AdapterError::internal("read maintained plans", "expression store is not open")
+        })?;
+        Ok(store
+            .read_plans(revisions)
+            .await
+            .map_err(|error| AdapterError::internal("read maintained plans", error.to_string()))?
+            .into_iter()
+            .map(|((id, _), plan)| (id, plan))
+            .collect())
     }
 
     /// Returns a best-effort cached plan, whose compatibility the caller must validate.
