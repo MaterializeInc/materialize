@@ -859,6 +859,7 @@ Snapshot {
     collection_compaction_bounds: {},
     maintained_read_requirements: {},
     client_incarnations: {},
+    written_plans: {},
     client_read_requirements: {},
     unfinalized_shards: {},
     txn_wal_shard: {},
