@@ -13,10 +13,9 @@ aliases:
 ---
 
 Materialize Cloud clusters come in two families of sizes: `cc` sizes and `M.1`
-sizes. We recommend `cc` sizes for most workloads; `M.1` sizes provide access
-to additional disk capacity, which can be beneficial for disk-intensive
-workloads. See [`CREATE CLUSTER`](/sql/create-cluster/) for details on
-choosing between them.
+sizes. We recommend `cc` sizes for most workloads; `M.1` clusters provide
+additional disk, which can be beneficial to handle spiky workloads. See
+[`CREATE CLUSTER`](/sql/create-cluster/) for details on choosing between them.
 
 ## cc cluster sizes
 
