@@ -338,6 +338,12 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     text_columns: Vec<UnresolvedItemName>,
     exclude_columns: Vec<UnresolvedItemName>,
+    // NOTE: `exclude_constraints` and `exclude_all_constraints` are only ever
+    // non-empty/true for `CREATE TABLE .. FROM SOURCE`, which purifies exactly
+    // one export, so constraint names are validated against that single
+    // table's keys.
+    exclude_constraints: &BTreeSet<String>,
+    exclude_all_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
@@ -402,6 +408,20 @@ pub(super) async fn purify_source_exports(
         .map(|requested_export| {
             let table = requested_export.meta.mysql_table().expect("is mysql");
             let table_ref = table.table_ref();
+
+            let missing_exclude_constraints: Vec<_> = exclude_constraints
+                .iter()
+                .filter(|n| !table.keys.iter().any(|k| &&k.name == n))
+                .cloned()
+                .collect();
+            if !missing_exclude_constraints.is_empty() {
+                return Err(MySqlSourcePurificationError::ConstraintsNotFound {
+                    table: format!("{}.{}", table.schema_name, table.name),
+                    constraints: missing_exclude_constraints,
+                }
+                .into());
+            }
+
             // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
             let text_cols = text_cols_map.get(&table_ref).map(|s| s.clone());
             let exclude_columns = exclude_columns_map.get(&table_ref).map(|s| s.clone());
@@ -426,6 +446,20 @@ pub(super) async fn purify_source_exports(
                     )),
                     _ => err.into(),
                 })?;
+            let mut parsed_table = parsed_table;
+            parsed_table
+                .keys
+                .retain(|k| !exclude_constraints.contains(&k.name));
+            if exclude_all_constraints {
+                // Marking columns as nullable allows dropping (and adding) the
+                // NOT NULL constraint without an outage.
+                parsed_table.keys.clear();
+                for c in &mut parsed_table.columns {
+                    if let Some(column_type) = &mut c.column_type {
+                        column_type.nullable = true;
+                    }
+                }
+            }
             Ok(requested_export.change_meta(parsed_table))
         })
         .collect::<Result<Vec<_>, PlanError>>()?;

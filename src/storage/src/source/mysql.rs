@@ -57,6 +57,7 @@ use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
 use itertools::Itertools;
+use mz_mysql_util::SchemaChangeError;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
@@ -220,7 +221,11 @@ impl SourceRender for MySqlSourceConnection {
             .map(move |err| {
                 // This update will cause the dataflow to restart
                 let err_string = err.display_with_causes().to_string();
-                let update = HealthStatusUpdate::halting(err_string.clone(), None);
+                let hint = match &err {
+                    ReplicationError::Definite(err) => err.hint(),
+                    ReplicationError::Transient(_) => None,
+                };
+                let update = HealthStatusUpdate::halting(err_string.clone(), hint);
 
                 let namespace = match err {
                     ReplicationError::Transient(err)
@@ -297,8 +302,8 @@ pub enum DefiniteError {
     TableTruncated(String),
     #[error("table was dropped: {0}")]
     TableDropped(String),
-    #[error("incompatible schema change: {0}")]
-    IncompatibleSchema(String),
+    #[error("{0}")]
+    IncompatibleSchema(SchemaChangeError),
     #[error("received a gtid set from the server that violates our requirements: {0}")]
     UnsupportedGtidState(String),
     #[error("received out of order gtids for source {0} at transaction-id {1}")]
@@ -311,11 +316,20 @@ pub enum DefiniteError {
     ServerConfigurationError(String),
 }
 
+impl DefiniteError {
+    fn hint(&self) -> Option<String> {
+        match self {
+            DefiniteError::IncompatibleSchema(err) => err.hint(),
+            _ => None,
+        }
+    }
+}
+
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         let m = err.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
-            hint: None,
+            hint: err.hint().map(Into::into),
             error: match &err {
                 DefiniteError::ValueDecodeError(_) => SourceErrorDetails::Other(m),
                 DefiniteError::TableTruncated(_) => SourceErrorDetails::Other(m),
