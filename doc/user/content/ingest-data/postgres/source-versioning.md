@@ -21,7 +21,8 @@ table schema changes seamlessly, specifically:
 
 - Adding a column in the upstream database.
 - Dropping a column in the upstream database.
-- Dropping a `PRIMARY KEY` or `UNIQUE` constraint in the upstream database.
+- Dropping a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint in the upstream
+  database.
 
 This guide walks you through how to handle these changes without any downtime in Materialize.
 
@@ -191,13 +192,20 @@ has been altered.
 
 {{< warn-if-unreleased "v26.42" >}}
 
+Materialize ignores the following constraints: foreign key, `CHECK`, and
+`EXCLUSION`. As such, you can add or drop them without affecting ingestion. To
+handle a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` drop, follow the guide below.
+
 ### A. Exclude the constraint in Materialize
 
-To drop a `PRIMARY KEY` or `UNIQUE` constraint safely, in Materialize, first,
-create a new `v4` schema, and recreate table `T` in the new schema but exclude
-the constraint to drop. In this example, we'll drop the primary key `t_pkey`.
-The constraint name is a string literal and must match the upstream name
-exactly, including case.
+To drop a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint safely, in
+Materialize, first, create a new `v4` schema, and recreate table `T` in the new
+schema but exclude the constraint to drop.
+
+To exclude a specific `PRIMARY KEY` or `UNIQUE` constraint, name it in `EXCLUDE
+CONSTRAINTS`. In this example, we'll drop the primary key `t_pkey`. The
+constraint name is a string literal and must match the upstream name exactly,
+including case.
 
 ```sql
 CREATE SCHEMA v4;
@@ -205,9 +213,20 @@ CREATE TABLE v4.T
     FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE CONSTRAINTS ('t_pkey'));
 ```
 
-Materialize does not record the excluded constraint as a key of `v4.T`. To
+Materialize does not record the excluded constraint as a key of `v4.T`.
+
+`EXCLUDE CONSTRAINTS` only matches `PRIMARY KEY` and `UNIQUE` constraints. To
 record no constraints at all, so that any later `PRIMARY KEY`, `UNIQUE`, or
-`NOT NULL` drop is also safe, use `WITH (EXCLUDE ALL CONSTRAINTS)` instead.
+`NOT NULL` drop is also safe, use `EXCLUDE ALL CONSTRAINTS` in place of
+`EXCLUDE CONSTRAINTS`:
+
+```sql
+CREATE TABLE v4.T
+    FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE ALL CONSTRAINTS);
+```
+
+`v4.T` then has no keys, and all of its columns are nullable. `EXCLUDE ALL
+CONSTRAINTS` cannot be combined with `EXCLUDE CONSTRAINTS`.
 
 {{< note >}}
 
@@ -223,6 +242,9 @@ table `T`:
 ```sql
 ALTER TABLE T DROP CONSTRAINT t_pkey;
 ```
+
+To drop a `NOT NULL` constraint instead, use `ALTER TABLE T ALTER COLUMN A DROP
+NOT NULL`. This is only safe on a table created with `EXCLUDE ALL CONSTRAINTS`.
 
 Dropping the constraint will have no effect on `v4.T`. However, the drop affects
 `v3.T` from our earlier example, which still records `t_pkey` as a key. When the
