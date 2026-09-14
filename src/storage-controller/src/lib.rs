@@ -1524,17 +1524,33 @@ impl StorageController for Controller {
         let from_storage_metadata = self.storage_collections.collection_metadata(from_id)?;
         let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
-        // Check whether the sink's write frontier is beyond the read hold we got
-        let cur_export = self.export_mut(id)?;
-        let input_readable = cur_export
-            .write_frontier
+        // External output commits before the sink advances its Persist upper.
+        // DDL can observe that upper before we process the worker's frontier report,
+        // so a cached controller frontier cannot disprove the committed overlap.
+        let persist = self
+            .persist
+            .open(to_storage_metadata.persist_location.clone())
+            .await
+            .expect("persist location is valid");
+        let durable_upper = persist
+            .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                to_storage_metadata.data_shard,
+                Diagnostics {
+                    shard_name: id.to_string(),
+                    handle_purpose: "sink alteration progress".into(),
+                },
+            )
+            .await
+            .expect("invalid persist usage");
+        let input_readable = durable_upper
             .iter()
             .all(|t| input_hold.since().less_than(t));
         if !input_readable {
             return Err(StorageError::ReadBeforeSince(from_id));
         }
 
-        let new_export = ExportState {
+        let cur_export = self.export_mut(id)?;
+        let mut new_export = ExportState {
             read_capabilities: cur_export.read_capabilities.clone(),
             cluster_id: new_description.instance_id,
             derived_since: cur_export.derived_since.clone(),
@@ -1542,6 +1558,19 @@ impl StorageController for Controller {
             read_policy: cur_export.read_policy.clone(),
             write_frontier: cur_export.write_frontier.clone(),
         };
+        // The new input can be readable only beyond our last native report.
+        // Raise the accounting floor with the acquired holds so delayed reports
+        // cannot ask those holds to move backward. Reported progress stays unchanged.
+        let mut since = new_export.derived_since.clone();
+        for hold in &new_export.read_holds {
+            since.join_assign(hold.since());
+        }
+        let mut changes = swap_updates(&mut new_export.derived_since, since.clone());
+        new_export.read_capabilities.update_iter(changes.drain());
+        for hold in &mut new_export.read_holds {
+            hold.try_downgrade(since.clone())
+                .expect("joined held readability");
+        }
         *cur_export = new_export;
 
         // For `ALTER SINK`, the snapshot should only occur if the sink has not made any progress.
@@ -1551,7 +1580,7 @@ impl StorageController for Controller {
         // to replay from the beginning.
         // TODO(STG-26): unify this with run_export, if possible
         let with_snapshot = new_description.sink.with_snapshot
-            && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
+            && !PartialOrder::less_than(&new_description.sink.as_of, &durable_upper);
 
         let cmd = RunSinkCommand {
             id,
@@ -4143,6 +4172,138 @@ mod tests {
                 commit_interval: Default::default(),
             },
             instance_id: StorageInstanceId::system(1).unwrap(),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn alter_export_uses_durable_progress_before_frontier_report() {
+        let (mut controller, collections, persist) = export_test_controller().await;
+        let input = GlobalId::User(1);
+        let sink = GlobalId::User(2);
+        let old_input = GlobalId::User(3);
+        let description = export_description(input);
+        let instance = description.instance_id;
+        let mut previous = export_description(old_input);
+        previous.sink.as_of = frontier(0);
+        let data_source = DataSource::Sink { desc: previous };
+        let metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([
+                (input, ShardId::new()),
+                (sink, ShardId::new()),
+                (old_input, ShardId::new()),
+            ]),
+            compaction_bounds: BTreeMap::from([
+                (input, frontier(5)),
+                (sink, frontier(0)),
+                (old_input, frontier(0)),
+            ]),
+            ..Default::default()
+        };
+        let mut sink_collection = CollectionDescription::for_other(RelationDesc::empty(), None);
+        sink_collection.data_source = data_source.clone();
+        collections
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                vec![
+                    (
+                        input,
+                        CollectionDescription::for_other(RelationDesc::empty(), Some(frontier(5))),
+                    ),
+                    (sink, sink_collection),
+                    (
+                        old_input,
+                        CollectionDescription::for_other(RelationDesc::empty(), Some(frontier(0))),
+                    ),
+                ],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        let [input_hold, self_hold] = collections
+            .acquire_read_holds(vec![old_input, sink])
+            .unwrap()
+            .try_into()
+            .expect("two holds");
+        controller.create_instance(instance, None);
+        controller.collections.insert(
+            sink,
+            CollectionState::new(
+                data_source,
+                collections.collection_metadata(sink).unwrap(),
+                CollectionStateExtra::Export(ExportState::new(
+                    instance,
+                    input_hold,
+                    self_hold,
+                    frontier(0),
+                    ReadPolicy::step_back(),
+                )),
+                controller.metrics.wallclock_lag_metrics(sink, None),
+            ),
+        );
+        let mut writer = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                metadata.collection_metadata[&sink],
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        // Equality is not sufficient: the input's snapshot must be complete in
+        // the sink before switching inputs. No native frontier report is delivered.
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(0),
+                frontier(5),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            controller.alter_export(sink, description.clone()).await,
+            Err(StorageError::ReadBeforeSince(id)) if id == input
+        ));
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(5),
+                frontier(6),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        controller.alter_export(sink, description).await.unwrap();
+        let command = controller.instances[&instance]
+            .get_export_description(&sink)
+            .unwrap();
+        assert_eq!(command.as_of, frontier(5));
+        assert!(!command.with_snapshot);
+        assert_eq!(controller.export(sink).unwrap().write_frontier, frontier(0));
+        // Reports already in flight may precede the new input's readability.
+        controller.update_write_frontier(sink, &frontier(3));
+        assert_eq!(
+            controller.export(sink).unwrap().input_hold().since(),
+            &frontier(5)
+        );
+        controller.update_write_frontier(sink, &frontier(6));
+        assert_eq!(
+            controller.export(sink).unwrap().input_hold().since(),
+            &frontier(5)
+        );
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(6),
+                frontier(7),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        controller.update_write_frontier(sink, &frontier(7));
+        for hold in &controller.export(sink).unwrap().read_holds {
+            assert_eq!(hold.since(), &frontier(6));
         }
     }
 

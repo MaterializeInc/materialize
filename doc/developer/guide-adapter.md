@@ -317,6 +317,18 @@ A system-table write before the barrier is included in the reset. A user-table w
 visible to later reads. The retry's `advance_to` is above the stale catalog handle's cached upper,
 so its catalog check is durable. An `advance_upper` no-op only checks an already-observed fence.
 
+### Durable sink progress can precede controller observations
+
+A sink commits external output before advancing its Persist progress shard, then
+reports that progress to the controller. A query client can observe the durable
+upper before the controller processes the report. Sink alteration must establish
+input overlap against durable progress, not reject committed desired state using
+a lagging controller observation. Waiting for that report on the coordinator loop
+can also block the loop that must process it.
+
+This applies to the sink's output-progress shard, not a source remap shard. Remap
+progress alone does not establish completion of source output.
+
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found
