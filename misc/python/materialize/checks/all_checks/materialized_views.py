@@ -368,8 +368,9 @@ class MaterializedViewReplacementDropInput(Check):
         # The first version whose expression cache records item versions. A
         # generation of an earlier version that boots after the apply reuses
         # the expressions cached for the old definition, and crash-loops on
-        # the dropped input.
-        return self.base_version >= MzVersion.parse_mz("v26.41.0-dev")
+        # the dropped input. #38677 landed after v26.41.0-rc.1 was cut, so it
+        # first shipped in v26.42.
+        return self.base_version >= MzVersion.parse_mz("v26.42.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""
