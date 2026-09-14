@@ -147,10 +147,11 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
+use timely::dataflow::operators::vec::Filter;
 use timely::dataflow::operators::vec::ToStream;
-use timely::dataflow::operators::vec::{BranchWhen, Filter};
 use timely::dataflow::operators::{Capability, Operator, Probe, probe};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
@@ -1006,13 +1007,23 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
                     // these results would go into the `max_iter + 1`th iteration.
-                    let (in_limit, over_limit) =
-                        oks.inner.branch_when(move |Product { inner: ps, .. }| {
-                            // The iteration number, or if missing a zero (as trailing zeros are truncated).
-                            let iteration_index = *ps.get(level).unwrap_or(&0);
-                            // The pointstamp starts counting from 0, so we need to add 1.
-                            iteration_index + 1 >= limit.max_iters.into()
-                        });
+                    //
+                    // The split consults each update's own time. A container's capability
+                    // is only a lower bound on the times it carries, so deciding per
+                    // container by capability could retain updates from an iteration
+                    // beyond the one the capability names.
+                    let (over_limit, in_limit) = oks
+                        .inner
+                        .partition_by::<CapacityContainerBuilder<Vec<_>>, _>(
+                            "LetRecLimit",
+                            move |(_data, Product { inner: ps, .. }, _diff)| {
+                                // The iteration number, or zero if absent, since trailing zero
+                                // coordinates are truncated.
+                                let iteration_index = *ps.get(level).unwrap_or(&0);
+                                // The pointstamp starts counting from 0, so we need to add 1.
+                                iteration_index + 1 >= limit.max_iters.into()
+                            },
+                        );
                     oks = VecCollection::new(in_limit);
                     if !limit.return_at_limit {
                         err = err.concat(VecCollection::new(over_limit).map(move |_data| {
