@@ -57,15 +57,8 @@ not milestone acceptance. Remaining work:
    dataflows pause while the adapter is down. Webhook batching and idle ticking
    likewise require a live adapter for this milestone.
 
-The designer clarified application ordering on 2026-09-14. Do not add durable
-physical-import protection. A publisher applies every catalog change through its
-transaction base before proposing bounds, and resamples after a failed CAS.
-Recovery installs before publishing or reclaiming. Verify this ordering with fixed
-written plans, including reconstruction from logical inputs after index compaction.
-DROP INDEX reports only objects whose plans the writer actually rewrote. Client
-aggregate advances use the existing coalesced publication cadence and bump the
-heartbeat in that transaction. Idle heartbeat renewal and reclamation grace stay
-unchanged. New grants should protect actual read requirements, not gratuitous MIN.
+Verify the apply-before-publish ordering with fixed written plans, including
+reconstruction from logical inputs after an index compacted past an old bound.
 
 The publisher defers all bounds and client reclamation while any installation is
 pending. Execution, catalog effects, sources, sinks, and queries continue. Pending
