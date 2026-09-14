@@ -14,7 +14,13 @@ from materialize.checks.checks import Check
 
 class RefreshVariants(Check):
     """REFRESH strategy variants not covered by materialized_views.py:
-    ALIGNED TO, AT CREATION, and explicit ON COMMIT."""
+    ALIGNED TO, AT CREATION, and explicit ON COMMIT.
+
+    Also checks that mz_materialized_view_refresh_strategies reports the times
+    of a view created with literal REFRESH AT and ALIGNED TO times. Purification
+    stores those folded to mz_timestamp literals, and a view created by an
+    older version stores them as written, so this covers the catalog migration
+    that folds them on upgrade."""
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""
@@ -27,6 +33,13 @@ class RefreshVariants(Check):
 
             > CREATE MATERIALIZED VIEW refresh_variants_at_creation1
               WITH (REFRESH AT CREATION)
+              AS SELECT sum(x) FROM refresh_variants_table
+
+            > CREATE MATERIALIZED VIEW refresh_variants_literal_times1
+              WITH (
+                REFRESH AT '2999-01-01 00:00:00+00',
+                REFRESH EVERY '1 day' ALIGNED TO TIMESTAMPTZ '2000-01-01 00:00:00+00' + INTERVAL '1 hour'
+              )
               AS SELECT sum(x) FROM refresh_variants_table
             """))
 
@@ -72,6 +85,13 @@ class RefreshVariants(Check):
 
             > SELECT * FROM refresh_variants_combined1
             7
+
+            > SELECT s.type, s.interval::text, s.aligned_to::text, s.at::text
+              FROM mz_internal.mz_materialized_view_refresh_strategies s
+              JOIN mz_catalog.mz_materialized_views mv ON mv.id = s.materialized_view_id
+              WHERE mv.name = 'refresh_variants_literal_times1'
+            at <null> <null> "2999-01-01 00:00:00+00"
+            every 24:00:00 "2000-01-01 01:00:00+00" <null>
             """))
 
 
