@@ -2815,6 +2815,7 @@ impl AggregateExpr {
                 wrapped_aggregate,
                 window_frame,
                 order_by: _,
+                order_by_values: _,
             } => {
                 // TODO: deduplicate code between the various window function cases.
 
@@ -2864,6 +2865,7 @@ impl AggregateExpr {
             AggregateFunc::FusedWindowAggregate {
                 wrapped_aggregates,
                 order_by: _,
+                order_by_values: _,
                 window_frame,
             } => {
                 // Throw away OrderByExprs
@@ -2935,6 +2937,7 @@ impl AggregateExpr {
             AggregateFunc::FusedValueWindowFunc {
                 funcs,
                 order_by: outer_order_by,
+                order_by_values: outer_order_by_values,
             } => {
                 // Throw away OrderByExprs
                 let tuple = self
@@ -2983,10 +2986,12 @@ impl AggregateExpr {
                         AggregateFunc::LagLead {
                             lag_lead,
                             order_by,
+                            order_by_values,
                             ignore_nulls: _,
                             args,
                         } => {
                             assert_eq!(order_by, outer_order_by);
+                            assert_eq!(order_by_values, outer_order_by_values);
                             Self::on_unique_lag_lead(
                                 lag_lead,
                                 args.as_ref(),
@@ -2998,8 +3003,10 @@ impl AggregateExpr {
                         AggregateFunc::FirstValue {
                             window_frame,
                             order_by,
+                            order_by_values,
                         } => {
                             assert_eq!(order_by, outer_order_by);
+                            assert_eq!(order_by_values, outer_order_by_values);
                             Self::on_unique_first_value_last_value(
                                 window_frame,
                                 args_for_func.expect("first/last value encode their argument"),
@@ -3009,8 +3016,10 @@ impl AggregateExpr {
                         AggregateFunc::LastValue {
                             window_frame,
                             order_by,
+                            order_by_values,
                         } => {
                             assert_eq!(order_by, outer_order_by);
+                            assert_eq!(order_by_values, outer_order_by_values);
                             Self::on_unique_first_value_last_value(
                                 window_frame,
                                 args_for_func.expect("first/last value encode their argument"),

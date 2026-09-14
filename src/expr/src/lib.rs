@@ -37,7 +37,7 @@ pub use relation::func::REPEAT_ROW_NAME;
 pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
     AggregateFunc, AnalyzedRegex, AnalyzedRegexOpts, CaptureGroupDesc, LagLeadArgs, LagLeadType,
-    NaiveOneByOneAggr, OneByOneAggr, TableFunc,
+    NaiveOneByOneAggr, OneByOneAggr, OrderByValues, TableFunc,
 };
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{

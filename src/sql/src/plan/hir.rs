@@ -604,12 +604,24 @@ impl ScalarWindowExpr {
         match self.func {
             ScalarWindowFunc::RowNumber => mz_expr::AggregateFunc::RowNumber {
                 order_by: self.order_by,
+                // Lowering narrows this once it knows the ORDER BY
+                // expressions' MIR forms; see
+                // `HirScalarExpr::describe_window_order_by`.
+                order_by_values: mz_expr::OrderByValues::Appended,
             },
             ScalarWindowFunc::Rank => mz_expr::AggregateFunc::Rank {
                 order_by: self.order_by,
+                // Lowering narrows this once it knows the ORDER BY
+                // expressions' MIR forms; see
+                // `HirScalarExpr::describe_window_order_by`.
+                order_by_values: mz_expr::OrderByValues::Appended,
             },
             ScalarWindowFunc::DenseRank => mz_expr::AggregateFunc::DenseRank {
                 order_by: self.order_by,
+                // Lowering narrows this once it knows the ORDER BY
+                // expressions' MIR forms; see
+                // `HirScalarExpr::describe_window_order_by`.
+                order_by_values: mz_expr::OrderByValues::Appended,
             },
         }
     }
@@ -832,6 +844,10 @@ impl ValueWindowFunc {
                 args,
                 mz_expr::AggregateFunc::FirstValue {
                     order_by,
+                    // Lowering narrows this once it knows the ORDER BY
+                    // expressions' MIR forms; see
+                    // `HirScalarExpr::describe_window_order_by`.
+                    order_by_values: mz_expr::OrderByValues::Appended,
                     window_frame,
                 },
             ),
@@ -839,6 +855,10 @@ impl ValueWindowFunc {
                 args,
                 mz_expr::AggregateFunc::LastValue {
                     order_by,
+                    // Lowering narrows this once it knows the ORDER BY
+                    // expressions' MIR forms; see
+                    // `HirScalarExpr::describe_window_order_by`.
+                    order_by_values: mz_expr::OrderByValues::Appended,
                     window_frame,
                 },
             ),
@@ -871,7 +891,14 @@ impl ValueWindowFunc {
                         mz_expr::func::variadic::RecordCreate { field_names },
                         argss,
                     ),
-                    mz_expr::AggregateFunc::FusedValueWindowFunc { funcs, order_by },
+                    mz_expr::AggregateFunc::FusedValueWindowFunc {
+                        funcs,
+                        order_by,
+                        // Lowering narrows this once it knows the ORDER BY
+                        // expressions' MIR forms; see
+                        // `HirScalarExpr::describe_window_order_by`.
+                        order_by_values: mz_expr::OrderByValues::Appended,
+                    },
                 )
             }
         }
@@ -930,6 +957,10 @@ impl ValueWindowFunc {
             encoded_args,
             mz_expr::AggregateFunc::LagLead {
                 order_by,
+                // Lowering narrows this once it knows the ORDER BY
+                // expressions' MIR forms; see
+                // `HirScalarExpr::describe_window_order_by`.
+                order_by_values: mz_expr::OrderByValues::Appended,
                 lag_lead,
                 ignore_nulls,
                 args,
@@ -990,6 +1021,10 @@ impl AggregateWindowExpr {
                 FusedWindowAggregate {
                     wrapped_aggregates: funcs.iter().map(|f| f.clone().into_expr()).collect(),
                     order_by: self.order_by,
+                    // Lowering narrows this once it knows the ORDER BY
+                    // expressions' MIR forms; see
+                    // `HirScalarExpr::describe_window_order_by`.
+                    order_by_values: mz_expr::OrderByValues::Appended,
                     window_frame: self.window_frame,
                 },
             )
@@ -999,6 +1034,10 @@ impl AggregateWindowExpr {
                 WindowAggregate {
                     wrapped_aggregate: Box::new(self.aggregate_expr.func.into_expr()),
                     order_by: self.order_by,
+                    // Lowering narrows this once it knows the ORDER BY
+                    // expressions' MIR forms; see
+                    // `HirScalarExpr::describe_window_order_by`.
+                    order_by_values: mz_expr::OrderByValues::Appended,
                     window_frame: self.window_frame,
                 },
             )

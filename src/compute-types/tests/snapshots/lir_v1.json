@@ -109,6 +109,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -119,6 +122,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           },
           "window_frame": {
             "TYPENAME": "WindowFrame"
@@ -136,6 +142,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -145,6 +154,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           },
           "window_frame": {
             "TYPENAME": "WindowFrame"
@@ -189,6 +201,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -198,6 +213,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           },
           "window_frame": {
             "TYPENAME": "WindowFrame"
@@ -265,6 +283,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -274,6 +295,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -301,6 +325,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           },
           "window_frame": {
             "TYPENAME": "WindowFrame"
@@ -3062,6 +3089,16 @@
     "NEWTYPESTRUCT": "U8"
   },
   "Or": "UNITSTRUCT",
+  "OrderByValues": {
+    "ENUM": {
+      "Appended": "UNIT",
+      "OriginalRow": {
+        "NEWTYPE": {
+          "SEQ": "U64"
+        }
+      }
+    }
+  },
   "OrdinalMode": {
     "ENUM": {
       "None": "UNIT"

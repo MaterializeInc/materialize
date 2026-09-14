@@ -42,7 +42,9 @@ use std::iter::repeat;
 use itertools::Itertools;
 use mz_expr::func::variadic;
 use mz_expr::visit::Visit;
-use mz_expr::{AccessStrategy, AggregateFunc, Columns, MirRelationExpr, MirScalarExpr, func};
+use mz_expr::{
+    AccessStrategy, AggregateFunc, Columns, MirRelationExpr, MirScalarExpr, OrderByValues, func,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -1452,6 +1454,84 @@ impl HirScalarExpr {
         }
     }
 
+    /// Moves a window function's ORDER BY values into the function itself where
+    /// it can find them without a copy in every row.
+    ///
+    /// The `OriginalRow` record the per-row value leads with holds every input
+    /// column, so an ORDER BY expression that is one of those columns needs no
+    /// appended copy. This is all or nothing: a window function reads its
+    /// ORDER BY values from one place, so a single expression that is not an
+    /// input column keeps all of them appended.
+    ///
+    /// `input_arity` bounds the columns `OriginalRow` covers, as in
+    /// [`Self::describe_window_args`].
+    ///
+    /// Returns the ORDER BY values still appended per row, empty when none are.
+    fn describe_window_order_by(
+        mir_aggr_func: &mut AggregateFunc,
+        order_by_mir: Vec<MirScalarExpr>,
+        input_arity: usize,
+    ) -> Vec<MirScalarExpr> {
+        let fields = order_by_mir
+            .iter()
+            .map(|expr| match expr {
+                MirScalarExpr::Column(column, _name) if *column < input_arity => Some(*column),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .filter(|fields| !fields.is_empty());
+        let Some(fields) = fields else {
+            return order_by_mir;
+        };
+        Self::set_order_by_values(mir_aggr_func, &OrderByValues::OriginalRow(fields));
+        Vec::new()
+    }
+
+    /// Records where a window function reads its ORDER BY values.
+    ///
+    /// A fused call's constituents carry their own copy, which the evaluation
+    /// asserts agrees with the outer one, so they are set too. The aggregates
+    /// wrapped by a window aggregate are not window functions and have none.
+    fn set_order_by_values(mir_aggr_func: &mut AggregateFunc, values: &OrderByValues) {
+        match mir_aggr_func {
+            AggregateFunc::RowNumber {
+                order_by_values, ..
+            }
+            | AggregateFunc::Rank {
+                order_by_values, ..
+            }
+            | AggregateFunc::DenseRank {
+                order_by_values, ..
+            }
+            | AggregateFunc::LagLead {
+                order_by_values, ..
+            }
+            | AggregateFunc::FirstValue {
+                order_by_values, ..
+            }
+            | AggregateFunc::LastValue {
+                order_by_values, ..
+            }
+            | AggregateFunc::WindowAggregate {
+                order_by_values, ..
+            }
+            | AggregateFunc::FusedWindowAggregate {
+                order_by_values, ..
+            } => *order_by_values = values.clone(),
+            AggregateFunc::FusedValueWindowFunc {
+                funcs,
+                order_by_values,
+                ..
+            } => {
+                *order_by_values = values.clone();
+                for func in funcs {
+                    Self::set_order_by_values(func, values);
+                }
+            }
+            func => unreachable!("not a window function: {func:?}"),
+        }
+    }
+
     fn window_func_applied_to<F>(
         id_gen: &mut mz_ore::id_gen::IdGen,
         col_map: &ColumnMap,
@@ -1519,6 +1599,13 @@ impl HirScalarExpr {
         //   - The <original row> currently always captures the entire original row. This should
         //     improve when we make `ProjectionPushdown` smarter, see
         //     https://github.com/MaterializeInc/database-issues/issues/5090
+        //
+        // Because <original row> holds every input column, the parts of this
+        // encoding that would repeat one of them are left out and recorded in
+        // the aggregate function instead: the <arguments to window function>
+        // by `describe_window_args`, the <order by values> by
+        // `describe_window_order_by`. Either can therefore be absent, and the
+        // function says whether it is.
         //
         // TODO:
         // We should probably introduce some dedicated Datum constructor functions instead of `row`
@@ -1599,6 +1686,11 @@ impl HirScalarExpr {
                     // it takes the function by reference and the aggregate is
                     // built afterwards.
                     let mut mir_aggr_func = mir_aggr_func;
+                    let order_by_mir = Self::describe_window_order_by(
+                        &mut mir_aggr_func,
+                        order_by_mir,
+                        input_arity,
+                    );
                     let (agg_input, agg_input_type) = lower_args(
                         id_gen,
                         col_map,
