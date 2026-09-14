@@ -198,14 +198,9 @@ pub fn describe_declare(
 
 /// The lookup key for the prepared statement or portal that `name` refers to.
 ///
-/// Both namespaces are shared with the extended protocol, whose `Parse` and
-/// `Bind` store the name exactly as it arrived on the wire, so the key has to be
-/// the identifier's raw value. `Ident`'s `Display` is the SQL renderer and
-/// re-quotes anything that cannot be printed bare, which would key
-/// `DEALLOCATE "Foo"` on a string holding the quote characters, matching no wire
-/// name. The lexer has already folded unquoted identifiers to lowercase, so the
-/// raw value gives Postgres' semantics: a quoted name keeps its case, an
-/// unquoted one is lowercase.
+/// Both namespaces are shared with the extended protocol, which stores names
+/// exactly as they arrive on the wire, so the key is the identifier's raw value
+/// rather than its SQL rendering, which re-quotes anything not printable bare.
 fn statement_or_portal_name(name: Ident) -> String {
     name.into_string()
 }
