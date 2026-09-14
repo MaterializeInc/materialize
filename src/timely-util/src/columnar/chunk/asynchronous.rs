@@ -9,8 +9,8 @@
 //! operator, which resumes maintenance on its Timely worker.
 
 use super::merge::ReadBudget;
-use super::native::maintain;
 pub use super::native::{Batcher, Spine};
+use super::native::{Exertion, maintain};
 use super::{ChunkChunker, Column, ColumnChunk};
 use crate::builder_async::{Event, OperatorBuilder, PressOnDropButton};
 use columnar::Columnar;
@@ -27,6 +27,16 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::order::TotalOrder;
 use timely::progress::{Timestamp, frontier::Antichain};
 type BatchRef<D, T, R> = Rc<ChunkBatch<ColumnChunk<D, T, R>>>;
+
+/// Quiet time on the input before unfunded consolidation may start.
+///
+/// The exertion policy grants effort per scheduling turn, and turns are not
+/// proportional to input: an operator that is woken often while ingesting can
+/// otherwise fund enough virtual introductions to merge each published batch into
+/// its largest batch. Inserted updates fund consolidation while input flows, and
+/// this quiet interval, well below a source tick and well above a turn, marks a
+/// genuinely idle input where the configured policy may run without limit.
+const IDLE_CONSOLIDATION_AFTER: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Arrange a local stream using asynchronous batch and trace merges.
 ///
@@ -71,13 +81,20 @@ where
         let mut batcher = Batcher::new(budget.clone());
         let mut chunker = ChunkChunker::<D, T, R>::default();
         let mut upper = Antichain::from_elem(T::minimum());
+        let mut last_input = tokio::time::Instant::now();
+        let mut deferred = false;
         const INPUT_EVENTS_PER_TURN: usize = 32;
         loop {
+            let idle_at = last_input + IDLE_CONSOLIDATION_AFTER;
             let mut event = tokio::select! {
                 biased;
                 _ = input.ready(), if !upper.is_empty() => input.next_sync(),
                 _ = notify.notified() => None,
+                _ = tokio::time::sleep_until(idle_at), if deferred => None,
             };
+            if event.is_some() {
+                last_input = tokio::time::Instant::now();
+            }
             let mut next_upper = None;
             // Extra exertion can introduce virtual batches and change subsequent
             // merge work. Amortize it over queued input, with a finite scheduling
@@ -130,9 +147,16 @@ where
                     upper = next;
                 }
             }
-            // Queued input will fund introductions itself. Continue active merges,
-            // but wait for input to drain before forcing separate batches together.
-            maintain(&state, &notify, input.is_empty()).await;
+            // Queued input funds its own introductions. Inserted updates fund
+            // consolidation while input flows, and only a quiet input lifts that bound.
+            let exertion = if !input.is_empty() {
+                Exertion::Merges
+            } else if upper.is_empty() || last_input.elapsed() >= IDLE_CONSOLIDATION_AFTER {
+                Exertion::Idle
+            } else {
+                Exertion::Funded
+            };
+            deferred = maintain(&state, &notify, exertion).await;
             tokio::task::yield_now().await;
         }
     });
@@ -260,7 +284,7 @@ mod tests {
             reader.set_logical_compaction(frontier.borrow());
             reader.set_physical_compaction(frontier.borrow());
 
-            maintain(&state, &notify, true).await;
+            maintain(&state, &notify, Exertion::Idle).await;
             assert_eq!(
                 reader
                     .batches_through(Antichain::new().borrow())
@@ -271,7 +295,7 @@ mod tests {
             );
             hold.set_logical_compaction(frontier.borrow());
             hold.set_physical_compaction(frontier.borrow());
-            let mut maintenance = Box::pin(maintain(&state, &notify, true));
+            let mut maintenance = Box::pin(maintain(&state, &notify, Exertion::Idle));
             assert!(futures_util::poll!(&mut maintenance).is_pending());
             assert_eq!(
                 reader

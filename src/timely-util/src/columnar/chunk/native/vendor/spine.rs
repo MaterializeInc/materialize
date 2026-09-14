@@ -95,6 +95,26 @@ fn span_len<B: SpineBatch>(span: &Span<B::Time, B>) -> usize {
     span.inner.as_ref().map(|b| b.len()).unwrap_or(0)
 }
 
+/// Policy-requested effort that each inserted update funds, in fuel units.
+///
+/// Introducing a batch already funds `8 << level` fuel for active merges. The same
+/// multiple bounds policy-requested effort while input flows, so it stays
+/// proportional to inserted updates however often the owner is scheduled. Per
+/// scheduling turn the policy would otherwise lift each published batch into the
+/// largest one. Unfunded requests wait for idle exertion.
+const CONSOLIDATION_CREDIT_PER_UPDATE: usize = 8;
+
+/// How much policy-requested maintenance an exertion turn may start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exertion {
+    /// Continue active merges only. Queued input funds its own introductions.
+    Merges,
+    /// Grant only what credit accrued by inserted updates can pay for.
+    Funded,
+    /// Also force separate batches together without limit: the owner has no input to accept.
+    Idle,
+}
+
 // A continuation of the existing introduction algorithm. No action owns a
 // published span: results move directly between levels before a poll can yield.
 enum Maintenance {
@@ -140,6 +160,8 @@ pub struct Spine<B: SpineBatch> {
     exert_logic: Option<ExertionLogic>,
     maintenance: VecDeque<Maintenance>,
     waker: Option<Waker>,
+    /// Fuel units of policy-requested consolidation that inserted updates have paid for.
+    consolidation_credit: usize,
 }
 
 impl<B: SpineBatch + Clone + 'static> Spine<B> {
@@ -288,51 +310,53 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
         Self::with_effort(1, info, logging, activator)
     }
 
-    /// Apply some amount of effort to trace maintenance.
+    /// Apply one exertion allowance to trace maintenance.
     ///
-    /// Whether and how much effort to apply is determined by `self.exert_logic`, a closure the user can set.
-    pub fn exert(&mut self) {
-        self.exert_inner(true);
-    }
-
-    /// Apply policy-funded effort to active merges without forcing separate batches together.
-    ///
-    /// Pending introductions retain their insertion-funded work. Call `exert` when
-    /// input drains to satisfy the configured optional consolidation policy.
-    pub fn exert_merges(&mut self) {
-        self.exert_inner(false);
-    }
-
-    fn exert_inner(&mut self, allow_consolidation: bool) {
+    /// Whether and how much effort policy requests is determined by `self.exert_logic`.
+    /// `Merges` funds only active merges. `Funded` spends credit that inserted updates
+    /// accrued, so optional effort during ingestion is bounded by
+    /// `CONSOLIDATION_CREDIT_PER_UPDATE` per update. `Idle` grants without limit.
+    /// Returns true when policy requested work that this turn did not grant, so the
+    /// owner knows to return once its input is idle.
+    pub fn exert(&mut self, exertion: Exertion) -> bool {
         // Finish the old grant before asking policy for another one.
         if !self.drive_maintenance() {
-            return;
+            return false;
         }
         self.consider_merges();
         if !self.maintenance.is_empty() {
-            return;
+            return false;
         }
         self.tidy_layers();
-        if let Some(effort) = self.exert_effort() {
-            let active_merge = self.merging.iter().any(|b| b.is_double());
-            if !active_merge && !allow_consolidation {
-                return;
+        let Some(effort) = self.exert_effort() else {
+            return false;
+        };
+        let active_merge = self.merging.iter().any(|b| b.is_double());
+        match exertion {
+            Exertion::Merges if !active_merge => return true,
+            Exertion::Funded => {
+                if self.consolidation_credit < effort {
+                    return true;
+                }
+                self.consolidation_credit -= effort;
             }
-            crate::columnar::chunk::metrics::record(
-                crate::columnar::chunk::metrics::Stage::OptionalExert,
-                effort,
-                0,
-            );
-            if active_merge {
-                self.queue_fuel(effort.cast_signed());
-            } else {
-                let level = usize::cast_from(effort.next_power_of_two().trailing_zeros());
-                self.queue_introduction(level, false);
-            }
-            if self.drive_maintenance() {
-                self.activate();
-            }
+            Exertion::Merges | Exertion::Idle => {}
         }
+        crate::columnar::chunk::metrics::record(
+            crate::columnar::chunk::metrics::Stage::OptionalExert,
+            effort,
+            0,
+        );
+        if active_merge {
+            self.queue_fuel(effort.cast_signed());
+        } else {
+            let level = usize::cast_from(effort.next_power_of_two().trailing_zeros());
+            self.queue_introduction(level, false);
+        }
+        if self.drive_maintenance() {
+            self.activate();
+        }
+        false
     }
 
     /// Resume queued maintenance without requesting another exertion allowance.
@@ -376,6 +400,11 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
         assert_eq!(span.lower(), &self.upper);
 
         self.upper.clone_from(span.upper());
+        self.consolidation_credit = self.consolidation_credit.saturating_add(
+            span_len(&span)
+                .saturating_mul(CONSOLIDATION_CREDIT_PER_UPDATE)
+                .saturating_mul(self.effort),
+        );
 
         // TODO: Consolidate or discard spans with no updates.
         self.pending.push(span);
@@ -505,6 +534,7 @@ impl<B: SpineBatch> Spine<B> {
             exert_logic: None,
             maintenance: VecDeque::new(),
             waker: None,
+            consolidation_credit: 0,
         }
     }
 
@@ -545,9 +575,6 @@ impl<B: SpineBatch> Spine<B> {
             if !self.drive_maintenance() {
                 return;
             }
-        }
-        if self.exert_effort().is_some() {
-            self.activate();
         }
     }
 

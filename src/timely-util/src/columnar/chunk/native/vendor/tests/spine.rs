@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // See ../LICENSE.
 
-use super::super::spine::Spine;
+use super::super::spine::{Exertion, Spine};
 use differential_dataflow_next::trace::asynchronous::{Batch as SpineBatch, MergeStatus, Merger};
 use differential_dataflow_next::trace::{Description, Span};
 use std::sync::{Arc, Mutex};
@@ -132,7 +132,7 @@ fn drive(trace: &mut Spine<Batch>, gate: &Mutex<Gate>, expected: &[(u64, u64, i6
         if let Some(wake) = wake {
             wake.wake();
         }
-        trace.exert();
+        trace.exert(Exertion::Idle);
     }
     panic!("maintenance failed to resume");
 }
@@ -184,7 +184,7 @@ fn maintenance_sample(
     rows: u64,
     fuel: usize,
     read_rows: Option<usize>,
-    allow_consolidation: bool,
+    exertion: Exertion,
 ) -> MaintenanceSample {
     use std::cell::RefCell;
     use std::future::Future;
@@ -228,7 +228,7 @@ fn maintenance_sample(
     let mut completions = 0;
     let start = Instant::now();
     {
-        let mut future = pin!(maintain(&state, &notify, allow_consolidation));
+        let mut future = pin!(maintain(&state, &notify, exertion));
         let wake_count = Arc::new(WakeCount(std::sync::atomic::AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&wake_count));
         let mut cx = Context::from_waker(&waker);
@@ -264,7 +264,7 @@ fn maintenance_sample(
     }
     gate.lock().unwrap().permits = usize::MAX / 2;
     for _ in 0..=2 * rows {
-        state.borrow_mut().exert();
+        state.borrow_mut().exert(Exertion::Idle);
         if gate.lock().unwrap().worked == usize::try_from(2 * rows).unwrap() {
             assert_eq!(contents(&state.borrow()), expected);
             return MaintenanceSample {
@@ -279,15 +279,15 @@ fn maintenance_sample(
 
 #[mz_ore::test]
 fn maintenance_readiness_preserves_work_allowance() {
-    for allow_consolidation in [false, true] {
+    for exertion in [Exertion::Merges, Exertion::Funded, Exertion::Idle] {
         for fuel in [1, 1000] {
-            let ready = maintenance_sample(4096, fuel, None, allow_consolidation);
+            let ready = maintenance_sample(4096, fuel, None, exertion);
             assert_eq!(ready.worked, fuel);
             for read_rows in [1, 64, 1024] {
-                let pending = maintenance_sample(4096, fuel, Some(read_rows), allow_consolidation);
+                let pending = maintenance_sample(4096, fuel, Some(read_rows), exertion);
                 assert_eq!(
                     pending.worked, ready.worked,
-                    "fuel={fuel}, read_rows={read_rows}, allow_consolidation={allow_consolidation}"
+                    "fuel={fuel}, read_rows={read_rows}, exertion={exertion:?}"
                 );
             }
         }
@@ -322,18 +322,88 @@ fn merge_only_maintenance_defers_consolidation_until_idle() {
         (batches > 1).then_some(1000)
     }));
     for _ in 0..100 {
-        trace.exert_merges();
+        assert!(trace.exert(Exertion::Merges), "policy work is deferred");
         assert_eq!(gate.lock().unwrap().worked, 0);
         assert_eq!(contents(&trace), expected);
     }
     for _ in 0..100 {
-        trace.exert();
+        trace.exert(Exertion::Idle);
     }
     assert_eq!(gate.lock().unwrap().worked, 33);
     let mut batches = 0;
     trace.map_spans(|span| batches += usize::from(span.inner.is_some()));
     assert_eq!(batches, 1, "idle maintenance must complete consolidation");
     assert_eq!(contents(&trace), expected);
+}
+
+// One large batch followed by small batches, each of which is followed by far more
+// exertion turns than inserted updates. Returns merge rows worked and the number of
+// non-empty batches left.
+fn many_turns_per_insert(exertion: Exertion) -> (usize, usize) {
+    let gate = Arc::new(Mutex::new(Gate {
+        permits: usize::MAX,
+        ..Gate::default()
+    }));
+    let mut trace = Spine::new(OperatorInfo::new(0, 0, [].into()), None, None);
+    // Active merges and any second non-empty layer request effort, as the storage
+    // policy does for layers near the largest one.
+    trace.set_exert_logic(Arc::new(|levels| {
+        let active = levels.iter().any(|(_, count, _)| *count > 1);
+        let separate = levels.iter().filter(|(_, _, len)| *len > 0).count() > 1;
+        (active || separate).then_some(1000)
+    }));
+    let mut expected = Vec::new();
+    for time in 0..=16u64 {
+        let count = if time == 0 { 4096 } else { 16 };
+        let rows: Vec<_> = (0..count)
+            .map(|key| (key + 100_000 * time, time, 1))
+            .collect();
+        expected.extend_from_slice(&rows);
+        trace.insert(Span::new(
+            Description::new(
+                Antichain::from_elem(time),
+                Antichain::from_elem(time + 1),
+                Antichain::from_elem(0),
+            ),
+            Some(Batch {
+                rows,
+                gate: Arc::clone(&gate),
+            }),
+        ));
+        trace.set_physical_compaction(Antichain::from_elem(time + 1).borrow());
+        for _ in 0..10_000 {
+            trace.exert(exertion);
+        }
+        assert!(!trace.maintenance_pending());
+    }
+    differential_dataflow_next::consolidation::consolidate_updates(&mut expected);
+    assert_eq!(contents(&trace), expected);
+    let mut batches = 0;
+    trace.map_spans(|span| batches += usize::from(span.inner.is_some()));
+    (gate.lock().unwrap().worked, batches)
+}
+
+#[mz_ore::test]
+fn funded_consolidation_is_bounded_by_inserted_updates() {
+    let inserted = 4096 + 16 * 16;
+    let (idle_worked, idle_batches) = many_turns_per_insert(Exertion::Idle);
+    assert_eq!(idle_batches, 1);
+    assert!(
+        idle_worked > 12 * 4096,
+        "idle turns should lift most small batches into the large one: {idle_worked}"
+    );
+    let (funded_worked, _) = many_turns_per_insert(Exertion::Funded);
+    // Insertion-funded merges of the small batches plus at most the credit's worth
+    // of policy-requested effort.
+    assert!(
+        funded_worked <= 8 * inserted + 16 * 16 * 4,
+        "funded exertion exceeded its credit: {funded_worked} of {idle_worked}"
+    );
+    let (merges_worked, _) = many_turns_per_insert(Exertion::Merges);
+    assert!(
+        merges_worked <= 16 * 16 * 4,
+        "merge-only turns forced consolidation: {merges_worked}"
+    );
 }
 
 /// Run with `cargo test -p mz-timely-util maintenance_microbench -- --ignored --nocapture`.
@@ -348,7 +418,7 @@ fn maintenance_microbench() {
         for fuel in [1, 1000] {
             for read_rows in [None, Some(1), Some(64), Some(1024)] {
                 for sample in 0..5 {
-                    let result = maintenance_sample(rows, fuel, read_rows, true);
+                    let result = maintenance_sample(rows, fuel, read_rows, Exertion::Idle);
                     println!(
                         "{rows},{fuel},{},{sample},{},{},{}",
                         read_rows.map_or_else(|| "ready".to_owned(), |n| n.to_string()),

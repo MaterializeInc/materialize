@@ -41,6 +41,7 @@ use super::ColumnChunk;
 use super::merge::ReadBudget;
 use pool_chunk::{PoolChunk, PreparedChunker};
 use timestamp::{Time, to_mz, to_native};
+pub use vendor::spine::Exertion;
 
 mod pool_chunk;
 mod timestamp;
@@ -328,22 +329,19 @@ impl Wake for NotifyWake {
 /// Apply one exertion turn, yielding while its maintenance waits for I/O.
 ///
 /// This does not force all batches to compact. DD's exertion policy determines
-/// the work allowance. The caller must use the notification installed by
-/// `Spine::with_budget` and poll this future on the owning Timely worker.
-/// Set `allow_consolidation` when input drains so policy can also initiate merges
-/// between separate batches. Otherwise only active merges receive optional fuel.
+/// the work allowance and `exertion` bounds what it may start. The caller must use
+/// the notification installed by `Spine::with_budget` and poll this future on the
+/// owning Timely worker. Returns true when policy requested consolidation that this
+/// turn did not fund, so the caller should return once it is idle.
 pub(super) async fn maintain<B>(
     state: &RefCell<vendor::spine::Spine<B>>,
     notify: &Notify,
-    allow_consolidation: bool,
-) where
+    exertion: Exertion,
+) -> bool
+where
     B: differential_dataflow_next::trace::asynchronous::Batch + Clone + 'static,
 {
-    if allow_consolidation {
-        state.borrow_mut().exert();
-    } else {
-        state.borrow_mut().exert_merges();
-    }
+    let deferred = state.borrow_mut().exert(exertion);
     while state.borrow().maintenance_pending() {
         // No trace borrow may cross this await. Reader compaction can change the
         // same spine while a read is pending, and its wakeup uses this notification.
@@ -353,4 +351,5 @@ pub(super) async fn maintain<B>(
         // until an entire merge finishes.
         state.borrow_mut().resume_maintenance();
     }
+    deferred
 }
