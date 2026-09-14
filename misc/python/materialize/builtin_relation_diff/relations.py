@@ -193,5 +193,10 @@ RELATIONS: dict[str, RelationDiffConfig] = {
     "mz_internal.mz_postgres_sources": RelationDiffConfig(
         ignore_columns=["replication_slot"],
     ),
+    # `updated_at` records when the source last refreshed its references, so
+    # it differs between the two environments by construction.
+    "mz_internal.mz_source_references": RelationDiffConfig(
+        ignore_columns=["updated_at"],
+    ),
     "mz_internal.mz_sql_server_source_tables": RelationDiffConfig(),
 }
