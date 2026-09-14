@@ -22,13 +22,12 @@ from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
 )
-from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.blob_store import blob_store_uri
 from materialize.mzcompose.services.metadata_store import (
     EXTERNAL_METADATA_STORE_ADDRESS,
     METADATA_STORE,
     metadata_store_companions,
 )
-from materialize.mzcompose.services.minio import minio_blob_uri
 
 SANITIZER_TIMEOUT_FACTOR = 10
 
@@ -79,7 +78,7 @@ class Testdrive(Service):
         no_consistency_checks: bool = False,
         check_statement_logging: bool = False,
         external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
-        external_blob_store: bool = False,
+        external_blob_store: str | bool = False,
         blob_store_is_azure: bool = False,
         fivetran_destination: bool = False,
         fivetran_destination_url: str = "http://fivetran-destination:6874",
@@ -220,16 +219,13 @@ class Testdrive(Service):
 
         if set_persist_urls:
             if external_blob_store:
-                blob_store = "azurite" if blob_store_is_azure else "minio"
-                address = (
-                    blob_store if external_blob_store == True else external_blob_store
+                # Same meaning as for `Materialized`.
+                blob_store = (
+                    external_blob_store
+                    if isinstance(external_blob_store, str)
+                    else ("azurite" if blob_store_is_azure else "minio")
                 )
-                persist_blob_url = (
-                    azure_blob_uri(address)
-                    if blob_store_is_azure
-                    else minio_blob_uri(address)
-                )
-                entrypoint.append(f"--persist-blob-url={persist_blob_url}")
+                entrypoint.append(f"--persist-blob-url={blob_store_uri(blob_store)}")
             else:
                 entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 

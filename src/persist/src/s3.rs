@@ -24,6 +24,7 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::config::{AsyncSleep, Sleep};
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_types::region::Region;
@@ -356,6 +357,14 @@ impl Blob for S3Blob {
         // the headers before the full data body has completed. This gives us
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
+        //
+        // Not every S3-compatible store reports the part count. Its response
+        // to the first request is then indistinguishable from a single-part
+        // object's, except that `Content-Range` still carries the object's
+        // total size. The remainder is fetched by byte range in that case, and
+        // the reassembled length is checked against the total either way, so a
+        // store that misbehaves fails the get instead of handing the decoder a
+        // truncated blob.
 
         // For each header and body that we fetch, we track the fastest, and
         // any large deviations from it.
@@ -385,56 +394,72 @@ impl Blob for S3Blob {
             }
         };
 
-        // Get the remaining number of parts
-        let num_parts = match first_part.parts_count() {
-            // For a non-multipart upload, parts_count will be None. The rest of  the code works
-            // perfectly well if we just pretend this was a multipart upload of 1 part.
-            None => 1,
-            // For any positive value greater than 0, just return it.
-            Some(parts @ 1..) => parts,
+        // The object's total size comes from `Content-Range`, which s3 returns
+        // for any request that names a part.
+        let total_len = first_part
+            .content_range()
+            .and_then(parse_content_range_total);
+        let first_len = first_part
+            .content_length()
+            .and_then(|len| u64::try_from(len).ok());
+
+        let remaining: Vec<PartRequest> = match first_part.parts_count() {
+            // For a non-multipart upload, parts_count will be None, and the
+            // first request already returned the whole object. A store that
+            // does not report the count looks the same, except that the first
+            // part falls short of the total. Its remainder is fetched by byte
+            // range in chunks of the first part's size, which is the size the
+            // upload used for every part but the last.
+            None => match (first_len, total_len) {
+                (Some(first_len), Some(total_len)) if first_len < total_len => {
+                    remaining_ranges(first_len, total_len)
+                        .into_iter()
+                        .map(PartRequest::Range)
+                        .collect()
+                }
+                _ => Vec::new(),
+            },
+            Some(parts @ 1..) => (2..=parts).map(PartRequest::Number).collect(),
             // A non-positive value is invalid.
             Some(bad) => {
                 assert!(bad <= 0);
                 return Err(anyhow!("unexpected number of s3 object parts: {}", bad).into());
             }
         };
+        let num_requests = remaining.len() + 1;
 
         trace!(
-            "s3 download first header took {:?} ({num_parts} parts)",
+            "s3 download first header took {:?} ({num_requests} requests)",
             start_overall.elapsed(),
         );
 
         let mut body_futures = FuturesOrdered::new();
-        let mut first_part = Some(first_part);
+        let mut requests = vec![PartRequest::First(first_part)];
+        requests.extend(remaining);
 
-        // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
-        // did part 1.)
-        for part_num in 1..=num_parts {
+        for request in requests {
             // Clone a handle to our MinElapsed trackers so we can give one to
             // each download task.
             let min_header_elapsed = Arc::clone(&min_header_elapsed);
             let min_body_elapsed = Arc::clone(&min_body_elapsed);
             let get_invalid_resp = self.metrics.get_invalid_resp.clone();
-            let first_part = first_part.take();
             let path = &path;
             let request_future = async move {
-                // Fetch the headers of the rest of the parts. (Using the existing headers
-                // for part 1.
-                let mut object = match first_part {
-                    Some(first_part) => {
-                        assert_eq!(part_num, 1, "only the first part should be prefetched");
-                        first_part
-                    }
-                    None => {
-                        assert_ne!(part_num, 1, "first part should be prefetched");
-                        // Request our headers.
+                let mut object = match request {
+                    // Fetched above, together with the headers that shaped
+                    // the remaining requests.
+                    PartRequest::First(object) => object,
+                    other => {
                         let header_start = Instant::now();
-                        let object = self
-                            .client
-                            .get_object()
-                            .bucket(&self.bucket)
-                            .key(path)
-                            .part_number(part_num)
+                        let req = self.client.get_object().bucket(&self.bucket).key(path);
+                        let req = match other {
+                            PartRequest::Number(part_num) => req.part_number(part_num),
+                            PartRequest::Range(range) => {
+                                req.range(format!("bytes={}-{}", range.start, range.end - 1))
+                            }
+                            PartRequest::First(_) => unreachable!("handled above"),
+                        };
+                        let object = req
                             .send()
                             .await
                             .inspect_err(|err| self.update_error_metrics("GetObject", err))
@@ -444,7 +469,6 @@ impl Blob for S3Blob {
                         object
                     }
                 };
-
                 // Request the body.
                 let body_start = Instant::now();
 
@@ -503,10 +527,24 @@ impl Blob for S3Blob {
             segments.append(&mut part_body);
         }
 
+        // A store that reports neither the part count nor a range it honors
+        // hands back less than the object. Fail the get here rather than let
+        // the decoder find out.
+        if let Some(total_len) = total_len {
+            let fetched_len: u64 = segments.iter().map(|s| u64::cast_from(s.len())).sum();
+            if fetched_len != total_len {
+                self.metrics.get_invalid_resp.inc();
+                return Err(anyhow!(
+                    "s3 GetObject {path} returned {fetched_len} bytes of a {total_len} byte object"
+                )
+                .into());
+            }
+        }
+
         debug!(
-            "s3 GetObject took {:?} ({} parts)",
+            "s3 GetObject took {:?} ({} requests)",
             start_overall.elapsed(),
-            num_parts
+            num_requests
         );
         Ok(Some(SegmentedBytes::from(segments)))
     }
@@ -915,6 +953,35 @@ impl S3Blob {
     }
 }
 
+/// One request of a multi-request `get`.
+enum PartRequest {
+    /// The first part, already fetched to learn the object's shape.
+    First(GetObjectOutput),
+    /// A part by the number it was uploaded with.
+    Number(i32),
+    /// A byte range, for stores that do not report the part count.
+    Range(Range<u64>),
+}
+
+/// The total size in a `Content-Range` header (`bytes 0-8388607/9711660`), if
+/// the header states one.
+fn parse_content_range_total(content_range: &str) -> Option<u64> {
+    content_range.rsplit_once('/')?.1.trim().parse().ok()
+}
+
+/// Byte ranges covering `[first_len, total_len)` in chunks of `first_len`.
+fn remaining_ranges(first_len: u64, total_len: u64) -> Vec<Range<u64>> {
+    let chunk_len = if first_len == 0 { total_len } else { first_len };
+    let mut ranges = Vec::new();
+    let mut start = first_len;
+    while start < total_len {
+        let end = cmp::min(start + chunk_len, total_len);
+        ranges.push(start..end);
+        start = end;
+    }
+    ranges
+}
+
 #[derive(Clone, Debug)]
 struct MultipartConfig {
     multipart_threshold: usize,
@@ -1083,6 +1150,33 @@ mod tests {
     use crate::location::tests::blob_impl_test;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn content_range_total() {
+        assert_eq!(
+            parse_content_range_total("bytes 0-8388607/9711660"),
+            Some(9711660)
+        );
+        assert_eq!(parse_content_range_total("bytes */42"), Some(42));
+        assert_eq!(parse_content_range_total("bytes 0-1/*"), None);
+        assert_eq!(parse_content_range_total("garbage"), None);
+    }
+
+    #[mz_ore::test]
+    fn ranges_for_unreported_parts() {
+        let mib = 1024 * 1024;
+        assert_eq!(remaining_ranges(8 * mib, 9711660), vec![8 * mib..9711660]);
+        assert_eq!(
+            remaining_ranges(8 * mib, 3 * 8 * mib + 5),
+            vec![
+                8 * mib..16 * mib,
+                16 * mib..24 * mib,
+                24 * mib..24 * mib + 5
+            ]
+        );
+        assert_eq!(remaining_ranges(8 * mib, 8 * mib), Vec::<Range<u64>>::new());
+        assert_eq!(remaining_ranges(0, 10), vec![0..10]);
+    }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586

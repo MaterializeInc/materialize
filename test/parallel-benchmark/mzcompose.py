@@ -14,12 +14,17 @@ actions concurrently, measures various kinds of statistics.
 
 import argparse
 import gc
+import json
+import math
 import os
+import re
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy
+import requests
 from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
@@ -36,7 +41,9 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.blob_store import BLOB_STORES
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.garage import Garage
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
@@ -45,6 +52,7 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.rustfs import RustFs
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.test_result import (
@@ -104,6 +112,8 @@ SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
     Minio(setup_materialize=True),
     Azurite(),
+    Garage(setup_materialize=True),
+    RustFs(setup_materialize=True),
     KgenService(),
     Postgres(),
     MySql(),
@@ -291,6 +301,125 @@ def upload_plots(
         print(f"Saving plots to {plot_paths}")
 
 
+PERSIST_BLOB_OPS = ["blob_get", "blob_set", "blob_delete", "blob_list_keys"]
+
+METRIC_LINE = re.compile(
+    r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{(?P<labels>[^}]*)\})?\s+(?P<value>\S+)"
+)
+METRIC_LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
+
+
+def persist_metrics_texts(c: Composition) -> list[str]:
+    """The prometheus exposition of each process in the materialized container.
+
+    environmentd is reached through its published port. The clusterds are found
+    through the service discovery files the process orchestrator writes, whose
+    targets are TCP proxies that only listen inside the container.
+    """
+    texts = [
+        requests.get(
+            f"http://127.0.0.1:{c.port('materialized', 6878)}/metrics", timeout=30
+        ).text
+    ]
+    files = c.exec(
+        "materialized",
+        "sh",
+        "-c",
+        "ls /mzdata/prometheus/*.json 2>/dev/null || true",
+        capture=True,
+        silent=True,
+    ).stdout.split()
+    for file in files:
+        static_configs = json.loads(
+            c.exec("materialized", "cat", file, capture=True, silent=True).stdout
+        )
+        for static_config in static_configs:
+            if static_config["labels"].get("mz_orchestrator_port") != "internal-http":
+                continue
+            for target in static_config["targets"]:
+                texts.append(
+                    c.exec(
+                        "materialized",
+                        "curl",
+                        "-sf",
+                        f"http://{target}/metrics",
+                        capture=True,
+                        silent=True,
+                    ).stdout
+                )
+    return texts
+
+
+def histogram_quantile(q: float, buckets: dict[float, float]) -> float:
+    """`histogram_quantile` over cumulative buckets keyed by upper bound."""
+    total = buckets.get(math.inf, 0.0)
+    if total == 0:
+        return math.nan
+    rank = q * total
+    prev_le, prev_count = 0.0, 0.0
+    for le in sorted(buckets):
+        count = buckets[le]
+        if count >= rank:
+            if le == math.inf:
+                return prev_le
+            return prev_le + (le - prev_le) * (rank - prev_count) / (count - prev_count)
+        prev_le, prev_count = le, count
+    return prev_le
+
+
+def report_persist_blob_ops(c: Composition) -> None:
+    """Prints what persist asked of the blob store, summed over environmentd
+    and its clusterds, since the container started.
+
+    The measured queries only reach the store through persist, so this is the
+    share of their latency the store itself accounts for, which the query
+    statistics alone cannot separate from Materialize's own work.
+    """
+    succeeded: dict[str, float] = defaultdict(float)
+    failed: dict[str, float] = defaultdict(float)
+    byte_count: dict[str, float] = defaultdict(float)
+    seconds: dict[str, float] = defaultdict(float)
+    buckets: dict[str, dict[float, float]] = defaultdict(lambda: defaultdict(float))
+    for text in persist_metrics_texts(c):
+        for line in text.splitlines():
+            match = METRIC_LINE.match(line)
+            if not match or not match["name"].startswith("mz_persist_external_"):
+                continue
+            labels = dict(METRIC_LABEL.findall(match["labels"] or ""))
+            op = labels.get("op")
+            if op not in PERSIST_BLOB_OPS:
+                continue
+            value = float(match["value"])
+            match match["name"]:
+                case "mz_persist_external_succeeded_count":
+                    succeeded[op] += value
+                case "mz_persist_external_failed_count":
+                    failed[op] += value
+                case "mz_persist_external_bytes_count":
+                    byte_count[op] += value
+                case "mz_persist_external_seconds":
+                    seconds[op] += value
+                case "mz_persist_external_op_latency_bucket":
+                    buckets[op][float(labels["le"])] += value
+
+    print("Persist blob store operations (all processes, since startup):")
+    print(
+        f"  {'OP':<15} {'COUNT':>8} {'FAILED':>7} {'MiB':>9} {'MEAN ms':>9} {'P50 ms':>9} {'P99 ms':>9}"
+    )
+    for op in PERSIST_BLOB_OPS:
+        count = succeeded[op] + failed[op]
+        mean = seconds[op] / count * 1000 if count else math.nan
+        # Only gets and sets record a latency histogram.
+        if op in buckets:
+            p50 = f"{histogram_quantile(0.5, buckets[op]) * 1000:9.2f}"
+            p99 = f"{histogram_quantile(0.99, buckets[op]) * 1000:9.2f}"
+        else:
+            p50 = p99 = f"{'':>9}"
+        print(
+            f"  {op:<15} {int(count):>8} {int(failed[op]):>7} {byte_count[op] / 2**20:9.1f} {mean:9.2f} {p50} {p99}"
+        )
+
+
 def report(
     mz_string: str,
     scenario: Scenario,
@@ -384,6 +513,7 @@ def run_once(
     service_names: list[str],
     tag: str | None,
     params: str | None,
+    blob_store: str,
     args,
     suffix: str,
     sqlite_store: bool,
@@ -457,8 +587,7 @@ def run_once(
                 default_size=args.size,
                 soft_assertions=False,
                 external_metadata_store=True,
-                external_blob_store=True,
-                blob_store_is_azure=args.azurite,
+                external_blob_store=blob_store,
                 sanity_restart=False,
                 additional_system_parameter_defaults=additional_system_parameter_defaults,
                 metadata_store="cockroach",
@@ -467,8 +596,7 @@ def run_once(
                 no_reset=True,
                 seed=1,
                 metadata_store="cockroach",
-                external_blob_store=True,
-                blob_store_is_azure=args.azurite,
+                external_blob_store=blob_store,
             ),
         ]
         target = None
@@ -492,6 +620,10 @@ def run_once(
                 mz_string = f"{mz_version} ({target.host})"
             else:
                 print("~~~ Starting up services")
+                # On its own first: garage and rustfs create their buckets
+                # after the server is up, and Materialized only waits for the
+                # store's container to have started.
+                c.up(blob_store)
                 c.up(*service_names, Service("testdrive", idle=True))
                 c.verify_build_profile()
 
@@ -568,12 +700,19 @@ def run_once(
                 failures.extend(new_failures)
                 stats[scenario] = new_stats
                 state.measurements.close()
+                if not target:
+                    try:
+                        report_persist_blob_ops(c)
+                    except Exception as e:
+                        # Diagnostics only, and this runs on the failure path
+                        # too, where Materialize may be gone.
+                        print(f"Could not collect persist blob store metrics: {e}")
 
             if not target:
                 print(
                     "~~~ Resetting services to prevent interference between scenarios"
                 )
-                services = service_names + ["cockroach", "testdrive", "minio"]
+                services = service_names + ["cockroach", "testdrive", blob_store]
                 c.kill(*services)
                 c.rm(*services, destroy_volumes=True)
                 c.rm_volumes("mzdata")
@@ -825,7 +964,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Store results in SQLite instead of in memory",
     )
     parser.add_argument(
-        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+        "--blob-store",
+        choices=BLOB_STORES,
+        default="minio",
+        help="Blob store to run persist against",
+    )
+
+    parser.add_argument(
+        "--other-blob-store",
+        choices=BLOB_STORES,
+        default=None,
+        help="Blob store for the 'OTHER' Mz instance, to compare blob stores rather than (or as well as) Materialize versions. Defaults to --blob-store.",
     )
 
     parser.add_argument(
@@ -883,6 +1032,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             service_names,
             tag=None,
             params=args.this_params,
+            blob_store=args.blob_store,
             args=args,
             suffix=f"this_run{run_number}",
             sqlite_store=args.sqlite_store,
@@ -904,10 +1054,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if f.test_class_name_override not in retried_scenario_names
         ] + this_failures
 
-        if args.other_tag:
+        if args.other_tag or args.other_blob_store:
             assert not args.mz_url, "Can't set both --mz-url and --other-tag"
-            tag = resolve_tag(args.other_tag)
-            print(f"--- Running against other tag for comparison: {tag}")
+            tag = resolve_tag(args.other_tag) if args.other_tag else None
+            other_blob_store = args.other_blob_store or args.blob_store
+            print(
+                f"--- Running against other configuration for comparison: tag {tag or 'same'}, blob store {other_blob_store}"
+            )
             guarantees_orig = args.guarantees
             args.guarantees = False
             other_stats, other_failures = run_once(
@@ -916,6 +1069,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 service_names,
                 tag=tag,
                 params=args.other_params,
+                blob_store=other_blob_store,
                 args=args,
                 suffix=f"other_run{run_number}",
                 sqlite_store=args.sqlite_store,

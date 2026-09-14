@@ -42,6 +42,7 @@ test/scalability/results/**/*.png
 misc/mcp-materialize/dist
 misc/wasm/target
 parallel-benchmark.db
+blob-store-benchmark*.csv
 license_key
 /trufflehog.log
 
