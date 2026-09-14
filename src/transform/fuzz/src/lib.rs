@@ -30,7 +30,8 @@ use std::collections::BTreeMap;
 
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use mz_expr::{
-    AggregateExpr, AggregateFunc, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, func,
+    AggregateExpr, AggregateFunc, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr,
+    UnaryFunc, func,
 };
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Datum, Diff, GlobalId, ReprColumnType, ReprRelationType, ReprScalarType, Row};
@@ -96,6 +97,25 @@ fn cols_of(schema: &[Ty], ty: Ty) -> Vec<usize> {
 /// exercise error-propagation paths). Includes `Add`/`Sub`/`Mul`/`Mod` per
 /// integer width, the boolean connectives, `Eq` across a random type, `If`, and
 /// the `int4`<->`int8`/`int4`<->`bool` casts so neither integer width is a leaf.
+
+/// A cast as the planner emits it: strict, or, half the time, wrapped in
+/// `TryCast` the way `TRY_CAST` wraps every stage of a cast chain. The wrapper
+/// is strict in its argument and never errors, so it needs no special handling
+/// in the oracle; generating it checks that `reduce` treats it that way.
+fn maybe_try_cast(
+    u: &mut Unstructured,
+    cast: impl Into<UnaryFunc>,
+) -> arbitrary::Result<UnaryFunc> {
+    let cast = cast.into();
+    Ok(if bool::arbitrary(u)? {
+        UnaryFunc::TryCast(func::TryCast {
+            inner: Box::new(cast),
+        })
+    } else {
+        cast
+    })
+}
+
 pub fn gen_scalar(
     u: &mut Unstructured,
     ty: Ty,
@@ -134,7 +154,8 @@ pub fn gen_scalar(
             3 => gen_scalar(u, Ty::Int32, schema, d)?
                 .call_binary(gen_scalar(u, Ty::Int32, schema, d)?, func::ModInt32),
             // Narrowing cast from int8 (may error on overflow, folds to an error).
-            4 => gen_scalar(u, Ty::Int64, schema, d)?.call_unary(func::CastInt64ToInt32),
+            4 => gen_scalar(u, Ty::Int64, schema, d)?
+                .call_unary(maybe_try_cast(u, func::CastInt64ToInt32)?),
             _ => gen_if(u)?,
         },
         Ty::Int64 => match u.int_in_range(0u8..=5)? {
@@ -147,7 +168,8 @@ pub fn gen_scalar(
             3 => gen_scalar(u, Ty::Int64, schema, d)?
                 .call_binary(gen_scalar(u, Ty::Int64, schema, d)?, func::ModInt64),
             // Widening cast from int4.
-            4 => gen_scalar(u, Ty::Int32, schema, d)?.call_unary(func::CastInt32ToInt64),
+            4 => gen_scalar(u, Ty::Int32, schema, d)?
+                .call_unary(maybe_try_cast(u, func::CastInt32ToInt64)?),
             _ => gen_if(u)?,
         },
         Ty::Bool => match u.int_in_range(0u8..=5)? {
@@ -161,7 +183,8 @@ pub fn gen_scalar(
                 a.call_binary(b, func::Eq)
             }
             // Cast int4 -> bool (nonzero is true).
-            4 => gen_scalar(u, Ty::Int32, schema, d)?.call_unary(func::CastInt32ToBool),
+            4 => gen_scalar(u, Ty::Int32, schema, d)?
+                .call_unary(maybe_try_cast(u, func::CastInt32ToBool)?),
             _ => gen_if(u)?,
         },
     })
