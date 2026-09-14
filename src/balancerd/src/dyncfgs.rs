@@ -49,9 +49,27 @@ pub const INJECT_PROXY_PROTOCOL_HEADER_HTTP: Config<bool> = Config::new(
 /// Maximum number of client connections to proxy at once.
 pub const MAX_CONNECTIONS: Config<u32> = Config::new(
     "balancerd_max_connections",
-    5000,
+    1000,
     "Maximum number of client connections to proxy at once, across the pgwire and HTTPS \
     listeners. Connections beyond this are rejected. Zero disables the limit.",
+    ParameterScope::Environment,
+);
+
+/// Maximum number of client connections that have not yet resolved to a backend.
+pub const MAX_PRE_RESOLVED_CONNECTIONS: Config<u32> = Config::new(
+    "balancerd_max_pre_resolved_connections",
+    1000,
+    "Maximum number of client connections that have not yet resolved to a backend, across the \
+    pgwire and HTTPS listeners. Connections beyond this are closed. Zero disables the limit.",
+    ParameterScope::Environment,
+);
+
+/// How long a client has to reach a resolved backend before the connection is closed.
+pub const PRE_RESOLVED_TIMEOUT: Config<Duration> = Config::new(
+    "balancerd_pre_resolved_timeout",
+    Duration::from_secs(30),
+    "How long a client has to complete the TLS handshake, the startup sequence and any credential \
+    exchange before the connection is closed. Zero disables the deadline.",
     ParameterScope::Environment,
 );
 
@@ -116,6 +134,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
         .add(&MAX_CONNECTIONS)
+        .add(&MAX_PRE_RESOLVED_CONNECTIONS)
+        .add(&PRE_RESOLVED_TIMEOUT)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
         .add(&LOGGING_FILTER_DEFAULTS)
@@ -146,6 +166,16 @@ pub(crate) fn set_defaults(
             config_updates.add_dynamic(
                 MAX_CONNECTIONS.name(),
                 mz_dyncfg::ConfigVal::U32(u32::from_str(v)?),
+            )
+        } else if k.as_str() == MAX_PRE_RESOLVED_CONNECTIONS.name() {
+            config_updates.add_dynamic(
+                MAX_PRE_RESOLVED_CONNECTIONS.name(),
+                mz_dyncfg::ConfigVal::U32(u32::from_str(v)?),
+            )
+        } else if k.as_str() == PRE_RESOLVED_TIMEOUT.name() {
+            config_updates.add_dynamic(
+                PRE_RESOLVED_TIMEOUT.name(),
+                mz_dyncfg::ConfigVal::Duration(humantime::parse_duration(v)?),
             )
         } else {
             return Err(anyhow!("Invalid default config value {k}"));

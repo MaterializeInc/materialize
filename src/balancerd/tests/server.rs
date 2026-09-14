@@ -41,6 +41,8 @@ use mz_ore::{assert_contains, assert_err, assert_ok, task};
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -407,4 +409,96 @@ async fn test_balancer() {
             .await
             .unwrap();
     }
+}
+
+/// Starts a balancerd with the given dyncfg defaults. Its upstream is unreachable: these tests
+/// never get far enough to be forwarded anywhere.
+async fn start_balancer(default_configs: Vec<(String, String)>) -> SocketAddr {
+    let unreachable = "127.0.0.1:1".to_string();
+    let (_reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
+    let balancer_cfg = BalancerConfig::new(
+        &BUILD_INFO,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        CancellationResolver::Static(unreachable.clone()),
+        BalancerResolver::Static(unreachable.clone()),
+        unreachable.clone(),
+        None,
+        false,
+        MetricsRegistry::new(),
+        Box::pin(reload_rx),
+        None,
+        None,
+        Duration::ZERO,
+        None,
+        None,
+        None,
+        TracingHandle::disabled(),
+        default_configs,
+    );
+    let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
+    let pgwire_addr = balancer_server.pgwire.0.local_addr();
+    task::spawn(|| "balancer", async {
+        balancer_server.serve().await.unwrap();
+    });
+    pgwire_addr
+}
+
+/// Connects and sends a startup frame-length header, then nothing further, which parks the
+/// connection in the pre-resolved phase.
+async fn stalled_connection(addr: SocketAddr) -> TcpStream {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream.write_all(&1024u32.to_be_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+    stream
+}
+
+/// Whether balancerd closed the connection rather than continuing to wait on us.
+async fn was_closed(stream: &mut TcpStream, within: Duration) -> bool {
+    let mut byte = [0u8; 1];
+    match tokio::time::timeout(within, stream.read(&mut byte)).await {
+        Err(_elapsed) => false,
+        Ok(Ok(0)) => true,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionReset => true,
+        Ok(Ok(n)) => panic!("balancerd sent {n} bytes instead of closing or waiting: {byte:?}"),
+        Ok(Err(e)) => panic!("unexpected error reading from balancerd: {e}"),
+    }
+}
+
+/// Connections that have not resolved a backend are capped, and the cap is released again when
+/// those connections time out, so a full pool drains on its own rather than wedging admission.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_pre_resolved_connection_limit() {
+    let pgwire_addr = start_balancer(vec![
+        ("balancerd_max_pre_resolved_connections".into(), "1".into()),
+        ("balancerd_pre_resolved_timeout".into(), "5s".into()),
+    ])
+    .await;
+
+    // One connection parks in the pre-resolved phase and holds the only permit.
+    let mut held = stalled_connection(pgwire_addr).await;
+    assert!(
+        !was_closed(&mut held, Duration::from_millis(500)).await,
+        "the first connection should be admitted and waited on",
+    );
+
+    // The next is refused while the pool is full.
+    let mut refused = stalled_connection(pgwire_addr).await;
+    assert!(
+        was_closed(&mut refused, Duration::from_secs(10)).await,
+        "a connection beyond the pre-resolved limit should be closed",
+    );
+
+    // The deadline reclaims the permit, so the pool is not a one-way door.
+    assert!(
+        was_closed(&mut held, Duration::from_secs(20)).await,
+        "the held connection should be closed once the pre-resolved deadline passes",
+    );
+    let mut after = stalled_connection(pgwire_addr).await;
+    assert!(
+        !was_closed(&mut after, Duration::from_millis(500)).await,
+        "capacity should be available again once the deadline reclaimed the permit",
+    );
 }
