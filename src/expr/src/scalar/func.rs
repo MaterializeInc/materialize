@@ -197,6 +197,7 @@ func_name! {
     TimezoneTimestampTz => "timezone_timestamp_tz",
     ToCharTimestamp => "to_char_timestamp",
     ToCharTimestampTz => "to_char_timestamp_tz",
+    <E> TryCast<E> => "try_cast",
     variadic::And => "and",
     variadic::Coalesce => "coalesce",
     variadic::Greatest => "greatest",
