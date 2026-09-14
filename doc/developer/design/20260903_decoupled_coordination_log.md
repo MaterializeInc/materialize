@@ -874,3 +874,18 @@ maintenance batches while retaining one-minute idle heartbeat renewal and the
 five-minute reclamation grace. Sharing heartbeat cadence retains obsolete live
 client grants for up to a minute. Earlier aggregate publication increases catalog
 traffic and needs a deliberate retention/traffic choice.
+
+### 2026-09-14: Designer clarification relayed by Aljoscha
+
+No durable physical-import protection. Logical inputs remain the only maintained
+requirement inputs. Publishers apply every catalog change through their transaction
+base before sampling bounds and apply/resample after CAS failure. Recovery installs
+before publication or reclamation, with writer client protection through commit.
+The rewrite scenario above does not establish a full-recovery failure: index
+reconstruction can recover the selected access path from protected logical inputs.
+Next: verify that reconstruction and application/publication ordering.
+
+DROP INDEX names only the objects whose plans the writer rewrote. Client aggregate
+advancement uses the existing coalesced publication cadence with heartbeat bumps
+in that transaction, while heartbeat-only renewal is idle maintenance. Inspect and
+remove unnecessary birth-time protection for new sources.

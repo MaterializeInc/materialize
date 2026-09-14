@@ -57,13 +57,15 @@ not milestone acceptance. Remaining work:
    dataflows pause while the adapter is down. Webhook batching and idle ticking
    likewise require a live adapter for this milestone.
 
-Pending decisions raised on 2026-09-14: do not remove installation fallback until
-the selected physical-import protection gap in the log is resolved. The proposal
-is object-owned protection derived from written plans, with extra index retention.
-DROP INDEX's physical in-use notice also needs execution-dependency observations
-or an agreed meaning change. Client aggregate publication currently shares the
-one-minute heartbeat cadence. More timely coalesced advancement, without changing
-the heartbeat/grace rules, is proposed but not yet agreed.
+The designer clarified application ordering on 2026-09-14. Do not add durable
+physical-import protection. A publisher applies every catalog change through its
+transaction base before proposing bounds, and resamples after a failed CAS.
+Recovery installs before publishing or reclaiming. Verify this ordering with fixed
+written plans, including reconstruction from logical inputs after index compaction.
+DROP INDEX reports only objects whose plans the writer actually rewrote. Client
+aggregate advances use the existing coalesced publication cadence and bump the
+heartbeat in that transaction. Idle heartbeat renewal and reclamation grace stay
+unchanged. New grants should protect actual read requirements, not gratuitous MIN.
 
 Keep per-build selection keys, but defer cross-build follower repair, version
 upgrades, and prewarming-owned selections. Retired-build cleanup is also deferred.

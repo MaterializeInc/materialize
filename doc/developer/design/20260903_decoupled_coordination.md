@@ -269,6 +269,9 @@ gone is not installable until then. No build writes another's plans. A new index
 does not change existing plans. A new generation's adapters write plans for their
 version before that generation's components install.
 
+DROP INDEX reports only the objects whose plans the writer rewrote, not the
+dependencies of running dataflows or their resource usage.
+
 ### Query client
 
 An adapter reads through a query client that owns that client's read
@@ -277,6 +280,11 @@ the fast protocol, where frontier reporting is best effort. It issues peeks and
 query-local dataflows and receives their responses. Its protection is the
 [durable client protection](#client-read-protection) from the start. No remote
 controller access API or volatile hold forwarding is introduced as a bridge.
+
+Client requirement advances use the coalesced publication cadence, with a heartbeat
+bump in the same transaction. Heartbeat-only renewal is needed only while idle.
+Protection follows the client's actual read requirements, including its oracle
+windows, rather than unnecessarily retaining collection-birth history.
 
 ### Cooperating catalog writers
 
@@ -292,6 +300,13 @@ and revalidates and reports a planning conflict when structural changes
 invalidated it rather than merging. Each writer follows the durable stream it
 commits to. Within a generation, safety comes from validation at commit, not from
 per-process epochs.
+
+A publisher applies every catalog change through its transaction base before
+proposing compaction bounds. A failed compare-and-append requires applying the
+intervening changes and resampling. Recovery installs committed maintained state
+before publishing bounds or reclaiming client protection. Writer client protection
+covers preparation through commit. Logical inputs remain the only durable
+maintained requirement inputs, without durable physical-import protection.
 
 Persist critical since handles follow the committed bound only. Every valid read
 requirement is in that bound, so applying it is monotone and needs no per-process
