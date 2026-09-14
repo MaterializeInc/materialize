@@ -227,6 +227,7 @@ usage.
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage, in bytes.
 | `heap_bytes`        | [`uint8`]    | Approximate heap (RAM + swap) usage, in bytes.
 | `heap_limit`        | [`uint8`]    | Available heap (RAM + swap) space, in bytes.
+| `swap_bytes`        | [`uint8`]    | Approximate swap usage, in bytes.
 
 ## `mz_cluster_replica_metrics_history`
 
@@ -252,6 +253,7 @@ history is retained across restarts.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 | `heap_bytes`     | [`uint8`] | Approximate heap (RAM + swap) usage, in bytes.
 | `heap_limit`     | [`uint8`] | Available heap (RAM + swap) space, in bytes.
+| `swap_bytes`     | [`uint8`] | Approximate swap usage, in bytes.
 
 ## `mz_cluster_replica_statuses`
 
@@ -298,6 +300,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.
 | `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation.
 | `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
+| `swap_percent`   | [`double precision`] | Approximate swap usage, in percent of the total heap allocation.
 
 ## `mz_cluster_replica_utilization_history`
 
@@ -316,6 +319,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.
 | `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation.
 | `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
+| `swap_percent`   | [`double precision`] | Approximate swap usage, in percent of the total heap allocation.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 
 ## `mz_cluster_replica_history`

@@ -9,7 +9,7 @@
 
 //! Durable history collection for completed object and replica hydration episodes.
 //!
-//! One sweep visits a single user replica, installs a replica-targeted
+//! One sweep visits a single replica, installs a replica-targeted
 //! subscribe that diffs that replica's live hydration timestamps against the
 //! durable history tables, and appends what is missing through the timestamped
 //! OCC write path. Including each history table in its read expression is what
@@ -198,7 +198,8 @@ impl Coordinator {
 
         let replicas = self
             .catalog()
-            .user_cluster_replicas()
+            .clusters()
+            .flat_map(|cluster| cluster.replicas())
             .filter(|replica| replica.config.compute.logging.enabled())
             .filter(|replica| match &replica.config.location {
                 ReplicaLocation::Managed(_) => {
@@ -295,7 +296,7 @@ impl Coordinator {
     }
 }
 
-/// A user replica eligible for one collection step.
+/// A replica eligible for one collection step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplicaTarget {
     cluster_id: ClusterId,
@@ -388,10 +389,8 @@ fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &
                 min(t.started_at) AS started_at,
                 max(t.hydrated_at) AS hydrated_at
             FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
-            JOIN mz_internal.mz_object_global_ids AS ids ON ids.global_id = t.export_id
-            JOIN mz_catalog.mz_objects AS o ON o.id = ids.id
-            WHERE t.export_id LIKE 'u%'
-              AND o.type IN ('index', 'materialized-view')
+            WHERE t.export_id NOT LIKE 'si%'
+              AND t.export_id NOT LIKE 't%'
             GROUP BY t.export_id
             HAVING count(*) = count(t.hydrated_at)
         ) AS e
@@ -478,6 +477,7 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
         -- Each interval belongs to the latest episode start at or before it.
         labeled AS (
             SELECT
+                object_id,
                 installed_at,
                 hydrated_at,
                 max(CASE WHEN starts_episode THEN installed_at END) OVER (
@@ -491,7 +491,7 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             SELECT
                 episode_started_at AS started_at,
                 max(hydrated_at) AS finished_at,
-                count(*)::uint8 AS object_count
+                count(*) FILTER (WHERE object_id NOT LIKE 'si%')::uint8 AS object_count
             FROM labeled
             GROUP BY episode_started_at
         ),

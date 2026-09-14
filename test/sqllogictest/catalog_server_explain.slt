@@ -709,7 +709,7 @@ mz_internal.mz_cluster_replica_metrics_ind:
 
 mz_internal.mz_cluster_replica_metrics:
   →Map/Filter/Project
-    Project: #0..=#4, #6, #7
+    Project: #0..=#4, #6..=#8
       →Non-monotonic TopK
         Group By #0, #1
         Order By #5 desc nulls_first
@@ -8451,8 +8451,8 @@ Explained Query:
   →One-Shot Delta Join [%0:mz_cluster_replicas » %1:mz_cluster_replica_sizes[#0{size}] » %2:mz_cluster_replica_metrics[#0{replica_id}]]
     path %0:
       after %2:
-        Project: #0, #4, #10..=#13
-        Map: ((uint8_to_double(#5{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#1{cpu_nano_cores})) then null else #1{cpu_nano_cores} end)) * 100), ((uint8_to_double(#6{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#2{memory_bytes})) then null else #2{memory_bytes} end)) * 100), ((uint8_to_double(#7{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#3{disk_bytes})) then null else #3{disk_bytes} end)) * 100), ((uint8_to_double(#8{heap_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#9{heap_limit})) then null else #9{heap_limit} end)) * 100)
+        Project: #0, #4, #11..=#13, #15, #16
+        Map: ((uint8_to_double(#5{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#1{cpu_nano_cores})) then null else #1{cpu_nano_cores} end)) * 100), ((uint8_to_double(#6{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#2{memory_bytes})) then null else #2{memory_bytes} end)) * 100), ((uint8_to_double(#7{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#3{disk_bytes})) then null else #3{disk_bytes} end)) * 100), uint8_to_double(case when (0 = uint8_to_numeric(#9{heap_limit})) then null else #9{heap_limit} end), ((uint8_to_double(#8{heap_bytes}) / #14) * 100), ((uint8_to_double(#10{swap_bytes}) / #14) * 100)
     →Unarranged Raw Stream
       →Fused with Child Map/Filter/Project
         Project: #0, #3
@@ -8478,8 +8478,8 @@ Explained Query:
   →One-Shot Delta Join [%0:mz_cluster_replicas » %1:mz_cluster_replica_sizes[#0{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]]
     path %0:
       after %2:
-        Project: #0, #4, #11..=#14, #8
-        Map: ((uint8_to_double(#5{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#1{cpu_nano_cores})) then null else #1{cpu_nano_cores} end)) * 100), ((uint8_to_double(#6{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#2{memory_bytes})) then null else #2{memory_bytes} end)) * 100), ((uint8_to_double(#7{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#3{disk_bytes})) then null else #3{disk_bytes} end)) * 100), ((uint8_to_double(#9{heap_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#10{heap_limit})) then null else #10{heap_limit} end)) * 100)
+        Project: #0, #4, #12..=#14, #16, #17, #8
+        Map: ((uint8_to_double(#5{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#1{cpu_nano_cores})) then null else #1{cpu_nano_cores} end)) * 100), ((uint8_to_double(#6{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#2{memory_bytes})) then null else #2{memory_bytes} end)) * 100), ((uint8_to_double(#7{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#3{disk_bytes})) then null else #3{disk_bytes} end)) * 100), uint8_to_double(case when (0 = uint8_to_numeric(#10{heap_limit})) then null else #10{heap_limit} end), ((uint8_to_double(#9{heap_bytes}) / #15) * 100), ((uint8_to_double(#11{swap_bytes}) / #15) * 100)
     →Unarranged Raw Stream
       →Fused with Child Map/Filter/Project
         Project: #0, #3
@@ -10527,7 +10527,7 @@ Explained Query:
       →Differential Join %0:l4[#0{entity_name}, #1{name}] » %1[#0{entity_name}, #1{column_name}]
         →Arranged l4
         →Arrange (#0{entity_name}, #1{column_name})
-          →Constant (283 rows)
+          →Constant (284 rows)
   →Return
     →Union
       →Map/Filter/Project

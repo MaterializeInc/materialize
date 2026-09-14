@@ -10,13 +10,15 @@
 //! A source that reads from an a persist shard.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::time::Instant;
 
+use differential_dataflow::AsCollection;
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
@@ -46,14 +48,13 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::probe::ProbeNotify;
-use mz_txn_wal::operator::{TxnsContext, txns_progress};
+use mz_txn_wal::operator::{TxnsContext, TxnsProgress};
 use serde::{Deserialize, Serialize};
-use timely::PartialOrder;
-use timely::container::CapacityContainerBuilder;
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
-use timely::dataflow::operators::{Capability, Leave, OkErr};
+use timely::dataflow::operators::{Capability, Leave};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
@@ -61,10 +62,11 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::timestamp::PathSummary;
 use timely::scheduling::Activator;
+use timely::{ContainerBuilder, PartialOrder};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, trace};
 
-use crate::metrics::BackpressureMetrics;
+use crate::metrics::BackpressureOperatorMetrics;
 
 /// This opaque token represents progress within a timestamp, allowing finer-grained frontier
 /// progress than would otherwise be possible.
@@ -147,6 +149,8 @@ impl Subtime {
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
 ///
+/// Returns the shard's rows in `CB`'s containers and its errors in a stream of their own.
+///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 /// All updates at times greater or equal to `until` will be suppressed.
 /// The `map_filter_project` argument, if supplied, may be partially applied,
@@ -166,7 +170,7 @@ impl Subtime {
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<'scope, E>(
+pub fn persist_source<'scope, E, CB>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -181,116 +185,133 @@ pub fn persist_source<'scope, E>(
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<'scope, mz_repr::Timestamp, (Row, Timestamp, Diff)>,
+    Stream<'scope, mz_repr::Timestamp, CB::Container>,
     StreamVec<'scope, mz_repr::Timestamp, (E, Timestamp, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    CB: ContainerBuilder + PushInto<(Row, mz_repr::Timestamp, Diff)>,
+    CB::Container: Clone,
 {
-    let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
-
     let mut tokens = vec![];
+    let name = source_id.to_string();
 
     let outer = scope.clone();
-    let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
-        let (flow_control, flow_control_probe) = match max_inflight_bytes {
-            Some(max_inflight_bytes) => {
-                let backpressure_metrics = BackpressureMetrics {
-                    emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
-                    last_backpressured_bytes: Arc::clone(
-                        &shard_metrics.backpressure_last_backpressured_bytes,
-                    ),
-                    retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
-                };
+    let (ok_stream, err_stream) =
+        scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
+            let (flow_control, flow_control_probe) = match max_inflight_bytes {
+                Some(max_inflight_bytes) => {
+                    let series = &persist_clients.metrics().backpressure;
+                    let backpressure_metrics = BackpressureOperatorMetrics::new(
+                        series.emitted_bytes.clone(),
+                        series.last_backpressured_bytes.clone(),
+                        series.retired_bytes.clone(),
+                    );
 
-                let probe = mz_timely_util::probe::Handle::default();
-                let progress_stream = mz_timely_util::probe::source(
-                    scope.clone(),
-                    format!("decode_backpressure_probe({source_id})"),
-                    probe.clone(),
-                );
-                let flow_control = FlowControl {
-                    progress_stream,
-                    max_inflight_bytes,
-                    summary: (Default::default(), Subtime::least_summary()),
-                    metrics: Some(backpressure_metrics),
-                };
-                (Some(flow_control), Some(probe))
-            }
-            None => (None, None),
-        };
+                    let probe = mz_timely_util::probe::Handle::default();
+                    let progress_stream = mz_timely_util::probe::source(
+                        scope.clone(),
+                        format!("decode_backpressure_probe({source_id})"),
+                        probe.clone(),
+                    );
+                    let flow_control = FlowControl {
+                        progress_stream,
+                        max_inflight_bytes,
+                        summary: (Default::default(), Subtime::least_summary()),
+                        metrics: Some(backpressure_metrics),
+                    };
+                    (Some(flow_control), Some(probe))
+                }
+                None => (None, None),
+            };
 
-        // Our default listen sleeps are tuned for the case of a shard that is
-        // written once a second, but txn-wal allows these to be lazy.
-        // Override the tuning to reduce crdb load. The pubsub fallback
-        // responsibility is then replaced by manual "one state" wakeups in the
-        // txns_progress operator.
-        let cfg = Arc::clone(&persist_clients.cfg().configs);
-        let subscribe_sleep = match metadata.txns_shard {
-            Some(_) => Some(move || mz_txn_wal::operator::txns_data_shard_retry_params(&cfg)),
-            None => None,
-        };
+            // Our default listen sleeps are tuned for the case of a shard that is
+            // written once a second, but txn-wal allows these to be lazy.
+            // Override the tuning to reduce crdb load. The pubsub fallback
+            // responsibility is then replaced by manual "one state" wakeups in the
+            // txns_progress operator.
+            let cfg = Arc::clone(&persist_clients.cfg().configs);
+            let subscribe_sleep = match metadata.txns_shard {
+                Some(_) => Some(move || mz_txn_wal::operator::txns_data_shard_retry_params(&cfg)),
+                None => None,
+            };
 
-        let (stream, source_tokens) = persist_source_core(
-            outer,
-            scope,
-            source_id,
-            Arc::clone(&persist_clients),
-            metadata.clone(),
-            read_schema,
-            as_of.clone(),
-            snapshot_mode,
-            until.clone(),
-            map_filter_project,
-            flow_control,
-            subscribe_sleep,
-            start_signal,
-            error_handler,
-        );
-        tokens.extend(source_tokens);
+            let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
+            let (cfg, fetched, source_tokens) = fetch_parts(
+                outer,
+                scope,
+                source_id,
+                Arc::clone(&persist_clients),
+                metadata.clone(),
+                read_schema,
+                as_of.clone(),
+                snapshot_mode,
+                until.clone(),
+                filter_plan,
+                flow_control,
+                subscribe_sleep,
+                start_signal,
+                error_handler,
+            );
+            tokens.extend(source_tokens);
 
-        let stream = match flow_control_probe {
-            Some(probe) => stream.probe_notify_with(vec![probe]),
-            None => stream,
-        };
+            let (ok_stream, err_stream) = decode_and_mfp::<E, mz_repr::Timestamp, CB>(
+                cfg,
+                fetched,
+                &name,
+                until.clone(),
+                map_filter_project,
+                |time| time.0,
+            );
 
-        stream.leave(outer)
-    });
+            // The handle's frontier is the meet of what its clones report, so both streams
+            // have to feed it for backpressure to retire the right bytes.
+            let (ok_stream, err_stream) = match flow_control_probe {
+                Some(probe) => (
+                    ok_stream.probe_notify_with(vec![probe.clone()]),
+                    err_stream.probe_notify_with(vec![probe]),
+                ),
+                None => (ok_stream, err_stream),
+            };
+
+            (ok_stream.leave(outer), err_stream.leave(outer))
+        });
 
     // If a txns_shard was provided, then this shard is in the txn-wal
     // system. This means the "logical" upper may be ahead of the "physical"
-    // upper. Render a dataflow operator that passes through the input and
-    // translates the progress frontiers as necessary.
-    let (stream, txns_tokens) = match metadata.txns_shard {
-        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _>(
-            stream,
-            &source_id.to_string(),
-            txns_ctx,
-            move || {
-                let (c, l) = (
-                    Arc::clone(&persist_clients),
-                    metadata.persist_location.clone(),
-                );
-                async move { c.open(l).await.expect("location is valid") }
-            },
-            txns_shard,
-            metadata.data_shard,
-            as_of
-                .expect("as_of is provided for table sources")
-                .into_option()
-                .expect("shard is not closed"),
-            until,
-            Arc::new(metadata.relation_desc),
-            Arc::new(UnitSchema),
-        ),
-        None => (stream, vec![]),
+    // upper. Render dataflow operators that pass through the inputs and
+    // translate the progress frontiers as necessary.
+    let (ok_stream, err_stream) = match metadata.txns_shard {
+        Some(txns_shard) => {
+            let (progress, remap_token) = TxnsProgress::new::<SourceData, (), i64, TxnsCodecRow, _>(
+                outer,
+                &name,
+                txns_ctx,
+                move || {
+                    let (c, l) = (
+                        Arc::clone(&persist_clients),
+                        metadata.persist_location.clone(),
+                    );
+                    async move { c.open(l).await.expect("location is valid") }
+                },
+                txns_shard,
+                metadata.data_shard,
+                as_of
+                    .expect("as_of is provided for table sources")
+                    .into_option()
+                    .expect("shard is not closed"),
+                Arc::new(metadata.relation_desc),
+                Arc::new(UnitSchema),
+            );
+            let (ok_stream, ok_token) = progress.translate(ok_stream, until.clone());
+            let (err_stream, err_token) = progress.translate(err_stream, until);
+            tokens.extend([remap_token, ok_token, err_token]);
+            (ok_stream, err_stream)
+        }
+        None => (ok_stream, err_stream),
     };
-    tokens.extend(txns_tokens);
-    let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
-        Ok(row) => Ok((row, t.0, r)),
-        Err(err) => Err((err, t.0, r)),
-    });
+
     (ok_stream, err_stream, tokens)
 }
 
@@ -302,7 +323,6 @@ type RefinedScope<'scope, T> = Scope<'scope, (T, Subtime)>;
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-#[allow(clippy::needless_borrow)]
 pub fn persist_source_core<'g, 'outer, E>(
     outer: Scope<'outer, mz_repr::Timestamp>,
     scope: RefinedScope<'g, mz_repr::Timestamp>,
@@ -314,25 +334,81 @@ pub fn persist_source_core<'g, 'outer, E>(
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    flow_control: Option<FlowControl<'g, (mz_repr::Timestamp, Subtime)>>,
+    flow_control: Option<FlowControl<'g, RefinedTime>>,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<
-        'g,
-        (mz_repr::Timestamp, Subtime),
-        Vec<(Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff)>,
-    >,
+    StreamVec<'g, RefinedTime, (Result<Row, E>, RefinedTime, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
 {
-    let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
+    let (cfg, fetched, token) = fetch_parts(
+        outer,
+        scope,
+        source_id,
+        persist_clients,
+        metadata,
+        read_schema,
+        as_of,
+        snapshot_mode,
+        until.clone(),
+        filter_plan,
+        flow_control,
+        listen_sleep,
+        start_signal,
+        error_handler,
+    );
+    let (oks, errs) = decode_and_mfp::<E, RefinedTime, RowVecBuilder<RefinedTime>>(
+        cfg,
+        fetched,
+        &name,
+        until,
+        map_filter_project,
+        |time| time,
+    );
+    // `upsert` reads one collection of `Result`s. Records keep the refined time, so putting
+    // the sides back together is a move per record with no re-timestamping.
+    let rows = oks
+        .as_collection()
+        .map(Ok)
+        .concat(errs.as_collection().map(Err))
+        .inner;
+    (rows, token)
+}
+
+/// Fetch the parts of a persist shard a dataflow needs, distributing the work of reading them
+/// across all timely workers.
+#[allow(clippy::needless_borrow)]
+fn fetch_parts<'g, 'outer>(
+    outer: Scope<'outer, mz_repr::Timestamp>,
+    scope: RefinedScope<'g, mz_repr::Timestamp>,
+    source_id: GlobalId,
+    persist_clients: Arc<PersistClientCache>,
+    metadata: CollectionMetadata,
+    read_schema: Option<RelationDesc>,
+    as_of: Option<Antichain<Timestamp>>,
+    snapshot_mode: SnapshotMode,
+    until: Antichain<Timestamp>,
+    // The MFP whose filter is pushed down into persist, if any.
+    filter_plan: Option<MfpPlan>,
+    flow_control: Option<FlowControl<'g, RefinedTime>>,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
+    start_signal: impl Future<Output = ()> + Send + 'static,
+    error_handler: ErrorHandler,
+) -> (
+    PersistConfig,
+    StreamVec<'g, RefinedTime, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    Vec<PressOnDropButton>,
+) {
+    let cfg = persist_clients.cfg().clone();
+    let name = source_id.to_string();
 
     // N.B. `read_schema` may be a subset of the total columns for this shard.
     let read_desc = match read_schema {
@@ -406,8 +482,7 @@ where
         start_signal,
         error_handler,
     );
-    let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
-    (rows, token)
+    (cfg, fetched, token)
 }
 
 fn filter_result(
@@ -456,23 +531,39 @@ fn filter_result(
     }
 }
 
-pub fn decode_and_mfp<'scope, E>(
+/// The time a decode operator's capabilities carry, refined with a [`Subtime`] so flow
+/// control can pace parts within a millisecond.
+type RefinedTime = (mz_repr::Timestamp, Subtime);
+
+/// Ok-side container builder producing row vectors timestamped with `T`.
+pub type RowVecBuilder<T> = ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>;
+
+/// Err-side container builder.
+type ErrBuilder<E, RT> = ConsolidatingContainerBuilder<Vec<(E, RT, Diff)>>;
+
+/// Decode fetched parts and apply `map_filter_project`, writing ok records into `CB`'s
+/// containers and err records into a separate output.
+///
+/// `record_time` picks what a record stores for its time. A reader that does not distinguish
+/// times within a millisecond passes `|time| time.0`, which drops the [`Subtime`] coordinate
+/// the enclosing scope refines with: that coordinate exists to pace flow control and stays on
+/// the capabilities, and keeping it in the records would force a re-encode to strip it later.
+/// A reader that builds a collection in the refined scope needs it, and passes `|time| time`.
+fn decode_and_mfp<'scope, E, RT, CB>(
     cfg: PersistConfig,
-    fetched: StreamVec<
-        'scope,
-        (mz_repr::Timestamp, Subtime),
-        FetchedBlob<SourceData, (), Timestamp, StorageDiff>,
-    >,
+    fetched: StreamVec<'scope, RefinedTime, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-) -> StreamVec<
-    'scope,
-    (mz_repr::Timestamp, Subtime),
-    (Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff),
->
+    record_time: fn(RefinedTime) -> RT,
+) -> (
+    Stream<'scope, RefinedTime, CB::Container>,
+    StreamVec<'scope, RefinedTime, (E, RT, Diff)>,
+)
 where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    RT: Ord + Clone + Debug + 'static,
+    CB: ContainerBuilder + PushInto<(Row, RT, Diff)>,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -482,57 +573,68 @@ where
     let operator_info = builder.operator_info();
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
-    let (updates_output, updates_stream) = builder.new_output();
-    let mut updates_output = OutputBuilder::from(updates_output);
+    let (ok_output, ok_stream) = builder.new_output::<CB::Container>();
+    let mut ok_output: OutputBuilder<_, CB> = OutputBuilder::from(ok_output);
+    let (err_output, err_stream) = builder.new_output();
+    let mut err_output: OutputBuilder<_, ErrBuilder<E, RT>> = OutputBuilder::from(err_output);
 
-    // Re-used state for processing and building rows.
-    let mut datum_vec = mz_repr::DatumVec::new();
-    let mut row_builder = Row::default();
-
+    let name = name.to_owned();
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
     let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
 
     builder.build(move |_caps| {
-        let name = name.to_owned();
         // Acquire an activator to reschedule the operator when it has unfinished work.
-        let activations = scope.activations();
-        let activator = Activator::new(operator_info.address, activations);
-        // Maintain a list of work to do
-        let mut pending_work = std::collections::VecDeque::new();
+        let activator = Activator::new(operator_info.address, scope.activations());
         let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
+        let mut pending_work = VecDeque::new();
+        let mut datum_vec = DatumVec::new();
+        let mut row_builder = Row::default();
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
-                let capability = time.retain(0);
-                for fetched_blob in data.drain(..) {
+                let capabilities = [time.retain(0), time.retain(1)];
+                let panic_on_audit_failure = panic_on_audit_failure.get();
+                for blob in data.drain(..) {
                     pending_work.push_back(PendingWork {
-                        panic_on_audit_failure: panic_on_audit_failure.get(),
-                        capability: capability.clone(),
-                        part: PendingPart::Unparsed(fetched_blob),
-                    })
+                        panic_on_audit_failure,
+                        capabilities: capabilities.clone(),
+                        part: PendingPart::Unparsed(blob),
+                    });
                 }
             });
 
-            // Get dyncfg values once per schedule to amortize the cost of
-            // loading the atomics.
+            // Get dyncfg values once per schedule to amortize the cost of loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
-            let yield_fn = |_, work| work >= yield_fuel;
-
             let mut work = 0;
-            let start_time = Instant::now();
-            let mut output = updates_output.activate();
-            while !pending_work.is_empty() && !yield_fn(start_time, work) {
-                let done = pending_work.front_mut().unwrap().do_work(
-                    &mut work,
+            let mut ok_output = ok_output.activate();
+            let mut err_output = err_output.activate();
+            while let Some(front) = pending_work.front_mut() {
+                if work >= yield_fuel {
+                    break;
+                }
+                let cap_time = *front.capabilities[0].time();
+                // A session per part: dropping it flushes the container builder, so a
+                // container never mixes records from parts held at different capabilities.
+                let mut ok_session = ok_output.session_with_builder(&front.capabilities[0]);
+                let mut err_session = err_output.session_with_builder(&front.capabilities[1]);
+                let done = decode_part(
+                    &mut front.part,
+                    front.panic_on_audit_failure,
+                    cap_time,
                     &name,
-                    start_time,
-                    yield_fn,
                     &until,
                     map_filter_project.as_ref(),
                     &mut datum_vec,
                     &mut row_builder,
-                    &mut output,
+                    &mut work,
+                    yield_fuel,
+                    |record, time, diff| match record {
+                        Ok(row) => ok_session.give((row.into_owned(), record_time(time), diff)),
+                        Err(err) => err_session.give((err, record_time(time), diff)),
+                    },
                 );
+                drop(ok_session);
+                drop(err_session);
                 if done {
                     pending_work.pop_front();
                 }
@@ -543,15 +645,15 @@ where
         }
     });
 
-    updates_stream
+    (ok_stream, err_stream)
 }
 
 /// Pending work to read from fetched parts
 struct PendingWork {
     /// Whether to panic if a part fails an audit, or to just pass along the audited data.
     panic_on_audit_failure: bool,
-    /// The time at which the work should happen.
-    capability: Capability<(mz_repr::Timestamp, Subtime)>,
+    /// The time at which the work should happen, one capability per operator output.
+    capabilities: [Capability<RefinedTime>; 2],
     /// Pending fetched part.
     part: PendingPart,
 }
@@ -582,167 +684,157 @@ impl PendingPart {
     }
 }
 
-impl PendingWork {
-    /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
-    /// `yield_fn` whether more fuel is available.
-    fn do_work<YFn, E>(
-        &mut self,
-        work: &mut usize,
-        name: &str,
-        start_time: Instant,
-        yield_fn: YFn,
-        until: &Antichain<Timestamp>,
-        map_filter_project: Option<&MfpPlan>,
-        datum_vec: &mut DatumVec,
-        row_builder: &mut Row,
-        output: &mut OutputBuilderSession<
-            '_,
-            (mz_repr::Timestamp, Subtime),
-            ConsolidatingContainerBuilder<
-                Vec<(Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff)>,
-            >,
-        >,
-    ) -> bool
-    where
-        YFn: Fn(Instant, usize) -> bool,
-        E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+/// Read `part`, apply the MFP, and hand every record to `give`, stopping once `work` reaches
+/// `yield_fuel`. Returns whether the part is exhausted.
+///
+/// Records carry `cap_time` with its millisecond replaced by the record's own time, so the
+/// caller must emit them at the capability `cap_time` came from.
+fn decode_part<E, F>(
+    part: &mut PendingPart,
+    panic_on_audit_failure: bool,
+    cap_time: RefinedTime,
+    name: &str,
+    until: &Antichain<Timestamp>,
+    map_filter_project: Option<&MfpPlan>,
+    datum_vec: &mut DatumVec,
+    row_builder: &mut Row,
+    work: &mut usize,
+    yield_fuel: usize,
+    mut give: F,
+) -> bool
+where
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    F: FnMut(Result<Cow<'_, Row>, E>, RefinedTime, Diff),
+{
+    let fetched_part = part.part_mut();
+    let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
+    let mut row_buf = None;
+    while let Some(((key, val), time, diff)) =
+        fetched_part.next_with_storage(&mut row_buf, &mut None)
     {
-        let mut session = output.session_with_builder(&self.capability);
-        let fetched_part = self.part.part_mut();
-        let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
-        let mut row_buf = None;
-        while let Some(((key, val), time, diff)) =
-            fetched_part.next_with_storage(&mut row_buf, &mut None)
-        {
-            if until.less_equal(&time) {
-                continue;
-            }
-            match (key, val) {
-                (SourceData(Ok(row)), ()) => {
-                    if let Some(mfp) = map_filter_project {
-                        // We originally accounted work as the number of outputs, to give downstream
-                        // operators a chance to reduce down anything we've emitted. This mfp call
-                        // might have a restrictive filter, which would have been counted as no
-                        // work. However, in practice, we've been decode_and_mfp be a source of
-                        // interactivity loss during rehydration, so we now also count each mfp
-                        // evaluation against our fuel.
-                        *work += 1;
-                        let arena = mz_repr::RowArena::new();
-                        let mut datums_local = datum_vec.borrow_with(&row);
-                        for result in mfp.evaluate(
-                            &mut datums_local,
-                            &arena,
-                            time,
-                            diff.into(),
-                            |time| !until.less_equal(time),
-                            row_builder,
-                        ) {
-                            // Earlier we decided this Part doesn't need to be fetched, but to
-                            // audit our logic we fetched it any way. If the MFP returned data it
-                            // means our earlier decision to not fetch this part was incorrect.
-                            if let Some(stats) = &is_filter_pushdown_audit {
-                                // NB: The tag added by this scope is used for alerting. The panic
-                                // message may be changed arbitrarily, but the tag key and val must
-                                // stay the same.
-                                sentry::with_scope(
-                                    |scope| {
-                                        scope
-                                            .set_tag("alert_id", "persist_pushdown_audit_violation")
-                                    },
-                                    || {
-                                        error!(
-                                            ?stats,
-                                            name,
-                                            mfp = ?redact(&mfp),
-                                            result = ?redact(&result),
-                                            "persist filter pushdown correctness violation!"
+        if until.less_equal(&time) {
+            continue;
+        }
+        match (key, val) {
+            (SourceData(Ok(row)), ()) => {
+                if let Some(mfp) = map_filter_project {
+                    // We originally accounted work as the number of outputs, to give downstream
+                    // operators a chance to reduce down anything we've emitted. This mfp call
+                    // might have a restrictive filter, which would have been counted as no
+                    // work. However, in practice, we've been decode_and_mfp be a source of
+                    // interactivity loss during rehydration, so we now also count each mfp
+                    // evaluation against our fuel.
+                    *work += 1;
+                    let arena = mz_repr::RowArena::new();
+                    let mut datums_local = datum_vec.borrow_with(&row);
+                    for result in mfp.evaluate(
+                        &mut datums_local,
+                        &arena,
+                        time,
+                        diff.into(),
+                        |time| !until.less_equal(time),
+                        row_builder,
+                    ) {
+                        // Earlier we decided this Part doesn't need to be fetched, but to
+                        // audit our logic we fetched it any way. If the MFP returned data it
+                        // means our earlier decision to not fetch this part was incorrect.
+                        if let Some(stats) = &is_filter_pushdown_audit {
+                            // NB: The tag added by this scope is used for alerting. The panic
+                            // message may be changed arbitrarily, but the tag key and val must
+                            // stay the same.
+                            sentry::with_scope(
+                                |scope| {
+                                    scope.set_tag("alert_id", "persist_pushdown_audit_violation")
+                                },
+                                || {
+                                    error!(
+                                        ?stats,
+                                        name,
+                                        mfp = ?redact(&mfp),
+                                        result = ?redact(&result),
+                                        "persist filter pushdown correctness violation!"
+                                    );
+                                    if panic_on_audit_failure {
+                                        panic!(
+                                            "persist filter pushdown correctness violation! {}",
+                                            name
                                         );
-                                        if self.panic_on_audit_failure {
-                                            panic!(
-                                                "persist filter pushdown correctness violation! {}",
-                                                name
-                                            );
-                                        }
-                                    },
-                                );
-                            }
-                            match result {
-                                Ok((row, time, diff)) => {
-                                    // Additional `until` filtering due to temporal filters.
-                                    if !until.less_equal(&time) {
-                                        let mut emit_time = *self.capability.time();
-                                        emit_time.0 = time;
-                                        session.give((Ok(row), emit_time, diff));
-                                        *work += 1;
                                     }
+                                },
+                            );
+                        }
+                        match result {
+                            Ok((row, time, diff)) => {
+                                // Additional `until` filtering due to temporal filters.
+                                if !until.less_equal(&time) {
+                                    let mut emit_time = cap_time;
+                                    emit_time.0 = time;
+                                    give(Ok(Cow::Owned(row)), emit_time, diff);
+                                    *work += 1;
                                 }
-                                Err((err, time, diff)) => {
-                                    // Additional `until` filtering due to temporal filters.
-                                    if !until.less_equal(&time) {
-                                        let mut emit_time = *self.capability.time();
-                                        emit_time.0 = time;
-                                        session.give((Err(err), emit_time, diff));
-                                        *work += 1;
-                                    }
+                            }
+                            Err((err, time, diff)) => {
+                                // Additional `until` filtering due to temporal filters.
+                                if !until.less_equal(&time) {
+                                    let mut emit_time = cap_time;
+                                    emit_time.0 = time;
+                                    give(Err(err), emit_time, diff);
+                                    *work += 1;
                                 }
                             }
                         }
-                        // At the moment, this is the only case where we can re-use the allocs for
-                        // the `SourceData`/`Row` we decoded. This could be improved if this timely
-                        // operator used a different container than `Vec<Row>`.
-                        drop(datums_local);
-                        row_buf.replace(SourceData(Ok(row)));
-                    } else {
-                        let mut emit_time = *self.capability.time();
-                        emit_time.0 = time;
-                        // Clone row so we retain our row allocation.
-                        session.give((Ok(row.clone()), emit_time, diff.into()));
-                        row_buf.replace(SourceData(Ok(row)));
-                        *work += 1;
                     }
-                }
-                (SourceData(Err(err)), ()) => {
-                    // A discarded part that turns out to hold an error row is
-                    // as much a pushdown violation as one whose MFP yields
-                    // output: errors must surface regardless of any filter.
-                    // Without this arm the audit was blind to exactly the
-                    // undercounted-err-stats violation class.
-                    if let Some(stats) = &is_filter_pushdown_audit {
-                        sentry::with_scope(
-                            |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
-                            || {
-                                // `err` is redacted for the same reason the
-                                // `Ok`-row arm redacts its MFP output: these
-                                // events go to Sentry, and a `DecodeError`
-                                // carries the raw source record bytes while
-                                // several `EvalError`s embed user input.
-                                error!(
-                                    ?stats,
-                                    name,
-                                    err = ?redact(&err),
-                                    "persist filter pushdown correctness violation!"
-                                );
-                                if self.panic_on_audit_failure {
-                                    panic!(
-                                        "persist filter pushdown correctness violation! {}",
-                                        name
-                                    );
-                                }
-                            },
-                        );
-                    }
-                    let mut emit_time = *self.capability.time();
+                    // The MFP built its output into `row_builder`, so the decoded row's
+                    // allocation is free to go back to `row_buf`.
+                    drop(datums_local);
+                    row_buf.replace(SourceData(Ok(row)));
+                } else {
+                    let mut emit_time = cap_time;
                     emit_time.0 = time;
-                    session.give((Err(E::from(err)), emit_time, diff.into()));
+                    // The output copies the row out, so the allocation stays with `row_buf`.
+                    give(Ok(Cow::Borrowed(&row)), emit_time, diff.into());
+                    row_buf.replace(SourceData(Ok(row)));
                     *work += 1;
                 }
             }
-            if yield_fn(start_time, *work) {
-                return false;
+            (SourceData(Err(err)), ()) => {
+                // A discarded part that turns out to hold an error row is
+                // as much a pushdown violation as one whose MFP yields
+                // output: errors must surface regardless of any filter.
+                // Without this arm the audit was blind to exactly the
+                // undercounted-err-stats violation class.
+                if let Some(stats) = &is_filter_pushdown_audit {
+                    sentry::with_scope(
+                        |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+                        || {
+                            // `err` is redacted for the same reason the
+                            // `Ok`-row arm redacts its MFP output: these
+                            // events go to Sentry, and a `DecodeError`
+                            // carries the raw source record bytes while
+                            // several `EvalError`s embed user input.
+                            error!(
+                                ?stats,
+                                name,
+                                err = ?redact(&err),
+                                "persist filter pushdown correctness violation!"
+                            );
+                            if panic_on_audit_failure {
+                                panic!("persist filter pushdown correctness violation! {}", name);
+                            }
+                        },
+                    );
+                }
+                let mut emit_time = cap_time;
+                emit_time.0 = time;
+                give(Err(E::from(err)), emit_time, diff.into());
+                *work += 1;
             }
         }
-        true
+        if *work >= yield_fuel {
+            return false;
+        }
     }
+    true
 }
 
 /// A trait representing a type that can be used in `backpressure`.
@@ -773,7 +865,7 @@ pub struct FlowControl<'scope, T: timely::progress::Timestamp> {
     pub summary: T::Summary,
 
     /// Optional metrics for the `backpressure` operator to keep up-to-date.
-    pub metrics: Option<BackpressureMetrics>,
+    pub metrics: Option<BackpressureOperatorMetrics>,
 }
 
 /// Apply flow control to the `data` input, based on the given `FlowControl`.

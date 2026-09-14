@@ -34,11 +34,18 @@ CREATE INDEX v_idx_x ON v(x);
 statement ok
 SELECT mz_unsafe.mz_sleep(8)
 
-query IT
-SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
+# The view and its index share one dataflow. Its numeric id depends on how many
+# dataflows the replica created before it, so assert the sharing, not the id.
+query I
+SELECT count(DISTINCT id) FROM mz_internal.mz_dataflow_global_ids;
 ----
-6  u2
-6  u3
+1
+
+query T
+SELECT global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY global_id;
+----
+u2
+u3
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
@@ -119,10 +126,10 @@ CREATE MATERIALIZED VIEW w AS
 statement ok
 SELECT mz_unsafe.mz_sleep(8)
 
-query IT
-SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
+query T
+SELECT global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY global_id;
 ----
-11  t<id>
+t<id>
 
 
 query TI

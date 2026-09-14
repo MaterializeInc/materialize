@@ -73,21 +73,22 @@ pub(crate) fn render_sink<'scope>(
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);
 
-        let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
-            scope,
-            sink.from,
-            Arc::clone(&storage_state.persist_clients),
-            &storage_state.txns_ctx,
-            sink.from_storage_metadata.clone(),
-            None,
-            Some(sink.as_of.clone()),
-            snapshot_mode,
-            timely::progress::Antichain::new(),
-            None,
-            None,
-            async {},
-            error_handler,
-        );
+        let (ok_collection, err_collection, persist_tokens) =
+            persist_source::persist_source::<_, persist_source::RowVecBuilder<Timestamp>>(
+                scope,
+                sink.from,
+                Arc::clone(&storage_state.persist_clients),
+                &storage_state.txns_ctx,
+                sink.from_storage_metadata.clone(),
+                None,
+                Some(sink.as_of.clone()),
+                snapshot_mode,
+                timely::progress::Antichain::new(),
+                None,
+                None,
+                async {},
+                error_handler,
+            );
         tokens.extend(persist_tokens);
 
         let batches = arrange_sink_input(&*sink_render, ok_collection.as_collection());

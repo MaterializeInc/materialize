@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use bytes::Bytes;
@@ -274,8 +275,6 @@ impl StateVersions {
                     new_state
                 );
 
-                shard_metrics.set_since(new_state.since());
-                shard_metrics.set_upper(new_state.upper());
                 shard_metrics.seqnos_since_last_rollup.set(
                     new_state
                         .seqno
@@ -287,17 +286,11 @@ impl StateVersions {
                     .set(u64::cast_from(new_state.spine_batch_count()));
                 let size_metrics = new_state.size_metrics();
                 shard_metrics
-                    .schema_registry_version_count
-                    .set(u64::cast_from(new_state.collections.schemas.len()));
-                shard_metrics
                     .hollow_batch_count
                     .set(u64::cast_from(size_metrics.hollow_batch_count));
                 shard_metrics
                     .batch_part_count
                     .set(u64::cast_from(size_metrics.batch_part_count));
-                shard_metrics
-                    .rewrite_part_count
-                    .set(u64::cast_from(size_metrics.rewrite_part_count));
                 shard_metrics
                     .update_count
                     .set(u64::cast_from(size_metrics.num_updates));
@@ -320,29 +313,16 @@ impl StateVersions {
                     .encoded_diff_size
                     .inc_by(u64::cast_from(payload_len));
                 shard_metrics
-                    .live_writers
-                    .set(u64::cast_from(new_state.collections.writers.len()));
-                shard_metrics
-                    .rewrite_part_count
-                    .set(u64::cast_from(size_metrics.rewrite_part_count));
-                shard_metrics
                     .inline_part_count
                     .set(u64::cast_from(size_metrics.inline_part_count));
-                shard_metrics
-                    .inline_part_bytes
-                    .set(u64::cast_from(size_metrics.inline_part_bytes));
-                shard_metrics.stale_version.set(
-                    if new_state
+                shard_metrics.stale.store(
+                    new_state
                         .state
                         .collections
                         .version
                         .cmp_precedence(&self.cfg.build_version)
-                        .is_lt()
-                    {
-                        1
-                    } else {
-                        0
-                    },
+                        .is_lt(),
+                    Ordering::Relaxed,
                 );
 
                 let spine_metrics = new_state.collections.trace.spine_metrics();
@@ -371,8 +351,8 @@ impl StateVersions {
                         // Carefully avoid any String allocs by splitting.
                         let (writer_key, _) = key.0.split_once('/')?;
                         match &writer_key[..1] {
-                            "w" => Some(("old", part.encoded_size_bytes())),
-                            "n" => Some((&writer_key[1..], part.encoded_size_bytes())),
+                            "w" => Some("old"),
+                            "n" => Some(&writer_key[1..]),
                             _ => None,
                         }
                     });
