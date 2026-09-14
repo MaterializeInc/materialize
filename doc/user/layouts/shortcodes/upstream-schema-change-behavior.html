@@ -69,7 +69,12 @@ ingestion.
 
 Dropping a `NOT NULL`, `UNIQUE`, or `PRIMARY KEY` constraint that existed when
 the table was created puts the affected table into an error state.
-
+{{ if $is_postgres }}
+If using the new [`CREATE SOURCE` and `CREATE TABLE FROM
+SOURCE`](/sql/create-source/postgres-v2/) syntax, you can safely drop such a
+constraint by first excluding it in Materialize. See [Handle upstream
+constraint drop](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop).
+{{ end }}
 {{ else -}}
 Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
