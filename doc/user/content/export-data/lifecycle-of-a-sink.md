@@ -48,10 +48,8 @@ CREATE SINK orders_sink IN CLUSTER export_demo
 
 ## Created
 
-Unlike a source, a sink has no upstream connection to wait for and nothing
-else to attach before it can run, so it has no separate resting `created`
-state. `created` is the default `mz_sink_statuses` reports before any status
-has been recorded for the sink, not a state a sink lingers in: creating a sink
+`created` is the default `mz_sink_statuses` reports before any status has
+been recorded for the sink, not a state a sink lingers in: creating a sink
 against a running cluster moves it to `starting` and then `running`
 essentially immediately, often within the same reporting interval:
 
