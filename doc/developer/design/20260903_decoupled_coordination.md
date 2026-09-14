@@ -252,16 +252,17 @@ permission, and there is no startup-specific writer protocol.
 
 ### Lifecycle placement
 
-Following and enactment run in clusterd, at the replica. Each replica follows the
-catalog for its cluster and reconciles itself: it installs from written plans,
-applies committed bounds, and proposes bounds from its own progress. Compute
-replicas come first. Storage clusters take the same path later, and until then
-their enactment stays with the adapter's controllers. For compute there is no
-lifecycle connection: the fast protocol is the only protocol, and nothing sends
-maintained installation commands. Which replica serves a request and how
-replicated responses are merged belong to the query client. Creating replica
-processes stays with envd for now. DDL and table appends are request-scoped and
-stay with adapters.
+Following and enactment run in clusterd, at the replica, for compute and storage
+alike. Each replica follows the catalog for its cluster and reconciles itself: it
+installs from written plans or source and sink definitions, applies committed
+bounds, and proposes bounds from its own progress. There is no lifecycle
+connection: the fast protocol is the only protocol, and nothing sends maintained
+installation commands. Which replica serves a request and how replicated
+responses are merged belong to the query client. Environment-wide storage
+accounting dissolves along the way: critical since handles follow committed
+bounds, table registration is adapter-owned, and shard finalization needs an
+owner or an idempotent rule. Creating replica processes stays with envd for now.
+DDL and table appends are request-scoped and stay with adapters.
 
 A replica's execution reads are protected like a client's, scoped to the
 replica's incarnation, so a slow or hydrating replica keeps the input history it
@@ -392,16 +393,16 @@ arrangement.
 
 #### 2. Independent maintained lifecycle
 
-Compute replicas establish and follow their cluster's maintained state from the
-catalog, without sequencer installation closures, creator-local plans, or a
-controller sending installation commands. Creation, changes, deletion,
-compaction, and protection publication for compute-maintained objects continue
-across adapter loss and recovery. Adapter DDL and replica publication commit as
-cooperating catalog writers. The adapter reads through the query client with
-durable protection, straight to replicas. Storage clusters keep controller-side
-enactment for this milestone.
+Replicas establish and follow their cluster's maintained state from the catalog,
+without sequencer installation closures, creator-local plans, or a controller
+sending installation commands. Creation, changes, deletion, compaction, and
+protection publication for maintained objects continue across adapter loss and
+recovery. Adapter DDL and replica publication commit as cooperating catalog
+writers. The adapter reads through the query client with durable protection,
+straight to replicas. Compute is the first working slice within this milestone,
+storage follows on the same path, and neither is complete without the other.
 
-Demonstrate: stop the adapter while compute-maintained dataflows and their
+Demonstrate: stop the adapter while maintained dataflows, sources, sinks, and
 compaction continue, with table-fed dataflows pausing and the demonstration
 saying so, then restart it and resume queries. Include a multi-replica cluster
 with one replica still hydrating, same-batch dependencies, and concurrent or
