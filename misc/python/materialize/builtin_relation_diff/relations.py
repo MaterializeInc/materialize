@@ -175,6 +175,16 @@ RELATIONS: dict[str, RelationDiffConfig] = {
     "mz_internal.mz_object_dependencies": RelationDiffConfig(
         allow_old_only=is_dropped_element_ref_edge,
     ),
+    # `global_id` is canonicalized in its own namespace: a `GlobalId` and a
+    # `CatalogItemId` with the same digits denote different objects, so
+    # resolving both columns in the "object" namespace would rewrite the
+    # mapping into nonsense. Several `GlobalId`s can share one item (one per
+    # version of a table or materialized view), so those rows canonicalize to
+    # the same pair and are distinguished only by their multiplicity, which
+    # `one_sided` preserves.
+    "mz_internal.mz_object_global_ids": RelationDiffConfig(
+        builtin_rows_drift=True,
+    ),
     "mz_internal.mz_pending_cluster_replicas": RelationDiffConfig(
         id_namespace_by_column={"id": "replica"},
     ),
