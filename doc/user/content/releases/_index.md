@@ -852,7 +852,7 @@ improvements, and bug fixes.
 We've made several improvements to our MCP Server for Agents, which can be used to give agents in production fresh context from Materialize.
 
 - **`query` tool enabled by default**: The MCP Server for Agents now
-  enables the [`query` tool](/developer-tools/mcp-server/mcp-agent-tools/#query)
+  enables the [`query` tool](/developer-tools/mcp-server/tools/#query)
   by default, allowing agents to join across data products.
 - **Data product routing**: The `read_data_product` tool now
   automatically routes queries to the data product's catalog cluster,

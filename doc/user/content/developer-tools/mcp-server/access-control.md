@@ -371,13 +371,14 @@ These parameters are only accessible to the `mz_system` and `mz_support` roles.
 Administrators need to answer "which agents read what, on whose behalf, and
 when". Today you can reconstruct this from existing sources:
 
-- **Sessions.** MCP sessions set `application_name`, so you can find them by `initial_application_name` in
-  `mz_internal.mz_session_history`. Legacy endpoints use `mz_mcp_agents` and
-  `mz_mcp_developer`.
-- **Statements.** SQL run by tool calls appears in the [statement
-  log](/sql/system-catalog/mz_internal/#mz_statement_execution_history) like any
-  other statement, joined to the session by `session_id`. Note that statement
-  logging is sampled and rate limited under load.
+- **Sessions.** MCP sessions set `application_name`, so you can find them by
+  `initial_application_name` in
+  [`mz_internal.mz_session_history`](/sql/system-catalog/mz_internal/#mz_session_history).
+  Legacy endpoints use `mz_mcp_agents` and `mz_mcp_developer`.
+- **Statements.** SQL run by tool calls appears in
+  [`mz_internal.mz_recent_activity_log`](/sql/system-catalog/mz_internal/#mz_recent_activity_log)
+  like any other statement, joined to the session by `session_id`. Note that
+  statement logging is sampled and rate limited under load.
 - **Metrics.** The `mz_mcp_requests_total`, `mz_mcp_tool_calls_total`, and
   `mz_mcp_tool_call_duration_seconds` Prometheus metrics are labeled by
   endpoint and tool. See the [metrics appendix](/observability/appendix-metrics/).
