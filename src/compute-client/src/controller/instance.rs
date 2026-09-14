@@ -1445,8 +1445,8 @@ impl Instance {
         for &id in dataflow.index_imports.keys() {
             if let Some(import_target) = self.expect_collection(id).target_replica {
                 assert_eq!(
-                    Some(import_target),
                     target_replica,
+                    Some(import_target),
                     "dataflow imports index {id} targeted at replica {import_target}, \
                      but the dataflow itself targets {target_replica:?}",
                 );
@@ -1815,8 +1815,8 @@ impl Instance {
         if let PeekTarget::Index { id } = &peek_target {
             if let Some(index_target) = self.expect_collection(*id).target_replica {
                 assert_eq!(
-                    Some(index_target),
                     target_replica,
+                    Some(index_target),
                     "peek of index {id} targeted at replica {index_target}, \
                      but the peek itself targets {target_replica:?}",
                 );

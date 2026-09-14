@@ -814,10 +814,12 @@ impl ComputeController {
     /// (materialized views, subscribes, copy-tos, metric sinks) may be targeted: a user's
     /// `CREATE METRIC SINK` runs untargeted, so every replica renders it into its own registry,
     /// while the coordinator's curated metric sinks are installed per replica and do target one,
-    /// so each replica's series are attributable to it. Index exports may be targeted only when
-    /// every reader of the index targets the same replica; the coordinator relies on this for the
-    /// transient index of a replica-targeted slow-path `SELECT`, whose only reader is the peek
-    /// that follows it. Catalog indexes are never targeted.
+    /// so each replica's series are attributable to it.
+    ///
+    /// Index exports may be targeted only when every reader of the index targets the same
+    /// replica. The coordinator relies on this for the transient index of a replica-targeted
+    /// slow-path `SELECT`, whose only reader is the peek that follows it. Catalog indexes are
+    /// never targeted.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
