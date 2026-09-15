@@ -256,6 +256,12 @@ def workflow_test_github_3553(c: Composition) -> None:
     c.sql("SELECT * FROM log_table;")
 
 
+# How many dataflows `test_github_4443` tolerates as not yet compacted out of a
+# command history. Compaction is asynchronous, so a sample can catch dataflows
+# the history has already dropped but not yet collapsed.
+MAX_LINGERING_DATAFLOWS = 5
+
+
 def workflow_test_github_4443(c: Composition) -> None:
     """
     Test that compute command history does not leak peek commands.
@@ -355,9 +361,9 @@ def workflow_test_github_4443(c: Composition) -> None:
         # Obtain initial history size and dataflow count.
         # Dataflow count can plausibly be more than 1, if compaction is delayed.
         (
-            controller_command_count,
+            initial_controller_command_count,
             controller_dataflow_count,
-            replica_command_count,
+            initial_replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
 
@@ -375,19 +381,21 @@ def workflow_test_github_4443(c: Composition) -> None:
             )
             metric_sink_dataflows = int(cursor.fetchall()[0][0])
 
-        assert controller_command_count > 0, "controller history cannot be empty"
+        assert (
+            initial_controller_command_count > 0
+        ), "controller history cannot be empty"
         assert (
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count - metric_sink_dataflows < 6
+            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), "more dataflows than expected in controller history"
-        assert replica_command_count > 0, "replica history cannot be empty"
+        assert initial_replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count - metric_sink_dataflows < 6
+            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
@@ -426,23 +434,41 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
+        # `ComputeCommandHistory` compacts only once the command count exceeds twice the count
+        # left by the previous compaction, so a healthy history oscillates between the compacted
+        # size and twice it. Both samples are drawn at an unknown point of that cycle, so the
+        # second can legitimately be twice the first. On top of that sits an allowance for the
+        # lingering dataflows the bounds below tolerate, each of which holds a `CreateDataflow`,
+        # a `Schedule`, and an `AllowCompaction` command. Bounding the second sample that way
+        # still catches a history that grows per peek, which is what this test is about: 400
+        # peeks that fail to retire land orders of magnitude above it. A fixed bound would
+        # instead need retuning whenever the object count installed at boot changes.
+        lingering_dataflow_commands = 3 * MAX_LINGERING_DATAFLOWS
         assert (
-            controller_command_count < 100
-        ), f"controller history grew more than expected after peeks, got {controller_command_count}"
+            controller_command_count
+            <= 2 * initial_controller_command_count + lingering_dataflow_commands
+        ), (
+            "controller history grew more than expected after peeks, got"
+            f" {controller_command_count}, started at {initial_controller_command_count}"
+        )
         assert (
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count - metric_sink_dataflows < 6
+            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
-            replica_command_count < 100
-        ), f"replica history grew more than expected after peeks, got {replica_command_count}"
+            replica_command_count
+            <= 2 * initial_replica_command_count + lingering_dataflow_commands
+        ), (
+            "replica history grew more than expected after peeks, got"
+            f" {replica_command_count}, started at {initial_replica_command_count}"
+        )
         assert (
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count - metric_sink_dataflows < 6
+            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 

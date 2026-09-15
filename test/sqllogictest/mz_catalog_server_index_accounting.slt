@@ -274,6 +274,7 @@ mz_cluster_replica_metrics  heap_limit
 mz_cluster_replica_metrics  memory_bytes
 mz_cluster_replica_metrics  process_id
 mz_cluster_replica_metrics  replica_id
+mz_cluster_replica_metrics  swap_bytes
 mz_cluster_replica_metrics_history  cpu_nano_cores
 mz_cluster_replica_metrics_history  disk_bytes
 mz_cluster_replica_metrics_history  heap_bytes
@@ -282,6 +283,7 @@ mz_cluster_replica_metrics_history  memory_bytes
 mz_cluster_replica_metrics_history  occurred_at
 mz_cluster_replica_metrics_history  process_id
 mz_cluster_replica_metrics_history  replica_id
+mz_cluster_replica_metrics_history  swap_bytes
 mz_cluster_replica_name_history  id
 mz_cluster_replica_name_history  new_name
 mz_cluster_replica_name_history  occurred_at

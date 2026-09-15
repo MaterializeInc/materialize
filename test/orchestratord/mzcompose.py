@@ -775,7 +775,7 @@ PRIORITY_CLASS_NAME = "mz-test-priority"
 PRIORITY_CLASS_VALUE = 1000000000
 # Release in which environmentd learned
 # --orchestrator-kubernetes-priority-class-name.
-PRIORITY_CLASS_VERSION = "v26.40.0"
+PRIORITY_CLASS_VERSION = "v26.42.0"
 
 
 def assert_priority_class(pod: dict[str, Any], expected: str | None) -> None:

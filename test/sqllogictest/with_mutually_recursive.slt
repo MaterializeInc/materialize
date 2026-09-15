@@ -670,6 +670,19 @@ WITH MUTUALLY RECURSIVE
     bar(x list_numeric_scale_2) as (SELECT LIST['1'::TEXT])
 SELECT x FROM bar
 
+# A distinct `UNION` whose recursive term is a bare identity `Get` on the rec
+# binding, placed directly as a `Union` input alongside a `Constant`. The
+# identity `Get` returns the binding's collection edge as-is, so this exercises
+# a recursive binding feeding a `Union` unchanged. The union is idempotent under
+# `distinct`, so the binding reaches a fixed point of {1, 2}.
+query I rowsort
+WITH MUTUALLY RECURSIVE
+  foo (x int) AS (VALUES (1), (2) UNION SELECT * FROM foo)
+SELECT * FROM foo
+----
+1
+2
+
 ## Adapted from https://www.sqlite.org/lang_with.html#outlandish_recursive_query_examples
 query T multiline
 WITH MUTUALLY RECURSIVE

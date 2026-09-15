@@ -27,12 +27,20 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 # of disabling it and leaving the shipping path untested. The default cluster's
 # replica has run the same set since boot, so read the count from there rather
 # than hardcoding it.
+#
+# Under `--replicas=N` the default cluster has several replicas, and reading a
+# per-replica log source then requires targeting one; `r1` always exists. The
+# test cluster below has a single replica, so its reads need no target.
+> SET cluster_replica = r1
+
 > SELECT count(*) > 0 FROM mz_introspection.mz_dataflows
   WHERE name LIKE '%metric-sink-%'
 true
 
 $ set-from-sql var=metric-sink-dataflows
 SELECT count(*)::text FROM mz_introspection.mz_dataflows WHERE name LIKE '%metric-sink-%'
+
+> RESET cluster_replica
 
 > CREATE CLUSTER test SIZE 'scale=1,workers=1';
 > SET cluster = test;

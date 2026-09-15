@@ -770,6 +770,15 @@ steps:
           queue: hetzner-x86-64-16cpu-32gb
         coverage: skip
         sanitizer: skip
+        # Every test in this suite carries a wall-clock budget sized against a
+        # healthy agent. A degraded one dilates the whole job uniformly, tests
+        # and `yarn install` alike, far enough to blow those budgets while
+        # Materialize itself is healthy. Raising the budgets is not the answer:
+        # a dilated run already spends most of the step timeout.
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
 
       - id: console-e2e-test
         label: "Console E2E/staging"

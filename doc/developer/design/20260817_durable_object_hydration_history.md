@@ -44,7 +44,7 @@ the output frontier passes the as-of. See
 `doc/developer/design/20260817_compute_hydration_timestamps.md`. This design adds
 the history table and the sweep that writes those timestamps down.
 
-A coordinator task visits one user replica per interval, in a rotation, skipping
+A coordinator task visits one replica per interval, in a rotation, skipping
 replicas with introspection disabled, whose logs are installed but never populated.
 It installs an internal subscribe on that replica which aggregates every worker's
 completed rows, anti-joins them against the history table, and writes the missing
@@ -262,7 +262,7 @@ replica dataflow installs.
 **Background mutations take no OCC write permit.** The permits are one semaphore
 shared by every read-then-write in the process, not one per table. A session's wait
 is bounded by its statement timeout, a sweep's is not, and a sweep's subscribe has
-to hydrate a dataflow on a user replica first, so holding a permit would let
+to hydrate a dataflow on the selected replica first, so holding a permit would let
 background sampling stall user DML on any table for as long as that takes. Being
 single-flight, skipping the permit adds at most one concurrent read-then-write.
 

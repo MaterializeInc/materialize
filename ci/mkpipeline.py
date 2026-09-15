@@ -759,33 +759,47 @@ def permit_rerunning_successful_steps(pipeline: Any) -> None:
         )
 
 
+# Failures that are the infrastructure's fault rather than the step's, so every
+# step retries them regardless of what else it asks for.
+SHARED_AUTOMATIC_RETRIES = [
+    {
+        "exit_status": -1,
+        "signal_reason": "none",
+        "limit": 2,
+    },
+    {
+        "signal_reason": "agent_stop",  # Stopped by OS
+        "limit": 2,
+    },
+    {
+        "exit_status": 128,  # Temporary Github/GHCR/DockerHub connection issue
+        "limit": 2,
+    },
+    {
+        "exit_status": 199,  # Rust ICE https://github.com/rust-lang/rust/issues/148581
+        "limit": 2,
+    },
+]
+
+
 def set_retry_on_agent_lost(pipeline: Any) -> None:
     for step in steps(pipeline):
         if "trigger" in step or "wait" in step or "group" in step or "block" in step:
             continue
-        retry = step.setdefault("retry", {})
-        if "automatic" in retry:
+        automatic = step.setdefault("retry", {}).setdefault("automatic", [])
+        # A step retrying on every exit status already covers these.
+        if any(rule.get("exit_status") == "*" for rule in automatic):
             continue
-        retry.setdefault("automatic", []).extend(
-            [
-                {
-                    "exit_status": -1,
-                    "signal_reason": "none",
-                    "limit": 2,
-                },
-                {
-                    "signal_reason": "agent_stop",  # Stopped by OS
-                    "limit": 2,
-                },
-                {
-                    "exit_status": 128,  # Temporary Github/GHCR/DockerHub connection issue
-                    "limit": 2,
-                },
-                {
-                    "exit_status": 199,  # Rust ICE https://github.com/rust-lang/rust/issues/148581
-                    "limit": 2,
-                },
-            ]
+        # Merge rather than skip a step that declares its own rules: skipping
+        # lets a narrow override such as `exit_status: 1` drop every shared rule
+        # and hard-fail the step on the infrastructure classes they exist for.
+        # Nothing surfaces that, and the mzcompose plugin goes out of its way to
+        # propagate 128 and 199 so these rules can match.
+        declared = {(r.get("exit_status"), r.get("signal_reason")) for r in automatic}
+        automatic.extend(
+            dict(rule)
+            for rule in SHARED_AUTOMATIC_RETRIES
+            if (rule.get("exit_status"), rule.get("signal_reason")) not in declared
         )
 
 

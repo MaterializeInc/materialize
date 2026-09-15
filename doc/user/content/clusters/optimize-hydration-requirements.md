@@ -26,9 +26,8 @@ triggering it in the first place.
     upsert sources.
 
   - Note: PostgreSQL, MySQL, and SQL Server sources run on a single replica,
-    the oldest, and remain there until that replica is removed. As such, the
-    use of a burst replica (through [`AUTO SCALING STRATEGY (ON
-    HYDRATION)`](#provision-extra-capacity-while-hydrating)) has no impact on
+    the oldest, and remain there until that replica is removed. As such,
+    [autoscaling for hydration](/clusters/autoscaling/) has no impact on
     these single-replica sources.
 
 - Distribute materialized views and indexes across multiple clusters. Each
@@ -111,17 +110,12 @@ materialized view.
 
 ## Provision extra capacity while hydrating
 
-Add an [`AUTO SCALING STRATEGY (ON
-HYDRATION)`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
-to your cluster with memory-heavy objects. With this strategy, Materialize
-automatically provisions an extra, larger replica (a burst replica) while the
-cluster has unhydrated objects, then removes it once a steady-size replica
-catches up. You pay for the burst replica while it is provisioned, but not at
-steady state.
-
-If a steady-size replica runs out of memory during hydration, resize the
-cluster. During the resize, the cluster continues to serve from the burst
-replica.
+For a cluster with memory-heavy objects, add an `AUTO SCALING STRATEGY (ON
+HYDRATION)` to provision a temporary, larger burst replica while the cluster
+has unhydrated objects; you pay for it only while it's provisioned. See
+[Autoscaling for hydration](/clusters/autoscaling/) for how to configure,
+monitor, and troubleshoot it, including what to do if a steady-size replica
+never catches up.
 
 ## Avoid unnecessary full-cluster hydration
 
@@ -164,6 +158,7 @@ cost and, on self-managed deployments, the additional capacity required.
 
 - [Hydration](/fundamentals/concepts/hydration/)
 - [Operational guidelines](/clusters/operational-guidelines/)
+- [Autoscaling for hydration](/clusters/autoscaling/)
 - [Configuring system parameters](/self-managed-deployments/configuration-system-parameters/)
 - [Query optimization](/transform-data/optimization/)
 - [Dictionary compression](/transform-data/dictionary-compression/)

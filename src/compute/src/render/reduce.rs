@@ -111,7 +111,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
             let (key_val_input, err) = input
                 .enter_region(inner)
-                .flat_map::<_, ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
+                .flat_map::<ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
                     input_key.map(|k| (k, None)),
                     max_demand,
                     move |row_datums, time, diff, ok_session, err_session| {
@@ -176,7 +176,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .get(&self.config_set)
                     .try_into()
                     .expect("must fit");
-                T::maybe_apply_temporal_bucketing(
+                T::maybe_apply_temporal_bucketing_vec(
                     key_val_collection.inner,
                     self.as_of_frontier.clone(),
                     summary,

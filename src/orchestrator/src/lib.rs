@@ -154,6 +154,7 @@ pub struct ServiceProcessMetrics {
     pub disk_bytes: Option<u64>,
     pub heap_bytes: Option<u64>,
     pub heap_limit: Option<u64>,
+    pub swap_bytes: Option<u64>,
 }
 
 /// A simple language for describing assertions about a label's existence and value.
