@@ -24,6 +24,7 @@ stopped being spread evenly across the replica's workers.
 | **Ad-hoc query load**: `SELECT`s served by the cluster compete with its maintenance work. | [Check ad-hoc query load](#check-ad-hoc-query-load) |
 | **Upstream volume**: more data is arriving from sources, so there is more incremental work to do. | [Check upstream data volume](#check-upstream-data-volume) |
 | **Memory pressure**: a replica that is paging to disk burns CPU on I/O rather than on your dataflows. | [Rule out memory pressure](#rule-out-memory-pressure) |
+| **An undersized cluster**: the workload is spread evenly and nothing has changed; there is simply not enough compute. | [Rule out general cluster overload](#rule-out-general-cluster-overload) |
 
 ## Confirm the spike window and scope
 
@@ -81,10 +82,19 @@ SET CLUSTER TO <cluster_name>;
 EXPLAIN ANALYZE CLUSTER CPU WITH SKEW;
 ```
 
+{{< note >}}
+`EXPLAIN ANALYZE` and the `mz_introspection` relations read logging data that
+each replica collects about itself. On a cluster with more than one replica, a
+query against them fails unless you also target a replica with `SET
+cluster_replica = <replica_name>;`. `RESET cluster_replica` clears the
+targeting, which otherwise applies to every subsequent query in the session.
+{{< /note >}}
+
 The output reports each dataflow's CPU time per worker against the average
-across workers, alongside the `global_id` of the underlying index, materialized
-view, or sink. A ratio near `1` means a worker is doing a roughly average share
-of the work; a ratio far above `1` on one worker points to skew in that object.
+across workers, alongside the `global_id` of the underlying index or
+materialized view. A ratio near `1` means a worker is doing a roughly average
+share of the work; a ratio far above `1` on one worker points to skew in that
+object.
 
 {{< important >}}
 `max_operator_cpu_ratio` is the maximum across all of a dataflow's operators, so
@@ -161,10 +171,10 @@ operators are busy at this moment, use
 [`mz_compute_operator_durations_histogram`](/transform-data/dataflow-troubleshooting/#debugging-expensive-dataflows-and-operators).
 {{< /note >}}
 
-To resolve, [optimize the expensive object](/transform-data/optimization/) —
-cross joins and joins without a suitable index are the usual culprits — move it
-to its own cluster, or size the cluster up with [`ALTER CLUSTER ... SET (SIZE =
-'<new size>')`](/sql/alter-cluster/).
+To resolve, [optimize the expensive object](/transform-data/optimization/), move
+it to its own cluster, or size the cluster up with [`ALTER CLUSTER ... SET (SIZE
+= '<new size>')`](/sql/alter-cluster/). Cross joins and joins without a suitable
+index are the usual culprits.
 
 ## Check for recent hydration
 
@@ -196,7 +206,7 @@ FROM mz_internal.mz_hydration_statuses h
 JOIN mz_catalog.mz_objects o ON h.object_id = o.id
 JOIN mz_catalog.mz_clusters c ON o.cluster_id = c.id
 WHERE c.name = '<cluster_name>'
-  AND NOT h.hydrated;
+  AND NOT coalesce(h.hydrated, false);
 ```
 
 Hydration resolves itself, so no action is needed unless it keeps recurring. If
@@ -227,7 +237,7 @@ up as a cluster-wide spike. Client-side restart loops are a frequent cause: each
 reconnect resubmits the same queries, and each one spins up a temporary
 dataflow.
 
-Introspection relations report on the cluster you are connected to, so run the
+Introspection relations report on the replica you are connected to, so run the
 following against the affected cluster:
 
 ```mzsql
@@ -261,6 +271,7 @@ compare:
 ```mzsql
 SELECT
     s.name,
+    ss.replica_id,
     ss.messages_received,
     ss.updates_committed
 FROM mz_internal.mz_source_statistics ss
@@ -312,15 +323,18 @@ much headroom is left, subscribe to the time workers spend idle:
 
 ```mzsql
 SET CLUSTER TO <cluster_name>;
-SUBSCRIBE (SELECT sum(slept_for_ns * count) FROM mz_introspection.mz_scheduling_parks_histogram);
+SUBSCRIBE (
+    SELECT sum(slept_for_ns * count) / 1e9 AS idle_seconds
+    FROM mz_introspection.mz_scheduling_parks_histogram
+);
 ```
 
-Each update reports the total time the cluster's workers have spent idle. Over a
-window of `T` seconds a fully idle cluster accrues `T × <number of workers>`
-seconds; as a rule of thumb, a cluster with healthy headroom stays above 10% of
-that. ([`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
-gives the worker count for a size.) Note that this aggregates across workers, so
-it will not reveal skew.
+Each update reports the total seconds the replica's workers have spent idle.
+Over a window of `T` seconds a fully idle replica accrues `T × <number of
+workers>`; as a rule of thumb, a replica with healthy headroom stays above 10%
+of that. A size's worker count is `processes * workers` from
+[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes).
+Note that this aggregates across workers, so it will not reveal skew.
 
 To resolve, size the cluster up with [`ALTER CLUSTER ... SET (SIZE = '<new
 size>')`](/sql/alter-cluster/) or move objects to another cluster. See [Check
