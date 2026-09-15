@@ -1569,6 +1569,48 @@ mod tests {
         assert!(!err.is_empty());
     }
 
+    /// The passthrough forwards every input record, including those whose key
+    /// evaluation errored, so a consumer of the bundle's collection sees the
+    /// unarranged input rather than the ok side of the arrangement.
+    #[mz_ore::test]
+    fn arrange_collection_passthrough_forwards_input() {
+        let rows = test_rows();
+        let mut expected: Vec<(Row, Timestamp, Diff)> = rows
+            .iter()
+            .map(|(row, t)| (row.clone(), Timestamp::from(*t), Diff::ONE))
+            .collect();
+        expected.sort();
+
+        let key = vec![LirScalarExpr::literal(
+            Err(EvalError::DivisionByZero),
+            ReprScalarType::Int32,
+        )];
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (_arranged, _errs, passthrough) =
+                    CollectionBundle::<Timestamp>::arrange_collection(
+                        &"col".to_string(),
+                        vec_to_columnar(collection),
+                        key,
+                        vec![0, 1],
+                        ArrangementBatcher::Columnation,
+                    );
+                let captured = columnar_to_vec(passthrough).inner.capture();
+
+                let max_time = rows.iter().map(|(_, t)| *t).max().unwrap_or(0);
+                for (row, time) in rows {
+                    input.update_at(row, Timestamp::from(time), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(max_time + 1));
+                input.flush();
+                captured
+            })
+        });
+
+        assert_eq!(extract_row_updates(captured), expected);
+    }
+
     fn extract_row_updates(
         captured: Captured<(Row, Timestamp, Diff)>,
     ) -> Vec<(Row, Timestamp, Diff)> {
