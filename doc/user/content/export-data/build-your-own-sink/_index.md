@@ -2,11 +2,10 @@
 title: "Build your own sink"
 description: "Stream a Materialize query into an external system using the Materialize sink SDK."
 disable_list: true
-menu:
-  main:
-    parent: sink
-    identifier: 'build-your-own-sink'
-    weight: 60
+robots: "noindex, nofollow"
+build:
+  render: always
+  list: never
 ---
 
 {{< private-preview enabled-by-default="true" />}}

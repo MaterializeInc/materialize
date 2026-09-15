@@ -1,11 +1,10 @@
 ---
 title: "PostgreSQL"
 description: "How to export results from Materialize to PostgreSQL using the Materialize sink SDK."
-menu:
-  main:
-    parent: build-your-own-sink
-    name: "PostgreSQL"
-    weight: 10
+robots: "noindex, nofollow"
+build:
+  render: always
+  list: never
 ---
 
 {{< private-preview enabled-by-default="true" />}}

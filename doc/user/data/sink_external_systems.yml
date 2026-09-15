@@ -45,13 +45,8 @@ rows:
       - [Sink to Iceberg](/export-data/iceberg/)
 
 
-  - External system: "PostgreSQL"
-    Method: "Use the sink SDK"
-    Guide(s) or Example(s): |
-      - [Sink to PostgreSQL](/export-data/build-your-own-sink/postgres/)
-
   - External system: "Various"
     Method: "Use `SUBSCRIBE`"
     Guide(s) or Example(s): |
-      - [Build your own sink](/export-data/build-your-own-sink/)
+      - [Sink to Postgres](https://github.com/MaterializeInc/mz-catalog-sync)
       - [Sink to Redis](https://github.com/MaterializeIncLabs/mz-redis-sync)
