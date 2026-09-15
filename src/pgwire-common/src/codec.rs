@@ -53,11 +53,15 @@ pub const MAX_STARTUP_FRAME_SIZE: usize = 10_000;
 ///
 /// The two parameters cost at most 119 bytes: an 18-byte key with a 36-byte
 /// UUID, a 16-byte key with an address of up to 45 bytes, and a NUL after each
-/// of the four strings.
+/// of the four strings. The rest is headroom, so that adding a third forwarded
+/// parameter does not immediately require re-deriving this number. Going over it
+/// is caught by `test_forwarded_startup_frame_fits_downstream_budget`, which
+/// measures what a balancer actually puts on the wire rather than trusting this
+/// comment.
 ///
 /// [`CONN_UUID_KEY`]: crate::CONN_UUID_KEY
 /// [`MZ_FORWARDED_FOR_KEY`]: crate::MZ_FORWARDED_FOR_KEY
-pub const FORWARDED_STARTUP_PARAM_ALLOWANCE: usize = 128;
+pub const FORWARDED_STARTUP_PARAM_ALLOWANCE: usize = 512;
 
 /// Maximum size of a startup frame accepted from a client that may be behind a
 /// balancer.
@@ -287,9 +291,11 @@ pub enum DecodeState {
 pub fn parse_frame_len(src: &[u8], max_frame_len: usize) -> Result<usize, io::Error> {
     let n = usize::cast_from(NetworkEndian::read_u32(src));
     if n > max_frame_len {
+        // The limit differs per call site, so naming both numbers is what makes a
+        // rejection diagnosable: "too big" alone no longer says which bound was hit.
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            netio::FrameTooBig,
+            format!("frame of {n} bytes exceeds the {max_frame_len} byte limit"),
         ));
     } else if n < 4 {
         return Err(io::Error::new(

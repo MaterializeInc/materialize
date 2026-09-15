@@ -40,7 +40,10 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{assert_contains, assert_err, assert_ok, task};
-use mz_pgwire_common::{FrontendStartupMessage, MAX_STARTUP_FRAME_SIZE, REJECT_ENCRYPTION};
+use mz_pgwire_common::{
+    FrontendStartupMessage, MAX_FORWARDED_STARTUP_FRAME_SIZE, MAX_STARTUP_FRAME_SIZE,
+    REJECT_ENCRYPTION, VERSION_3,
+};
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
@@ -417,7 +420,12 @@ async fn test_balancer() {
 /// Starts a balancerd whose pgwire listener is reachable but whose upstream is
 /// not. These tests never get far enough to be forwarded anywhere.
 async fn start_balancer() -> SocketAddr {
-    let unreachable = "127.0.0.1:1".to_string();
+    // Unreachable upstream: these tests never get far enough to be forwarded.
+    start_balancer_to("127.0.0.1:1".to_string()).await
+}
+
+async fn start_balancer_to(upstream: String) -> SocketAddr {
+    let unreachable = upstream;
     let (_reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
     let balancer_cfg = BalancerConfig::new(
         &BUILD_INFO,
@@ -510,4 +518,58 @@ async fn test_pgwire_oversized_startup_frame_is_rejected() {
     let mut reply = [0u8; 1];
     probe.read_exact(&mut reply).await.unwrap();
     assert_eq!(reply, [REJECT_ENCRYPTION]);
+}
+
+/// The startup frame a balancer forwards is larger than the one the client sent, because it
+/// appends its own parameters. This measures what balancerd actually puts on the wire, rather
+/// than trusting a hand-maintained list of which parameters those are, so adding a third one
+/// fails here instead of silently overrunning the budget environmentd allows.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_forwarded_startup_frame_fits_downstream_budget() {
+    // Stands in for environmentd, only to capture the frame balancerd sends it.
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let pgwire_addr = start_balancer_to(upstream_addr.to_string()).await;
+
+    // The largest startup frame balancerd will accept from a client. `user` is required to get
+    // past `run`, and `options` pads the rest out to exactly the budget.
+    let overhead = 4 + 4 + "user".len() + 1 + "mz".len() + 1 + "options".len() + 1 + 1 + 1;
+    let params = BTreeMap::from([
+        ("user".to_string(), "mz".to_string()),
+        (
+            "options".to_string(),
+            "x".repeat(MAX_STARTUP_FRAME_SIZE - overhead),
+        ),
+    ]);
+    let mut frame = BytesMut::new();
+    FrontendStartupMessage::Startup {
+        version: VERSION_3,
+        params,
+    }
+    .encode(&mut frame)
+    .unwrap();
+    assert_eq!(frame.len(), MAX_STARTUP_FRAME_SIZE);
+
+    let mut client = TcpStream::connect(pgwire_addr).await.unwrap();
+    client.write_all(&frame).await.unwrap();
+    client.flush().await.unwrap();
+
+    let (mut forwarded_to, _) = tokio::time::timeout(Duration::from_secs(30), upstream.accept())
+        .await
+        .expect("balancerd should forward the connection upstream")
+        .unwrap();
+    let mut len = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(30), forwarded_to.read_exact(&mut len))
+        .await
+        .expect("balancerd should send a startup frame upstream")
+        .unwrap();
+    let forwarded_len = usize::cast_from(u32::from_be_bytes(len));
+
+    assert!(
+        forwarded_len <= MAX_FORWARDED_STARTUP_FRAME_SIZE,
+        "balancerd forwarded a {forwarded_len} byte startup frame, over the \
+         {MAX_FORWARDED_STARTUP_FRAME_SIZE} byte budget downstream allows. If a parameter was \
+         added to the forwarded set, raise FORWARDED_STARTUP_PARAM_ALLOWANCE to match.",
+    );
 }
