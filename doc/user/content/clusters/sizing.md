@@ -140,7 +140,7 @@ LIMIT 5;
 Every replica records its own rows, so a cluster with a replication factor
 above one, or one that has been resized, returns a row per object per replica.
 If one object accounts for most of the episode, [move it to its own
-cluster](/fundamentals/concepts/hydration/#hydration-strategies) so its
+cluster](/clusters/optimize-hydration-requirements/) so its
 hydration peak stops dictating the size of everything else.
 
 ### 4. Size down
@@ -183,9 +183,9 @@ LIMIT 10;
 ```
 
 If you see repeated `offline` rows with an out-of-memory `reason`, that means
-the new size is too small. Size up, or consider using one of our [hydration
-strategies](/fundamentals/concepts/hydration/#hydration-strategies) to reduce
-the memory required for hydration.
+the new size is too small. Size up, or consider [optimizing hydration
+requirements](/clusters/optimize-hydration-requirements/) to reduce the memory
+required for hydration.
 
 ## How should I interpret the hydration metrics?
 
@@ -284,12 +284,13 @@ hydration alone rather than running at the larger size permanently. See
 burst replica at a larger size whenever the cluster has un-hydrated objects and
 removes it once a steady-size replica catches up.
 
-To reduce the work hydration has to do in the first place, see [hydration
-strategies](/fundamentals/concepts/hydration/#hydration-strategies).
+To reduce the work hydration has to do in the first place, see [Optimize
+hydration requirements](/clusters/optimize-hydration-requirements/).
 
 ## Related pages
 
 - [Hydration](/fundamentals/concepts/hydration/)
+- [Optimize hydration requirements](/clusters/optimize-hydration-requirements/)
 - [Clusters](/fundamentals/concepts/clusters/)
 - [Operational guidelines](/clusters/operational-guidelines/)
 - [Autoscaling for hydration](/clusters/autoscaling/)

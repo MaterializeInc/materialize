@@ -118,6 +118,7 @@ pools](/self-managed-deployments/deployment-guidelines/resize-node-pools/).
 ## Related pages
 
 - [Hydration](/fundamentals/concepts/hydration/)
+- [Optimize hydration requirements](/clusters/optimize-hydration-requirements/)
 - [`CREATE CLUSTER`](/sql/create-cluster/#autoscaling)
 - [`ALTER CLUSTER`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
 - [`mz_internal.mz_cluster_auto_scaling_strategies`](/sql/system-catalog/mz_internal/#mz_cluster_auto_scaling_strategies)

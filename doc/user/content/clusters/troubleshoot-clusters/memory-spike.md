@@ -112,8 +112,8 @@ activity](/transform-data/freshness-troubleshooting/#check-for-ddl-or-deploy-act
 **Resolution**: Put new objects on their own cluster and cut over with a
 [blue/green deployment](/developer-tools/dbt/blue-green-deployments/) instead
 of adding them to an existing production cluster. See [Operational
-guidelines](/clusters/operational-guidelines/) and [Hydration
-strategies](/fundamentals/concepts/hydration/#hydration-strategies).
+guidelines](/clusters/operational-guidelines/) and [Optimize hydration
+requirements](/clusters/optimize-hydration-requirements/).
 
 ### An ad-hoc query stood up a dataflow
 
