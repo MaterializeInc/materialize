@@ -10,6 +10,7 @@
 //! Catalog introspection HTTP endpoints.
 
 use axum::Json;
+use axum::extract::Query;
 use axum::response::IntoResponse;
 use axum_extra::TypedHeader;
 use headers::ContentType;
@@ -19,16 +20,30 @@ use mz_adapter::catalog::InjectedAuditEvent;
 use crate::http::AuthedClient;
 
 pub async fn handle_catalog_dump(mut client: AuthedClient) -> impl IntoResponse {
-    match client.client.dump_catalog().await.map(|c| c.into_string()) {
-        Ok(res) => Ok((TypedHeader(ContentType::json()), res)),
+    match client.client.dump_catalog().await {
+        Ok(dump) => Ok((TypedHeader(ContentType::json()), dump.into_string())),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
 }
 
-pub async fn handle_catalog_check(mut client: AuthedClient) -> impl IntoResponse {
-    let response = match client.client.check_catalog().await {
+#[derive(Default, serde::Deserialize)]
+pub struct CatalogCheckParams {
+    #[serde(default)]
+    durable: bool,
+}
+
+pub async fn handle_catalog_check(
+    mut client: AuthedClient,
+    Query(params): Query<CatalogCheckParams>,
+) -> impl IntoResponse {
+    let response = match client.client.check_catalog(params.durable).await {
         Ok(_) => serde_json::Value::String("".to_string()),
         Err(inconsistencies) => serde_json::json!({ "err": inconsistencies }),
+    };
+    let response = if params.durable {
+        serde_json::json!({ "durable": true, "inconsistencies": response })
+    } else {
+        response
     };
     (TypedHeader(ContentType::json()), response.to_string())
 }

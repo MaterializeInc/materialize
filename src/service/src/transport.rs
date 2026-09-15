@@ -17,8 +17,8 @@
 //! traits. Messages are encoded using the [`bincode`] format and then sent over the wire with a
 //! length prefix.
 //!
-//! A CTP server only serves a single client at a time. If a new client connects while a connection
-//! is already established, the previous connection is canceled.
+//! By default a CTP server replaces the previous connection on accept. Concurrent serving
+//! delegates connection ownership and replacement to the protocol handler.
 
 mod metrics;
 
@@ -148,6 +148,58 @@ where
     Out: Message,
     H: GenericClient<In, Out> + 'static,
 {
+    serve_inner(
+        false,
+        address,
+        version,
+        server_fqdn,
+        idle_timeout,
+        handler_fn,
+        metrics,
+    )
+    .await
+}
+
+/// Serves concurrent connections. The handler owns role validation and replacement policy.
+pub async fn serve_concurrent<In, Out, H>(
+    address: SocketAddr,
+    version: Version,
+    server_fqdn: Option<String>,
+    idle_timeout: Duration,
+    handler_fn: impl Fn() -> H,
+    metrics: impl Metrics<Out, In>,
+) -> anyhow::Result<()>
+where
+    In: Message,
+    Out: Message,
+    H: GenericClient<In, Out> + 'static,
+{
+    serve_inner(
+        true,
+        address,
+        version,
+        server_fqdn,
+        idle_timeout,
+        handler_fn,
+        metrics,
+    )
+    .await
+}
+
+async fn serve_inner<In, Out, H>(
+    concurrent: bool,
+    address: SocketAddr,
+    version: Version,
+    server_fqdn: Option<String>,
+    idle_timeout: Duration,
+    handler_fn: impl Fn() -> H,
+    metrics: impl Metrics<Out, In>,
+) -> anyhow::Result<()>
+where
+    In: Message,
+    Out: Message,
+    H: GenericClient<In, Out> + 'static,
+{
     // Keep a handle to the task serving the current connection, as well as a cancelation token, so
     // we can cancel it when a new client connects.
     //
@@ -174,11 +226,17 @@ where
         let server_fqdn = server_fqdn.clone();
         let metrics = metrics.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (cancel_guard, exclusive_token) = if concurrent {
+            (Some(cancel_tx), None)
+        } else {
+            (None, Some(cancel_tx))
+        };
 
         let span = tracing::Span::current();
         let handle = mz_ore::task::spawn(
             || "ctp::connection",
             async move {
+                let _cancel_guard = cancel_guard;
                 let Err(error) = serve_connection(
                     stream,
                     handler,
@@ -194,7 +252,9 @@ where
             .instrument(span),
         );
 
-        connection_task = Some((handle, cancel_tx));
+        if let Some(token) = exclusive_token {
+            connection_task = Some((handle, token));
+        }
     }
 }
 

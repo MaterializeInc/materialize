@@ -227,6 +227,40 @@ impl CollectionManager {
             + Sync
             + 'static,
     {
+        let owned: fn(&Row) -> bool = match introspection_config.introspection_type {
+            IntrospectionType::StorageSourceStatistics => owns_replicated_source_statistics,
+            _ => |_| true,
+        };
+        self.register_differential_writer(
+            id,
+            write_handle,
+            read_handle_fn,
+            force_writable,
+            owned,
+            DifferentialWriteTask::<R>::prepare(id, introspection_config).boxed(),
+        );
+    }
+
+    /// Registers a writer that reconciles only rows accepted by `owned`.
+    ///
+    /// Writers sharing a shard must own disjoint partitions. Every appended row
+    /// must be owned. `initialize` runs before reconciliation, unless read-only
+    /// mode suppresses writes (respecting `force_writable`). It can seed desired
+    /// state through `differential_write`, but must not await those writes.
+    pub(crate) fn register_differential_writer<R>(
+        &self,
+        id: GlobalId,
+        write_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        read_handle_fn: R,
+        force_writable: bool,
+        owned: fn(&Row) -> bool,
+        initialize: BoxFuture<'static, ()>,
+    ) where
+        R: FnMut() -> BoxFuture<'static, ReadHandle<SourceData, (), Timestamp, StorageDiff>>
+            + Send
+            + Sync
+            + 'static,
+    {
         let mut guard = self
             .differential_collections
             .lock()
@@ -251,7 +285,8 @@ impl CollectionManager {
             read_handle_fn,
             read_only,
             self.now.clone(),
-            introspection_config,
+            owned,
+            initialize,
         );
         let prev = guard.insert(id, writer_and_handle);
 
@@ -363,16 +398,13 @@ impl CollectionManager {
         }
     }
 
-    /// Returns a sender for writes to the given differential collection.
-    ///
-    /// # Panics
-    /// - If `id` does not belong to a differential collections.
-    pub(super) fn differential_write_sender(&self, id: GlobalId) -> DifferentialWriteChannel {
+    /// Returns a sender while the differential collection is registered.
+    pub(super) fn differential_write_sender(
+        &self,
+        id: GlobalId,
+    ) -> Option<DifferentialWriteChannel> {
         let collections = self.differential_collections.lock().expect("poisoned");
-        match collections.get(&id) {
-            Some((tx, _, _)) => tx.clone(),
-            None => panic!("missing differential collection: {id}"),
-        }
+        collections.get(&id).map(|(tx, _, _)| tx.clone())
     }
 
     /// Appends `updates` to the append-only collection identified by `id`, at
@@ -460,12 +492,29 @@ impl CollectionManager {
     }
 }
 
+/// `replica_id` is non-NULL for replicated sources and NULL exclusively for
+/// webhooks, including retained history. The lifecycle controller owns only the
+/// replicated partition of MZ_SOURCE_STATISTICS_RAW_DESC.
+fn owns_replicated_source_statistics(row: &Row) -> bool {
+    !row.iter()
+        .nth(1)
+        .expect("source statistics replica_id")
+        .is_null()
+}
+
 pub(crate) struct DifferentialIntrospectionConfig {
     pub(crate) recent_upper: Antichain<Timestamp>,
     pub(crate) introspection_type: IntrospectionType,
     pub(crate) storage_collections: Arc<dyn StorageCollections + Send + Sync>,
     pub(crate) collection_manager: collection_mgmt::CollectionManager,
-    pub(crate) source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
+    pub(crate) source_statistics: Arc<
+        Mutex<
+            BTreeMap<
+                (GlobalId, Option<ReplicaId>),
+                mz_storage_client::statistics::ControllerSourceStatistics,
+            >,
+        >,
+    >,
     pub(crate) sink_statistics:
         Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSinkStatistics>>>,
     pub(crate) statistics_interval: Duration,
@@ -495,6 +544,9 @@ where
 
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
+
+    /// Stable partition of the shard that this writer may reconcile.
+    owned: fn(&Row) -> bool,
 
     read_only: bool,
 
@@ -551,7 +603,8 @@ where
         read_handle_fn: R,
         read_only: bool,
         now: NowFn,
-        introspection_config: DifferentialIntrospectionConfig,
+        owned: fn(&Row) -> bool,
+        initialize: BoxFuture<'static, ()>,
     ) -> (DifferentialWriteChannel, WriteTask, ShutdownSender) {
         let (tx, rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -562,6 +615,7 @@ where
             id,
             write_handle,
             read_handle_fn,
+            owned,
             read_only,
             now,
             upper_tick_interval,
@@ -576,7 +630,7 @@ where
             || format!("CollectionManager-differential_write_task-{id}"),
             async move {
                 if !task.read_only {
-                    task.prepare(introspection_config).await;
+                    initialize.await;
                 }
                 let res = task.run().await;
 
@@ -602,8 +656,8 @@ where
     ///
     /// This might include consolidation, deleting older entries or seeding
     /// in-memory state of, say, scrapers, with current collection contents.
-    async fn prepare(&self, introspection_config: DifferentialIntrospectionConfig) {
-        tracing::info!(%self.id, ?introspection_config.introspection_type, "preparing differential introspection collection for writes");
+    async fn prepare(id: GlobalId, introspection_config: DifferentialIntrospectionConfig) {
+        tracing::info!(%id, ?introspection_config.introspection_type, "preparing differential introspection collection for writes");
 
         match introspection_config.introspection_type {
             IntrospectionType::ShardMapping => {
@@ -614,48 +668,44 @@ where
                 // desired state. No need to manually reset.
             }
             IntrospectionType::StorageSourceStatistics => {
-                let prev = snapshot_statistics(
-                    self.id,
+                let mut prev = snapshot_statistics(
+                    id,
                     introspection_config.recent_upper,
                     &introspection_config.storage_collections,
                 )
                 .await;
+                prev.retain(owns_replicated_source_statistics);
 
                 let scraper_token = statistics::spawn_statistics_scraper(
-                    self.id.clone(),
+                    id,
                     // These do a shallow copy.
                     introspection_config.collection_manager,
                     Arc::clone(&introspection_config.source_statistics),
                     prev,
-                    introspection_config.statistics_interval.clone(),
-                    introspection_config.statistics_interval_receiver.clone(),
+                    introspection_config.statistics_interval,
+                    introspection_config.statistics_interval_receiver,
                     introspection_config.statistics_retention_duration,
                     introspection_config.metrics,
                 );
-                let web_token = statistics::spawn_webhook_statistics_scraper(
-                    introspection_config.source_statistics,
-                    introspection_config.statistics_interval,
-                    introspection_config.statistics_interval_receiver,
-                );
 
-                // Make sure these are dropped when the controller is
+                // Make sure this is dropped when the controller is
                 // dropped, so that the internal task will stop.
                 introspection_config
                     .introspection_tokens
                     .lock()
                     .expect("poisoned")
-                    .insert(self.id, Box::new((scraper_token, web_token)));
+                    .insert(id, scraper_token);
             }
             IntrospectionType::StorageSinkStatistics => {
                 let prev = snapshot_statistics(
-                    self.id,
+                    id,
                     introspection_config.recent_upper,
                     &introspection_config.storage_collections,
                 )
                 .await;
 
                 let scraper_token = statistics::spawn_statistics_scraper(
-                    self.id.clone(),
+                    id,
                     introspection_config.collection_manager,
                     Arc::clone(&introspection_config.sink_statistics),
                     prev,
@@ -671,7 +721,7 @@ where
                     .introspection_tokens
                     .lock()
                     .expect("poisoned")
-                    .insert(self.id, scraper_token);
+                    .insert(id, scraper_token);
             }
 
             IntrospectionType::ComputeDependencies
@@ -860,6 +910,10 @@ where
     fn apply_write_op(&mut self, op: StorageWriteOp) {
         match op {
             StorageWriteOp::Append { updates } => {
+                assert!(
+                    updates.iter().all(|(row, _)| (self.owned)(row)),
+                    "appended row outside differential writer partition"
+                );
                 self.desired.extend_from_slice(&updates);
                 self.to_write.extend(updates);
             }
@@ -989,7 +1043,7 @@ where
 
     /// Re-derives [Self::to_write] by looking at [Self::desired] and the
     /// current state in persist. We want to insert everything in desired and
-    /// retract everything in persist. But ideally most of that cancels out in
+    /// retract owned rows in persist. But ideally most of that cancels out in
     /// consolidation.
     ///
     /// To be called when a `compare_and_append` failed because the upper didn't
@@ -1005,7 +1059,9 @@ where
                 let mut snapshot = Vec::with_capacity(contents.len());
                 for ((data, _), _, diff) in contents {
                     let row = data.0.unwrap();
-                    snapshot.push((row, -Diff::from(diff)));
+                    if (self.owned)(&row) {
+                        snapshot.push((row, -Diff::from(diff)));
+                    }
                 }
                 snapshot
             }
@@ -1836,6 +1892,222 @@ mod tests {
     use mz_storage_client::healthcheck::{
         MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
     };
+
+    /// Each manager has its own task and Persist handles, as independent
+    /// controllers do. The reader factory counts full reconciliation snapshots.
+    async fn register_partition(
+        manager: &CollectionManager,
+        client: &mz_persist_client::PersistClient,
+        shard: mz_persist_client::ShardId,
+        schema: &Arc<mz_repr::RelationDesc>,
+        owned: fn(&Row) -> bool,
+        initialize: BoxFuture<'static, ()>,
+        snapshots: &Arc<AtomicU64>,
+    ) {
+        use mz_persist_client::Diagnostics;
+        use mz_persist_types::codec_impls::UnitSchema;
+
+        let writer = client
+            .open_writer(
+                shard,
+                Arc::clone(schema),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        let client = client.clone();
+        let schema = Arc::clone(schema);
+        let snapshots = Arc::clone(snapshots);
+        manager.register_differential_writer(
+            GlobalId::System(1),
+            writer,
+            move || {
+                snapshots.fetch_add(1, Ordering::Relaxed);
+                let client = client.clone();
+                let schema = Arc::clone(&schema);
+                async move {
+                    client
+                        .open_leased_reader(
+                            shard,
+                            schema,
+                            Arc::new(UnitSchema),
+                            Diagnostics::for_tests(),
+                            false,
+                        )
+                        .await
+                        .unwrap()
+                }
+                .boxed()
+            },
+            false,
+            owned,
+            initialize,
+        );
+    }
+
+    async fn partition_write(manager: &CollectionManager, op: StorageWriteOp) {
+        let (tx, rx) = oneshot::channel();
+        manager
+            .differential_write_sender(GlobalId::System(1))
+            .unwrap()
+            .send((op, tx))
+            .unwrap();
+        rx.await.unwrap().unwrap();
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn independent_differential_partitions() {
+        use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+        use mz_persist_types::codec_impls::UnitSchema;
+        use mz_repr::{RelationDesc, SqlScalarType};
+
+        tokio::time::timeout(Duration::from_secs(60), async {
+            let start = Instant::now();
+            let client = PersistClient::new_for_tests().await;
+            let shard = ShardId::new();
+            let schema = Arc::new(
+                RelationDesc::builder()
+                    .with_column("id", SqlScalarType::Int64.nullable(false))
+                    .with_column("replica_id", SqlScalarType::String.nullable(true))
+                    .finish(),
+            );
+            let (mut observer, mut reader) = client
+                .open::<SourceData, (), Timestamp, StorageDiff>(
+                    shard,
+                    Arc::clone(&schema),
+                    Arc::new(UnitSchema),
+                    Diagnostics::for_tests(),
+                    false,
+                )
+                .await
+                .unwrap();
+            let managers = [
+                CollectionManager::new(false, NowFn::from(|| 100)),
+                CollectionManager::new(false, NowFn::from(|| 100)),
+            ];
+            let predicates: [fn(&Row) -> bool; 2] = [owns_replicated_source_statistics, |row| {
+                !owns_replicated_source_statistics(row)
+            }];
+            let snapshots = Arc::new(AtomicU64::new(0));
+            let row = |round, partition| {
+                Row::pack_slice(&[
+                    Datum::Int64(round),
+                    if partition == 0 {
+                        Datum::String("r1")
+                    } else {
+                        Datum::Null
+                    },
+                ])
+            };
+            for partition in 0..2 {
+                register_partition(
+                    &managers[partition],
+                    &client,
+                    shard,
+                    &schema,
+                    predicates[partition],
+                    async {}.boxed(),
+                    &snapshots,
+                )
+                .await;
+            }
+
+            let mut expected = Vec::new();
+            for round in 0..8 {
+                // Both tasks race on the same upper. The loser must reconcile
+                // without retracting the winner's partition.
+                let updates = |partition| {
+                    let mut updates = vec![(row(round, partition), Diff::ONE)];
+                    if round > 0 {
+                        updates.push((row(round - 1, partition), -Diff::ONE));
+                    }
+                    StorageWriteOp::Append { updates }
+                };
+                futures::join!(
+                    partition_write(&managers[0], updates(0)),
+                    partition_write(&managers[1], updates(1)),
+                );
+                expected = vec![(row(round, 0), 1), (row(round, 1), 1)];
+
+                if round % 2 == 1 {
+                    let partition = (usize::try_from(round).unwrap() / 2) % 2;
+                    let manager = &managers[partition];
+                    manager.unregister_collection(GlobalId::System(1)).await;
+                    let seed_manager = manager.clone();
+                    let seed = row(round, partition);
+                    register_partition(
+                        manager,
+                        &client,
+                        shard,
+                        &schema,
+                        predicates[partition],
+                        async move {
+                            seed_manager.differential_write(
+                                GlobalId::System(1),
+                                StorageWriteOp::Append {
+                                    updates: vec![(seed, Diff::ONE)],
+                                },
+                            );
+                        }
+                        .boxed(),
+                        &snapshots,
+                    )
+                    .await;
+                    // This acknowledgement also waits for initialization's seed.
+                    partition_write(manager, StorageWriteOp::Append { updates: vec![] }).await;
+                }
+
+                let upper = *observer.fetch_recent_upper().await.as_option().unwrap();
+                let contents = reader
+                    .snapshot_and_fetch(Antichain::from_elem(upper.step_back().unwrap()))
+                    .await
+                    .unwrap();
+                let mut actual: Vec<_> = contents
+                    .into_iter()
+                    .map(|((data, ()), _, diff)| (data.0.unwrap(), diff))
+                    .collect();
+                actual.sort();
+                expected.sort();
+                assert_eq!(actual, expected, "round {round}");
+            }
+            // An unrestricted delete still only deletes this writer's desired
+            // rows. A subsequent other-partition write forces reconciliation.
+            partition_write(
+                &managers[0],
+                StorageWriteOp::Delete {
+                    filter: Box::new(|_| true),
+                },
+            )
+            .await;
+            partition_write(&managers[1], StorageWriteOp::Append { updates: vec![] }).await;
+            let upper = *observer.fetch_recent_upper().await.as_option().unwrap();
+            let contents = reader
+                .snapshot_and_fetch(Antichain::from_elem(upper.step_back().unwrap()))
+                .await
+                .unwrap();
+            let actual: Vec<_> = contents
+                .into_iter()
+                .map(|((data, ()), _, diff)| (data.0.unwrap(), diff))
+                .collect();
+            expected.retain(|(row, _)| !owns_replicated_source_statistics(row));
+            assert_eq!(actual, expected);
+            assert!(
+                snapshots.load(Ordering::Relaxed) > 0,
+                "must exercise conflicts"
+            );
+            for manager in managers {
+                manager.unregister_collection(GlobalId::System(1)).await;
+            }
+            eprintln!(
+                "8 concurrent update rounds, 4 restarts: {:?}, {} reconciliation snapshots",
+                start.elapsed(),
+                snapshots.load(Ordering::Relaxed)
+            );
+        })
+        .await
+        .expect("bounded partition workload");
+    }
 
     #[mz_ore::test]
     fn test_row() {

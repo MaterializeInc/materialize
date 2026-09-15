@@ -1377,6 +1377,10 @@ impl<'a> RunnerInner<'a> {
                     "log_filter".to_string(),
                     config.tracing.startup_log_filter.to_string(),
                 );
+                params.insert(
+                    "enable_catalog_read_protection".to_string(),
+                    "true".to_string(),
+                );
                 params.extend(config.system_parameter_defaults.clone());
                 params
             },

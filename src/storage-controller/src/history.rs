@@ -90,6 +90,7 @@ impl CommandHistory {
 
         for command in self.commands.drain(..) {
             match command {
+                HelloQuery { .. } => panic!("query handshake in lifecycle history"),
                 cmd @ Hello { .. } => hello_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
@@ -412,6 +413,7 @@ mod tests {
             StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
+                remap_compaction_bound: None,
             })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
@@ -436,6 +438,7 @@ mod tests {
             StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
+                remap_compaction_bound: Some(Antichain::from_elem(100.into())),
             })),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1.into())),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2.into())),
@@ -460,6 +463,7 @@ mod tests {
             StorageCommand::RunIngestion(Box::new(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
+                remap_compaction_bound: Some(Antichain::from_elem(100.into())),
             })),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
         ];
@@ -472,6 +476,22 @@ mod tests {
 
         let commands_after: Vec<_> = history.iter().cloned().collect();
         assert_eq!(commands_after, commands);
+    }
+
+    #[mz_ore::test]
+    fn ingestion_replay_preserves_latest_permission() {
+        let mut history = history();
+        let mut ingestion = RunIngestionCommand {
+            id: GlobalId::User(1),
+            description: ingestion_description(1, [2], 3),
+            remap_compaction_bound: None,
+        };
+        history.push(StorageCommand::RunIngestion(Box::new(ingestion.clone())));
+        ingestion.remap_compaction_bound = Some(Antichain::from_elem(100.into()));
+        let latest = StorageCommand::RunIngestion(Box::new(ingestion));
+        history.push(latest.clone());
+        history.reduce();
+        assert_eq!(history.iter().cloned().collect::<Vec<_>>(), [latest]);
     }
 
     #[mz_ore::test]

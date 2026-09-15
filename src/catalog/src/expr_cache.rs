@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A cache for optimized expressions.
+//! Optimized expressions and immutable, catalog-selected maintained plans.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -33,8 +33,9 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 #[derive(
     Debug,
@@ -50,6 +51,7 @@ use tracing::{debug, warn};
 enum ExpressionType {
     Local,
     Global,
+    Written { revision: Uuid },
 }
 
 /// The data that is cached per catalog object as a result of local optimizations.
@@ -61,7 +63,7 @@ pub struct LocalExpressions {
     pub item_version: RelationVersion,
 }
 
-/// The data that is cached per catalog object as a result of global optimizations.
+/// Global optimization output, including the plan and its optimizer notices.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GlobalExpressions {
     pub global_mir: DataflowDescription<OptimizedMirRelationExpr>,
@@ -72,7 +74,25 @@ pub struct GlobalExpressions {
     pub item_version: RelationVersion,
 }
 
+/// Failure to durably write or read an immutable plan revision.
+#[derive(Debug, thiserror::Error)]
+pub enum PlanStoreError {
+    #[error("written plan codec error: {0}")]
+    Codec(#[from] bincode::Error),
+    #[error("written plan revision {revision} for {id} already has different contents")]
+    RevisionConflict { id: GlobalId, revision: Uuid },
+    #[error("expression store shut down")]
+    Shutdown,
+}
+
 impl GlobalExpressions {
+    /// Catalog collections required by the written MIR and physical plan.
+    pub fn collection_imports(&self) -> impl Iterator<Item = &GlobalId> {
+        self.index_imports()
+            .chain(self.global_mir.source_imports.keys())
+            .chain(self.physical_plan.source_imports.keys())
+    }
+
     fn index_imports(&self) -> impl Iterator<Item = &GlobalId> {
         self.global_mir
             .index_imports
@@ -241,6 +261,12 @@ impl ExpressionCache {
         let mut global_expressions = BTreeMap::new();
 
         for (key, expressions) in self.durable_cache.entries_local() {
+            // Reclaiming a build's written entries requires fencing its owner. A
+            // cache owner's catalog snapshot proves no such fence, and an entry
+            // may precede the transaction that selects it.
+            if matches!(key.expr_type, ExpressionType::Written { .. }) {
+                continue;
+            }
             let build_version = match key.build_version.parse::<Version>() {
                 Ok(build_version) => build_version,
                 Err(err) => {
@@ -271,6 +297,7 @@ impl ExpressionCache {
                             local_expressions.insert(key.id, expressions);
                         }
                     }
+                    ExpressionType::Written { .. } => unreachable!("handled above"),
                     ExpressionType::Global => {
                         let expressions: GlobalExpressions = match bincode::deserialize(expressions)
                         {
@@ -322,6 +349,92 @@ impl ExpressionCache {
         }
 
         Ok((local_expressions, global_expressions))
+    }
+
+    fn get_global(&self, id: GlobalId) -> Option<GlobalExpressions> {
+        let key = CacheKey {
+            build_version: self.build_version.to_string(),
+            id,
+            expr_type: ExpressionType::Global,
+        };
+        let expressions = self.durable_cache.get_local(&key)?;
+        match bincode::deserialize(expressions) {
+            Ok(expressions) => Some(expressions),
+            Err(err) => {
+                soft_panic_or_log!(
+                    "unable to deserialize global expressions: ({key:?}, {expressions:?}): {err:?}"
+                );
+                None
+            }
+        }
+    }
+
+    async fn write_plans(
+        &mut self,
+        plans: Vec<(GlobalId, Uuid, GlobalExpressions)>,
+    ) -> Result<(), PlanStoreError> {
+        let mut entries = BTreeMap::new();
+        for (id, revision, plan) in plans {
+            let key = CacheKey {
+                build_version: self.build_version.to_string(),
+                id,
+                expr_type: ExpressionType::Written { revision },
+            };
+            let bytes = Bytes::from(bincode::serialize(&plan)?);
+            if let Some(previous) = entries.insert(key, bytes.clone())
+                && previous != bytes
+            {
+                return Err(PlanStoreError::RevisionConflict { id, revision });
+            }
+        }
+        loop {
+            let mut writes = Vec::new();
+            for (key, bytes) in &entries {
+                match self.durable_cache.get_local(key) {
+                    Some(existing) if existing != bytes => {
+                        let ExpressionType::Written { revision } = key.expr_type else {
+                            unreachable!("only written plans are inserted");
+                        };
+                        return Err(PlanStoreError::RevisionConflict {
+                            id: key.id,
+                            revision,
+                        });
+                    }
+                    Some(_) => {}
+                    None => writes.push((key, Some(bytes))),
+                }
+            }
+            if writes.is_empty() {
+                return Ok(());
+            }
+            // A failed CAS synchronizes the cache. Recheck immutability against that
+            // state rather than letting set_many overwrite another writer's revision.
+            if self.durable_cache.try_set_many(&writes).await.is_ok() {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn read_plans(
+        &mut self,
+        revisions: Vec<(GlobalId, Uuid)>,
+    ) -> Result<BTreeMap<(GlobalId, Uuid), GlobalExpressions>, PlanStoreError> {
+        self.durable_cache.synchronize().await;
+        revisions
+            .into_iter()
+            .filter_map(|(id, revision)| {
+                let key = CacheKey {
+                    build_version: self.build_version.to_string(),
+                    id,
+                    expr_type: ExpressionType::Written { revision },
+                };
+                self.durable_cache.get_local(&key).map(|bytes| {
+                    bincode::deserialize(bytes)
+                        .map(|plan| ((id, revision), plan))
+                        .map_err(PlanStoreError::from)
+                })
+            })
+            .collect()
     }
 
     /// Durably removes all entries given by `invalidate_ids` and inserts `new_local_expressions`
@@ -405,6 +518,18 @@ impl ExpressionCache {
 
 /// Operations to perform on the cache.
 enum CacheOperation {
+    WritePlans {
+        plans: Vec<(GlobalId, Uuid, GlobalExpressions)>,
+        tx: oneshot::Sender<Result<(), PlanStoreError>>,
+    },
+    ReadPlans {
+        revisions: Vec<(GlobalId, Uuid)>,
+        tx: oneshot::Sender<Result<BTreeMap<(GlobalId, Uuid), GlobalExpressions>, PlanStoreError>>,
+    },
+    GetGlobal {
+        id: GlobalId,
+        tx: oneshot::Sender<Option<GlobalExpressions>>,
+    },
     /// See [`ExpressionCache::update`].
     Update {
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
@@ -430,12 +555,37 @@ impl ExpressionCacheHandle {
         BTreeMap<GlobalId, LocalExpressions>,
         BTreeMap<GlobalId, GlobalExpressions>,
     ) {
-        let (mut cache, local_expressions, global_expressions) =
-            ExpressionCache::open(config).await;
+        let (cache, local_expressions, global_expressions) = ExpressionCache::open(config).await;
+        (Self::spawn(cache), local_expressions, global_expressions)
+    }
+
+    /// Opens the per-build plan store without cache reconciliation or speculative deletion.
+    /// Only binaries supporting written plans may share this shard.
+    pub async fn open_plan_store(
+        build_version: Version,
+        persist: &PersistClient,
+        shard_id: ShardId,
+    ) -> Self {
+        Self::spawn(ExpressionCache {
+            build_version,
+            durable_cache: DurableCache::new(persist, shard_id, "expressions").await,
+        })
+    }
+
+    fn spawn(mut cache: ExpressionCache) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel();
         spawn(|| "expression-cache-task", async move {
             while let Some(op) = rx.recv().await {
                 match op {
+                    CacheOperation::WritePlans { plans, tx } => {
+                        let _ = tx.send(cache.write_plans(plans).await);
+                    }
+                    CacheOperation::ReadPlans { revisions, tx } => {
+                        let _ = tx.send(cache.read_plans(revisions).await);
+                    }
+                    CacheOperation::GetGlobal { id, tx } => {
+                        let _ = tx.send(cache.get_global(id));
+                    }
                     CacheOperation::Update {
                         new_local_expressions,
                         new_global_expressions,
@@ -454,7 +604,44 @@ impl ExpressionCacheHandle {
             }
         });
 
-        (Self { tx }, local_expressions, global_expressions)
+        Self { tx }
+    }
+
+    /// Writes immutable revisions and acknowledges durable completion. A catalog transaction
+    /// must select a revision before it becomes authoritative. Reusing a revision with different
+    /// contents fails, including when another writer wins the expression-shard CAS.
+    pub async fn write_plans(
+        &self,
+        plans: Vec<(GlobalId, Uuid, GlobalExpressions)>,
+    ) -> Result<(), PlanStoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(CacheOperation::WritePlans { plans, tx })
+            .map_err(|_| PlanStoreError::Shutdown)?;
+        rx.await.map_err(|_| PlanStoreError::Shutdown)?
+    }
+
+    /// Reads the requested revisions after synchronizing with other writers. Missing entries
+    /// are omitted, never generated. Callers select revisions from their committed catalog.
+    pub async fn read_plans(
+        &self,
+        revisions: Vec<(GlobalId, Uuid)>,
+    ) -> Result<BTreeMap<(GlobalId, Uuid), GlobalExpressions>, PlanStoreError> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(CacheOperation::ReadPlans { revisions, tx })
+            .map_err(|_| PlanStoreError::Shutdown)?;
+        rx.await.map_err(|_| PlanStoreError::Shutdown)?
+    }
+
+    /// Returns best-effort local cache contents for the current build version, or `None`
+    /// if absent or the cache task shuts down. Reads follow prior updates on this handle
+    /// without synchronizing with other cache owners. Callers must validate the item version,
+    /// optimizer features, and dependencies against their catalog/compute snapshot.
+    pub async fn get_global(&self, id: GlobalId) -> Option<GlobalExpressions> {
+        let (tx, rx) = oneshot::channel();
+        self.tx.send(CacheOperation::GetGlobal { id, tx }).ok()?;
+        rx.await.ok().flatten()
     }
 
     pub fn update(
@@ -493,6 +680,155 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
+    async fn written_plan_revisions() {
+        let persist = PersistClient::new_for_tests().await;
+        let shard = ShardId::new();
+        let build = Version::new(0, 1, 0);
+        let writer = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
+        let reader = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
+        let id = GlobalId::User(1);
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let absent = Uuid::new_v4();
+        let plan = gen_global_expressions();
+        let mut changed = plan.clone();
+        changed.physical_plan.debug_name = "another plan".into();
+
+        assert!(
+            reader
+                .read_plans(vec![(id, first)])
+                .await
+                .expect("read")
+                .is_empty()
+        );
+        writer
+            .write_plans(vec![
+                (id, first, plan.clone()),
+                (id, second, changed.clone()),
+            ])
+            .await
+            .expect("write revisions");
+        assert_eq!(
+            reader
+                .read_plans(vec![(id, first), (id, second), (id, absent)])
+                .await
+                .expect("synchronized read"),
+            BTreeMap::from([((id, first), plan.clone()), ((id, second), changed.clone())])
+        );
+        reader
+            .write_plans(vec![(id, first, plan.clone())])
+            .await
+            .expect("idempotent write");
+
+        // The handle has not observed this entry. Its failed CAS must reveal the
+        // conflict rather than retrying an overwrite, including the rest of the batch.
+        let stale = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
+        let raced = Uuid::new_v4();
+        writer
+            .write_plans(vec![(id, raced, plan.clone())])
+            .await
+            .expect("winner");
+        assert!(matches!(
+            stale
+                .write_plans(vec![
+                    (id, absent, plan.clone()),
+                    (id, raced, changed.clone())
+                ])
+                .await,
+            Err(PlanStoreError::RevisionConflict { .. })
+        ));
+        assert_eq!(
+            reader
+                .read_plans(vec![(id, raced), (id, absent)])
+                .await
+                .expect("read winner"),
+            BTreeMap::from([((id, raced), plan.clone())])
+        );
+
+        let other_build =
+            ExpressionCacheHandle::open_plan_store(Version::new(0, 2, 0), &persist, shard).await;
+        assert!(
+            other_build
+                .read_plans(vec![(id, first)])
+                .await
+                .expect("other build")
+                .is_empty()
+        );
+        other_build
+            .write_plans(vec![(id, first, changed.clone())])
+            .await
+            .expect("independent build");
+
+        // Cache reconciliation has no authority over immutable entries, including
+        // another build's entries and revisions not yet selected by the catalog.
+        let (cache, _, _) = ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
+            build_version: build.clone(),
+            persist: persist.clone(),
+            shard_id: shard,
+            current_items: BTreeMap::new(),
+            remove_prior_versions: true,
+            compact_shard: false,
+            dyncfgs: mz_persist_client::cfg::all_dyncfgs(ConfigSet::default()),
+        })
+        .await;
+        cache
+            .update(Vec::new(), Vec::new(), BTreeSet::from([id]))
+            .await;
+        let restarted = ExpressionCacheHandle::open_plan_store(build, &persist, shard).await;
+        assert_eq!(
+            restarted
+                .read_plans(vec![(id, first)])
+                .await
+                .expect("restart"),
+            BTreeMap::from([((id, first), plan)])
+        );
+        assert_eq!(
+            other_build
+                .read_plans(vec![(id, first)])
+                .await
+                .expect("foreign build retained"),
+            BTreeMap::from([((id, first), changed)])
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn written_plan_errors_are_not_misses() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        drop(rx);
+        let stopped = ExpressionCacheHandle { tx };
+        assert!(matches!(
+            stopped.write_plans(Vec::new()).await,
+            Err(PlanStoreError::Shutdown)
+        ));
+        assert!(matches!(
+            stopped.read_plans(Vec::new()).await,
+            Err(PlanStoreError::Shutdown)
+        ));
+
+        let persist = PersistClient::new_for_tests().await;
+        let shard = ShardId::new();
+        let build = Version::new(0, 1, 0);
+        let store = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
+        let id = GlobalId::User(1);
+        let revision = Uuid::new_v4();
+        let mut raw =
+            DurableCache::<ExpressionCodec>::new(&persist, shard, "corrupt plan fixture").await;
+        raw.set(
+            &CacheKey {
+                build_version: build.to_string(),
+                id,
+                expr_type: ExpressionType::Written { revision },
+            },
+            Some(&Bytes::from_static(b"not a plan")),
+        )
+        .await;
+        assert!(matches!(
+            store.read_plans(vec![(id, revision)]).await,
+            Err(PlanStoreError::Codec(_))
+        ));
+    }
+
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn expression_cache() {
         let first_build_version = Version::new(0, 1, 0);
@@ -527,6 +863,7 @@ mod tests {
                 spawn(&first_build_version, &current_items, remove_prior_versions).await;
             assert_eq!(local_exprs, BTreeMap::new(), "new cache should be empty");
             assert_eq!(global_exprs, BTreeMap::new(), "new cache should be empty");
+            assert_eq!(cache.get_global(GlobalId::User(next_id)).await, None);
 
             // Insert some expressions into the cache.
             let mut local_exps = BTreeMap::new();
@@ -536,13 +873,13 @@ mod tests {
                 let local_exp = gen_local_expressions();
                 let global_exp = gen_global_expressions();
 
-                cache
-                    .update(
-                        vec![(id, local_exp.clone())],
-                        vec![(id, global_exp.clone())],
-                        BTreeSet::new(),
-                    )
-                    .await;
+                // The read must observe the update even without awaiting its completion.
+                drop(cache.update(
+                    vec![(id, local_exp.clone())],
+                    vec![(id, global_exp.clone())],
+                    BTreeSet::new(),
+                ));
+                assert_eq!(cache.get_global(id).await, Some(global_exp.clone()));
 
                 current_items.insert(id, RelationVersion::root());
                 current_items.extend(
@@ -706,8 +1043,11 @@ mod tests {
 
         {
             // Re-open the cache at the first build version.
-            let (_cache, local_entries, global_entries) =
+            let (cache, local_entries, global_entries) =
                 spawn(&first_build_version, &current_items, remove_prior_versions).await;
+            for id in new_gen_global_exps.keys() {
+                assert_eq!(cache.get_global(*id).await, None);
+            }
             assert_eq!(
                 local_entries, local_exps,
                 "Previous build version local expressions should still exist"
@@ -721,7 +1061,7 @@ mod tests {
         {
             // Open the cache at a new build version and clear previous build versions.
             remove_prior_versions = true;
-            let (_cache, local_entries, global_entries) =
+            let (cache, local_entries, global_entries) =
                 spawn(&second_build_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries, new_gen_local_exps,
@@ -731,6 +1071,10 @@ mod tests {
                 global_entries, new_gen_global_exps,
                 "new build version global expressions should be persisted"
             );
+            let (&id, expressions) = new_gen_global_exps.first_key_value().expect("not empty");
+            assert_eq!(cache.get_global(id).await, Some(expressions.clone()));
+            drop(cache.update(Vec::new(), Vec::new(), BTreeSet::from([id])));
+            assert_eq!(cache.get_global(id).await, None);
         }
 
         {

@@ -173,11 +173,17 @@ pub(crate) async fn migrate(
     // Since some migrations might introduce non-item 'post-item' updates, we sequester those
     // so they can be applied with other post-item updates after migrations to avoid
     // accumulating negative diffs.
-    let (post_item_updates, item_updates): (Vec<_>, Vec<_>) = item_updates
-        .into_iter()
-        // The only post-item update kind we currently generate is to
-        // update storage collection metadata.
-        .partition(|(kind, _, _)| matches!(kind, StateUpdateKind::StorageCollectionMetadata(_)));
+    let (post_item_updates, item_updates): (Vec<_>, Vec<_>) =
+        item_updates.into_iter().partition(|(kind, _, _)| {
+            matches!(
+                kind,
+                StateUpdateKind::StorageCollectionMetadata(_)
+                    | StateUpdateKind::CollectionCompactionBound(_)
+                    | StateUpdateKind::MaintainedReadRequirement(_)
+                    | StateUpdateKind::ClientIncarnation(_)
+                    | StateUpdateKind::ClientReadRequirement(_)
+            )
+        });
 
     let item_updates = item_updates
         .into_iter()

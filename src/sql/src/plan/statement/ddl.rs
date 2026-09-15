@@ -2874,6 +2874,7 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
+    let query_ids = crate::names::visit_dependencies(scx.catalog, &stmt.query);
     let query::PlannedRootQuery {
         expr,
         mut desc,
@@ -3190,6 +3191,7 @@ pub fn plan_create_materialized_view(
         name,
         materialized_view: MaterializedView {
             create_sql,
+            query_ids,
             expr,
             dependencies: DependencyIds(dependencies),
             column_names,

@@ -20,12 +20,17 @@ from threading import Thread
 
 import psycopg
 import pymysql
+import requests
 from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -1028,6 +1033,285 @@ def workflow_basic(c: Composition) -> None:
             <TIMESTAMP> 1 7
             > COMMIT
             """))
+
+
+def workflow_index_read_protection(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Follow committed index permissions beyond a readonly catalog savepoint."""
+    parser.add_argument(
+        "--index-count",
+        type=int,
+        default=1,
+        help="Stable live cohort including keep (default: 1), plus one live drop index",
+    )
+    parser.add_argument("--publication-interval-ms", type=int, default=1000)
+    args = parser.parse_args()
+    if args.index_count < 1 or args.publication_interval_ms < 1:
+        parser.error("index count and publication interval must be positive")
+    c.down(destroy_volumes=True)
+    c.up("mz_old", Service("testdrive", idle=True))
+    setup(c)
+
+    def query(sql: str, service: str = "mz_old") -> list[tuple]:
+        with c.sql_connection(
+            service=service,
+            port=6877,
+            user="mz_system",
+            startup_params={"statement_timeout": "5s", "cluster": "cluster"},
+        ) as conn:
+            cursor = conn.execute(sql.encode())
+            return cursor.fetchall() if cursor.description is not None else []
+
+    query("ALTER SYSTEM SET enable_logical_compaction_window = true")
+    query("ALTER SYSTEM SET enable_index_options = true")
+    query(f"ALTER SYSTEM SET max_objects_per_schema = {args.index_count + 100}")
+    query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
+    unpublished_start = time.monotonic()
+    c.testdrive(dedent("""
+        > CREATE CLUSTER permission_suspended SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        > CREATE TABLE permission_suspended_input (a int);
+        > INSERT INTO permission_suspended_input VALUES (1);
+        > CREATE TABLE permission_input (a int);
+        > INSERT INTO permission_input VALUES (1);
+        > CREATE VIEW permission_keep AS SELECT a + 1 AS a FROM permission_input;
+        > CREATE VIEW permission_drop AS SELECT a + 2 AS a FROM permission_input;
+        > CREATE INDEX permission_keep_idx ON permission_keep (a)
+          WITH (RETAIN HISTORY = FOR '1s');
+        > CREATE INDEX permission_drop_idx ON permission_drop (a)
+          WITH (RETAIN HISTORY = FOR '1s');
+        > CREATE INDEX permission_suspended_idx IN CLUSTER permission_suspended
+          ON permission_suspended_input (a) WITH (RETAIN HISTORY = FOR '1s');
+        > CREATE INDEX permission_bootstrap_drop_idx IN CLUSTER permission_suspended
+          ON permission_suspended_input (a) WITH (RETAIN HISTORY = FOR '1s');
+    """))
+    extra_names = [f"permission_cohort_{i}_idx" for i in range(1, args.index_count)]
+    if extra_names:
+        c.testdrive(
+            "\n".join(
+                f"> CREATE INDEX {name} IN CLUSTER cluster ON permission_input (a) "
+                "WITH (RETAIN HISTORY = FOR '1s');"
+                for name in extra_names
+            )
+        )
+    names = [
+        "permission_keep_idx",
+        "permission_drop_idx",
+        "permission_suspended_idx",
+        "permission_bootstrap_drop_idx",
+        *extra_names,
+    ]
+    names_sql = ", ".join(f"'{name}'" for name in names)
+    ids = dict(query(f"""
+        SELECT o.name, g.global_id FROM mz_objects o
+        JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+        WHERE o.name IN ({names_sql})
+    """))
+    assert set(ids) == set(names), ids
+    assert len(set(ids.values())) == len(names), ids
+    stable_ids = [ids[name] for name in ["permission_keep_idx", *extra_names]]
+
+    def catalog_bounds(service: str) -> dict:
+        # mz_catalog_raw tails the writer even in readonly mode. The memory dump,
+        # not a SQL query over that live collection, exposes the frozen savepoint.
+        response = requests.get(
+            f"http://localhost:{c.port(service, 6878)}/api/catalog/dump", timeout=30
+        )
+        response.raise_for_status()
+        return response.json()["collection_compaction_bounds"]
+
+    def frozen_bounds() -> dict:
+        bounds = catalog_bounds("mz_new")
+        return {name: bounds.get(gid) for name, gid in ids.items()}
+
+    bounds = catalog_bounds("mz_old")
+    assert all(gid not in bounds for gid in ids.values())
+    # Starting without the health wait overlaps DDL with boot, but does not prove
+    # whether the savepoint includes this index. Both schedules must boot.
+    c.up("mz_new", wait=False)
+    query("DROP INDEX permission_bootstrap_drop_idx")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    bounds = catalog_bounds("mz_old")
+    assert all(gid not in bounds for gid in ids.values())
+    assert time.monotonic() - unpublished_start < 300
+    frozen = frozen_bounds()
+    assert all(bound is None for bound in frozen.values()), frozen
+    assert (
+        query(
+            """
+        SELECT count(*) FROM mz_cluster_replicas r
+        JOIN mz_clusters c ON c.id = r.cluster_id
+        WHERE c.name = 'permission_suspended'
+    """,
+            "mz_new",
+        )
+        == [(0,)]
+    )
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up(Service("testdrive", idle=True))
+        c.testdrive(dedent("""
+            > SET statement_timeout = '5s';
+            > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
+            ! INSERT INTO permission_input VALUES (99);
+            contains: cannot write in read-only mode
+            > SELECT DISTINCT name, hydrated
+              FROM mz_internal.mz_hydration_statuses
+              JOIN mz_indexes ON (id = object_id)
+              WHERE name IN ('permission_keep_idx', 'permission_drop_idx');
+            permission_drop_idx true
+            permission_keep_idx true
+            > SELECT * FROM permission_keep;
+            2
+            > SELECT * FROM permission_drop;
+            3
+        """))
+        assert frozen_bounds() == frozen
+        bounds = catalog_bounds("mz_old")
+        assert all(gid not in bounds for gid in ids.values())
+        assert time.monotonic() - unpublished_start < 300
+        query(
+            "ALTER SYSTEM SET catalog_read_protection_publish_interval = "
+            f"'{args.publication_interval_ms}ms'"
+        )
+
+        # The subscriber follows permissions, not SQL schema changes. A removed
+        # writer index must not prevent delivery for another stable global ID.
+        for value in (2, 3):
+            if value == 3:
+                query("DROP INDEX permission_drop_idx")
+            query(f"INSERT INTO permission_input VALUES ({value})")
+            keep = ids["permission_keep_idx"]
+            cohort = stable_ids + ([ids["permission_drop_idx"]] if value == 2 else [])
+            bounds = catalog_bounds("mz_old")
+            baseline = {
+                gid: bounds.get(gid, {"elements": [0]})["elements"][0] for gid in cohort
+            }
+            deadline = time.monotonic() + 300
+            publication_start = time.monotonic()
+            while True:
+                writer_request_start = time.monotonic()
+                bounds = catalog_bounds("mz_old")
+                committed_observed = time.monotonic()
+                targets = {
+                    gid: bounds.get(gid, {"elements": [0]})["elements"][0]
+                    for gid in cohort
+                }
+                if all(targets[gid] > baseline[gid] for gid in cohort):
+                    break
+                assert time.monotonic() < deadline, (baseline, targets)
+                time.sleep(0.5)
+            committed = targets[keep]
+            assert committed > 0
+            # Freeze the writer snapshot. One aggregate query checks every target
+            # without installing execution read holds on the governed indexes.
+            targets_sql = ", ".join(
+                f"('{gid}', {permission})" for gid, permission in targets.items()
+            )
+            follower_requests = 0
+            follower_request_seconds = 0.0
+            while True:
+                follower_request_start = time.monotonic()
+                [(observed_count,)] = query(
+                    f"""
+                    SELECT count(*) FROM (VALUES {targets_sql}) AS targets(gid, permission)
+                    JOIN mz_internal.mz_frontiers f ON f.object_id = targets.gid
+                    WHERE f.read_frontier::text::numeric >= targets.permission
+                    """,
+                    "mz_new",
+                )
+                follower_observed = time.monotonic()
+                follower_requests += 1
+                follower_request_seconds += follower_observed - follower_request_start
+                if observed_count == len(cohort):
+                    break
+                assert time.monotonic() < deadline, (
+                    len(cohort),
+                    observed_count,
+                    targets,
+                )
+                time.sleep(0.5)
+            c.testdrive(dedent(f"""
+                > SELECT read_frontier::text::numeric >= {committed}
+                  FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
+                true
+                > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
+                > SELECT count(*), sum(a) FROM permission_keep;
+                {value} {sum(range(2, value + 2))}
+            """))
+            print(
+                json.dumps(
+                    {
+                        "workflow": "index-read-protection",
+                        "publication_interval_ms": args.publication_interval_ms,
+                        "index_count": args.index_count,
+                        "initial_live_index_count": len(stable_ids) + 1,
+                        "cohort_index_count": len(cohort),
+                        "follower_observed_index_count": observed_count,
+                        "observer": "writer catalog dump and follower SQL frontier polling at 500ms",
+                        "measurement_scope": "snapshot observation to all-complete read frontier observation, not isolated subscriber CPU or unobserved commit-to-poll latency",
+                        "committed_permission": committed,
+                        "writer_permission_observation_seconds": committed_observed
+                        - publication_start,
+                        "writer_observed_to_follower_frontier_seconds": follower_observed
+                        - committed_observed,
+                        "max_all_complete_observation_lag_seconds": follower_observed
+                        - committed_observed,
+                        "writer_snapshot_request_seconds": committed_observed
+                        - writer_request_start,
+                        "follower_frontier_request_count": follower_requests,
+                        "follower_frontier_request_seconds": follower_request_seconds,
+                        "follower_final_frontier_request_seconds": follower_observed
+                        - follower_request_start,
+                        "follower_read_check_seconds": time.monotonic()
+                        - follower_observed,
+                        "writer_index_dropped": value == 3,
+                    },
+                    sort_keys=True,
+                )
+            )
+            assert frozen_bounds() == frozen
+            plan = query("EXPLAIN SELECT * FROM permission_keep", "mz_new")[0][0]
+            assert "permission_keep_idx" in plan, plan
+
+        query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
+        capped_start = time.monotonic()
+        cap = catalog_bounds("mz_old")[keep]["elements"][0]
+        for value in (4, 5, 6):
+            query(f"INSERT INTO permission_input VALUES ({value})")
+            [(upper,)] = query(
+                "SELECT write_frontier::text::numeric FROM mz_internal.mz_frontiers "
+                f"WHERE object_id = '{keep}'",
+                "mz_new",
+            )
+            c.testdrive(dedent(f"""
+                > SELECT write_frontier::text::numeric > {max(upper, cap + 1000)},
+                         read_frontier::text::numeric <= {cap}
+                  FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
+                true true
+            """))
+            assert catalog_bounds("mz_old")[keep]["elements"] == [cap]
+            assert time.monotonic() - capped_start < 300
+
+        query(
+            "ALTER SYSTEM SET catalog_read_protection_publish_interval = "
+            f"'{args.publication_interval_ms}ms'"
+        )
+        c.testdrive(dedent(f"""
+            > SELECT read_frontier::text::numeric > {cap}
+              FROM mz_internal.mz_frontiers WHERE object_id = '{keep}';
+            true
+        """))
+        assert frozen_bounds() == frozen
 
 
 def workflow_kafka_source_rehydration(c: Composition) -> None:

@@ -124,7 +124,9 @@ pub enum AdapterNotice {
     WebhookSourceCreated {
         url: url::Url,
     },
-    DroppedInUseIndex(DroppedInUseIndex),
+    RewrittenPlans {
+        objects: Vec<String>,
+    },
     PerReplicaLogRead {
         log_names: Vec<String>,
     },
@@ -220,7 +222,7 @@ impl AdapterNotice {
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
             AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
-            AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
+            AdapterNotice::RewrittenPlans { .. } => Severity::Notice,
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::StartupOnlyVarUpdated { .. } => Severity::Warning,
@@ -285,7 +287,7 @@ impl AdapterNotice {
                     .into(),
             ),
             AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
-            AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
+            AdapterNotice::RewrittenPlans { .. } => None,
             AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
@@ -343,7 +345,7 @@ impl AdapterNotice {
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
             AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::from_code("MZ005"),
             AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
-            AdapterNotice::DroppedInUseIndex { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::RewrittenPlans { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
@@ -503,14 +505,11 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::WebhookSourceCreated { url } => {
                 write!(f, "URL to POST data is '{url}'")
             }
-            AdapterNotice::DroppedInUseIndex(DroppedInUseIndex {
-                index_name,
-                dependant_objects,
-            }) => {
+            AdapterNotice::RewrittenPlans { objects } => {
                 write!(
                     f,
-                    "The dropped index {index_name} is being used by the following objects: {}. The index is now dropped from the catalog, but it will continue to be maintained and take up resources until all dependent objects are dropped, altered, or Materialize is restarted!",
-                    separated(", ", dependant_objects)
+                    "Rewrote plans for the following objects: {}.",
+                    separated(", ", objects)
                 )
             }
             AdapterNotice::PerReplicaLogRead { log_names } => {
@@ -586,12 +585,6 @@ impl fmt::Display for AdapterNotice {
             }
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct DroppedInUseIndex {
-    pub index_name: String,
-    pub dependant_objects: Vec<String>,
 }
 
 impl From<PlanNotice> for AdapterNotice {

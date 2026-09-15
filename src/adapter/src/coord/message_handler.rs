@@ -73,15 +73,43 @@ impl Coordinator {
                 span.in_scope(|| otel_ctx.attach_as_parent());
                 self.message_command(cmd).instrument(span).await
             }
+            Message::QueryWatchSetReady(id, result) => {
+                self.message_watch_set_ready(id, result).await;
+            }
+            Message::QueryDataflowResponse(response) => {
+                use crate::query_client::compute::DataflowResponse;
+                use mz_compute_client::protocol::response::{
+                    CopyToResponse, SubscribeBatch, SubscribeResponse,
+                };
+                let response = match response {
+                    DataflowResponse::Subscribe(id, response) => {
+                        let batch = match response {
+                            SubscribeResponse::Batch(batch) => batch,
+                            SubscribeResponse::DroppedAt(lower) => SubscribeBatch {
+                                lower,
+                                upper: timely::progress::Antichain::new(),
+                                updates: Err("query subscription dataflow was dropped".into()),
+                            },
+                        };
+                        ControllerResponse::SubscribeResponse(id, batch)
+                    }
+                    DataflowResponse::CopyTo(id, response) => {
+                        let result = match response {
+                            CopyToResponse::RowCount(count) => Ok(count),
+                            CopyToResponse::Error(error) => Err(anyhow::anyhow!(error)),
+                            CopyToResponse::Dropped => {
+                                Err(anyhow::anyhow!("query COPY dataflow was dropped"))
+                            }
+                        };
+                        ControllerResponse::CopyToResponse(id, result)
+                    }
+                };
+                self.message_controller(response).boxed_local().await;
+            }
             Message::ControllerReady { controller: _ } => {
-                let Coordinator {
-                    controller,
-                    catalog,
-                    ..
-                } = self;
-                let storage_metadata = catalog.state().storage_metadata();
-                if let Some(m) = controller
-                    .process(storage_metadata)
+                if let Some(m) = self
+                    .controller
+                    .process()
                     .expect("`process` never returns an error")
                 {
                     self.message_controller(m).boxed_local().await
@@ -131,6 +159,13 @@ impl Coordinator {
                 // that and we can downgrade the local read holds without an oracle round trip.
                 self.downgrade_local_read_holds(write_ts);
                 self.advance_custom_timelines().boxed_local().await;
+                if let Err(error) = self
+                    .acquire_pending_query_timeline_holds()
+                    .boxed_local()
+                    .await
+                {
+                    tracing::warn!(%error, "unable to establish query timeline windows");
+                }
                 for result in internal_results {
                     result.send(crate::coord::appends::WriteResult::Success {
                         timestamp: write_ts,
@@ -144,6 +179,13 @@ impl Coordinator {
                 let read_ts = self.get_local_read_ts().await;
                 self.downgrade_local_read_holds(read_ts);
                 self.advance_custom_timelines().boxed_local().await;
+                if let Err(error) = self
+                    .acquire_pending_query_timeline_holds()
+                    .boxed_local()
+                    .await
+                {
+                    tracing::warn!(%error, "unable to establish query timeline windows");
+                }
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
@@ -154,10 +196,11 @@ impl Coordinator {
             }
             Message::StagedBatches {
                 conn_id,
+                ingestion_id,
                 table_id,
                 batches,
             } => {
-                self.commit_staged_batches(conn_id, table_id, batches);
+                self.commit_staged_batches(conn_id, ingestion_id, table_id, batches);
             }
             Message::StorageUsageSchedule => {
                 self.schedule_storage_usage_collection().boxed_local().await;
@@ -773,32 +816,47 @@ impl Coordinator {
                 }
             }
             ControllerResponse::WatchSetFinished(ws_ids) => {
-                let now = self.now();
-                for ws_id in ws_ids {
-                    let Some((conn_id, rsp)) = self.installed_watch_sets.remove(&ws_id) else {
-                        continue;
-                    };
-                    self.connection_watch_sets
-                        .get_mut(&conn_id)
-                        .expect("corrupted coordinator state: unknown connection id")
-                        .remove(&ws_id);
-                    if self.connection_watch_sets[&conn_id].is_empty() {
-                        self.connection_watch_sets.remove(&conn_id);
-                    }
-
-                    match rsp {
-                        WatchSetResponse::StatementDependenciesReady(id, ev) => {
-                            self.record_statement_lifecycle_event(&id, &ev, now);
-                        }
-                        WatchSetResponse::AlterSinkReady(ctx) => {
-                            self.sequence_alter_sink_finish(ctx).await;
-                        }
-                        WatchSetResponse::AlterMaterializedViewReady(ctx) => {
-                            self.sequence_alter_materialized_view_apply_replacement_finish(ctx)
-                                .await;
-                        }
-                    }
+                for id in ws_ids {
+                    self.message_watch_set_ready(id, Ok(())).await;
                 }
+            }
+        }
+    }
+
+    async fn message_watch_set_ready(
+        &mut self,
+        id: mz_controller_types::WatchSetId,
+        result: Result<(), crate::AdapterError>,
+    ) {
+        let Some(watch) = self.installed_watch_sets.remove(&id) else {
+            return;
+        };
+        let conn_id = watch.conn_id;
+        let watches = self
+            .connection_watch_sets
+            .get_mut(&conn_id)
+            .expect("watch has a registered connection");
+        watches.remove(&id);
+        if watches.is_empty() {
+            self.connection_watch_sets.remove(&conn_id);
+        }
+        match (watch.response, result) {
+            (WatchSetResponse::StatementDependenciesReady(id, event), Ok(())) => {
+                self.record_statement_lifecycle_event(&id, &event, self.now());
+            }
+            (WatchSetResponse::StatementDependenciesReady(..), Err(error)) => {
+                tracing::debug!(?error, "dependency progress observation ended");
+            }
+            (WatchSetResponse::AlterSinkReady(ctx), Ok(())) => {
+                self.sequence_alter_sink_finish(ctx).await;
+            }
+            (WatchSetResponse::AlterSinkReady(ctx), Err(error)) => ctx.retire(Err(error)),
+            (WatchSetResponse::AlterMaterializedViewReady(ctx), Ok(())) => {
+                self.sequence_alter_materialized_view_apply_replacement_finish(ctx)
+                    .await;
+            }
+            (WatchSetResponse::AlterMaterializedViewReady(ctx), Err(error)) => {
+                ctx.retire(Err(error))
             }
         }
     }

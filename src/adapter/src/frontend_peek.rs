@@ -478,8 +478,13 @@ impl PeekClient {
 
         // # From peek_validate
 
-        let compute_instance_snapshot =
-            ComputeInstanceSnapshot::new_without_collections(cluster.id());
+        let compute_instance_snapshot = if let Some(client) = &self.query_client
+            && explain_ctx.needs_cluster()
+        {
+            client.instance_snapshot(&catalog, cluster.id())
+        } else {
+            ComputeInstanceSnapshot::new_without_collections(cluster.id())
+        };
 
         let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
             .override_from(&catalog.get_cluster(cluster.id()).config.features())
@@ -792,7 +797,10 @@ impl PeekClient {
             &determination.timestamp_context.antichain(),
             true,
             catalog.system_config(),
-            &*self.storage_collections,
+            self.storage_collections.as_deref(),
+            self.query_client
+                .as_deref()
+                .map(|client| (client, &*catalog)),
         )
         .await
         .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
@@ -1185,7 +1193,8 @@ impl PeekClient {
                     coord::sequencer::explain_pushdown_future_inner(
                         session,
                         &*catalog,
-                        &self.storage_collections,
+                        self.storage_collections.as_deref(),
+                        self.query_client.as_ref(),
                         as_of,
                         mz_now,
                         imports,
@@ -1510,7 +1519,16 @@ impl PeekClient {
         let isolation_level = session.vars().transaction_isolation();
 
         let (read_holds, upper) = self
-            .acquire_read_holds_and_least_valid_write(id_bundle)
+            .acquire_read_holds_and_least_valid_write(id_bundle, |upper| {
+                Coordinator::read_protection_timestamp(
+                    session,
+                    when,
+                    timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                    upper,
+                )
+            })
             .await
             .map_err(|err| {
                 AdapterError::concurrent_dependency_drop_from_collection_lookup_error(

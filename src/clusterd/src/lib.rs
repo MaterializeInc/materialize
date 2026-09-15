@@ -461,7 +461,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
     mz_ore::task::spawn(
         || "storage_server",
-        transport::serve(
+        transport::serve_concurrent(
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
@@ -494,7 +494,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
     mz_ore::task::spawn(
         || "compute_server",
-        transport::serve(
+        transport::serve_concurrent(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),

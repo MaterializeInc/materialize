@@ -315,6 +315,18 @@ metrics:
   - collection
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
+- name: mz_catalog_committed_update_bytes
+  help: Packed SourceData row bytes in acknowledged catalog compare-and-appends, including retractions and bootstrap writes. Excludes timestamps, diffs, Persist encoding, compression, and network framing. Not blob or network bytes.
+  labels:
+  - kind
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_committed_updates
+  help: Number of catalog row updates in acknowledged compare-and-appends, including retractions and bootstrap writes.
+  labels:
+  - kind
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_info_metrics_reconcile_seconds_bucket
   help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
   labels:
@@ -1198,6 +1210,18 @@ metrics:
   - type
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_maintained_compute_installation_retries_total
+  help: Installation attempts that left committed maintained compute exports pending.
+  source: src/adapter/src/metrics.rs
+  visibility: public
+  tags:
+  - environment
+- name: mz_maintained_compute_pending_installations
+  help: Committed maintained compute exports awaiting installation. Nonzero defers bound publication and client reclamation.
+  source: src/adapter/src/metrics.rs
+  visibility: public
+  tags:
+  - environment
 - name: mz_mcp_requests_total
   help: Total number of MCP requests received.
   labels:

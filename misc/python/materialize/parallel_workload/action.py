@@ -3234,6 +3234,8 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            # Latched at fresh catalog initialization, not changed by ALTER SYSTEM.
+            "enable_catalog_read_protection",
             # Read once at environmentd startup, so an ALTER SYSTEM SET only
             # takes effect after a restart. Flipping it here would be a no-op
             # for the running process.

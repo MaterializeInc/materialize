@@ -7616,7 +7616,7 @@ def workflow_alter_sink_hang(c: Composition) -> None:
         def alter_sink():
             c.sql("ALTER SINK snk SET FROM t2")
 
-        alter_thread = Thread(target=alter_sink)
+        alter_thread = PropagatingThread(target=alter_sink)
         alter_thread.start()
 
         # Sleep a bit to give the ALTER SINK a chance to run.

@@ -103,6 +103,7 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
 
         let active_subscribe = ActiveSubscribe {
+            query_execution: None,
             owner,
             channel: tx,
             backlog_accounting: std::sync::Arc::new(std::sync::Mutex::new(
@@ -186,7 +187,7 @@ impl Coordinator {
             }
             WriteAttemptKind::Background { .. } => {}
         }
-        if self.controller.read_only() {
+        if self.read_only_controllers {
             result.send(WriteResult::ReadOnly);
             return;
         }

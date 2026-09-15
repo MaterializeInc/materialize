@@ -107,7 +107,8 @@ pub async fn serve(
 
     let client_builder = move || {
         let client = ClusterClient::new(Arc::clone(&timely_container));
-        let client: Box<dyn StorageClient> = Box::new(client);
+        let client: Box<dyn StorageClient> =
+            Box::new(mz_storage_client::client::RoleClient::new(client));
         client
     };
 

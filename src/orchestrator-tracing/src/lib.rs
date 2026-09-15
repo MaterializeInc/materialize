@@ -11,6 +11,7 @@
 
 use std::ffi::OsString;
 use std::fmt;
+use std::num::NonZero;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +21,6 @@ use derivative::Derivative;
 use futures_core::stream::BoxStream;
 use http::header::{HeaderName, HeaderValue};
 use mz_build_info::BuildInfo;
-#[cfg(feature = "tokio-console")]
 use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
@@ -387,6 +387,15 @@ struct NamespacedTracingOrchestrator {
 
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
+    fn service_addresses(
+        &self,
+        id: &str,
+        scale: NonZero<u16>,
+        port: &ServicePort,
+    ) -> Result<Vec<String>, anyhow::Error> {
+        self.inner.service_addresses(id, scale, port)
+    }
+
     async fn fetch_service_metrics(
         &self,
         id: &str,

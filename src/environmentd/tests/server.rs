@@ -2759,6 +2759,12 @@ async fn migrated_builtin_mvs_readable_at_ready_to_promote(hydrate_migrated_mvs:
         .unsafe_mode()
         .data_directory(tmpdir.path())
         .with_deploy_generation(1)
+        // Builtin schema migrations are unsupported in protected mode. Initialize unprotected
+        // from the first startup because the mode is latched at environment creation.
+        .with_system_parameter_default(
+            "enable_catalog_read_protection".to_string(),
+            "false".to_string(),
+        )
         // Tick often, and tolerate far less lag than production, so the test finishes quickly and
         // actually exercises the gate. The allowed lag has to stay *below* the stability period: a
         // frozen collection looks caught up for as long as the tolerance lasts, so it must fall

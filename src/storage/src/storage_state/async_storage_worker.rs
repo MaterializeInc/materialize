@@ -25,6 +25,7 @@ use mz_persist_client::read::ListenEvent;
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, Row, TimestampManipulation};
+use mz_storage_client::client::RunIngestionCommand;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::StorageSinkDesc;
@@ -53,7 +54,11 @@ pub struct AsyncStorageWorker<T: Timestamp + Lattice + Codec64> {
 #[derive(Debug)]
 pub enum AsyncStorageWorkerCommand<T> {
     /// Calculate a recent resumption frontier for the ingestion.
-    UpdateIngestionFrontiers(GlobalId, IngestionDescription<CollectionMetadata>),
+    UpdateIngestionFrontiers(
+        GlobalId,
+        IngestionDescription<CollectionMetadata>,
+        Option<Antichain<T>>,
+    ),
 
     /// Calculate a recent resumption frontier for the Sink.
     UpdateSinkFrontiers(GlobalId, StorageSinkDesc<CollectionMetadata, T>),
@@ -219,6 +224,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                     AsyncStorageWorkerCommand::UpdateIngestionFrontiers(
                         id,
                         ingestion_description,
+                        remap_compaction_bound,
                     ) => {
                         let mut resume_uppers = BTreeMap::new();
 
@@ -254,7 +260,9 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                                 .unwrap();
                             let upper = write_handle.fetch_recent_upper().await;
                             let upper = match export.data_config.envelope {
-                                // The CdcV2 envelope must re-ingest everything since the Mz frontier does not have a relation to upstream timestamps.
+                                // CDCv2 replays all upstream data. Its decoder discards transport
+                                // timestamps and reconstructs embedded output timestamps, so neither
+                                // output progress nor the remap as-of can shorten upstream replay.
                                 // TODO(petrosagg): move this reasoning to the controller
                                 SourceEnvelope::CdcV2 if upper.is_empty() => Antichain::new(),
                                 SourceEnvelope::CdcV2 => Antichain::from_elem(Timestamp::minimum()),
@@ -264,21 +272,6 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             write_handle.expire().await;
                         }
 
-                        // Here we update the as-of frontier of the ingestion.
-                        //
-                        // The as-of frontier controls the frontier with which all inputs of the
-                        // ingestion dataflow will be advanced by. It is in our interest to set the
-                        // as-of froniter to the largest possible value, which will result in the
-                        // maximum amount of consolidation, which in turn results in the minimum
-                        // amount of memory required to hydrate.
-                        //
-                        // For each output `o` and for each input `i` of the ingestion the
-                        // controller guarantees that i.since < o.upper except when o.upper is
-                        // [T::minimum()]. Therefore the largest as-of for a particular output `o`
-                        // is `{ (t - 1).advance_by(i.since) | t in o.upper }`.
-                        //
-                        // To calculate the global as_of frontier we take the minimum of all those
-                        // per-output as-of frontiers.
                         let client = persist_clients
                             .open(
                                 ingestion_description
@@ -310,16 +303,11 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                             read_handle.expire().await;
                         });
-                        let mut as_of = Antichain::new();
-                        for upper in resume_uppers.values() {
-                            for t in upper.elements() {
-                                let mut t_prime = t.step_back().unwrap_or_else(T::minimum);
-                                if !remap_since.is_empty() {
-                                    t_prime.advance_by(remap_since.borrow());
-                                    as_of.insert(t_prime);
-                                }
-                            }
-                        }
+                        let as_of = ingestion_as_of(
+                            &remap_since,
+                            remap_compaction_bound.as_ref(),
+                            resume_uppers.values(),
+                        );
 
                         /// Convenience function to convert `BTreeMap<GlobalId, Antichain<C>>` to
                         /// `BTreeMap<GlobalId, Vec<Row>>`.
@@ -472,16 +460,23 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
         }
     }
 
-    /// Updates the frontiers associated with the provided `IngestionDescription` to recent values.
-    /// Currently this will calculate a fresh as-of for the ingestion and a fresh resumption
-    /// frontier for each of the exports.
-    pub fn update_ingestion_frontiers(
-        &self,
-        id: GlobalId,
-        ingestion: IngestionDescription<CollectionMetadata>,
-    ) {
+    /// Calculates a readable ingestion as-of respecting the command's remap permission,
+    /// and recent resumption frontiers for its exports.
+    pub fn update_ingestion_frontiers(&self, ingestion: RunIngestionCommand)
+    where
+        T: From<mz_repr::Timestamp>,
+    {
+        let RunIngestionCommand {
+            id,
+            description,
+            remap_compaction_bound,
+        } = ingestion;
+        let remap_compaction_bound =
+            remap_compaction_bound.map(|bound| bound.into_iter().map(T::from).collect());
         self.send(AsyncStorageWorkerCommand::UpdateIngestionFrontiers(
-            id, ingestion,
+            id,
+            description,
+            remap_compaction_bound,
         ))
     }
 
@@ -522,6 +517,30 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
     }
 }
 
+/// Chooses the ingestion input as-of without advancing physical compaction.
+fn ingestion_as_of<'a, T: TimestampManipulation>(
+    remap_since: &Antichain<T>,
+    remap_compaction_bound: Option<&Antichain<T>>,
+    resume_uppers: impl IntoIterator<Item = &'a Antichain<T>>,
+) -> Antichain<T> {
+    let mut as_of: Antichain<T> = resume_uppers
+        .into_iter()
+        .flat_map(|upper| {
+            upper
+                .iter()
+                .map(|t| t.step_back().unwrap_or_else(T::minimum))
+        })
+        .collect();
+    as_of.join_assign(remap_since);
+    // New exports at MIN must start at the committed floor even if a lease or
+    // physical compaction still holds remap since behind it. The command's recovery
+    // constraint makes this safe for existing exports too.
+    if let Some(bound) = remap_compaction_bound {
+        as_of.join_assign(bound);
+    }
+    as_of
+}
+
 /// Helper that makes sure that we always unpark the target thread when we send a
 /// message.
 struct ActivatingSender<T> {
@@ -538,5 +557,232 @@ impl<T> ActivatingSender<T> {
         let res = self.tx.send(message);
         self.thread.unpark();
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use mz_persist_client::ShardId;
+    use mz_persist_types::PersistLocation;
+    use mz_repr::{RelationDesc, Timestamp};
+    use mz_storage_types::instances::StorageInstanceId;
+    use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope};
+    use mz_storage_types::sources::load_generator::{
+        LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceExportDetails,
+    };
+    use mz_storage_types::sources::{
+        MzOffset, SourceDesc, SourceExport, SourceExportDataConfig, SourceExportDetails,
+    };
+
+    use super::*;
+
+    fn frontier(t: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(t.into())
+    }
+
+    #[mz_ore::test]
+    fn ingestion_as_of_respects_readability_and_completion() {
+        assert_eq!(
+            ingestion_as_of(&frontier(200), Some(&frontier(100)), &[frontier(0)]),
+            frontier(200),
+        );
+        for (since, permission, uppers) in [
+            (Antichain::new(), frontier(100), vec![frontier(0)]),
+            (frontier(10), Antichain::new(), vec![frontier(0)]),
+            (frontier(10), frontier(100), vec![Antichain::new()]),
+        ] {
+            assert!(ingestion_as_of(&since, Some(&permission), &uppers).is_empty());
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn ingestion_birth_floor_and_recovery() {
+        let clients = Arc::new(PersistClientCache::new_no_metrics());
+        let location = PersistLocation {
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
+        };
+        let client = clients.open(location.clone()).await.unwrap();
+        let connection = LoadGeneratorSourceConnection {
+            load_generator: LoadGenerator::Counter {
+                max_cardinality: None,
+            },
+            tick_micros: None,
+            as_of: 0,
+            up_to: u64::MAX,
+        };
+        let remap_metadata = CollectionMetadata {
+            persist_location: location.clone(),
+            data_shard: ShardId::new(),
+            relation_desc: connection.timestamp_desc(),
+            txns_shard: None,
+        };
+        let (mut remap_writer, mut remap_reader) = client
+            .open::<SourceData, (), Timestamp, StorageDiff>(
+                remap_metadata.data_shard,
+                Arc::new(remap_metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                false,
+            )
+            .await
+            .unwrap();
+        // Offset 7 is needed by existing exports, while new exports must replay from MIN.
+        let bindings = [(0, 0, 1), (0, 50, -1), (7, 50, 1)].map(|(offset, time, diff)| {
+            (
+                (SourceData(Ok(MzOffset::from(offset).encode_row())), ()),
+                Timestamp::from(time),
+                StorageDiff::from(diff),
+            )
+        });
+        remap_writer
+            .compare_and_append(bindings, frontier(0), frontier(300))
+            .await
+            .unwrap()
+            .unwrap();
+        remap_reader.downgrade_since(&frontier(10)).await;
+
+        let worker = AsyncStorageWorker::<Timestamp>::new(std::thread::current(), clients);
+        let ordinary = SourceEnvelope::None(NoneEnvelope {
+            key_envelope: KeyEnvelope::None,
+            key_arity: 0,
+        });
+        for (name, permission, uppers, envelope, expected_as_of) in [
+            (
+                "new alongside older exports",
+                Some(100),
+                vec![0, 151, 201],
+                ordinary.clone(),
+                100,
+            ),
+            (
+                "restart at permission",
+                Some(100),
+                vec![101, 151],
+                ordinary.clone(),
+                100,
+            ),
+            (
+                "partial progress",
+                Some(100),
+                vec![151, 201],
+                ordinary.clone(),
+                150,
+            ),
+            (
+                "legacy new export",
+                None,
+                vec![0, 151],
+                ordinary.clone(),
+                10,
+            ),
+            ("legacy restart", None, vec![151, 201], ordinary, 150),
+            (
+                "CDCv2 full replay",
+                Some(100),
+                vec![151],
+                SourceEnvelope::CdcV2,
+                100,
+            ),
+        ] {
+            let mut source_exports = BTreeMap::new();
+            for (index, upper) in uppers.iter().enumerate() {
+                let id = GlobalId::User(u64::try_from(index).unwrap() + 1);
+                let metadata = CollectionMetadata {
+                    persist_location: location.clone(),
+                    data_shard: ShardId::new(),
+                    relation_desc: RelationDesc::empty(),
+                    txns_shard: None,
+                };
+                let mut writer = client
+                    .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                        metadata.data_shard,
+                        Arc::new(metadata.relation_desc.clone()),
+                        Arc::new(UnitSchema),
+                        Diagnostics::for_tests(),
+                    )
+                    .await
+                    .unwrap();
+                let updates: Vec<((SourceData, ()), Timestamp, StorageDiff)> = Vec::new();
+                writer
+                    .compare_and_append(updates, frontier(0), frontier(*upper))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                writer.expire().await;
+                source_exports.insert(
+                    id,
+                    SourceExport {
+                        storage_metadata: metadata,
+                        details: SourceExportDetails::LoadGenerator(
+                            LoadGeneratorSourceExportDetails {
+                                output: LoadGeneratorOutput::Default,
+                            },
+                        ),
+                        data_config: SourceExportDataConfig {
+                            encoding: None,
+                            envelope: envelope.clone(),
+                        },
+                    },
+                );
+            }
+            worker.update_ingestion_frontiers(RunIngestionCommand {
+                id: GlobalId::User(1),
+                description: IngestionDescription {
+                    desc: SourceDesc {
+                        connection: GenericSourceConnection::LoadGenerator(connection.clone()),
+                        timestamp_interval: Duration::from_secs(1),
+                    },
+                    source_exports,
+                    instance_id: StorageInstanceId::system(0).unwrap(),
+                    remap_collection_id: GlobalId::User(10),
+                    remap_metadata: remap_metadata.clone(),
+                },
+                remap_compaction_bound: permission.map(frontier),
+            });
+            let response = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    match worker.try_recv() {
+                        Ok(response) => break response,
+                        Err(crossbeam_channel::TryRecvError::Empty) => {
+                            tokio::task::yield_now().await
+                        }
+                        Err(err) => panic!("{err}"),
+                    }
+                }
+            })
+            .await
+            .expect(name);
+            let AsyncStorageWorkerResponse::IngestionFrontiersUpdated {
+                as_of,
+                resume_uppers,
+                source_resume_uppers,
+                ..
+            } = response
+            else {
+                panic!("unexpected response: {response:?}")
+            };
+            assert_eq!(as_of, frontier(expected_as_of), "{name}");
+            for (index, upper) in uppers.into_iter().enumerate() {
+                let id = GlobalId::User(u64::try_from(index).unwrap() + 1);
+                let upper = if envelope == SourceEnvelope::CdcV2 {
+                    0
+                } else {
+                    upper
+                };
+                assert_eq!(resume_uppers[&id], frontier(upper), "{name}");
+                let offset = if upper == 0 { 0 } else { 7 };
+                assert_eq!(
+                    source_resume_uppers[&id],
+                    [MzOffset::from(offset).encode_row()],
+                    "{name}"
+                );
+            }
+        }
+        assert_eq!(remap_reader.since(), &frontier(10));
+        remap_reader.expire().await;
+        remap_writer.expire().await;
     }
 }

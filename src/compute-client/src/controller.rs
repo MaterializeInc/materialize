@@ -36,6 +36,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::ControllerMetrics;
@@ -71,9 +72,9 @@ use tokio::time::{self, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    HydrationCheckBadTarget, InstanceExists, InstanceMissing, PeekError, ReadPolicyError,
-    ReplicaCreationError, ReplicaDropError,
+    CollectionLookupError, CollectionMissing, CollectionUpdateError, CompactionBoundError,
+    DataflowCreationError, HydrationCheckBadTarget, InstanceExists, InstanceMissing, PeekError,
+    ReadPolicyError, ReplicaCreationError, ReplicaDropError,
 };
 use crate::controller::instance::{Instance, SharedCollectionState};
 use crate::controller::introspection::{IntrospectionUpdates, spawn_introspection_sink};
@@ -144,7 +145,7 @@ pub enum PeekNotification {
 impl PeekNotification {
     /// Construct a new [`PeekNotification`] from a [`PeekResponse`]. The `offset` and `limit`
     /// parameters are used to calculate the number of rows in the peek result.
-    fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
+    pub fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
         match peek_response {
             PeekResponse::Rows(rows) => {
                 let num_rows = u64::cast_from(RowCollection::offset_limit(
@@ -181,6 +182,9 @@ impl PeekNotification {
 /// A controller for the compute layer.
 pub struct ComputeController {
     instances: BTreeMap<ComputeInstanceId, InstanceState>,
+    /// Committed permissions for collections not yet installed.
+    staged_compaction_bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    dirty_compaction_proposals: Arc<Mutex<BTreeSet<GlobalId>>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
     /// `production` or `staging`).
@@ -196,6 +200,7 @@ pub struct ComputeController {
     /// controlled by it are allowed to affect changes to external systems
     /// (largely persist).
     read_only: bool,
+    catalog_read_protection_enabled: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
     /// The persist location where we can stash large peek results.
@@ -240,10 +245,14 @@ pub struct ComputeController {
 
 impl ComputeController {
     /// Construct a new [`ComputeController`].
+    ///
+    /// Catalog read protection governs permanent readable exports from installation,
+    /// using their installation `as_of` until a committed bound is available.
     pub fn new(
         build_info: &'static BuildInfo,
         storage_collections: StorageCollections,
         read_only: bool,
+        catalog_read_protection_enabled: bool,
         metrics_registry: &MetricsRegistry,
         peek_stash_persist_location: PersistLocation,
         controller_metrics: ControllerMetrics,
@@ -302,11 +311,14 @@ impl ComputeController {
 
         Self {
             instances: BTreeMap::new(),
+            staged_compaction_bounds: BTreeMap::new(),
+            dirty_compaction_proposals: Arc::default(),
             instance_workload_classes,
             build_info,
             storage_collections,
             initialized: false,
             read_only,
+            catalog_read_protection_enabled,
             config: Default::default(),
             peek_stash_persist_location,
             stashed_response: None,
@@ -467,11 +479,14 @@ impl ComputeController {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
             instances,
+            staged_compaction_bounds,
+            dirty_compaction_proposals: _,
             instance_workload_classes,
             build_info: _,
             storage_collections: _,
             initialized,
             read_only,
+            catalog_read_protection_enabled,
             config: _,
             peek_stash_persist_location: _,
             stashed_response,
@@ -503,9 +518,11 @@ impl ComputeController {
 
         Ok(serde_json::json!({
             "instances": instances_dump,
+            "staged_compaction_bounds": format!("{staged_compaction_bounds:?}"),
             "instance_workload_classes": instance_workload_classes,
             "initialized": initialized,
             "read_only": read_only,
+            "catalog_read_protection_enabled": catalog_read_protection_enabled,
             "stashed_response": format!("{stashed_response:?}"),
             "maintenance_scheduled": maintenance_scheduled,
         }))
@@ -527,7 +544,14 @@ impl ComputeController {
         let mut collections = BTreeMap::new();
         let mut logs = Vec::with_capacity(arranged_logs.len());
         for (&log, &id) in &arranged_logs {
-            let collection = Collection::new_log();
+            let bound = self.staged_compaction_bounds.remove(&id).or_else(|| {
+                (self.catalog_read_protection_enabled && (id.is_user() || id.is_system()))
+                    .then(|| Antichain::from_elem(Timestamp::MIN))
+            });
+            let collection = Collection::new_log(bound);
+            collection
+                .shared
+                .track_compaction_proposals(id, Arc::clone(&self.dirty_compaction_proposals));
             let shared = collection.shared.clone();
             collections.insert(id, collection);
             logs.push((log, id, shared));
@@ -815,6 +839,11 @@ impl ComputeController {
     /// into its own registry. The coordinator's curated metric sinks are installed per replica and
     /// do target one, so each replica's series are attributable to it.
     ///
+    /// A staged compaction bound caps each index export's `as_of`, unless the inputs are
+    /// no longer readable there. Such an export must install at exactly their least readable
+    /// frontier, with local permission seeded there pending durable publication.
+    /// Write-only exports discard any staged bound without installing permission.
+    ///
     /// Panics if called with a dataflow description that has index exports
     /// when `target_replica` is set.
     pub fn create_dataflow(
@@ -893,9 +922,21 @@ impl ComputeController {
             let read_hold = instance.acquire_read_hold(id)?;
             import_read_holds.push(read_hold);
         }
+        let mut least_readable = Antichain::from_elem(Timestamp::MIN);
         for hold in &import_read_holds {
             if PartialOrder::less_than(as_of, hold.since()) {
                 return Err(SinceViolation(hold.id()));
+            }
+            least_readable.join_assign(hold.since());
+        }
+        for id in dataflow.exported_index_ids() {
+            if let Some(bound) = self.staged_compaction_bounds.get(&id) {
+                if !PartialOrder::less_equal(as_of, bound)
+                    && !(as_of == &least_readable
+                        && PartialOrder::less_than(bound, &least_readable))
+                {
+                    return Err(CompactionBoundViolation(id));
+                }
             }
         }
 
@@ -909,13 +950,24 @@ impl ComputeController {
             .determine_time_dependence(instance_id, &dataflow, &used_imports)
             .expect("must exist");
 
-        let instance = self.instance_mut(instance_id).expect("validated");
-
+        let staged_bounds = &mut self.staged_compaction_bounds;
+        let instance = self.instances.get_mut(&instance_id).expect("validated");
         let mut shared_collection_state = BTreeMap::new();
         for id in dataflow.export_ids() {
-            let shared = SharedCollectionState::new(as_of.clone());
+            let bound = staged_bounds.remove(&id);
+            let write_only = dataflow.sink_exports.contains_key(&id);
+            let permission = if write_only {
+                None
+            } else {
+                bound.or_else(|| {
+                    (self.catalog_read_protection_enabled && (id.is_user() || id.is_system()))
+                        .then(|| as_of.clone())
+                })
+            };
+            let shared = SharedCollectionState::new(as_of.clone(), permission);
+            shared.track_compaction_proposals(id, Arc::clone(&self.dirty_compaction_proposals));
             let collection = Collection {
-                write_only: dataflow.sink_exports.contains_key(&id),
+                write_only,
                 compute_dependencies: dataflow.imported_index_ids().collect(),
                 shared: shared.clone(),
                 time_dependence: time_dependence.clone(),
@@ -941,6 +993,8 @@ impl ComputeController {
 
     /// Drop the read capability for the given collections and allow their resources to be
     /// reclaimed.
+    ///
+    /// For governed indexes, the caller must commit the drop before calling this method.
     pub fn drop_collections(
         &mut self,
         instance_id: ComputeInstanceId,
@@ -1039,6 +1093,79 @@ impl ComputeController {
         self.instance(instance_id)?
             .call(move |i| i.cancel_peek(uuid, reason));
         Ok(())
+    }
+
+    /// Apply a committed catalog compaction permission for a globally unique collection ID.
+    ///
+    /// An absent collection's bound is staged for creation. Live indexes must already be
+    /// governed, and write-only exports reject bounds. Repeated or stale deliveries never
+    /// regress permission. Live updates take effect asynchronously on the instance task.
+    /// The caller must deliver only committed bounds and must not deliver a dropped ID again.
+    pub fn apply_compaction_bound(
+        &mut self,
+        id: GlobalId,
+        bound: Antichain<Timestamp>,
+    ) -> Result<(), CompactionBoundError> {
+        if !(id.is_user() || id.is_system()) {
+            return Err(CompactionBoundError::UngovernedCollection(id));
+        }
+        for instance in self.instances.values() {
+            if let Some(collection) = instance.collections.get(&id) {
+                if collection.write_only {
+                    return Err(CompactionBoundError::WriteOnlyCollection(id));
+                }
+                if collection.shared.compaction_bound().is_none() {
+                    return Err(CompactionBoundError::UngovernedCollection(id));
+                }
+                instance.call(move |i| i.apply_compaction_bound(id, bound));
+                return Ok(());
+            }
+        }
+        let staged = self
+            .staged_compaction_bounds
+            .entry(id)
+            .or_insert_with(|| bound.clone());
+        if PartialOrder::less_than(staged, &bound) {
+            *staged = bound;
+        }
+        Ok(())
+    }
+
+    /// Take current compaction candidates for changed or explicitly requested governed indexes.
+    ///
+    /// Each candidate excludes only the catalog permission contribution. Reader, policy,
+    /// dependency, and warmup holds still constrain it. These are snapshots, not permissions.
+    /// They may precede committed permission or regress when new readers arrive.
+    /// Missing, dropped, write-only, transient, and ungoverned collections are omitted.
+    /// Changes concurrent with sampling are included or retained for the next call.
+    /// After failed publication, pass the affected IDs in `additional_ids` to resample them.
+    pub fn take_compaction_bound_proposals(
+        &mut self,
+        additional_ids: &BTreeSet<GlobalId>,
+    ) -> BTreeMap<GlobalId, Antichain<Timestamp>> {
+        // Never hold the dirty-set lock while acquiring a collection lock. Writers and
+        // sampling both lock capabilities before clearing or setting their notification.
+        let mut ids = self
+            .dirty_compaction_proposals
+            .lock()
+            .expect("poisoned")
+            .clone();
+        ids.extend(additional_ids);
+        ids.into_iter()
+            .filter_map(|id| {
+                let collection = self.instances.values().find_map(|i| i.collections.get(&id));
+                let proposal = collection
+                    .filter(|c| !c.write_only && (id.is_user() || id.is_system()))
+                    .and_then(|c| c.shared.take_compaction_bound_proposal());
+                if collection.is_none() {
+                    self.dirty_compaction_proposals
+                        .lock()
+                        .expect("poisoned")
+                        .remove(&id);
+                }
+                proposal.map(|bound| (id, bound))
+            })
+            .collect()
     }
 
     /// Assign a read policy to specific identifiers.
@@ -1304,7 +1431,7 @@ impl InstanceState {
         // at the implied capability.
 
         let collection = self.collection(id)?;
-        let since = collection.shared.lock_read_capabilities(|caps| {
+        let since = collection.shared.mutate_read_capabilities(|caps| {
             let since = caps.frontier().to_owned();
             caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
             since
@@ -1358,12 +1485,12 @@ struct Collection {
 }
 
 impl Collection {
-    fn new_log() -> Self {
+    fn new_log(bound: Option<Antichain<Timestamp>>) -> Self {
         let as_of = Antichain::from_elem(Timestamp::MIN);
         Self {
             write_only: false,
             compute_dependencies: Default::default(),
-            shared: SharedCollectionState::new(as_of),
+            shared: SharedCollectionState::new(as_of, bound),
             time_dependence: Some(TimeDependence::default()),
         }
     }

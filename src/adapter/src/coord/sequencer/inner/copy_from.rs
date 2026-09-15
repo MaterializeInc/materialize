@@ -23,11 +23,14 @@ use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_storage_types::StorageDiff;
-use mz_storage_types::oneshot_sources::{ContentShape, OneshotIngestionRequest};
+use mz_storage_types::oneshot_sources::{
+    ContentShape, OneshotIngestionRequest, OneshotResultCallback,
+};
 use mz_storage_types::sources::SourceData;
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
+use tracing::Instrument;
 use url::Url;
 use uuid::Uuid;
 
@@ -169,7 +172,7 @@ impl Coordinator {
                 }
                 let enforce_external_addresses =
                     mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-                        .get(self.controller.storage.config().config_set());
+                        .get(self.storage_configuration.config_set());
                 if enforce_external_addresses {
                     if let Err(err) = mz_ore::netio::ensure_url_ip_global(&url) {
                         return ctx
@@ -262,14 +265,27 @@ impl Coordinator {
             }
         };
         let cluster_id = target_cluster.id;
+        let query_execution = if let Some(client) = self.query_client.clone() {
+            if self.read_only_controllers {
+                return ctx.retire(Err(AdapterError::ReadOnly));
+            }
+            let metadata = return_if_err!(
+                client.collection_metadata(self.catalog(), collection_id),
+                ctx
+            );
+            Some((client, metadata))
+        } else {
+            None
+        };
 
         // When we finish staging the Batches in Persist, we'll send a command
         // to the Coordinator.
         let command_tx = self.internal_cmd_tx.clone();
         let conn_id = ctx.session().conn_id().clone();
-        let closure = Box::new(move |batches| {
+        let closure: OneshotResultCallback<ProtoBatch> = Box::new(move |batches| {
             let _ = command_tx.send(crate::coord::Message::StagedBatches {
                 conn_id,
+                ingestion_id,
                 table_id: target_id,
                 batches,
             });
@@ -277,20 +293,42 @@ impl Coordinator {
         // Stash the execute context so we can cancel the COPY.
         let conn_id = ctx.session().conn_id().clone();
         self.active_copies.insert(
-            conn_id,
+            conn_id.clone(),
             ActiveCopyFrom {
                 ingestion_id,
                 cluster_id,
                 table_id: target_id,
+                query_execution: None,
                 ctx,
             },
         );
 
-        let _result = self
-            .controller
-            .storage
-            .create_oneshot_ingestion(ingestion_id, collection_id, cluster_id, request, closure)
-            .await;
+        if let Some((client, collection_meta)) = query_execution {
+            let command = mz_storage_client::client::RunOneshotIngestion {
+                ingestion_id,
+                collection_id,
+                collection_meta,
+                request,
+            };
+            let task = mz_ore::task::spawn(
+                || "query COPY FROM",
+                async move {
+                    let result = client.stage_oneshot(cluster_id, command).await;
+                    closure(result.unwrap_or_else(|error| vec![Err(error.to_string())]));
+                }
+                .instrument(tracing::Span::current()),
+            );
+            self.active_copies
+                .get_mut(&conn_id)
+                .expect("registered COPY")
+                .query_execution = Some(task.abort_on_drop());
+        } else {
+            let _result = self
+                .controller
+                .storage
+                .create_oneshot_ingestion(ingestion_id, collection_id, cluster_id, request, closure)
+                .await;
+        }
     }
 
     /// Sets up a streaming COPY FROM STDIN operation.
@@ -323,13 +361,12 @@ impl Coordinator {
         };
         let collection_id = dest_table.global_id_writes();
 
-        let collection_meta = self
-            .controller
-            .storage
-            .collection_metadata(collection_id)
-            .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{e}")))?;
-        let shard_id = collection_meta.data_shard;
-        let collection_desc = collection_meta.relation_desc.clone();
+        let shard_id = self
+            .catalog()
+            .state()
+            .storage_metadata()
+            .get_collection_shard(collection_id)?;
+        let collection_desc = dest_table.desc.latest();
 
         // Pre-compute the column transformation.
         let pcx = session.pcx().clone();
@@ -670,21 +707,30 @@ impl Coordinator {
     pub(crate) fn commit_staged_batches(
         &mut self,
         conn_id: ConnectionId,
+        ingestion_id: uuid::Uuid,
         table_id: CatalogItemId,
         batches: Vec<Result<ProtoBatch, String>>,
     ) {
-        let Some(active_copy) = self.active_copies.remove(&conn_id) else {
-            // Getting a successful response for a cancel COPY FROM is unexpected.
-            tracing::warn!(%conn_id, ?batches, "got response for canceled COPY FROM");
+        // A canceled request can complete after the session starts another COPY.
+        // Session and table identity alone cannot identify the owner of these batches.
+        if !self
+            .active_copies
+            .get(&conn_id)
+            .is_some_and(|copy| copy.ingestion_id == ingestion_id && copy.table_id == table_id)
+        {
+            tracing::debug!(%conn_id, %ingestion_id, "got response for retired COPY FROM");
             return;
-        };
+        }
+        let active_copy = self.active_copies.remove(&conn_id).expect("matched COPY");
 
         let ActiveCopyFrom {
             ingestion_id,
             cluster_id: _,
             table_id: _,
+            query_execution,
             mut ctx,
         } = active_copy;
+        drop(query_execution);
         tracing::info!(%ingestion_id, num_batches = ?batches.len(), "received batches to append");
 
         let mut all_batches = SmallVec::with_capacity(batches.len());
@@ -741,15 +787,20 @@ impl Coordinator {
             ingestion_id,
             cluster_id: _,
             table_id: _,
+            query_execution,
             ctx,
         }) = self.active_copies.remove(conn_id)
         {
-            let cancel_result = self
-                .controller
-                .storage
-                .cancel_oneshot_ingestion(ingestion_id);
-            if let Err(err) = cancel_result {
-                tracing::error!(?err, "failed to cancel OneshotIngestion");
+            if let Some(execution) = query_execution {
+                drop(execution);
+            } else {
+                let cancel_result = self
+                    .controller
+                    .storage
+                    .cancel_oneshot_ingestion(ingestion_id);
+                if let Err(err) = cancel_result {
+                    tracing::error!(?err, "failed to cancel OneshotIngestion");
+                }
             }
 
             ctx.retire(Err(AdapterError::Canceled));

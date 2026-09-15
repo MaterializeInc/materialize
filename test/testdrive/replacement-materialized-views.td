@@ -130,6 +130,48 @@ mv   other   ""
 > DROP MATERIALIZED VIEW mv CASCADE
 
 
+# Test: a pending replacement can read input newer than its target's output.
+# Keep the target suspended so its shared output shard cannot keep up with the
+# new input. Installing the replacement must use its own initial visibility frontier,
+# not require its inputs to be readable at the target's old output frontier.
+
+> CREATE CLUSTER replacement_target SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
+> CREATE MATERIALIZED VIEW mv IN CLUSTER replacement_target AS SELECT a, b FROM t
+
+> CREATE TABLE newer_input (a int NOT NULL, b int NOT NULL)
+> INSERT INTO newer_input VALUES (10, 20), (30, 40)
+
+> SELECT input.read_frontier > output.write_frontier
+  FROM mz_internal.mz_frontiers input
+  JOIN mz_tables t ON input.object_id = t.id
+  CROSS JOIN mz_internal.mz_frontiers output
+  JOIN mz_materialized_views m ON output.object_id = m.id
+  WHERE t.name = 'newer_input' AND m.name = 'mv'
+true
+
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER quickstart
+  AS SELECT a, b FROM newer_input
+
+# Resume only after installation, so ordinary reads can finish while we verify
+# that creating the replacement has not changed the target's contents.
+> ALTER CLUSTER replacement_target SET (REPLICATION FACTOR 1)
+
+> SELECT * FROM mv
+1 2
+3 4
+5 6
+
+> ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+> SELECT * FROM mv
+10 20
+30 40
+
+> DROP MATERIALIZED VIEW mv
+> DROP TABLE newer_input
+> DROP CLUSTER replacement_target
+
+
 # Test: replacement with downstream objects
 
 > CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t

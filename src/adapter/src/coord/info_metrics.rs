@@ -286,13 +286,16 @@ impl Coordinator {
                 let (tx, rx) = oneshot::channel();
                 let send = internal_cmd_tx.send(Message::Command(
                     OpenTelemetryContext::obtain(),
-                    Command::CatalogSnapshot { tx },
+                    Command::CatalogSnapshot {
+                        tx,
+                        include_durable_upper: false,
+                    },
                 ));
                 // Bail if the coordinator has gone away.
                 if send.is_err() {
                     break;
                 }
-                let Ok(CatalogSnapshot { catalog }) = rx.await else {
+                let Ok(CatalogSnapshot { catalog, .. }) = rx.await else {
                     break;
                 };
 
