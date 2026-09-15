@@ -114,13 +114,22 @@ snapshot, then commits each subsequent batch of changes about once a second.
 Query the destination from PostgreSQL to verify:
 
 ```sql
-SELECT * FROM public.winning_bids ORDER BY auction_id LIMIT 5;
+SELECT * FROM public.winning_bids ORDER BY auction_id;
 ```
 
-Column types come from the query's result types (`bigint` to `BIGINT`,
-`numeric(38,2)` to `NUMERIC(38,2)`, `text[]` to `TEXT[]`, `uuid` to `UUID`).
-Materialize types with no faithful PostgreSQL equivalent, such as `list`, `map`,
-and `record`, become `JSONB`.
+```nofmt
+ auction_id | bid_id | amount
+------------+--------+--------
+          1 |     11 |  11.75
+          3 |     30 |  30.25
+          4 |     40 |  40.00
+```
+
+Column types come from the query's result types: `bigint` to `bigint`, `text[]`
+to `text[]`, `uuid` to `uuid`, `jsonb` to `jsonb`. Materialize types with no
+faithful PostgreSQL equivalent, such as `list`, `map`, and `record`, become
+`jsonb`. A `numeric` column is created one digit wider than its Materialize
+declaration, so `numeric(38,2)` arrives as `numeric(39,2)`.
 
 ## Sink into several tables
 
@@ -190,6 +199,12 @@ are meaningful and must be preserved exactly.
   the `table=` form in [Step 3](#step-3-write-the-sink) to an explicit
   `routes=` list changes the `id` from `default` to the table name, which is a
   `DestinationPlanMismatch`. Pass `id="default"` to keep the same identity.
+
+- **Static relations.** The sink commits at progress boundaries, and a relation
+  with no upstream dependencies, such as a materialized view over constants,
+  never advances past its snapshot. Such a sink writes nothing and does not
+  exit, which looks like a hang. Sink from a relation that tracks a table or a
+  source.
 
 - **Writing to the destination table.** The sink expects to be the only writer.
   If another process changes a row the sink is about to update, the transaction
