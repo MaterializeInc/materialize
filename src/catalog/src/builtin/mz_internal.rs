@@ -5222,6 +5222,7 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
         .with_column("peak_memory_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("peak_disk_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("status", SqlScalarType::String.nullable(false))
+        .with_column("process_id", SqlScalarType::UInt64.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -5243,15 +5244,19 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
         ),
         (
             "peak_memory_bytes",
-            "The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak.",
+            "The process-lifetime cgroup memory high-water mark when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak.",
         ),
         (
             "peak_disk_bytes",
-            "The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.",
+            "The process-lifetime scratch-filesystem or swap high-water mark when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.",
         ),
         (
             "status",
             "The hydration episode's status. Currently always `hydrated`.",
+        ),
+        (
+            "process_id",
+            "The ID of a process within the replica. Episode timing and object_count are replica-wide and repeated for each process.",
         ),
     ]),
     // Not a retained-metrics object: that would pin a 30 day compaction window,

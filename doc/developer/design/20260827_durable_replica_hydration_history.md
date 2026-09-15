@@ -40,10 +40,9 @@ intervals as an earlier or overlapping episode.
 
 ## Resource interpretation
 
-`peak_memory_bytes` is the maximum `cgroup memory_peak` across replica
-processes. `peak_disk_bytes` is the maximum sampled `statvfs fs_used_peak` when a
-scratch filesystem is present. Otherwise it is the maximum kernel-maintained
-`cgroup swap_peak`.
+Each process contributes a row. `peak_memory_bytes` is its `cgroup memory_peak`.
+`peak_disk_bytes` is its sampled `statvfs fs_used_peak` when a scratch filesystem
+is present. Otherwise it is its kernel-maintained `cgroup swap_peak`.
 
 Replica memory and disk limits apply independently to each process. The maximum
 process peak therefore answers whether any process approached its limit. Adding
@@ -71,11 +70,16 @@ mz_internal.mz_replica_hydration_history
   peak_memory_bytes  uint8        null
   peak_disk_bytes    uint8        null
   status             text         not null
+  process_id         uint8        null
 ```
 
-An episode is identified operationally by `(replica_id, started_at)`. The table
-does not declare a key or index. Collection runs on the selected replica, so a
-catalog-server index would not avoid importing and arranging the history there.
+An episode is identified operationally by `(replica_id, started_at)`, with one
+row per `process_id`. Timing, status, and object count are replica-wide and
+repeated for each process.
+
+The table does not declare a key or index. Collection runs on the selected
+replica, so a catalog-server index would not avoid importing and arranging the
+history there.
 
 Rows currently have a populated `finished_at` and the status `hydrated`.
 Resource columns are nullable because the available kernel and filesystem
