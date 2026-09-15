@@ -7421,6 +7421,7 @@ dependencies = [
  "md-5 0.10.6",
  "murmur2",
  "mz-build-tools",
+ "mz-compute-types",
  "mz-expr",
  "mz-expr-derive",
  "mz-expr-derive-impl",

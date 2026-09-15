@@ -232,6 +232,15 @@ macro_rules! derive_unary {
                 }
             }
 
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$name $(<$marker>)? as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
             /// Rebuilds this function with any stored expressions converted to
             /// `E2`. Fails if any expression conversion fails, reporting the
             /// first failure.
@@ -403,6 +412,14 @@ macro_rules! derive_variadic {
                 }
             }
 
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
             /// Attempts to construct a `VariadicFunc` from the canonical name
             /// of one of its variants, as declared by the variant's
             /// [`FuncName`](crate::func::FuncName) impl (the name of the
@@ -537,6 +554,14 @@ macro_rules! derive_binary {
             pub fn variant_name(&self) -> &'static str {
                 match self {
                     $(Self::$name(_) => <$variant as crate::func::FuncName>::NAME,)*
+                }
+            }
+
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
                 }
             }
 

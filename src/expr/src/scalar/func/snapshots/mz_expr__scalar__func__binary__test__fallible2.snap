@@ -49,6 +49,10 @@ impl std::fmt::Display for Fallible2 {
 }
 impl crate::func::FuncName for Fallible2 {
     const NAME: &'static str = stringify!(fallible2);
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(test = true)] fn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError>",
+        body_fingerprint: 5269907380045003520u64,
+    });
 }
 #[allow(dead_code)]
 fn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError> {

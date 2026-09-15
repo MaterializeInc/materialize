@@ -49,6 +49,10 @@ impl std::fmt::Display for Infallible2 {
 }
 impl crate::func::FuncName for Infallible2 {
     const NAME: &'static str = stringify!(infallible2);
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(test = true)] fn infallible2(a: Option<f32>, b: Option<f32>) -> f32",
+        body_fingerprint: 17486601647010151685u64,
+    });
 }
 #[allow(dead_code)]
 fn infallible2(a: Option<f32>, b: Option<f32>) -> f32 {

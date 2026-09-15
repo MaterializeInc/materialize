@@ -51,6 +51,10 @@ impl std::fmt::Display for RangeLower {
 }
 impl crate::func::FuncName for RangeLower {
     const NAME: &'static str = stringify!(range_lower);
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(sqlname = \"rangelower\", is_monotone = true,)] fn range_lower<'a, T>(a: Range<T>) -> Option<T>",
+        body_fingerprint: 9617721996965895957u64,
+    });
 }
 fn range_lower<'a, T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.lower.bound).flatten()
