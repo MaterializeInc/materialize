@@ -218,6 +218,11 @@ ORDER BY u.cpu_percent DESC;
 - If the returned `memory_percent` is high, Materialize may force data to disk,
   which can slow down processing.
 
+Note that `cpu_percent` averages over the replica's workers, so a cluster whose
+work is concentrated on one worker can degrade while reporting unremarkable CPU.
+To attribute CPU to a cause, see [Cluster CPU
+troubleshooting](/clusters/cpu-troubleshooting/).
+
 To resolve, scale the cluster up to a larger size ([`ALTER CLUSTER ... SET (SIZE
 = '<new size>')`](/sql/alter-cluster/)), and/or move enough objects to another
 cluster to reduce load on the current cluster. If the pressure is caused by an
