@@ -16,17 +16,19 @@ use std::sync::LazyLock;
 
 use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
-use mz_expr::func;
 use mz_expr::func::variadic::{JsonbBuildObject, RecordCreate};
-use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
+use mz_expr::func::{CastArrayToJsonb, CastListToJsonb, TryCast};
+use mz_expr::{CastFailureMode, func};
+use mz_ore::soft_panic_or_log;
 use mz_repr::{
-    ColumnName, Datum, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
+    ColumnName, Datum, Row, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
 };
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
 use crate::plan::hir::{
-    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, HirScalarExpr, UnaryFunc,
+    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, HirScalarExpr, NameMetadata,
+    UnaryFunc,
 };
 use crate::plan::query::{ExprContext, QueryContext};
 use crate::plan::scope::Scope;
@@ -34,7 +36,7 @@ use crate::plan::scope::Scope;
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
     let invoke = crate::func::sql_impl(expr);
-    CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
+    CastTemplate::strict_only(move |ecx, _ccx, from_type, _to_type| {
         // Oddly, this needs to be able to gracefully fail so we can detect unmet dependencies.
         let mut out = invoke(ecx, vec![from_type.clone()]).ok()?;
         Some(move |e| {
@@ -49,7 +51,7 @@ fn sql_impl_cast_per_context(casts: &[(CastContext, &'static str)]) -> CastTempl
         .iter()
         .map(|(ccx, expr)| (ccx.clone(), crate::func::sql_impl(expr)))
         .collect();
-    CastTemplate::new(move |ecx, ccx, from_type, _to_type| {
+    CastTemplate::strict_only(move |ecx, ccx, from_type, _to_type| {
         let invoke = &casts[&ccx];
         let r = invoke(ecx, vec![from_type.clone()]);
         let mut out = r.ok()?;
@@ -64,8 +66,9 @@ fn sql_impl_cast_per_context(casts: &[(CastContext, &'static str)]) -> CastTempl
 type Cast = Box<dyn FnOnce(HirScalarExpr) -> HirScalarExpr>;
 
 /// A cast template is a function that produces a `Cast` given a concrete input
-/// and output type. A template can return `None` to indicate that it is
-/// incapable of producing a cast for the specified types.
+/// and output type and a failure mode. A template can return `None` to
+/// indicate that it is incapable of producing a cast for the specified types,
+/// or for the specified failure mode.
 ///
 /// Cast templates are used to share code for similar casts, where the input or
 /// output type is of one "category" of type. For example, a single cast
@@ -74,13 +77,27 @@ type Cast = Box<dyn FnOnce(HirScalarExpr) -> HirScalarExpr>;
 /// which is impractical.
 struct CastTemplate(
     Box<
-        dyn Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<Cast>
+        dyn Fn(
+                &ExprContext,
+                CastContext,
+                CastFailureMode,
+                &SqlScalarType,
+                &SqlScalarType,
+            ) -> Option<Cast>
             + Send
             + Sync,
     >,
 );
 
 impl CastTemplate {
+    /// Builds a template from a builder of the erroring cast.
+    ///
+    /// Under [`CastFailureMode::NullFallback`] the template emits the same
+    /// stages with each wrapped in [`TryCast`], so a failure at any stage yields
+    /// NULL. That requires the builder to apply only unary functions to its
+    /// input, which [`extract_unary_stages_for_try_cast`] verifies; a builder of any other shape
+    /// yields `None` under `NullFallback` and must use
+    /// [`CastTemplate::strict_only`] instead.
     fn new<T, C>(t: T) -> CastTemplate
     where
         T: Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<C>
@@ -89,10 +106,85 @@ impl CastTemplate {
             + 'static,
         C: FnOnce(HirScalarExpr) -> HirScalarExpr + 'static,
     {
-        CastTemplate(Box::new(move |ecx, ccx, from_ty, to_ty| {
-            Some(Box::new(t(ecx, ccx, from_ty, to_ty)?))
+        CastTemplate(Box::new(move |ecx, ccx, mode, from_ty, to_ty| {
+            let cast = t(ecx, ccx, from_ty, to_ty)?;
+            match mode {
+                CastFailureMode::Error => Some(Box::new(cast)),
+                CastFailureMode::NullFallback => {
+                    let stages = extract_unary_stages_for_try_cast(from_ty, cast)?;
+                    Some(Box::new(move |mut expr: HirScalarExpr| {
+                        for stage in stages {
+                            expr = expr.call_unary(UnaryFunc::TryCast(TryCast {
+                                inner: Box::new(stage),
+                            }));
+                        }
+                        expr
+                    }))
+                }
+            }
         }))
     }
+
+    /// Builds a template that supports only [`CastFailureMode::Error`].
+    ///
+    /// For casts implemented in SQL: their failures come from `mz_error_if_null`
+    /// calls and from subquery cardinality, neither of which a scalar-level
+    /// wrapper can turn into NULL.
+    fn strict_only<T, C>(t: T) -> CastTemplate
+    where
+        T: Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<C>
+            + Send
+            + Sync
+            + 'static,
+        C: FnOnce(HirScalarExpr) -> HirScalarExpr + 'static,
+    {
+        CastTemplate(Box::new(move |ecx, ccx, mode, from_ty, to_ty| match mode {
+            CastFailureMode::Error => Some(Box::new(t(ecx, ccx, from_ty, to_ty)?)),
+            CastFailureMode::NullFallback => None,
+        }))
+    }
+}
+
+/// Extracts a sequence of `UnaryFunc`s from a cast, returning `None` if the cast
+/// is not a sequence of `UnaryFunc`s.
+///
+/// These stages must propagate nulls: f(g(e)) == try[f](try[g](e)) only when
+/// f and g return null on a null input. (As of 2026-09-15, this is true of all
+/// casts that are sequences of `UnaryFunc` stages.)
+fn extract_unary_stages_for_try_cast(
+    from: &SqlScalarType,
+    cast: impl FnOnce(HirScalarExpr) -> HirScalarExpr,
+) -> Option<Vec<UnaryFunc>> {
+    // dummy argument (built manually to avoid an assert)
+    let sentinel = HirScalarExpr::Literal(
+        Row::pack([Datum::Dummy]),
+        from.clone().nullable(false),
+        NameMetadata::default(),
+    );
+    let mut expr = cast(sentinel.clone());
+    let mut stages = vec![];
+    loop {
+        match expr {
+            HirScalarExpr::CallUnary {
+                func, expr: inner, ..
+            } => {
+                stages.push(func);
+                expr = *inner;
+            }
+            other if other == sentinel => break,
+            _ => return None,
+        }
+    }
+    stages.reverse();
+    if let Some(stage) = stages
+        .iter()
+        .skip(1)
+        .find(|stage| !stage.propagates_nulls())
+    {
+        soft_panic_or_log!("cast stage {stage} does not propagate NULLs; TRY_CAST cannot wrap it");
+        return None;
+    }
+    Some(stages)
 }
 
 impl From<UnaryFunc> for CastTemplate {
@@ -1099,6 +1191,8 @@ pub enum CastError {
     },
     /// Cast would apply but is disallowed (e.g. range over an unsupported element type).
     UnsupportedRangeElementType { element_type_name: String },
+    /// The cast exists but has no null-fallback form, so `TRY_CAST` cannot use it.
+    NullFallbackUnsupported { from: String, to: String },
 }
 
 impl CastError {
@@ -1114,6 +1208,9 @@ impl CastError {
             CastError::UnsupportedRangeElementType { element_type_name } => {
                 PlanError::UnsupportedRangeElementType { element_type_name }
             }
+            CastError::NullFallbackUnsupported { from, to } => {
+                PlanError::TryCastUnsupported { from, to }
+            }
         }
     }
 }
@@ -1127,11 +1224,13 @@ impl CastError {
 fn get_cast(
     ecx: &ExprContext,
     ccx: CastContext,
+    mode: CastFailureMode,
     from: &SqlScalarType,
     to: &SqlScalarType,
 ) -> Result<Cast, CastError> {
     use CastContext::*;
 
+    // The identity cast cannot fail, so it is the same in every failure mode.
     if from == to || (ccx == Implicit && from.base_eq(to)) {
         return Ok(Box::new(|expr| expr));
     }
@@ -1156,8 +1255,20 @@ fn get_cast(
     } else {
         None
     };
-    match template.and_then(|template| (template.0)(ecx, ccx, from, to)) {
+    let build = |mode| template.and_then(|template| (template.0)(ecx, ccx, mode, from, to));
+    match build(mode) {
         Some(cast) => Ok(cast),
+        // A template declines a failure mode by returning `None`, the same way
+        // it declines a type pair. Tell the two apart so that the error names
+        // the actual problem.
+        None if mode == CastFailureMode::NullFallback
+            && build(CastFailureMode::Error).is_some() =>
+        {
+            Err(CastError::NullFallbackUnsupported {
+                from: ecx.humanize_sql_scalar_type(from, false),
+                to: ecx.humanize_sql_scalar_type(to, false),
+            })
+        }
         None => Err(CastError::InvalidCast {
             ccx,
             from: ecx.humanize_sql_scalar_type(from, false),
@@ -1399,6 +1510,18 @@ pub fn plan_coerce<'a>(
     e: CoercibleScalarExpr,
     coerce_to: &SqlScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
+    plan_coerce_with_failure_mode(ecx, e, coerce_to, CastFailureMode::Error)
+}
+
+/// Like [`plan_coerce`], but the casts that coerce a literal to `coerce_to`
+/// use the given failure mode. `TRY_CAST('abc' AS int4)` reaches its cast
+/// through this coercion, so the mode has to apply here too.
+pub fn plan_coerce_with_failure_mode<'a>(
+    ecx: &'a ExprContext,
+    e: CoercibleScalarExpr,
+    coerce_to: &SqlScalarType,
+    mode: CastFailureMode,
+) -> Result<HirScalarExpr, PlanError> {
     use CoercibleScalarExpr::*;
 
     Ok(match e {
@@ -1413,7 +1536,7 @@ pub fn plan_coerce<'a>(
             // (with either implicit or explicit semantics) via a separate call
             // to `plan_cast`.
             let coerce_to_base = &coerce_to.without_modifiers();
-            plan_cast(ecx, CastContext::Coerced, lit, coerce_to_base)?
+            plan_cast_with_failure_mode(ecx, CastContext::Coerced, mode, lit, coerce_to_base)?
         }
 
         LiteralRecord(exprs) => {
@@ -1428,7 +1551,7 @@ pub fn plan_coerce<'a>(
             };
             let mut out = vec![];
             for (e, coerce_to) in exprs.into_iter().zip_eq(coercions) {
-                out.push(plan_coerce(ecx, e, &coerce_to)?);
+                out.push(plan_coerce_with_failure_mode(ecx, e, &coerce_to, mode)?);
             }
             HirScalarExpr::call_variadic(
                 RecordCreate {
@@ -1523,6 +1646,11 @@ pub fn plan_hypothetical_cast(
 
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
+    //
+    // NOTE: element casts are always strict, whatever the enclosing cast's
+    // failure mode. Under `TRY_CAST` the enclosing function is what gets
+    // wrapped, so a bad element makes the whole value NULL rather than
+    // producing a value with NULL holes in it.
     plan_cast(&ecx, ccx, col_expr, to)
         .ok()?
         // TODO(jkosh44) Support casts that have correlated implementations.
@@ -1545,12 +1673,26 @@ pub fn plan_cast(
     expr: HirScalarExpr,
     to: &SqlScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
+    plan_cast_with_failure_mode(ecx, ccx, CastFailureMode::Error, expr, to)
+}
+
+/// Like [`plan_cast`], but with the given failure mode. Under
+/// [`CastFailureMode::NullFallback`] every stage of the cast, including the
+/// intermediate string cast that string-like types route through, is wrapped so
+/// that a failure anywhere yields NULL.
+pub fn plan_cast_with_failure_mode(
+    ecx: &ExprContext,
+    ccx: CastContext,
+    mode: CastFailureMode,
+    expr: HirScalarExpr,
+    to: &SqlScalarType,
+) -> Result<HirScalarExpr, PlanError> {
     let from = ecx.scalar_type(&expr);
 
-    // Close over `ccx`, `from`, and `to` to simplify error messages in the
-    // face of intermediate expressions.
+    // Close over `ccx`, `mode`, `from`, and `to` to simplify error messages in
+    // the face of intermediate expressions.
     let cast_inner = |from, to, expr| {
-        get_cast(ecx, ccx, from, to)
+        get_cast(ecx, ccx, mode, from, to)
             .map(|cast| cast(expr))
             .map_err(|e| e.into_plan_error(ecx.name.into()))
     };
@@ -1585,5 +1727,70 @@ pub fn can_cast(
     cast_from: &SqlScalarType,
     cast_to: &SqlScalarType,
 ) -> bool {
-    get_cast(ecx, ccx, cast_from, cast_to).is_ok()
+    get_cast(ecx, ccx, CastFailureMode::Error, cast_from, cast_to).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::func::{CastInt64ToInt32, CastStringToInt64, Eq as EqFunc, IsNull};
+    use mz_repr::SqlScalarType;
+
+    use super::extract_unary_stages_for_try_cast;
+    use crate::plan::hir::HirScalarExpr;
+
+    #[mz_ore::test]
+    fn cast_stages_of_chain_are_innermost_first() {
+        let stages =
+            extract_unary_stages_for_try_cast(&SqlScalarType::String, |e: HirScalarExpr| {
+                e.call_unary(CastStringToInt64.into())
+                    .call_unary(CastInt64ToInt32.into())
+            });
+        assert_eq!(
+            stages,
+            Some(vec![CastStringToInt64.into(), CastInt64ToInt32.into()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn cast_stages_of_identity_is_empty() {
+        assert_eq!(
+            extract_unary_stages_for_try_cast(&SqlScalarType::Int32, |e: HirScalarExpr| e),
+            Some(vec![])
+        );
+    }
+
+    #[mz_ore::test]
+    fn cast_stages_rejects_non_unary_shapes() {
+        let compares = |e: HirScalarExpr| {
+            let zero = HirScalarExpr::literal_null(SqlScalarType::Int32);
+            e.call_binary(zero, EqFunc)
+        };
+        assert_eq!(
+            extract_unary_stages_for_try_cast(&SqlScalarType::Int32, compares),
+            None
+        );
+        let ignores_input = |_: HirScalarExpr| HirScalarExpr::literal_null(SqlScalarType::Int32);
+        assert_eq!(
+            extract_unary_stages_for_try_cast(&SqlScalarType::Int32, ignores_input),
+            None
+        );
+    }
+
+    /// A stage after the first that does not propagate NULLs would turn the
+    /// NULL of an earlier failure into a value, so wrapping must refuse it.
+    #[mz_ore::test]
+    fn cast_stages_rejects_non_null_propagating_later_stage() {
+        let chain = |e: HirScalarExpr| {
+            e.call_unary(CastInt64ToInt32.into())
+                .call_unary(IsNull.into())
+        };
+        let outcome = mz_ore::panic::catch_unwind(|| {
+            extract_unary_stages_for_try_cast(&SqlScalarType::Int64, chain)
+        });
+        if mz_ore::assert::soft_assertions_enabled() {
+            assert!(outcome.is_err(), "soft assertion should have fired");
+        } else {
+            assert_eq!(outcome.expect("no panic"), None);
+        }
+    }
 }
