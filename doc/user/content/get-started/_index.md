@@ -369,13 +369,14 @@ creates:
            w2.amount AS sold_amount,
            w1.amount AS purchased_amount,
            w2.amount - w1.amount AS diff_amount,
-           datediff('days', w2.bid_time, w1.bid_time) AS timeframe_days
+           datediff('days', w1.bid_time, w2.bid_time) AS timeframe_days
      FROM  winning_bids AS w1
        JOIN winning_bids AS w2
          ON w1.buyer = w2.seller   -- Buyer and seller are the same
             AND w1.item = w2.item  -- Item is the same
      WHERE w2.amount > w1.amount   -- But sold at a higher price
-       AND datediff('days', w2.bid_time, w1.bid_time) < 8;
+       AND w2.bid_time > w1.bid_time -- And sold after it was bought
+       AND datediff('days', w1.bid_time, w2.bid_time) < 8;
     ```
 
     To view a sample row in `flip_activities`, run the following
