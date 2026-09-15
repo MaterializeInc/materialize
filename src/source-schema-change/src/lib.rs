@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum SchemaChange {
     #[error("table was dropped and recreated upstream")]
-    TableDropped {},
+    TableDropped,
     #[error("table was renamed or moved upstream")]
-    TableRenamed {},
+    TableRenamed,
     #[error("column {} was dropped or renamed upstream", .column.quoted())]
     ColumnDropped { column: String },
     #[error(
@@ -96,8 +96,8 @@ impl SchemaChange {
                 escape::escape_literal(&key.name),
             )),
             SchemaChange::NotNullDropped { .. } => Some(recreate(Some("EXCLUDE ALL CONSTRAINTS"))),
-            SchemaChange::TableDropped { .. }
-            | SchemaChange::TableRenamed { .. }
+            SchemaChange::TableDropped
+            | SchemaChange::TableRenamed
             | SchemaChange::ColumnDropped { .. }
             | SchemaChange::ColumnMoved { .. }
             | SchemaChange::ColumnTypeChanged { .. }
