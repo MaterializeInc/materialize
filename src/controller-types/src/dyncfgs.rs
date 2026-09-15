@@ -76,9 +76,13 @@ pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
     ParameterScope::Replica,
 );
 
+/// The proportionality halves per layer below the largest, so 16 lets the
+/// policy request consolidation of layers within four levels of the largest
+/// batch, the same reach compute uses. Larger values let every small published
+/// batch be lifted into the largest batch on idle turns.
 pub const STORAGE_ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
     "storage_arrangement_exert_proportionality",
-    1337,
+    16,
     "Storage arrangement maintenance proportionality. Zero disables optional maintenance. Applies when a replica is provisioned.",
     ParameterScope::Replica,
 );
