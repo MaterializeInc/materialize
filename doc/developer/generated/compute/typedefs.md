@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/typedefs.rs
-revision: 4e012ea88d
+revision: 73fc5ef43f
 ---
 
 # mz-compute::typedefs

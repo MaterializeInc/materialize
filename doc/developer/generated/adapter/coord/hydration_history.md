@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/hydration_history.rs
-revision: 46f729653a
+revision: 7cdbebdb15
 ---
 
 # `adapter::coord::hydration_history`
@@ -9,13 +9,13 @@ Durable history collection for completed object and replica hydration episodes.
 
 ## Overview
 
-Each sweep visits one user replica, installs a replica-targeted subscribe that diffs that replica's live hydration timestamps against the durable history tables, and appends missing rows through the timestamped OCC write path. Including each history table in its read expression makes the write idempotent across concurrent `environmentd` processes: two collectors that compute the same row race for one write timestamp, and the loser observes the winner's append through its own subscribe and finds nothing left to write.
+Each sweep visits one replica, installs a replica-targeted subscribe that diffs that replica's live hydration timestamps against the durable history tables, and appends missing rows through the timestamped OCC write path. Including each history table in its read expression makes the write idempotent across concurrent `environmentd` processes: two collectors that compute the same row race for one write timestamp, and the loser observes the winner's append through its own subscribe and finds nothing left to write.
 
 One replica is sampled per interval, so an environment with N eligible replicas revisits each one approximately every `N * interval`. Collection is sampling, not an event log. Replica history records only the latest completed episode visible in a sweep. Intermediate episodes and intervals retracted before collection leave no evidence and are not recorded.
 
 ## Key Types
 
-**`ReplicaTarget`** — A user replica eligible for one collection step, carrying `cluster_id`, `replica_id`, and `process_count`. The `process_count` is used by `replica_collection_sql` to gate the write on all configured processes having reported resource usage.
+**`ReplicaTarget`** — A replica eligible for one collection step, carrying `cluster_id`, `replica_id`, and `process_count`. The `process_count` is used by `replica_collection_sql` to gate the write on all configured processes having reported resource usage.
 
 **`Sweep`** — Context for one sweep run, holding the `PeekClient`, catalog reference, `object_history_id` and `replica_history_id` table IDs, metrics handle, wall time, and a `cutoff` string (RFC 3339 timestamp). The two operations are:
 - `collect` — appends one replica's completed object and replica episodes that their respective history tables are missing
@@ -25,13 +25,13 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 `Coordinator::schedule_hydration_history_collection` aligns sweep fires to interval boundaries, shifted per-environment by a SHA-256-derived offset so a fleet-wide interval does not create a fleet-wide burst. Each sleep is capped at `SCHEDULE_RECHECK_CAP` (5 s) so dynamic configuration changes take effect promptly. Sweeps do not overlap: the next one is scheduled only after the previous completes or fails.
 
-`Coordinator::run_hydration_history_collection` dispatches the sweep as a background task. The task runs `collect` against the selected user replica and `retain` against the catalog server cluster, then reschedules. The sweep handle is stored on the `Coordinator` so it is aborted when the coordinator drops.
+`Coordinator::run_hydration_history_collection` dispatches the sweep as a background task. The task runs `collect` against the selected replica and `retain` against the catalog server cluster, then reschedules. The sweep handle is stored on the `Coordinator` so it is aborted when the coordinator drops.
 
 ## Collection Queries
 
-`object_collection_sql` builds a `SELECT` that joins `mz_compute_hydration_times_per_worker` against `mz_object_hydration_history` with an anti-join, filtering to fully-hydrated user indexes and materialized views (all workers have a `hydrated_at`) whose episodes are not yet recorded. The cutoff and the anti-join sit outside the aggregate so they do not interfere with the per-worker completeness check.
+`object_collection_sql` builds a `SELECT` that joins `mz_compute_hydration_times_per_worker` against `mz_object_hydration_history` with an anti-join, filtering to fully-hydrated exports (all workers have a `hydrated_at`) whose episodes are not yet recorded. Introspection-index exports (IDs starting with `si`) and transient exports (IDs starting with `t`) are excluded. The cutoff and the anti-join sit outside the aggregate so they do not interfere with the per-worker completeness check.
 
-`replica_collection_sql` implements a gaps-and-islands algorithm over compute export hydration intervals to find the latest completed hydration episode that is disconnected from any still-open interval. Transient exports (those with IDs starting with `t`) are excluded. The query also waits until every configured replica process (`process_count`) has reported resource usage before committing the episode, capturing `peak_memory_bytes` (cgroup `memory_peak`) and `peak_disk_bytes` (statvfs `fs_used_peak`, falling back to cgroup `swap_peak`).
+`replica_collection_sql` implements a gaps-and-islands algorithm over compute export hydration intervals to find the latest completed hydration episode that is disconnected from any still-open interval. Transient exports (those with IDs starting with `t`) are excluded from episode construction entirely. Introspection-index exports (IDs starting with `si`) participate in episode boundary and completion calculations but are excluded from the `object_count` column, so introspection-only episodes are visible with `object_count = 0`. The query also waits until every configured replica process (`process_count`) has reported resource usage before committing the episode, capturing `peak_memory_bytes` (cgroup `memory_peak`) and `peak_disk_bytes` (statvfs `fs_used_peak`, falling back to cgroup `swap_peak`).
 
 ## Retention
 

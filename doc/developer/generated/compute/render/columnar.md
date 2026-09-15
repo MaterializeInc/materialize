@@ -1,18 +1,16 @@
 ---
 source: src/compute/src/render/columnar.rs
-revision: d43cd78803
+revision: 4e5eafb239
 ---
 
 # mz-compute::render::columnar
 
 Columnar dataflow edge support.
 
-Defines `CollectionEdge`, a wrapper that lets dataflow edges between Plan nodes carry either row-based (`VecCollection`) or columnar (`ColumnarCollection`) batches of `(D, T, R)` updates.
+Defines `CollectionEdge`, the columnar batch representation that dataflow edges between Plan nodes carry.
 
 `ColumnarCollection` mirrors differential's `VecCollection` with `Column<(D, T, R)>` as the container instead of `Vec<(D, T, R)>`.
 
-`CollectionEdge` is an enum with two variants:
-- `Vec` — row-formatted collection; the current default for all producers.
-- `Columnar` — columnar collection; reserved for producers once the migration completes.
+`CollectionEdge` is a type alias for `ColumnarCollection<'scope, T, Row, Diff>`. Every producer emits this columnar representation. Within a Plan node, operators may freely work with row-based (`Vec`) collections, but only the columnar edge format is used at node boundaries. A node that produces a row-based collection re-encodes it to the columnar edge via `vec_to_columnar`. A node that must consume rows decodes at its input leaf via `columnar_to_vec`. Both are named operators (`VecToColumnar`, `ColumnarToVec`) so those conversion seams stay visible in dataflow introspection.
 
-The migration is consumer-first: every Plan-node consumer learns to accept both variants before any producer emits the columnar variant. Consumers that have not yet learned the columnar form fall back to `CollectionEdge::into_vec`, which decodes through a named `ColumnarToVec` operator. These repack seams remain visible in dataflow introspection so they can be found and retired. Pure passthrough consumers (Negate, Union) round-trip the columnar variant without decoding.
+`flat_map_datums` is the canonical entry point for operators that decode `mz_repr::Datum`s from each row; it iterates the columnar batch directly without materializing owned `Row` values.
