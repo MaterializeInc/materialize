@@ -94,6 +94,7 @@ ERROR_RE = re.compile(
     | SUMMARY:\ .*Sanitizer
     | primary\ source\ \w+\ seemingly\ dropped\ before\ subsource
     | :\ test\ timed\ out
+    | :\ ci-cleanup\ workflow\ failed
     | very\ slow\ coordinator\ message
     # Only notifying on unexpected failures. INT, TRAP, BUS, FPE, SEGV, PIPE
     | \ ANOM_ABEND\ .*\ sig=(2|5|7|8|11|13)

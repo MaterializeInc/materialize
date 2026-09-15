@@ -157,6 +157,7 @@ cost and, on self-managed deployments, the additional capacity required.
 ## Related pages
 
 - [Hydration](/fundamentals/concepts/hydration/)
+- [Optimize cluster size](/clusters/sizing/)
 - [Operational guidelines](/clusters/operational-guidelines/)
 - [Autoscaling for hydration](/clusters/autoscaling/)
 - [Configuring system parameters](/self-managed-deployments/configuration-system-parameters/)
