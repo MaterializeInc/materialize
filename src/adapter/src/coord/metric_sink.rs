@@ -24,6 +24,10 @@
 //! (`bootstrap_metric_sinks` covers the replicas already present at startup), and
 //! `drop_metric_sinks` drops them before a replica is dropped. This mirrors
 //! [`crate::coord::introspection`], which installs introspection subscribes on the same triggers.
+//!
+//! The `disabled_metric_sinks` system var denies definitions by name, and
+//! `reconcile_metric_sinks` converges the installed set on it, tearing a denied sink down rather
+//! than only gating future installs.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,8 +45,8 @@ use mz_sql::plan::{
     validate_metric_sink_desc, validate_metric_sink_prefix,
 };
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
-use mz_sql::session::vars::ENABLE_METRIC_SINK;
-use tracing::{Span, info};
+use mz_sql::session::vars::{ENABLE_METRIC_SINK, SystemVars};
+use tracing::{Span, debug, info};
 
 use crate::catalog::Catalog;
 use crate::coord::{
@@ -208,8 +212,45 @@ impl Coordinator {
         // drop). `coord::introspection` installs subscribes on the same triggers and has the same
         // gap.
         for definition in CURATED {
+            if metric_sink_denied(self.catalog().system_config(), definition.name) {
+                continue;
+            }
             self.install_metric_sink(cluster_id, replica_id, definition)
                 .await;
+        }
+    }
+
+    /// Converges the installed curated sinks on `disabled_metric_sinks`.
+    ///
+    /// Reconciles the whole set rather than the delta.
+    pub(super) async fn reconcile_metric_sinks(&mut self) {
+        for entry in self
+            .catalog()
+            .system_config()
+            .disabled_metric_sinks()
+            .split(',')
+        {
+            let entry = entry.trim();
+            if !entry.is_empty() && !CURATED.iter().any(|d| d.name == entry) {
+                debug!(
+                    name = entry,
+                    "disabled_metric_sinks entry matches no curated definition"
+                );
+            }
+        }
+
+        let denied: Vec<_> = self
+            .metric_sinks
+            .keys()
+            .copied()
+            .filter(|(_, name)| metric_sink_denied(self.catalog().system_config(), name))
+            .collect();
+        for (replica_id, name) in denied {
+            self.drop_metric_sink(replica_id, name);
+        }
+
+        for (cluster_id, replica_id) in self.all_cluster_replicas() {
+            self.install_metric_sinks(cluster_id, replica_id).await;
         }
     }
 
@@ -440,6 +481,12 @@ impl Coordinator {
             return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
         }
 
+        // `reconcile_metric_sinks` only sees sinks already in `metric_sinks`, so a definition
+        // denied while its install was in flight would ship anyway without this recheck.
+        if metric_sink_denied(self.catalog().system_config(), definition.name) {
+            return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
+        }
+
         // Hold a read on the imports across shipping, so their since cannot advance past the as-of
         // just picked. Compute takes its own holds during `create_dataflow`.
         let read_holds = self.acquire_read_holds(&id_bundle);
@@ -458,16 +505,17 @@ impl Coordinator {
             .metric_sinks
             .insert((replica_id, definition.name), install)
         {
-            // The key is already taken. `curated_names_are_unique` rules out two definitions
-            // colliding, so the reachable cause is `install_metric_sinks` running twice for one
-            // replica. Restore the first install and abandon this one: shipping both would leak the
-            // first's collection (now unreachable to `drop_metric_sinks`) and register a second
-            // collector under the same `sink` label.
+            // The key is already taken. `curated_names_are_unique` rules out a name collision,
+            // so this is the same definition installed twice: reconcile can start a second
+            // install while an earlier one is still in flight. Restore the first and abandon this
+            // one, else we leak the first's collection (unreachable to `drop_metric_sinks`) and
+            // register a second collector under the same `sink` label.
             self.metric_sinks
                 .insert((replica_id, definition.name), previous);
-            soft_panic_or_log!(
-                "metric sink installed twice (name={}, replica_id={replica_id})",
-                definition.name
+            info!(
+                %replica_id,
+                name = definition.name,
+                "abandoning metric sink install, already installed"
             );
             return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
         }
@@ -487,31 +535,52 @@ impl Coordinator {
     /// dataflows down anyway, but the controller's collection state for them is instance-global,
     /// so it has to be released explicitly.
     pub(super) fn drop_metric_sinks(&mut self, replica_id: ReplicaId) {
-        for (name, cluster_id, sink_id) in metric_sinks_on_replica(&self.metric_sinks, replica_id) {
-            info!(%sink_id, %replica_id, name, "dropping metric sink");
-            self.metric_sinks.remove(&(replica_id, name));
-
-            // The entry exists only for a shipped dataflow, so its collection is present and this
-            // drop succeeds. Result ignored: a failure during replica teardown is not worth a panic.
-            let _ = self
-                .controller
-                .compute
-                .drop_collections(cluster_id, vec![sink_id]);
+        for name in metric_sinks_on_replica(&self.metric_sinks, replica_id) {
+            self.drop_metric_sink(replica_id, name);
         }
+    }
+
+    /// Drops one curated metric sink, if it is installed.
+    fn drop_metric_sink(&mut self, replica_id: ReplicaId, name: &'static str) {
+        let Some(install) = self.metric_sinks.remove(&(replica_id, name)) else {
+            return;
+        };
+        let InstalledMetricSink {
+            cluster_id,
+            sink_id,
+        } = install;
+        info!(%sink_id, %replica_id, name, "dropping metric sink");
+
+        // The entry exists only for a shipped dataflow, so its collection is present and this
+        // drop succeeds. Result ignored: a failure during replica teardown is not worth a panic.
+        let _ = self
+            .controller
+            .compute
+            .drop_collections(cluster_id, vec![sink_id]);
     }
 }
 
-/// The registry entries installed on `replica_id`, as `(name, cluster, sink)` in key order.
+/// Whether `disabled_metric_sinks` denies the curated definition called `name`.
+///
+/// An entry naming no definition is never asked about, so a stale or misspelled one is inert.
+fn metric_sink_denied(system_config: &SystemVars, name: &str) -> bool {
+    system_config
+        .disabled_metric_sinks()
+        .split(',')
+        .any(|denied| denied.trim() == name)
+}
+
+/// The names of the definitions installed on `replica_id`, in key order.
 ///
 /// The map is keyed replica-first, so a replica's installs are one contiguous range.
 fn metric_sinks_on_replica(
     metric_sinks: &BTreeMap<(ReplicaId, &'static str), InstalledMetricSink>,
     replica_id: ReplicaId,
-) -> Vec<(&'static str, ClusterId, GlobalId)> {
+) -> Vec<&'static str> {
     metric_sinks
         .range((replica_id, "")..)
         .take_while(|((id, _), _)| *id == replica_id)
-        .map(|((_, name), install)| (*name, install.cluster_id, install.sink_id))
+        .map(|((_, name), _)| *name)
         .collect()
 }
 
@@ -638,11 +707,12 @@ mod tests {
         METRIC_SINK_CURATED_PREFIX_MARKER, validate_metric_sink_prefix,
         validate_user_metric_sink_prefix,
     };
+    use mz_sql::session::vars::{DISABLED_METRIC_SINKS, SystemVars, Var, VarInput};
 
     use crate::catalog::Catalog;
     use crate::coord::metric_sink::{
         CURATED, CuratedMetricSink, InstalledMetricSink, ensure_reads_only_logs,
-        metric_sinks_on_replica,
+        metric_sink_denied, metric_sinks_on_replica,
     };
 
     /// `drop_metric_sinks` relies on this range scan returning exactly one replica's installs, with
@@ -664,27 +734,39 @@ mod tests {
         sinks.insert((r(4), "a"), install(40));
 
         // A replica with several installs: all of them, in key order, and nothing from r(1)/r(4).
-        assert_eq!(
-            metric_sinks_on_replica(&sinks, r(2)),
-            vec![
-                ("a", cluster, GlobalId::Transient(20)),
-                ("b", cluster, GlobalId::Transient(21)),
-                ("c", cluster, GlobalId::Transient(22)),
-            ]
-        );
+        assert_eq!(metric_sinks_on_replica(&sinks, r(2)), vec!["a", "b", "c"]);
         // First and last replicas in the map: the scan stops at each boundary.
-        assert_eq!(
-            metric_sinks_on_replica(&sinks, r(1)),
-            vec![("a", cluster, GlobalId::Transient(10))]
-        );
-        assert_eq!(
-            metric_sinks_on_replica(&sinks, r(4)),
-            vec![("a", cluster, GlobalId::Transient(40))]
-        );
+        assert_eq!(metric_sinks_on_replica(&sinks, r(1)), vec!["a"]);
+        assert_eq!(metric_sinks_on_replica(&sinks, r(4)), vec!["a"]);
         // A replica with no installs, whether ordered between present ones (the r(3) gap) or past
         // the end, returns nothing rather than the next replica's range.
         assert!(metric_sinks_on_replica(&sinks, r(3)).is_empty());
         assert!(metric_sinks_on_replica(&sinks, r(5)).is_empty());
+    }
+
+    /// Parsing tolerates a hand-typed list: padding, empty entries, a trailing comma. Matching is
+    /// otherwise exact.
+    #[mz_ore::test]
+    fn denylist_matches_names_leniently() {
+        let denied = |list: &str, name: &str| {
+            let mut vars = SystemVars::new();
+            vars.set(DISABLED_METRIC_SINKS.name(), VarInput::Flat(list))
+                .expect("valid denylist");
+            metric_sink_denied(&vars, name)
+        };
+
+        assert!(!denied("", "a"));
+        assert!(denied("a", "a"));
+        assert!(denied("a,b", "b"));
+        assert!(denied("  a , b  ", "a"));
+        assert!(denied("a,,b,", "b"));
+        // An unknown name denies nothing but is carried without error.
+        assert!(!denied("nope", "a"));
+        assert!(denied("nope,a", "a"));
+        // Exact match only: no prefix match, no case fold.
+        assert!(!denied("a", "ab"));
+        assert!(!denied("ab", "a"));
+        assert!(!denied("A", "a"));
     }
 
     #[mz_ore::test]
