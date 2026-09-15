@@ -236,12 +236,12 @@ mod tests {
     fn chunked_seal_installs_codecs() {
         use std::sync::atomic::Ordering;
 
+        use differential_dataflow::trace::implementations::merge_batcher::Sealer;
         use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
-        use differential_dataflow::trace::{Builder, Description};
         use mz_timely_util::columnar::Column;
         use mz_timely_util::columnar::chunk::{ColumnChunk, UnchunkBuilder};
         use timely::container::PushInto;
-        use timely::progress::{Antichain, Timestamp as _};
+        use timely::progress::Timestamp as _;
 
         use crate::ArcBatch;
 
@@ -278,25 +278,17 @@ mod tests {
                 })
                 .collect()
         };
-        let description = || {
-            Description::new(
-                Antichain::from_elem(time),
-                Antichain::new(),
-                Antichain::from_elem(time),
-            )
-        };
-
         type Paged = crate::RowRowColPagedBuilder<Timestamp, i64>;
         type Chunked = UnchunkBuilder<Paged, (Row, Row), Timestamp, i64>;
 
         let mut chain = columns();
-        let from_columns = <Paged as Builder>::seal(&mut chain, description());
+        let from_columns = <Paged as Sealer<_>>::seal(&mut chain).expect("chain holds updates");
 
         let mut chain: Vec<ColumnChunk<(Row, Row), Timestamp, i64>> = columns()
             .into_iter()
             .map(ColumnChunk::from_column)
             .collect();
-        let from_chunks = <Chunked as Builder>::seal(&mut chain, description());
+        let from_chunks = <Chunked as Sealer<_>>::seal(&mut chain).expect("chain holds updates");
 
         assert!(
             from_chunks.0.storage.keys.has_codec() && from_chunks.0.storage.vals.vals.has_codec(),
@@ -1294,8 +1286,11 @@ mod dictionary {
             }
         }
 
-        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
-            RowBuilder<T, R>
+        impl<T, R, DC> RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
         {
             /// Allocates a builder sized for the counts a chain reports.
             ///
@@ -1309,18 +1304,24 @@ mod dictionary {
             }
         }
 
-        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
-            Default for RowBuilder<T, R>
+        impl<T, R, DC> Default for RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
         {
             fn default() -> Self {
                 Self::with_capacity(0, 0, 0)
             }
         }
 
-        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
-            Sealer<TimelyStack<((Row, ()), T, R)>> for RowBuilder<T, R>
+        impl<T, R, DC> Sealer<TimelyStack<((Row, ()), T, R)>> for RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
         {
-            type Output = OrdKeyBatch<RowLayout<((Row, ()), T, R)>>;
+            type Output = OrdKeyBatch<RowLayout<((Row, ()), T, R), DC>>;
 
             fn seal(chain: &mut Vec<TimelyStack<((Row, ()), T, R)>>) -> Option<Self::Output> {
                 let key_codec = build_codec(
@@ -1590,7 +1591,7 @@ mod dictionary {
                     state.gathered = true;
                 }
 
-                use differential_dataflow::trace::implementations::BuilderInput;
+                use differential_dataflow::trace::implementations::ord_neu::BuilderInput;
                 let (keys, vals, upds) = <Self::Input as BuilderInput<
                     DatumContainer,
                     DatumContainer,

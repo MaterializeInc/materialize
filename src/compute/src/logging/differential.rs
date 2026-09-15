@@ -108,7 +108,7 @@ pub(super) fn construct(
                 let mut batcher_capacity = batcher_capacity_out.activate();
                 let mut batcher_allocations = batcher_allocations_out.activate();
 
-                input.for_each_time(|cap, data| {
+                input.for_each_stamp(|cap, data| {
                     let mut output_buffers = DemuxOutput {
                         batches: batches.session_with_builder(&cap),
                         records: records.session_with_builder(&cap),

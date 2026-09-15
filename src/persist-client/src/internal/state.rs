@@ -901,9 +901,7 @@ pub struct HollowBatchPart<T> {
     pub deprecated_schema_id: Option<SchemaId>,
 }
 
-/// A [Batch] but with the updates themselves stored externally.
-///
-/// [Batch]: differential_dataflow::trace::BatchReader
+/// A differential trace batch, but with the updates themselves stored externally.
 #[derive(Clone, PartialEq, Eq)]
 pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.

@@ -318,7 +318,7 @@ where
     let consolidated = consolidate_pact::<B, _, _>(input, Pipeline, c_name, B::new_batcher);
     consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
         move |input, output| {
-            input.for_each_time(|time, data| {
+            input.for_each_stamp(|time, data| {
                 let mut session = output.session_with_builder(&time);
                 for item in data.flatten().flat_map(|data| data.drain(..)) {
                     logic(item, &mut packer, &mut session);

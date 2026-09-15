@@ -11,8 +11,6 @@
 //!
 //! Consult [ReducePlan] documentation for details.
 
-use std::collections::BTreeMap;
-
 use columnar::Columnar;
 use columnation::{Columnation, CopyRegion};
 use differential_dataflow::Diff as _;
@@ -1460,11 +1458,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             >("ArrangeAccumulable [val: empty]", MergeBatcher::new);
             self.reduce_accumulable(arranged, full_aggrs, mfp_after)
         } else {
-            let arranged = collection
-                .mz_arrange::<RowBatcher<_, _, ColumnationChunker<_>>, RowSpine<_, (Vec<Accum>, Diff)>>(
-                    "ArrangeAccumulable [val: empty]",
-                    MergeBatcher::new,
-                );
+            let arranged = collection.mz_arrange::<
+                RowBatcher<_, _, ColumnationChunker<_>>,
+                RowSpine<_, (Vec<Accum>, Diff)>,
+            >("ArrangeAccumulable [val: empty]", MergeBatcher::new);
             self.reduce_accumulable(arranged, full_aggrs, mfp_after)
         }
     }

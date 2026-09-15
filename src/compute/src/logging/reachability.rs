@@ -70,7 +70,7 @@ pub(super) fn construct(
         };
         let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_, _| {
             move |input, output| {
-                input.for_each_time(|time, data| {
+                input.for_each_stamp(|time, data| {
                     output
                         .session_with_builder(&time)
                         .give_iterator(data.flat_map(|d| {

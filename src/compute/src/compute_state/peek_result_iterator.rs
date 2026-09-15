@@ -19,8 +19,8 @@ use timely::progress::Antichain;
 
 use crate::compute_state::PeekRowIterationTracker;
 
-/// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
-/// [`CursorList`] over the per-batch cursors.
+/// The merged cursor over all of a trace's batches: a [`CursorList`] over the per-batch
+/// cursors that [`TraceReader::batches_through`] hands out.
 pub(super) type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
 pub(super) type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;

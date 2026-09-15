@@ -119,7 +119,9 @@ pub(crate) fn render<'scope>(
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut rewind_input = builder.new_input_for(
+    // GTID partitions are only partially ordered, so a message has no single time and the whole
+    // stamp is retained to ship rewound updates under.
+    let mut rewind_input = builder.new_input_for_stamp(
         rewind_stream,
         Exchange::new(move |_| repl_reader_id),
         &data_output,

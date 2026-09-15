@@ -51,8 +51,9 @@ use crate::columnation::ColInternalMerger;
 /// `Chu` melds raw input containers into the chunks the batcher merges:
 /// [`ColumnationChunker`](crate::columnation::ColumnationChunker) for `Vec<_>`
 /// input, or [`batcher::Chunker`] (over a `ColumnationStack<_>`) for [`Column`]
-/// input. `Se` seals each extracted chain; a spine builder seals into a batch,
-/// [`ChainSealer`](crate::operator::ChainSealer) hands the chain back as-is.
+/// input. `Se` seals each extracted chain into a batch. A caller that wants the
+/// chain itself takes [`ConsolidatingBatcher`](crate::operator::ConsolidatingBatcher)
+/// instead, which is this batcher without the seal.
 pub type Col2ValBatcher<K, V, T, R, Chu, Se> =
     MergeBatcher<Chu, ColInternalMerger<(K, V), T, R>, Se>;
 /// A batcher for columnar storage with unit values.
