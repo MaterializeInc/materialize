@@ -302,7 +302,7 @@ pub enum DefiniteError {
     TableTruncated(String),
     #[error("table was dropped: {0}")]
     TableDropped(String),
-    #[error("{0}")]
+    #[error(transparent)]
     IncompatibleSchema(SchemaChangeError),
     #[error("received a gtid set from the server that violates our requirements: {0}")]
     UnsupportedGtidState(String),

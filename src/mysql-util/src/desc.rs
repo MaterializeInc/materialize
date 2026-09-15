@@ -99,7 +99,7 @@ impl MySqlTableDesc {
         }
 
         if self.schema_name != other.schema_name || self.name != other.name {
-            return Err(self.build_schema_change_error(SchemaChange::TableRenamed {}));
+            return Err(self.build_schema_change_error(SchemaChange::TableRenamed));
         }
 
         // In the case that we don't have full binlog row metadata, `columns` is ordered by the
@@ -309,51 +309,31 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
 }
 
 impl MySqlColumnDesc {
+    /// The first change that makes a column shaped like `other` incompatible
+    /// with `self`, or `None` if `other` can be ingested as `self`.
     fn get_incompatible_schema_change(&self, other: &MySqlColumnDesc) -> Option<SchemaChange> {
-        if self.is_compatible(other) {
-            return None;
-        }
         let column = self.name.clone();
         if self.name != other.name {
             return Some(SchemaChange::ColumnDropped { column });
         }
-        let nullability_only_change = match (&self.column_type, &other.column_type) {
-            (Some(self_type), Some(other_type)) => {
-                !self_type.nullable
-                    && other_type.nullable
-                    && self_type.scalar_type == other_type.scalar_type
-                    && self.meta.is_compatible(&other.meta)
-            }
-            _ => false,
-        };
-        if nullability_only_change {
-            Some(SchemaChange::NotNullDropped { column })
-        } else {
-            Some(SchemaChange::ColumnTypeChanged { column })
+        if !self.meta.is_compatible(&other.meta) {
+            return Some(SchemaChange::ColumnTypeChanged { column });
         }
-    }
-}
-
-impl IsCompatible for MySqlColumnDesc {
-    /// Determines if two `MySqlColumnDesc` are compatible with one another in
-    /// a way that Materialize can handle.
-    fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
-        self.name == other.name
-            && match (&self.column_type, &other.column_type) {
-                (None, None) => true,
-                (Some(self_type), Some(other_type)) => {
-                    self_type.scalar_type == other_type.scalar_type
-                    // Columns are compatible if:
-                    // - self is nullable; introducing a not null constraint doesn't
-                    //   change this column's behavior.
-                    // - self and other are both not nullable
-                    && (self_type.nullable || self_type.nullable == other_type.nullable)
+        match (&self.column_type, &other.column_type) {
+            (None, None) => None,
+            (Some(self_type), Some(other_type)) => {
+                if self_type.scalar_type != other_type.scalar_type {
+                    return Some(SchemaChange::ColumnTypeChanged { column });
                 }
-                (Some(_), None) => false,
-                (None, Some(_)) => false,
+                // A nullable column stays compatible when upstream adds NOT
+                // NULL. Only losing a NOT NULL that we recorded is a change.
+                if !self_type.nullable && other_type.nullable {
+                    return Some(SchemaChange::NotNullDropped { column });
+                }
+                None
             }
-            // Ensure any column metadata is compatible
-            && self.meta.is_compatible(&other.meta)
+            (Some(_), None) | (None, Some(_)) => Some(SchemaChange::ColumnTypeChanged { column }),
+        }
     }
 }
 
