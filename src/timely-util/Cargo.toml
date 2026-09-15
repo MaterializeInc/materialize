@@ -29,6 +29,10 @@ harness = false
 name = "column_pager"
 harness = false
 
+[[bench]]
+name = "async_builder_scheduling"
+harness = false
+
 [dependencies]
 ahash.workspace = true
 bytemuck.workspace = true
@@ -52,8 +56,10 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 allocation-counter = { workspace = true, optional = true }
 
 [dev-dependencies]
+clap.workspace = true
 criterion.workspace = true
 itertools.workspace = true
+libc.workspace = true
 proptest.workspace = true
 rand.workspace = true
 tempfile.workspace = true
