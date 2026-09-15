@@ -80,3 +80,7 @@ harness = false
 [[bench]]
 name = "columnar_merge_batcher_row"
 harness = false
+
+[[bench]]
+name = "join_stage_split"
+harness = false

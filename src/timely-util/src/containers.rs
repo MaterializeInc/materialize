@@ -16,6 +16,7 @@
 //! Reusable containers.
 
 pub mod heap_size;
+pub mod ok_err;
 pub mod stack;
 
 pub use heap_size::HeapSize;
