@@ -326,6 +326,7 @@ impl Wake for NotifyWake {
     }
 }
 
+#[cfg(test)]
 /// Apply one exertion turn, yielding while its maintenance waits for I/O.
 ///
 /// This does not force all batches to compact. DD's exertion policy determines
