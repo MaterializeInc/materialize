@@ -46,6 +46,11 @@ disallowed-methods = [
     { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
     { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead", allow-invalid = true },
 
+    # A message carries a multiset of capabilities, not one. Both of these panic on a message
+    # whose stamp is not a singleton, which compiles clean and is only found by running.
+    { path = "timely::dataflow::operators::capability::InputCapability::time", reason = "panics unless the message's stamp is a singleton; use `stamp()`" },
+    { path = "timely::dataflow::operators::capability::InputCapability::retain", reason = "panics unless the message's stamp is a singleton; use `retain_stamp()`" },
+
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
 
     { path = "aws_config::defaults", reason = "use the `mz_aws_config::defaults` function instead" },

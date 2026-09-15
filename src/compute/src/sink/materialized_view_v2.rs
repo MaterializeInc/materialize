@@ -769,6 +769,8 @@ mod write {
 
                 // Accept batch descriptions.
                 descs_input.for_each(|cap, data| {
+                    // The `mint` operator above emits one `cap_set.delayed(..)` per message.
+                    #[allow(clippy::disallowed_methods)]
                     let cap = cap.retain(0);
                     for desc in data.drain(..) {
                         state.absorb_batch_description(desc, cap.clone());

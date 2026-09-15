@@ -21,7 +21,7 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::generic::Session;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -118,7 +118,12 @@ where
                 let mut budget = budget;
 
                 input.for_each(|cap, data| {
-                    queue.push_back((cap.retain(0), cap.retain(1), std::mem::take(data)))
+                    // A message's stamp need not be a singleton, so hold the whole set.
+                    queue.push_back((
+                        cap.retain_stamp(0),
+                        cap.retain_stamp(1),
+                        std::mem::take(data),
+                    ))
                 });
 
                 while let Some((ok_cap, err_cap, data)) = queue.pop_front() {
@@ -233,8 +238,8 @@ fn drain_through_mfp<T>(
     extensions: &[(Row, Diff)],
     mfp_plan: &MfpPlan<LirScalarExpr>,
     until: &Antichain<Timestamp>,
-    ok_output: &mut Session<'_, '_, T, FlatMapOk<T>, Capability<T>>,
-    err_output: &mut Session<'_, '_, T, FlatMapErr<T>, Capability<T>>,
+    ok_output: &mut Session<'_, '_, T, FlatMapOk<T>, CapabilitySet<T>>,
+    err_output: &mut Session<'_, '_, T, FlatMapErr<T>, CapabilitySet<T>>,
     budget: &mut usize,
 ) where
     T: RenderTimestamp,

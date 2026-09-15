@@ -15,11 +15,10 @@ use columnar::{Columnar, Index, Len, Push};
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Batcher;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ColumnChunk};
+use mz_timely_util::columnar::chunk::{AccountedChunkChainBatcher, ColumnChunk};
 use mz_timely_util::columnar::columnar_exchange_data;
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketRange, BucketTimestamp};
 use timely::Accountable;
@@ -330,7 +329,7 @@ where
     }
 }
 
-/// A wrapper around [`AccountedChunkBatcher`] that implements the bucketing API.
+/// A wrapper around [`AccountedChunkChainBatcher`] that implements the bucketing API.
 ///
 /// This is the same merge batcher the arrange sites' chunked arm uses, so the
 /// bucket chain and those arrangements share one merge-batcher implementation.
@@ -350,7 +349,7 @@ where
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
     chunker: ColumnChunker<(D, T, R)>,
-    inner: AccountedChunkBatcher<D, T, R>,
+    inner: AccountedChunkChainBatcher<D, T, R>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
@@ -370,7 +369,7 @@ where
             logger: logger.clone(),
             operator_id,
             chunker: ColumnChunker::default(),
-            inner: AccountedChunkBatcher::new(logger, operator_id),
+            inner: AccountedChunkChainBatcher::new(logger, operator_id),
         }
     }
 
@@ -385,7 +384,7 @@ where
         buffer.clear();
         while let Some(chunk) = self.chunker.extract() {
             self.inner
-                .push_into(ColumnChunk::from_column(std::mem::take(chunk)));
+                .push_chunk(ColumnChunk::from_column(std::mem::take(chunk)));
         }
     }
 
@@ -394,14 +393,14 @@ where
         use timely::container::{ContainerBuilder as _, PushInto as _};
         while let Some(chunk) = self.chunker.finish() {
             self.inner
-                .push_into(ColumnChunk::from_column(std::mem::take(chunk)));
+                .push_chunk(ColumnChunk::from_column(std::mem::take(chunk)));
         }
     }
 
     /// Reveal the contents of the merge batcher, returning a vector of chunks.
     fn done(mut self) -> Vec<ColumnChunk<D, T, R>> {
         self.flush();
-        let (chain, _description) = self.inner.seal(Antichain::new());
+        let (chain, _frontier) = self.inner.extract_chain(Antichain::new().borrow());
         chain
     }
 }
@@ -424,14 +423,14 @@ where
         self.flush();
         let upper = Antichain::from_elem(timestamp.clone());
         let mut lower = Self::new(self.logger.clone(), self.operator_id);
-        // Sealing at `timestamp` ships exactly the updates strictly less than it,
-        // as sorted, consolidated chunks; feed them to the lower batcher whole,
-        // so spilled bodies move without being loaded. The `fuel` charge covers
-        // the sealing work those records paid for.
-        let (chain, _description) = self.inner.seal(upper);
+        // Extracting at `timestamp` ships exactly the updates strictly less than it,
+        // as sorted, consolidated chunks. Feed them to the lower batcher whole, so
+        // spilled bodies move without being loaded. The `fuel` charge covers the
+        // extraction work those records paid for.
+        let (chain, _frontier) = self.inner.extract_chain(upper.borrow());
         for chunk in chain {
             *fuel = fuel.saturating_sub(chunk.record_count());
-            lower.inner.push_into(chunk);
+            lower.inner.push_chunk(chunk);
         }
         (lower, self)
     }
