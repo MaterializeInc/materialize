@@ -57,12 +57,6 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
     "persist_blob_hedged_get_enabled": "true",
     "persist_blob_hedged_get_delay": "2s",
     "persist_blob_hedged_get_budget_ratio": "0.01",
-    # Curated metric sinks are causing a regression in performance thresholds.
-    # Currently, the flag defaults off in production, so benchmarking without it
-    # measures the configuration we ship. Correctness coverage is unaffected:
-    # the rest of CI # still gets "true" from get_minimal_system_parameters().
-    # TODO: remove once the regression is fixed
-    "enable_metric_sink": "false",
 }
 
 
