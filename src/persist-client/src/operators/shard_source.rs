@@ -9,19 +9,6 @@
 
 //! A source that reads from a persist shard.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::collections::VecDeque;
-use std::collections::hash_map::DefaultHasher;
-use std::convert::Infallible;
-use std::fmt::{Debug, Formatter};
-use std::future::Future;
-use std::hash::{Hash, Hasher};
-use std::pin::pin;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::Instant;
-
 use anyhow::anyhow;
 use arrow::array::ArrayRef;
 use differential_dataflow::Hashable;
@@ -36,10 +23,22 @@ use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::collections::VecDeque;
+use std::collections::hash_map::DefaultHasher;
+use std::convert::Infallible;
+use std::fmt::{Debug, Formatter};
+use std::future::Future;
+use std::hash::{Hash, Hasher};
+use std::pin::pin;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Instant;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
@@ -658,7 +657,7 @@ where
     let (fetched_output, fetched_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (completed_fetches_output, completed_fetches_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
-    let mut descs_input = builder.new_input_for_many(
+    let mut descs_input = builder.new_input_for_many_stamp(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
         [&fetched_output, &completed_fetches_output],
@@ -704,7 +703,7 @@ where
         // come back with the result. The missing-blob diagnostics round-trip
         // happens inside the future, so the error surfaces only after the fetch
         // has truly failed.
-        let fetch_one = |caps: [Capability<TInner>; 2], part: ExchangeableBatchPart<T>| {
+        let fetch_one = |caps: [CapabilitySet<TInner>; 2], part: ExchangeableBatchPart<T>| {
             let mut fetcher = fetcher.clone();
             async move {
                 let reader_id = part.reader_id().clone();
@@ -748,7 +747,7 @@ where
         // worker via the completed-fetches feedback. Carrying capabilities
         // rather than a separate time-keyed map makes correctness independent of
         // the order results come back in.
-        let mut pending: VecDeque<([Capability<TInner>; 2], ExchangeableBatchPart<T>)> =
+        let mut pending: VecDeque<([CapabilitySet<TInner>; 2], ExchangeableBatchPart<T>)> =
             VecDeque::new();
         let mut in_flight = FuturesUnordered::new();
         let mut input_done = false;
@@ -1086,8 +1085,8 @@ mod tests {
                 // frontier downgrades are held back.
                 let mut max_msg_time: Option<u64> = None;
                 while let Ok(event) = receiver.try_recv() {
-                    if let CaptureEvent::Messages(time, _) = event {
-                        max_msg_time = max_msg_time.max(Some(time));
+                    if let CaptureEvent::Messages(stamp, _) = event {
+                        max_msg_time = max_msg_time.max(stamp.iter().copied().max());
                     }
                 }
                 max_msg_time
@@ -1590,9 +1589,9 @@ mod tests {
             let mut blob_count = 0;
             let mut max_time: Option<u64> = None;
             while let Ok(event) = capture.try_recv() {
-                if let CaptureEvent::Messages(time, msgs) = event {
+                if let CaptureEvent::Messages(stamp, msgs) = event {
                     blob_count += msgs.len();
-                    max_time = max_time.max(Some(time));
+                    max_time = max_time.max(stamp.iter().copied().max());
                 }
             }
             (blob_count, max_time)

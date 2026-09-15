@@ -27,7 +27,7 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::columnar_consolidate_exchange;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::columnar::merge_batcher::ConsolidatingColumnBatcher;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
@@ -102,10 +102,10 @@ where
             let mut ok_output = ok_output.activate();
             let mut err_output = err_output.activate();
             input.for_each(|time, data| {
-                // Retain the input capability to derive a `Capability` for each
-                // output. The `Session` type alias is fixed to `Capability<T>`.
-                let ok_cap = time.retain(0);
-                let err_cap = time.retain(1);
+                // Retain the input capability to derive a capability for each
+                // output. The `Session` type alias is fixed to `CapabilitySet<T>`.
+                let ok_cap = time.retain_stamp(0);
+                let err_cap = time.retain_stamp(1);
                 let mut ok_session = ok_output.session_with_builder(&ok_cap);
                 let mut err_session = err_output.session_with_builder(&err_cap);
                 // Rows are read from the borrowed column, never materialized as
@@ -221,11 +221,15 @@ where
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
     let consolidated = consolidate_pact::<
-        ColumnChunker<(Row, T, Diff)>,
-        ColumnMergeBatcher<Row, T, Diff>,
+        ConsolidatingColumnBatcher<ColumnChunker<(Row, T, Diff)>, Row, T, Diff>,
         _,
         _,
-    >(collection.inner, exchange, name);
+    >(
+        collection.inner,
+        exchange,
+        name,
+        ConsolidatingColumnBatcher::new,
+    );
 
     // Flatten the sealed chain into one container per chunk, moving containers and
     // visiting no record.

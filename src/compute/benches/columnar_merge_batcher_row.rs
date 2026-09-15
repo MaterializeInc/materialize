@@ -28,17 +28,17 @@
 //! consume the same pre-built [`Column<Tuple>`] inputs so the chunker
 //! sees identical input shape.
 
-use std::mem::size_of;
-
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use differential_dataflow::trace::Batcher;
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::batcher::Batcher;
+use differential_dataflow::trace::implementations::merge_batcher::Merger;
 use mz_ore::cast::{CastFrom, CastLossy, ReinterpretCast};
 use mz_repr::{Datum, Row};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::{Chunker, ColumnChunker, ColumnMerger};
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
+use mz_timely_util::operator::ConsolidatingBatcher;
 use rand::{Rng, SeedableRng, rngs::StdRng};
+use std::mem::size_of;
 use timely::container::ContainerBuilder;
 use timely::container::PushInto;
 use timely::progress::Antichain;
@@ -47,18 +47,6 @@ type Data = Row;
 type Time = u64;
 type Diff = i64;
 type Tuple = (Data, Time, Diff);
-
-/// Legacy path: input is `Column<Tuple>`, chunker produces
-/// `ColumnationStack<Tuple>` chunks, merger operates on those.
-type ColumnationBatcher = MergeBatcher<ColInternalMerger<Data, Time, Diff>>;
-/// Chunker feeding [`ColumnationBatcher`].
-type ColumnationBatcherChunker = Chunker<ColumnationStack<Tuple>>;
-
-/// All-`Column` path: input is `Column<Tuple>`, chunker produces
-/// `Column<Tuple>` chunks, merger operates on those.
-type ColumnBatcher = MergeBatcher<ColumnMerger<Data, Time, Diff>>;
-/// Chunker feeding [`ColumnBatcher`].
-type ColumnBatcherChunker = ColumnChunker<Tuple>;
 
 /// Per-side payload-byte targets. Element counts are derived from
 /// [`ROW_PAYLOAD_BYTES`]. Same shape as [`columnar_merger_row`] so
@@ -193,31 +181,21 @@ fn rounds_to_columns(rounds: &[Vec<Tuple>]) -> Vec<Column<Tuple>> {
         .collect()
 }
 
-/// Run a fresh `B` over a clone of `prebuilt_rounds`, pushing each round
-/// then sealing at `+inf` so all data flows through extract. Generic over
-/// `B::Output` because the columnation path produces `ColumnationStack`
-/// chunks while the column path produces `Column` chunks; the no-op
-/// builder accommodates either.
-fn drive_batcher<B, Chu>(prebuilt_rounds: &[Column<Tuple>])
+/// Run a fresh `Chu`/`M` batcher over a clone of `prebuilt_rounds`, inserting each round then
+/// extracting at `+inf` so all data flows through the merge ladder.
+fn drive_batcher<Chu, M>(prebuilt_rounds: &[Column<Tuple>])
 where
-    B: Batcher<Time = Time>,
-    Chu: ContainerBuilder<Container = B::Output> + for<'a> PushInto<&'a mut Column<Tuple>>,
-    B::Output: 'static,
+    M: Merger<Time = Time>,
+    Chu: ContainerBuilder<Container = M::Chunk> + for<'a> PushInto<&'a mut Column<Tuple>>,
+    ConsolidatingBatcher<Chu, M>: Batcher<Column<Tuple>, Time = Time>,
 {
-    let mut batcher = B::new(None, 0);
-    let mut chunker = Chu::default();
+    let mut batcher = ConsolidatingBatcher::<Chu, M>::new(None, 0);
     for round in prebuilt_rounds {
         let mut col = round.clone();
-        chunker.push_into(&mut col);
-        while let Some(chunk) = chunker.extract() {
-            batcher.push_into(std::mem::take(chunk));
-        }
-    }
-    while let Some(chunk) = chunker.finish() {
-        batcher.push_into(std::mem::take(chunk));
+        batcher.insert(&mut col);
     }
     let upper = Antichain::from_elem(Time::MAX);
-    let _ = batcher.seal(upper);
+    let _ = batcher.extract(upper.borrow());
 }
 
 fn bench_batcher(c: &mut Criterion) {
@@ -266,7 +244,10 @@ fn bench_batcher(c: &mut Criterion) {
                 bencher.iter_batched(
                     || prebuilt.clone(),
                     |rounds| {
-                        drive_batcher::<ColumnationBatcher, ColumnationBatcherChunker>(&rounds)
+                        drive_batcher::<
+                            Chunker<ColumnationStack<Tuple>>,
+                            ColInternalMerger<Data, Time, Diff>,
+                        >(&rounds)
                     },
                     BatchSize::LargeInput,
                 );
@@ -275,7 +256,11 @@ fn bench_batcher(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new("column", &id), &(), |bencher, _| {
                 bencher.iter_batched(
                     || prebuilt.clone(),
-                    |rounds| drive_batcher::<ColumnBatcher, ColumnBatcherChunker>(&rounds),
+                    |rounds| {
+                        drive_batcher::<ColumnChunker<Tuple>, ColumnMerger<Data, Time, Diff>>(
+                            &rounds,
+                        )
+                    },
                     BatchSize::LargeInput,
                 );
             });

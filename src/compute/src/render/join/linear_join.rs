@@ -11,20 +11,17 @@
 //!
 //! Consult [LinearJoinPlan] documentation for details.
 
-use std::time::{Duration, Instant};
-
 use columnar::{Columnar, Index};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
-use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::scalar::LirScalarExpr;
-use mz_dyncfg::ConfigSet;
 use mz_expr::Eval;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
@@ -32,6 +29,7 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
+use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::columnar::{
     Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
 };
@@ -48,159 +46,30 @@ use crate::render::RenderTimestamp;
 use crate::render::columnar::{CollectionEdge, columnar_to_vec, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::render::join::mz_join_core::mz_join_core;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
 
-/// Available linear join implementations.
+/// Joins two arranged collections, applying `result` to each matching pair and assembling
+/// the output through `CB`.
 ///
-/// See the `mz_join_core` module docs for our rationale for providing two join implementations.
-#[derive(Clone, Copy)]
-enum LinearJoinImpl {
-    Materialize,
-    DifferentialDataflow,
-}
-
-/// Specification of how linear joins are to be executed.
-///
-/// Note that currently `yielding` only affects the `Materialize` join implementation, as the DD
-/// join doesn't allow configuring its yielding behavior. Merging [#390] would fix this.
-///
-/// [#390]: https://github.com/TimelyDataflow/differential-dataflow/pull/390
-#[derive(Clone, Copy)]
-pub struct LinearJoinSpec {
-    implementation: LinearJoinImpl,
-    yielding: YieldSpec,
-}
-
-impl Default for LinearJoinSpec {
-    fn default() -> Self {
-        Self {
-            implementation: LinearJoinImpl::Materialize,
-            yielding: Default::default(),
-        }
-    }
-}
-
-impl LinearJoinSpec {
-    /// Create a `LinearJoinSpec` based on the given config.
-    pub fn from_config(config: &ConfigSet) -> Self {
-        let implementation = if ENABLE_MZ_JOIN_CORE.get(config) {
-            LinearJoinImpl::Materialize
-        } else {
-            LinearJoinImpl::DifferentialDataflow
-        };
-
-        let yielding_raw = LINEAR_JOIN_YIELDING.get(config);
-        let yielding = YieldSpec::try_from_str(&yielding_raw).unwrap_or_else(|| {
-            tracing::error!("invalid LINEAR_JOIN_YIELDING config: {yielding_raw}");
-            YieldSpec::default()
-        });
-
-        Self {
-            implementation,
-            yielding,
-        }
-    }
-
-    /// Render a join operator according to this specification, assembling its
-    /// output through `CB`.
-    ///
-    /// The `DifferentialDataflow` implementation builds its own `Vec` output and
-    /// cannot be handed a container builder, so that arm re-encodes through `CB`.
-    /// The `Materialize` implementation writes `CB` directly.
-    fn render<'s, T, Tr1, Tr2, L, I, CB>(
-        &self,
-        arranged1: Arranged<'s, Tr1>,
-        arranged2: Arranged<'s, Tr2>,
-        result: L,
-    ) -> Stream<'s, T, CB::Container>
-    where
-        T: Lattice + timely::progress::Timestamp,
-        CB: ContainerBuilder + PushInto<(I::Item, T, Diff)> + 'static,
-        Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
-        Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
-        BatchCursor<Tr1>: Cursor<Time = T, Diff = Diff>,
-        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, Time = T, Diff = Diff>,
-        L: FnMut(BatchKey<'_, Tr1>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
-        I: IntoIterator<Item: Data> + 'static,
-    {
-        use LinearJoinImpl::*;
-
-        match (
-            self.implementation,
-            self.yielding.after_work,
-            self.yielding.after_time,
-        ) {
-            (DifferentialDataflow, _, _) => {
-                encode_updates::<_, _, CB>(arranged1.join_core(arranged2, result), "JoinCoreEncode")
-            }
-            (Materialize, Some(work_limit), Some(time_limit)) => {
-                let yield_fn =
-                    move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core::<_, _, _, _, _, _, CB>(arranged1, arranged2, result, yield_fn)
-            }
-            (Materialize, Some(work_limit), None) => {
-                let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core::<_, _, _, _, _, _, CB>(arranged1, arranged2, result, yield_fn)
-            }
-            (Materialize, None, Some(time_limit)) => {
-                let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core::<_, _, _, _, _, _, CB>(arranged1, arranged2, result, yield_fn)
-            }
-            (Materialize, None, None) => {
-                let yield_fn = |_start, _work| false;
-                mz_join_core::<_, _, _, _, _, _, CB>(arranged1, arranged2, result, yield_fn)
-            }
-        }
-    }
-}
-
-/// Specification of a dataflow operator's yielding behavior.
-#[derive(Clone, Copy)]
-struct YieldSpec {
-    /// Yield after the given amount of work was performed.
-    after_work: Option<usize>,
-    /// Yield after the given amount of time has elapsed.
-    after_time: Option<Duration>,
-}
-
-impl Default for YieldSpec {
-    fn default() -> Self {
-        Self {
-            after_work: Some(1_000_000),
-            after_time: Some(Duration::from_millis(100)),
-        }
-    }
-}
-
-impl YieldSpec {
-    fn try_from_str(s: &str) -> Option<Self> {
-        let mut after_work = None;
-        let mut after_time = None;
-
-        let options = s.split(',').map(|o| o.trim());
-        for option in options {
-            let mut iter = option.split(':').map(|p| p.trim());
-            match std::array::from_fn(|_| iter.next()) {
-                [Some("work"), Some(amount), None] => {
-                    let amount = amount.parse().ok()?;
-                    after_work = Some(amount);
-                }
-                [Some("time"), Some(millis), None] => {
-                    let millis = millis.parse().ok()?;
-                    let duration = Duration::from_millis(millis);
-                    after_time = Some(duration);
-                }
-                _ => return None,
-            }
-        }
-
-        Some(Self {
-            after_work,
-            after_time,
-        })
-    }
+/// Differential's `join_core` builds its own `Vec` output and cannot be handed a container
+/// builder, so the result is re-encoded through `CB`. It owns the fuel budget it yields on.
+fn join_arranged<'s, T, Tr1, Tr2, L, I, CB>(
+    arranged1: Arranged<'s, Tr1>,
+    arranged2: Arranged<'s, Tr2>,
+    result: L,
+) -> Stream<'s, T, CB::Container>
+where
+    T: Lattice + timely::progress::Timestamp,
+    CB: ContainerBuilder + PushInto<(I::Item, T, Diff)> + 'static,
+    Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+    Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+    BatchCursor<Tr1>: Cursor<Time = T, Diff = Diff>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, Time = T, Diff = Diff>,
+    L: FnMut(BatchKey<'_, Tr1>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
+    I: IntoIterator<Item: Data> + 'static,
+{
+    encode_updates::<_, _, CB>(arranged1.join_core(arranged2, result), "JoinCoreEncode")
 }
 
 /// Different forms the streamed data might take.
@@ -529,9 +398,8 @@ where
         type VecCB<D, T> = CapacityContainerBuilder<Vec<(D, T, Diff)>>;
 
         if closure.could_error() {
-            let (oks, err) = self
-                .linear_join_spec
-                .render::<T, _, _, _, _, VecCB<Result<Row, DataflowErrorSer>, T>>(
+            let (oks, err) =
+                join_arranged::<T, _, _, _, _, VecCB<Result<Row, DataflowErrorSer>, T>>(
                     prev_keyed,
                     next_input,
                     move |key, old, new| {
@@ -558,29 +426,25 @@ where
             };
             (oks, Some(err.as_collection()))
         } else if terminal {
-            let oks = self
-                .linear_join_spec
-                .render::<T, _, _, _, _, ConsolidatingColumnBuilder<Row, T, Diff>>(
-                    prev_keyed,
-                    next_input,
-                    move |key, old, new| {
-                        apply_join_closure(&closure, &mut datums, key, old, new)
-                            .expect("Closure claimed to never error")
-                    },
-                );
+            let oks = join_arranged::<T, _, _, _, _, ConsolidatingColumnBuilder<Row, T, Diff>>(
+                prev_keyed,
+                next_input,
+                move |key, old, new| {
+                    apply_join_closure(&closure, &mut datums, key, old, new)
+                        .expect("Closure claimed to never error")
+                },
+            );
 
             (JoinedFlavor::Edge(oks.as_collection()), None)
         } else {
-            let oks = self
-                .linear_join_spec
-                .render::<T, _, _, _, _, VecCB<Row, T>>(
-                    prev_keyed,
-                    next_input,
-                    move |key, old, new| {
-                        apply_join_closure(&closure, &mut datums, key, old, new)
-                            .expect("Closure claimed to never error")
-                    },
-                );
+            let oks = join_arranged::<T, _, _, _, _, VecCB<Row, T>>(
+                prev_keyed,
+                next_input,
+                move |key, old, new| {
+                    apply_join_closure(&closure, &mut datums, key, old, new)
+                        .expect("Closure claimed to never error")
+                },
+            );
 
             (JoinedFlavor::Collection(oks.as_collection()), None)
         }
@@ -713,27 +577,36 @@ where
     let exchange =
         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
     let arranged = match batcher {
-        ArrangementBatcher::ColumnarPaged => keyed.mz_arrange_core::<
+        ArrangementBatcher::ColumnarPaged => {
+            keyed.mz_arrange_core::<_, Col2ValPagedBatcher<
+                _,
+                _,
+                _,
+                _,
+                batcher::ColumnChunker<_>,
+                RowRowColPagedBuilder<_, _>,
+            >, RowRowSpine<_, _>>(exchange, "JoinStage", ColumnMergeBatcher::new)
+        }
+        ArrangementBatcher::Columnar => {
+            keyed.mz_arrange_core::<_, Col2ValColBatcher<
+                _,
+                _,
+                _,
+                _,
+                batcher::ColumnChunker<_>,
+                RowRowColPagedBuilder<_, _>,
+            >, RowRowSpine<_, _>>(exchange, "JoinStage", MergeBatcher::new)
+        }
+        ArrangementBatcher::Columnation => keyed.mz_arrange_core::<_, Col2ValBatcher<
             _,
-            batcher::ColumnChunker<_>,
-            Col2ValPagedBatcher<_, _, _, _>,
-            RowRowColPagedBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage"),
-        ArrangementBatcher::Columnar => keyed.mz_arrange_core::<
             _,
-            batcher::ColumnChunker<_>,
-            Col2ValColBatcher<_, _, _, _>,
-            RowRowColPagedBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage"),
-        ArrangementBatcher::Columnation => keyed.mz_arrange_core::<
+            _,
             _,
             batcher::Chunker<_>,
-            Col2ValBatcher<_, _, _, _>,
             RowRowBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage"),
+        >, RowRowSpine<_, _>>(
+            exchange, "JoinStage", MergeBatcher::new
+        ),
     };
     (arranged, errs.as_collection())
 }
@@ -800,8 +673,8 @@ where
 
 /// Forms the arrangement for the intra-operator `Vec` accumulator of a linear
 /// join. Unlike [`arrange_join_input`], the accumulator is a bare `VecCollection`
-/// rather than a collection edge: `mz_join_core` is `Vec`-internal, so the
-/// accumulator never carries the collection edge type.
+/// rather than a collection edge, because a non-terminal stage's output is always
+/// re-encoded by whatever consumes it.
 fn arrange_join_collection<'s, T>(
     collection: VecCollection<'s, T, Row, Diff>,
     stream_key: Vec<LirScalarExpr>,

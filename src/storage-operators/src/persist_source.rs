@@ -592,7 +592,13 @@ where
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
-                let capabilities = [time.retain(0), time.retain(1)];
+                const EMPTY_STAMP: &str = "message stamped with no capabilities";
+                // The scope is totally ordered, so the least of the message's capabilities
+                // dominates the rest and alone suffices to hold the fetched parts.
+                let capabilities = [
+                    time.retain_least(0).expect(EMPTY_STAMP),
+                    time.retain_least(1).expect(EMPTY_STAMP),
+                ];
                 let panic_on_audit_failure = panic_on_audit_failure.get();
                 for blob in data.drain(..) {
                     pending_work.push_back(PendingWork {
@@ -957,7 +963,10 @@ where
                     }
                     break;
                 }
-                Some(Event::Data(time, data)) => {
+                Some(Event::Data(stamp, data)) => {
+                    // Backpressure accounts a part against the time at which it can first cause
+                    // downstream work, which is the least time the message is stamped with.
+                    let time = stamp.least().expect("message stamped with no capabilities");
                     for d in data {
                         parts.push((time.clone(), d));
                     }
@@ -1588,7 +1597,7 @@ mod tests {
     /// being processed. Also connects the `feedback` handle to its output.
     fn consumer_operator<
         'scope,
-        T: timely::progress::Timestamp,
+        T: timely::progress::Timestamp + timely::order::TotalOrder,
         O: Backpressureable + std::fmt::Debug,
     >(
         scope: Scope<'scope, T>,

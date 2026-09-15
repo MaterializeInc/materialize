@@ -34,7 +34,8 @@
 use columnar::{Columnar, Index, Len};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput};
+use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::ord_neu::BuilderInput;
 use timely::progress::Timestamp;
 
 use crate::columnar::Column;
