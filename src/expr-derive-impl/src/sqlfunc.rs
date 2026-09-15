@@ -9,7 +9,7 @@
 
 use darling::FromMeta;
 use proc_macro2::{Ident, TokenStream};
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::spanned::Spanned;
 use syn::{Expr, Lifetime, Lit};
 
@@ -115,16 +115,17 @@ pub fn sqlfunc(
     let modifiers = Modifiers::from_list(&attr_args).unwrap();
     let generate_tests = modifiers.test.unwrap_or(false);
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
+    let source = sqlfunc_source(&attr, &func);
 
     let tokens = match determine_arity(&func) {
         Arity::Nullary => Err(darling::Error::custom("Nullary functions not supported")),
-        Arity::Unary { arena: false } => unary_func(&func, modifiers),
+        Arity::Unary { arena: false } => unary_func(&func, modifiers, &source),
         Arity::Unary { arena: true } => Err(darling::Error::custom(
             "Unary functions do not yet support RowArena.",
         )),
-        Arity::Binary { arena } => binary_func(&func, modifiers, arena),
+        Arity::Binary { arena } => binary_func(&func, modifiers, arena, &source),
         Arity::Variadic { arena, has_self } => {
-            variadic_func(&func, modifiers, struct_ty, arena, has_self)
+            variadic_func(&func, modifiers, struct_ty, arena, has_self, &source)
         }
     }?;
 
@@ -134,6 +135,71 @@ pub fn sqlfunc(
         #tokens
         #test
     })
+}
+
+/// Renders a token stream as compact source text.
+///
+/// `TokenStream::to_string` separates every token with whitespace, and the
+/// compiler's implementation wraps long streams onto several lines. This
+/// collapses the whitespace and drops it around punctuation, so the result
+/// reads like formatted code on one line, independent of how the source was
+/// actually formatted.
+fn compact_tokens(tokens: &TokenStream) -> String {
+    let rendered = tokens
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut out = String::with_capacity(rendered.len());
+    let mut chars = rendered.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == ' ' {
+            let after_opener = out
+                .chars()
+                .last()
+                .is_some_and(|prev| "([<&.!'".contains(prev));
+            let before_closer = chars
+                .peek()
+                .is_some_and(|next| "()[],:;<>.?".contains(*next));
+            if after_opener || before_closer {
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// FNV-1a, 64 bit. A fingerprint, not a secure hash: it only needs to be
+/// stable across builds and sensitive to any change in its input.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+/// Emits the `SQLFUNC` const of the generated `FuncName` impl: the
+/// declaration (attribute arguments and signature) as text and a fingerprint
+/// of the body. Both come from token streams, so formatting and comments do
+/// not affect them.
+fn sqlfunc_source(attr: &TokenStream, func: &syn::ItemFn) -> TokenStream {
+    let attr = compact_tokens(attr);
+    let attr = if attr.is_empty() {
+        String::new()
+    } else {
+        format!("({attr})")
+    };
+    let decl = format!(
+        "#[sqlfunc{attr}] {}",
+        compact_tokens(&func.sig.to_token_stream())
+    );
+    let body_fingerprint = fnv1a64(compact_tokens(&func.block.to_token_stream()).as_bytes());
+    quote! {
+        const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+            decl: #decl,
+            body_fingerprint: #body_fingerprint,
+        });
+    }
 }
 
 #[cfg(any(feature = "test", test))]
@@ -855,7 +921,11 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
 }
 
 /// Produce a `EagerUnaryFunc` implementation.
-fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
+fn unary_func(
+    func: &syn::ItemFn,
+    modifiers: Modifiers,
+    source: &TokenStream,
+) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
     let input_ty_raw = arg_type(func, 0)?;
@@ -1047,6 +1117,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
 
         impl crate::func::FuncName for #struct_name {
             const NAME: &'static str = stringify!(#fn_name);
+            #source
         }
 
         #func
@@ -1059,6 +1130,7 @@ fn binary_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
     arena: bool,
+    source: &TokenStream,
 ) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
@@ -1288,6 +1360,7 @@ fn binary_func(
 
         impl crate::func::FuncName for #struct_name {
             const NAME: &'static str = stringify!(#fn_name);
+            #source
         }
 
         #func
@@ -1307,6 +1380,7 @@ fn variadic_func(
     struct_ty: Option<syn::Path>,
     arena: bool,
     has_self: bool,
+    source: &TokenStream,
 ) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let output_ty_raw = output_type(func)?;
@@ -1591,6 +1665,7 @@ fn variadic_func(
     let funcname_impl = quote! {
         impl crate::func::FuncName for #struct_name {
             const NAME: &'static str = stringify!(#fn_name);
+            #source
         }
     };
 

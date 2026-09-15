@@ -75,6 +75,7 @@ bincode.workspace = true
 criterion.workspace = true
 datadriven.workspace = true
 insta.workspace = true
+mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = ".", features = ["proptest"] }
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-parser = { path = "../expr-parser" }

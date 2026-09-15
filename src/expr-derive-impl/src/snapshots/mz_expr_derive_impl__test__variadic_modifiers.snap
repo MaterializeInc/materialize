@@ -57,6 +57,10 @@ impl std::fmt::Display for Greatest {
 }
 impl crate::func::FuncName for Greatest {
     const NAME: &'static str = stringify!(greatest);
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(Greatest, sqlname = \"greatest\", could_error = false, is_monotone = true,)] fn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a>",
+        body_fingerprint: 10652195696595148890u64,
+    });
 }
 fn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
     datums.into_iter().max().unwrap_or(Datum::Null)

@@ -63,6 +63,10 @@ impl std::fmt::Display for MultiGeneric {
 }
 impl crate::func::FuncName for MultiGeneric {
     const NAME: &'static str = stringify!(multi_generic);
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(sqlname = \"multi_generic\",)] fn multi_generic<'a, A, B>(a: DatumList<'a, A>, b: DatumList<'a, B>,) -> Option<B>",
+        body_fingerprint: 9814741405877077832u64,
+    });
 }
 fn multi_generic<'a, A, B>(a: DatumList<'a, A>, b: DatumList<'a, B>) -> Option<B> {
     unimplemented!()
