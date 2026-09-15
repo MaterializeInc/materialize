@@ -7937,6 +7937,7 @@ fn console_cluster_utilization_overview_desc() -> RelationDesc {
         // Swap at the peak-heap sample. Heap is RAM plus swap, so the moment
         // heap peaks is the moment swap matters; reporting it from the same
         // sample avoids a second top-k pass.
+        .with_column("heap_limit", SqlScalarType::Float64.nullable(true))
         .with_column("swap_percent", SqlScalarType::Float64.nullable(true))
         .with_column("swap_bytes", SqlScalarType::Float64.nullable(true))
         .with_column("max_cpu_percent", SqlScalarType::Float64.nullable(true))
@@ -7994,7 +7995,7 @@ replica_metrics_history AS (
     s.disk_bytes::float8 * s.processes AS total_disk_bytes,
     s.memory_bytes::float8 * s.processes AS total_memory_bytes,
     MAX(m.heap_bytes::float8) AS heap_bytes,
-    MAX(m.heap_limit) AS heap_limit,
+    MAX(m.heap_limit)::float8 AS heap_limit,
     -- heap_limit is NULL when clusterd isn't launched with --heap-limit (e.g.
     -- the emulator's process orchestrator). Fall back to the size-based memory
     -- percent so the chart still renders.
@@ -8039,6 +8040,7 @@ replica_utilization_history_binned AS (
     m.total_memory_bytes,
     m.heap_bytes,
     m.heap_percent,
+    m.heap_limit,
     m.swap_bytes,
     m.swap_percent,
     m.size,
@@ -8088,7 +8090,7 @@ max_memory_and_disk AS (
 ),
 -- For each (replica, bucket), take the sample with the highest heap.
 max_heap AS (
-  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, heap_percent, swap_percent, swap_bytes, occurred_at
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, heap_percent, heap_limit, swap_percent, swap_bytes, occurred_at
   FROM replica_utilization_history_binned
   OPTIONS (DISTINCT ON INPUT GROUP SIZE = {group_size})
   ORDER BY bucket_start, replica_id, COALESCE(heap_bytes, 0) DESC
@@ -8126,6 +8128,7 @@ SELECT
   max_memory_and_disk.occurred_at AS max_memory_and_disk_at,
   max_heap.heap_percent,
   max_heap.occurred_at AS max_heap_at,
+  max_heap.heap_limit,
   max_heap.swap_percent,
   max_heap.swap_bytes,
   max_cpu.cpu_percent AS max_cpu_percent,
@@ -8178,6 +8181,7 @@ fn console_cluster_utilization_unbinned_3h_desc() -> RelationDesc {
         .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
         .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
         .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("heap_limit", SqlScalarType::Float64.nullable(true))
         .with_column("swap_percent", SqlScalarType::Float64.nullable(true))
         .with_column("swap_bytes", SqlScalarType::Float64.nullable(true))
         .with_column(
@@ -8225,6 +8229,7 @@ replica_metrics AS (
       MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0)),
       SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)
     ) AS heap_percent,
+    MAX(m.heap_limit)::float8 AS heap_limit,
     SUM(m.swap_bytes::float8) AS swap_bytes,
     -- See the binned view: `heap_limit` is measured per process, so the
     -- fraction alone is not convertible back to bytes downstream.
@@ -8261,6 +8266,7 @@ SELECT
   m.memory_percent,
   m.disk_percent,
   m.heap_percent,
+  m.heap_limit,
   m.swap_percent,
   m.swap_bytes,
   m.memory_and_disk_percent

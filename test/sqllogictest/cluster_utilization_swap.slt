@@ -45,7 +45,7 @@ mz_console_cluster_utilization_overview_3h  swap_percent  double␠precision
 # how many rows come back.
 query T
 SELECT count(*) >= 0 FROM (
-  SELECT swap_bytes, swap_percent
+  SELECT swap_bytes, swap_percent, heap_limit
   FROM mz_internal.mz_console_cluster_utilization_overview_3h
 )
 ----
@@ -53,7 +53,7 @@ true
 
 query T
 SELECT count(*) >= 0 FROM (
-  SELECT swap_bytes, swap_percent
+  SELECT swap_bytes, swap_percent, heap_limit
   FROM mz_internal.mz_console_cluster_utilization_overview_24h
 )
 ----
@@ -61,11 +61,32 @@ true
 
 query T
 SELECT count(*) >= 0 FROM (
-  SELECT swap_bytes, swap_percent
+  SELECT swap_bytes, swap_percent, heap_limit
   FROM mz_internal.mz_console_cluster_utilization_overview
 )
 ----
 true
+
+# `heap_limit` is the ceiling swap and heap are measured against: the point at
+# which the memory limiter terminates the process. The views divided by it but
+# never emitted it, so a consumer could read `heap_percent` without being able
+# to say what it was a percent of.
+#
+# In the binned views it is taken from the peak-heap sample, the same row the
+# heap and swap figures come from, so a bucket's usage and the ceiling it was
+# measured against always describe the same instant.
+
+query TTT
+SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'mz_internal'
+  AND table_name LIKE 'mz_console_cluster_utilization%'
+  AND column_name = 'heap_limit'
+ORDER BY table_name
+----
+mz_console_cluster_utilization_overview  heap_limit  double␠precision
+mz_console_cluster_utilization_overview_24h  heap_limit  double␠precision
+mz_console_cluster_utilization_overview_3h  heap_limit  double␠precision
 
 # ----------------------------------------------------------------------------
 # The arithmetic, over a table shaped like the metrics source.
