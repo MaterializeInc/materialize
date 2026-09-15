@@ -125,6 +125,11 @@ def get_minimal_system_parameters(
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
+        # Introspection goldens depend on the replica topology, so tests need
+        # one consistent value rather than a varying one.
+        "enable_unified_cluster": (
+            "true" if version >= MzVersion.parse_mz("v26.43.0-dev") else "false"
+        ),
         "enable_compute_error_distinct": "true",
         "enable_compute_temporal_bucketing": "true",
         "enable_union_cancellation_after_relation_cse": "true",
