@@ -1,0 +1,70 @@
+=== Elastic IPs: Name, reason tag, and whether still associated
+Anything with an AssociationId, or a Name that is not aws-test-dev-*/
+aws-up-dev-*, should NOT be released.
+eipalloc-0108617c8f4628944	None	44.218.145.39	aws-test-dev-vpc-us-east-1a	None
+eipalloc-01475ed3566561fb3	None	44.205.170.223	aws-up-dev-vpc-us-east-1a	None
+eipalloc-01b415bb7e28bf995	None	3.222.47.228	aws-up-dev-vpc-us-east-1a	None
+eipalloc-01ec6bd6125686409	None	52.22.12.136	aws-test-dev-vpc-us-east-1a	None
+eipalloc-024b0869e6faea4c4	None	54.86.163.119	aws-up-dev-vpc-us-east-1a	None
+eipalloc-02c8ec1f443921f4d	None	54.237.96.238	aws-up-dev-vpc-us-east-1a	None
+eipalloc-0320d008f4feb4c21	None	100.31.175.36	aws-test-dev-vpc-us-east-1a	None
+eipalloc-03595cbe7f6aea459	None	54.209.149.83	aws-up-dev-vpc-us-east-1a	None
+eipalloc-0360a85a60df3490e	None	98.83.81.142	aws-up-dev-vpc-us-east-1a	None
+eipalloc-04a1c91707b45d2b1	None	54.197.249.216	aws-up-dev-vpc-us-east-1a	None
+eipalloc-04e589e8c35caba45	None	3.92.10.34	aws-up-dev-vpc-us-east-1a	None
+eipalloc-0565bb67da2fcad1a	None	52.200.130.245	aws-up-dev-vpc-us-east-1a	None
+eipalloc-05974e464f8c62cc0	None	44.206.202.37	aws-up-dev-vpc-us-east-1a	None
+eipalloc-06227220c0e2892b2	None	98.95.107.27	aws-test-dev-vpc-us-east-1a	None
+eipalloc-06519e61a94f0c88e	None	107.22.253.154	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0662729a0d4910b8d	None	98.94.243.163	aws-test-dev-vpc-us-east-1a	None
+eipalloc-066ec1c5c35fa5a41	None	98.86.51.160	aws-test-dev-vpc-us-east-1a	None
+eipalloc-08efea9b167ed22a2	None	34.235.18.253	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0964650383828865f	None	34.224.134.4	aws-up-dev-vpc-us-east-1a	None
+eipalloc-09a83e700c76ec1f3	None	107.22.195.79	aws-up-dev-vpc-us-east-1a	None
+eipalloc-09dbe3439ad083a73	None	100.48.135.154	aws-up-dev-vpc-us-east-1a	None
+eipalloc-0becbe14843591e86	None	52.205.240.16	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0c482c885810af0f8	None	44.199.90.241	aws-up-dev-vpc-us-east-1a	None
+eipalloc-0cb2f99e590c07047	None	98.95.111.29	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0ce5301d2ab0b5a4e	None	52.200.19.86	aws-up-dev-vpc-us-east-1a	None
+eipalloc-0cfac389a8830bbbf	None	52.0.154.130	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0d629a60bccbe226d	None	100.49.134.17	aws-up-dev-vpc-us-east-1a	None
+eipalloc-0dbc9547c1fe65017	None	52.203.243.108	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0dcc98803c4228f1c	None	3.209.134.232	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0e212a68866777887	None	32.193.74.138	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0e436116d1f407597	None	54.209.119.225	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0edf2da9d95184ee3	None	44.209.182.86	aws-test-dev-vpc-us-east-1a	None
+eipalloc-0f457878044022844	None	44.207.180.179	aws-test-dev-vpc-us-east-1a	None
+
+=== Launch templates: name and creation date
+lt-012ed0a0b93e0db9d	aws-test-dev-base-eks-node-group-2026071200011889600000001d	2026-07-12T00:01:19+00:00
+lt-04309de9e9f8c2b33	aws-test-dev-mz-20250820162808734400000014	2025-08-20T16:28:08+00:00
+lt-0483728b522e99956	aws-test-dev-mz-20250731001545231800000014	2025-07-31T00:15:45+00:00
+lt-0523d6a2d64ac6eab	aws-test-dev-mz-20250224214541076100000014	2025-02-24T21:45:41+00:00
+lt-05407118638fed94e	aws-test-dev-mz-20250417074512274100000014	2025-04-17T07:45:12+00:00
+lt-06e487245ba9d4386	aws-test-dev-mz-20250802001343841300000014	2025-08-02T00:13:44+00:00
+lt-07305a432c1e64031	aws-test-dev-mz-20250417150027256000000014	2025-04-17T15:00:27+00:00
+lt-082e26cb323db4396	aws-test-dev-mz-20250423064210487800000014	2025-04-23T06:42:10+00:00
+lt-0a05b5caf059c9a99	aws-test-dev-mz-20250418042314279900000014	2025-04-18T04:23:14+00:00
+lt-0ec65640b463f7825	aws-test-dev-mz-20250218124123840400000014	2025-02-18T12:41:23+00:00
+
+=== IAM roles: name, creation date, last used
+These are global. Confirm each one is a test role and not shared infra.
+aws-test-dev-base-eks-node-group-20260712000118473500000019	2026-07-12T00:01:18+00:00	2026-07-12T00:30:37+00:00
+  attached policies:
+    AmazonEKS_CNI_Policy	AmazonEC2ContainerRegistryReadOnly	AmazonEKSWorkerNodePolicy
+aws-test-dev-eks-cluster-08bf1f0a9309084d181fa27156	2026-09-07T12:13:40+00:00	2026-09-09T14:25:00+00:00
+  attached policies:
+    AmazonEKSClusterPolicy
+aws-test-dev-eks-cluster-20260711233633221600000011	2026-07-11T23:36:33+00:00	2026-07-12T18:44:20+00:00
+  attached policies:
+    AmazonEKSClusterPolicy	AmazonEKSVPCResourceController	aws-test-dev-eks-cluster-ClusterEncryption20260711233654301700000016	aws-test-dev-eks-cluster-20260711233633237400000012
+aws-up-dev-eks-cluster-20251127121640797300000006	2025-11-27T12:16:40+00:00	2025-11-27T14:12:20+00:00
+  attached policies:
+    AmazonEKSClusterPolicy	AmazonEKSVPCResourceController
+aws-up-dev-eks-cluster-96a8501cbf5e305e9414e97a2c	2026-09-07T12:07:47+00:00	2026-09-07T13:30:17+00:00
+  attached policies:
+    AmazonEKSClusterPolicy
+
+=== VPCs the rest of the file operates inside (should both be tagged ours)
+vpc-02bba4402bb1a9fc8	aws-up-dev-vpc	materialize test/terraform CI run	2026-09-08T12:05:05Z
+vpc-0fb7dfd29daafb9c6	aws-test-dev-vpc	materialize test/terraform CI run	2026-09-08T12:10:15Z
