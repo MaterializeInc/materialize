@@ -935,7 +935,6 @@ impl<'a> ActiveComputeState<'a> {
             self.response_tx.clone(),
             self.timely_worker.index(),
             self.timely_worker.peers(),
-            self.compute_state.workers_per_process,
             max_result_size,
             snapshot_chunk,
         );

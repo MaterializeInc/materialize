@@ -87,27 +87,21 @@ impl PersistSubscribes {
         response_tx: ResponseSender,
         worker_index: usize,
         worker_peers: usize,
-        workers_per_process: usize,
         max_result_size: usize,
         snapshot_chunk: usize,
     ) {
         let id = subscribe.id;
         let chosen = usize::cast_from(subscribe.target.hashed()) % worker_peers;
         if chosen != worker_index {
-            let speaks_for_process = worker_index % workers_per_process == 0;
-            let chosen_elsewhere =
-                chosen / workers_per_process != worker_index / workers_per_process;
-            if speaks_for_process && chosen_elsewhere {
-                let done = SubscribeBatch {
-                    lower: Antichain::from_elem(Timestamp::minimum()),
-                    upper: Antichain::new(),
-                    updates: Ok(Vec::new()),
-                };
-                let _ = response_tx.send(ComputeResponse::SubscribeResponse(
-                    id,
-                    SubscribeResponse::Batch(done),
-                ));
-            }
+            let done = SubscribeBatch {
+                lower: Antichain::from_elem(Timestamp::minimum()),
+                upper: Antichain::new(),
+                updates: Ok(Vec::new()),
+            };
+            let _ = response_tx.send(ComputeResponse::SubscribeResponse(
+                id,
+                SubscribeResponse::Batch(done),
+            ));
             self.running.insert(id, Running::Elsewhere);
             return;
         }

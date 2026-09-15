@@ -914,9 +914,12 @@ impl Coordinator {
             up_to: plan.up_to,
             with_snapshot: plan.with_snapshot,
             order: plan.output.row_order().to_vec(),
-            // Only diff output leaves a timestamp's rows independent of one
-            // another, see `implement_persist_subscribe`.
-            chunk_snapshot: matches!(plan.output, SubscribeOutput::Diffs),
+            // A piece of the snapshot bypasses the frontier, which is what
+            // deduplicates batches across replicas and across a replica's
+            // reconnect. Until pieces are pinned to one replica and a
+            // reconnect mid-snapshot fails the subscribe, the snapshot
+            // ships whole on this path, so both cases stay correct.
+            chunk_snapshot: false,
             max_buffered_bytes,
         };
         if let Err(e) = self

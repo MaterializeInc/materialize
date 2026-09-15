@@ -165,14 +165,23 @@ controller onward the subscribe is a subscribe sink: the controller tracks it
 as a write-only collection, forwards its batches, and ends it by allowing
 compaction to the empty frontier, which the task answers with `DroppedAt`.
 
-Two protocol details are load-bearing. The controller merges a subscribe's
-responses expecting one stream per replica process, as a sink emits from one
-worker, so exactly one worker per process speaks for a subscribe: the chosen
-worker in its process, and the first worker of every other process, which
-reports the empty frontier at once so the merge is driven by the chosen worker
-alone. And an error ends the subscribe with a batch at the empty frontier,
-because both the partitioned merge and the controller forward a batch only
-when it moves the frontier.
+Two protocol details are load-bearing. A subscribe's responses are merged
+twice, over the workers of a process by the cluster client and over processes
+by the controller, and each merge waits for every stream it expects before
+its frontier moves. So every worker speaks for a subscribe: the chosen one
+with its batches, and each other worker with the empty frontier at once, which
+lets both merges be driven by the chosen worker alone. And an error ends the
+subscribe with a batch at the empty frontier, because both merges forward a
+batch only when it moves the frontier.
+
+That second detail is also why the snapshot ships whole on this path for now.
+A piece of the snapshot moves no frontier, and the frontier is what
+deduplicates batches across the replicas of an untargeted subscribe and
+across a replica's reconnect, so pieces would be delivered from every replica
+and again after a restart mid-snapshot. Both merges pass a piece straight
+through when asked to, so the plumbing is in place, but the controller has to
+pin pieces to one replica and fail the subscribe if that replica goes away
+mid-snapshot before it can be turned on.
 
 `environmentd` needs less on this path than on its own: `ActiveSubscribe`,
 coordinator formatting, cancellation, dependency drops, and
@@ -302,26 +311,22 @@ started `environmentd` with a warm-up pass, all against the same shard:
 
 | One client, 1,000,000 rows | Dataflow | Tail in `environmentd` | Tail on replica |
 |---|---|---|---|
-| `FETCH 10` from a new cursor | 0.52 s | 0.34 s | 0.84 s |
-| First row over `COPY` | 0.62 s | 0.28 s | 0.83 s |
-| Whole snapshot delivered | 1.50 s | 1.55 s | 1.68 s |
-| `environmentd` resident growth | 158 MB | 113 MB | 4 MB |
-| `clusterd` resident growth | 195 MB | 22 MB | 115 MB |
+| `FETCH 10` from a new cursor | 0.49 s | 0.29 s | 1.32 s |
+| First row over `COPY` | 0.46 s | 0.28 s | 1.35 s |
+| Whole snapshot delivered | 1.28 s | 1.48 s | 2.13 s |
+| `environmentd` resident growth | 157 MB | 122 MB | 155 MB |
+| `clusterd` resident growth | 197 MB | 21 MB | 220 MB |
 
-The snapshot never sits in `environmentd` on the replica path: its pieces
-cross the protocol as they are read and are formatted and handed on as they
-arrive. The first row costs the hop, a command to the replica, its handles
-opened there, and each piece serialized, merged and formatted on the
-coordinator's loop before the session sees it. These sub-second figures vary
-by up to 2x between runs, so the columns should be read against one another.
+On this path the snapshot ships whole, see above, so the first row waits for
+it, and the batch is materialized once in `environmentd` on its way through
+the merge and the coordinator's formatting. These sub-second figures vary by
+up to 2x between runs, so the columns should be read against one another.
 
-Chunked snapshot delivery needed one change to reach the client through the
-protocol. Both the partitioned response merge and the controller forwarded a
-subscribe batch only when it moved the frontier, so a piece of the snapshot,
-whose bounds are both the `as_of`, waited in the merge's stash until the
-first real frontier advance and arrived as one batch. Both now pass such a
-batch straight through without touching the frontier, which is sound for the
-same reason the piece could ship early in the first place.
+Chunked delivery was measured on this path too, with the merges passing pieces
+through. It brought the first row to about the `environmentd` tail's and kept
+the snapshot out of `environmentd` entirely, at 4 MB of growth for a million
+rows, but it is unsound across replicas and reconnects as described above, so
+it is off until the controller pins pieces to a replica.
 
 ## Follow-ups
 
