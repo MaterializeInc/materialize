@@ -186,19 +186,8 @@ are meaningful and must be preserved exactly.
   commits. The interval affects commit granularity and replay after a crash,
   never correctness.
 
-- **Changing a running pipeline.** The checkpoint stores fingerprints of the
-  query, its result schema, and the destination layout. Changing any of them
-  fails startup with `QueryIdentityMismatch`, `SchemaMismatch`, or
-  `DestinationPlanMismatch`, because a changed contract over an existing
-  checkpoint has no safe interpretation. To make such a change, rebootstrap
-  under a new `sink_id`, or drop the old checkpoint and destination state.
-  Adding a column to a `SELECT *`, or changing a column's type, changes the
-  schema fingerprint too.
-
-  The destination's `id` is part of that layout. Moving an existing sink from
-  the `table=` form in [Step 3](#step-3-write-the-sink) to an explicit
-  `routes=` list changes the `id` from `default` to the table name, which is a
-  `DestinationPlanMismatch`. Pass `id="default"` to keep the same identity.
+- **Schema changes.** Schema changes require rebuilding the sink, under a new
+  `sink_id`.
 
 - **Static relations.** The sink commits at progress boundaries, and a relation
   with no upstream dependencies, such as a materialized view over constants,
@@ -209,20 +198,6 @@ are meaningful and must be preserved exactly.
 - **Writing to the destination table.** The sink expects to be the only writer.
   If another process changes a row the sink is about to update, the transaction
   fails with `TargetStateMismatch`.
-
-- **Errors.** Error classes other than `PrimaryKeyViolation` and
-  `TargetStateMismatch` are importable from `mz_sink_sdk.sink`, not from the
-  top-level package:
-
-  ```python
-  from mz_sink_sdk.sink import FenceLost, QueryIdentityMismatch, SinkError
-  ```
-
-  `run_forever()` reopens from the last durable checkpoint after any failure,
-  so a fail-closed error retries in a loop rather than exiting the process.
-  `FenceLost` means another process took over the `sink_id` and resolves
-  itself. The mismatch errors above and `PrimaryKeyViolation` are configuration
-  problems: watch the sink's logs, because they recur until you fix them.
 
 ## Related pages
 
