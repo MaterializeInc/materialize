@@ -9,9 +9,12 @@ write catalog changes and use a separate fast protocol for query execution.
 
 The goal is decoupling, preserving consistency guarantees, performance, and
 existing SQL behavior except for the [maintained-creation admission rules](#admission),
-including the [fresh sink cutoff](#fresh-sink-cutoff).
+including the [fresh sink cutoff](#fresh-sink-cutoff), and the plan-selection and
+introspection behavior of [written plans](#written-plans).
 Losing an adapter must not disrupt maintained dataflows or other clients. Its own
 queries may fail. Transparent query or session failover is out of scope.
+For this deliverable, table and webhook ticking and shard finalization remain
+adapter-owned and may pause while no adapter is live.
 
 Working multi-adapter operation is the destination, not this deliverable.
 Boundaries must support independent adapters becoming catalog writers and query
@@ -72,8 +75,8 @@ Use catalog implications to derive lifecycle effects from committed catalog
 state. Complete the relevant implication paths as needed for this work. Move
 responsibility for enacting those effects to cluster-side components that can
 recover and follow catalog state independently of the originating adapter.
-Controllers can remain useful abstractions. Their exact placement and factoring
-are implementation choices.
+Controllers can remain useful abstractions. Internal factoring is an implementation
+choice within the agreed [lifecycle placement](#lifecycle-placement).
 
 Catalog authority covers creation, changes, compaction permission, and deletion
 of maintained objects. It describes desired state, not a command history that
@@ -260,9 +263,10 @@ connection: the fast protocol is the only protocol, and nothing sends maintained
 installation commands. Which replica serves a request and how replicated
 responses are merged belong to the query client. Environment-wide storage
 accounting dissolves along the way: critical since handles follow committed
-bounds, table registration is adapter-owned, and shard finalization needs an
-owner or an idempotent rule. Creating replica processes stays with envd for now.
-DDL and table appends are request-scoped and stay with adapters.
+bounds, table registration is adapter-owned, and shard finalization applies
+committed retirement permission idempotently. Adapters perform finalization for
+this deliverable. Creating replica processes stays with envd for now. DDL and table
+appends are request-scoped and stay with adapters.
 
 A replica's execution reads are protected like a client's, scoped to the
 replica's incarnation, so a slow or hydrating replica keeps the input history it
@@ -395,19 +399,22 @@ arrangement.
 
 Replicas establish and follow their cluster's maintained state from the catalog,
 without sequencer installation closures, creator-local plans, or a controller
-sending installation commands. Creation, changes, deletion, compaction, and
-protection publication for maintained objects continue across adapter loss and
-recovery. Adapter DDL and replica publication commit as cooperating catalog
+sending installation commands. Enactment of committed creations, changes, and
+deletions, together with compaction and protection publication, continues across
+adapter loss and recovery, subject to the adapter-owned work in
+[Outcome and scope](#outcome-and-scope).
+Adapter DDL and replica publication commit as cooperating catalog
 writers. The adapter reads through the query client with durable protection,
 straight to replicas. Compute is the first working slice within this milestone,
 storage follows on the same path, and neither is complete without the other.
 
 Demonstrate: stop the adapter while maintained dataflows, sources, sinks, and
-compaction continue, with table-fed dataflows pausing and the demonstration
-saying so, then restart it and resume queries. Include a multi-replica cluster
-with one replica still hydrating, same-batch dependencies, and concurrent or
-delayed application of committed permission. One adapter and one query client
-suffice.
+compaction continue, explicitly allowing table- and webhook-fed work to pause.
+Restart a replica during the outage and show that it reconstructs and progresses
+without the adapter, rather than relying on a surviving sibling's progress.
+Then restart the adapter and resume queries. Include a multi-replica cluster with
+one replica still hydrating, same-batch dependencies, and concurrent or delayed
+application of committed permission. One adapter and one query client suffice.
 
 #### 3. Independent query clients
 

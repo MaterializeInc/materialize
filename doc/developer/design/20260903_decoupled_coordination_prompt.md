@@ -7,78 +7,82 @@ Working PR: https://github.com/MaterializeInc/materialize/pull/38696
 Bookmark: decoupled-coordination
 Remote: origin, pointing to the contributor fork, not upstream
 
-Read the design and doc/developer/design/20260903_decoupled_coordination_log.md,
-then inspect the current code, worktree, and remote bookmark. Preserve existing
-work and account for progress from other sessions. Use the latest handoff and
-current code to identify the active milestone in the design's Implementation and
-verification section. Choose the next coherent piece toward its observable outcome,
-briefly explain that choice, then implement and verify it. Historical proposals
-and next steps are context, not a cumulative task list.
+Read the design and the latest handoff in
+doc/developer/design/20260903_decoupled_coordination_log.md, consulting earlier
+entries for relevant decisions. Inspect the current code, worktree, and remote
+bookmark. Preserve existing work and account for progress from other sessions.
+Use the handoff and code to identify the active milestone in the design's
+Implementation and verification section. Choose the next coherent piece toward
+its observable outcome, briefly explain that choice, then implement and verify it.
+Historical proposals and next steps are context, not a cumulative task list.
 
 Current steering
 
-Check which of these review findings remain unresolved, then choose one coherent
-change. Remove resolved steering from this prompt. These are implementation
-priorities, not additional design requirements.
+Recheck these priorities against the code and latest handoff. Flag resolved
+steering for removal rather than accumulating a checklist.
 
-Milestone 2 is active. Placement is decided in the design's Lifecycle placement
-decision and the re-cut milestone: following and enactment run in clusterd, at
-the replica, for compute and storage alike. There is no separate lifecycle
-process and no lifecycle connection. Do not extract the controllers into their
-own process, and do not leave the storage controller's enactment as a second
-stack beside the new path. The latest log entry is the implementation checkpoint.
+Milestone 2 is active. Following and enactment belong in clusterd replicas for
+compute and storage alike, not a separate lifecycle process or connection.
+The query client, cooperating writers, and written-plan installation are
+in-process checkpoints. The replica follower observes but does not enact, and
+the shared-catalog extraction is incomplete. The next integration is:
 
-The query connection split and generation-scoped cooperating catalog writers are
-implemented in-process. MV and metric-sink compute installation and sink alteration
-derive from committed state. Remote COPY staging uses request-owned storage query
-connections, while its row commitment stays in the adapter. Webhook and statement
-history writes are adapter-owned. Request statistics, real-time recency and progress
-use metadata/Persist and the query protocol. Protected plan explanations read the
-committed selection, and runtime notice publication is writer-owned. Protected
-request plumbing carries no legacy storage handles. These are in-process checkpoints,
-not milestone acceptance. Remaining work:
+1. Finish the minimum shared core in mz-catalog: committed loading, update
+   application, item reconstruction, and implication absorption. Adapter and
+   clusterd must use the same path. Delete the snapshot-derived follower, do not
+   build a parallel derivation. Sessions, prepared statements, serving wrappers,
+   and DDL admission stay in adapter. State-owned mutations move with the core,
+   without exposing mutable maps. Separate mechanical moves from behavior changes.
+2. Enact from the replica's committed state. Acquire incarnation-scoped import
+   protection before choosing as_of and installing written plans, then apply
+   bounds and propose them from replica progress. Finish bootstrap installation
+   from selections too, without installer replanning or durable physical-import
+   requirements. Keep the controller as sole installer until the replica path
+   can replace it. Retire the superseded enactment path at cutover.
+3. Complete direct query routing and response merging in the query client, and
+   storage enactment through the same follower. Split StorageCollections by its
+   responsibilities: critical handles follow bounds, table registration and
+   finalization stay adapter-owned. Finalization may pause during adapter loss,
+   as may table and webhook ticking. Compute is a slice, not milestone completion.
 
-1. Finish replacing the adapter's direct use of controller frontiers and holds
-   with the query client: storage frontiers from persist, compute
-   frontiers from fast-protocol `Frontiers` responses, peeks and query-local
-   dataflows through it, durable client protection as its only protection. The
-   client records and reclamation rule are agreed. No remote controller access API.
-2. Finish Written plans for one adapter and one build. Writer DDL commits plan
-   selections with creates, unselects on drops, and rewrites its affected plans
-   when an import is removed. Lifecycle components install the written plan or
-   wait, without planning. Verify selected-plan explanations and writer-owned
-   notice appends/retractions, same-batch dependencies, and pending
-   replacements. Use separate commits where they form coherent implementation or
-   review boundaries. An intermediate commit is not a reason to stop the work.
-3. A catalog follower in compute clusterd that installs its cluster's indexes
-   and MVs from written plans and applies committed bounds, first alongside the
-   controller still driving, then replacing the controller's installation path.
-   The compute controller's per-instance logic moves into the replica's
-   reconciliation loop. What stays in envd is replica orchestration.
-4. Replica-owned protection and publication: a replica holds its execution
-   reads as client protection scoped to its incarnation, proposes bounds from
-   its own progress, and advances the requirements of the outputs it writes.
-5. Peeks and query-local dataflows go from the query client straight to
-   replicas, with replica choice and response merging in the client.
-6. The same follower in storage clusterd for its cluster's sources and sinks,
-   and the StorageCollections split that goes with it: critical since handles
-   follow committed bounds, table registration stays adapter-owned, shard
-   finalization gets an owner or an idempotent rule. Bring the finalization rule
-   and any sink external-write case that is unsafe under two same-generation
-   followers before building them. DDL and table appends stay with the adapter.
-   Table time stays adapter-driven for now: assume a live adapter ticks
-   transaction-WAL time, and let the demonstration state that table-fed
-   dataflows pause while the adapter is down. Webhook batching and idle ticking
-   likewise require a live adapter for this milestone.
+Use cluster/adapter-loss as the acceptance target, including replica reconstruction
+during adapter absence. Show that the restarted replica progresses, not just its
+surviving sibling. Exercise slow hydration, same-batch dependencies, pending
+replacements, and fixed-plan recovery from logical inputs after actual compaction.
+Unavailable diagnostics may remain unknown. Do not let a diagnostic audit block
+the ownership change.
 
-Verify the apply-before-publish ordering with fixed written plans, including
-reconstruction from logical inputs after an index compacted past an old bound.
+Two bounded query-client fixes belong before acceptance, not in a new redesign:
+- Protection acquisition prepares a frontier once, then can retry the same grant
+  after a peer advances permission. Re-observe on acquisition contention while
+  preserving the caller's timestamp constraints. Closed clients and genuinely
+  unavailable historical reads must still fail. Test the competing publication.
+- src/adapter/src/query_client/compute.rs caches reported transient-export frontiers
+  until disconnection, even after request cleanup, and planning clones that cache.
+  Retire request-owned observations and prevent late reports from recreating them,
+  or avoid caching unused transient observations. Do not replace this with an
+  unbounded tombstone set. Test repeated create/complete/cancel cycles on one
+  connection, including late reports, while preserving observations needed by
+  live work. An empty write frontier alone does not mean a collection is gone.
 
 The publisher defers all bounds and client reclamation while any installation is
 pending. Execution, catalog effects, sources, sinks, and queries continue. Pending
 must be transient within one build. Retry with backoff, log and count failures, and
-surface stalls. Do not build dependency-scoped publication exceptions. If real
-stalls appear, bring them before considering that fallback.
+surface stalls. Re-establish this ordering argument with replica-owned protection
+and a slow replica, rather than relying on controller-held imports. Do not build
+dependency-scoped publication exceptions. Bring concrete counterexamples or stalls.
+
+Storage steering: finalization ownership is settled in the 2026-09-14 log entry.
+Kafka uses the lowest live replica incarnation, transactional fencing and versioned
+progress, without a sink lease. Re-evaluate eligibility and the committed definition
+before producer restarts, rather than blindly restarting a stale local definition.
+Two questions remain for the storage cutover, not the shared-core extraction:
+- Does tying takeover to the five-minute reclamation grace give acceptable sink
+  recovery latency? Bring that tradeoff before choosing a faster closure rule.
+- Iceberg's conflict retry can append an overlapping same-version batch after
+  another writer commits part of it. Reproduce the competing-writer case and bring
+  a narrow commit-boundary solution before enabling independent sink followers.
+Do not silently exclude a sink type or introduce a general lifecycle leader.
 
 Keep per-build selection keys, but defer cross-build follower repair, version
 upgrades, and prewarming-owned selections. Retired-build cleanup is also deferred.
@@ -91,6 +95,8 @@ quadratic identical-index notice/dependency costs are deferred. Baseline catalog
 snapshot and storage-metadata cloning costs remain. Keep payload, Persist metadata,
 and current-state batch footprint distinct in reports, and do not treat observer
 timings as isolated subscriber latency or current-state bytes as total disk usage.
+At replica cutover, measure follower and publication costs with multiple replicas
+at those same bounded sizes. Single-publisher measurements are not that evidence.
 
 Keep the draft PR description accurate about what is implemented and what remains,
 with validation status in the PR rather than the design log.
@@ -117,8 +123,9 @@ Treat the design as the agreed boundaries, not a prescribed mechanism. Prefer
 the smallest coherent solution that preserves the full capability. Incremental
 progress is fine, but do not mistake an intermediate step for completion.
 Implementation choices within the agreed boundaries do not require renewed
-design approval. Catalog fields, leases, protocol messages, planning placement,
-and process topology remain implementation choices.
+design approval. Writer-owned planning and replica-side enactment are decided.
+Internal factoring and mechanisms not fixed by the agreed decisions are yours
+to choose.
 
 Bring discoveries, consequential tradeoffs, and scope growth to me, Aljoscha.
 Pause affected work when guidance is needed rather than silently narrowing
@@ -148,10 +155,11 @@ Focus on regular PR CI for now. Nightly intentionally does not run on this
 draft PR, so do not treat its absence as a blocker or try to enable it. We will
 start nightly validation once we have a working implementation.
 
-Normally finish the session with one coherent change. Give it a clear commit
-message and change description explaining the outcome, rationale, and validation
-status, not the chronology of attempts. If blocked, report the blocker rather
-than claiming completion.
+Land coherent, reviewable changes. Separate commits are appropriate for distinct
+implementation or review boundaries, especially mechanical relocation versus
+behavior changes. An intermediate commit is not a reason to stop the work. Commit
+messages and change descriptions explain the outcome, rationale, and validation,
+not the chronology of attempts. If blocked, report the blocker.
 
 Append only a minimal dated handoff to
 doc/developer/design/20260903_decoupled_coordination_log.md: consequential findings
@@ -159,13 +167,14 @@ or decisions, unresolved questions, and the next useful step. Do not record
 validation status there at all: CI results, pending checks, formatting or
 compile checks, tool availability, and review outcomes are reconstructible from
 the PR and are noise in the log. Distinguish proposals from decisions we
-reviewed together. Do not rewrite earlier entries. Keep the main design focused
-on design, and change its agreed boundaries only after discussing them with me.
+reviewed together. Do not rewrite earlier entries. Design and prompt bodies are
+designer-owned. Propose changes rather than editing them unless Aljoscha explicitly
+assigns documentation work.
 
 You may commit and push progress to this bookmark without asking again.
 Prefer jj. In-progress commits and pushes are allowed while iterating. Before
-finishing, squash your session's intermediate commits, including fixes and log
-updates, into one coherent commit.
+finishing, fold fixups and log updates into the relevant coherent commits without
+collapsing useful review boundaries merely because they share a session.
 You may rewrite and repush your own session's work-in-progress commits for
 this purpose. Check for remote changes before pushing. Do not overwrite
 others' work, and ask before rewriting other sessions' commits or commits

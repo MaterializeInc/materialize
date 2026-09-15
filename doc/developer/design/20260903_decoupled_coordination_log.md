@@ -995,3 +995,21 @@ parse-and-absorb catalog implications. Delete the parallel derivation. Replica
 enactment must acquire incarnation-scoped import protection before choosing an
 as_of and installing through its worker path, then apply bounds before proposing
 them. The controller remains the installer until that path can replace it.
+
+### 2026-09-20: Convergence steering and remaining storage questions
+
+Aljoscha approved documentation cleanup and steering toward the shared-catalog
+integration, replica enactment, and adapter-loss proof, including reconstruction
+of a replica during adapter absence. Mechanical moves and behavior changes may
+land separately. Writer-owned planning and replica-side enactment remain agreed
+boundaries.
+
+Query-client findings: completed transient-export observations survive until
+disconnect and are cloned during planning. Acquisition retries can reuse a grant
+made incompatible by peer publication. Resolve at those boundaries without adding
+another protection mechanism.
+
+Before storage cutover, settle the takeover latency implied by incarnation
+reclamation and Iceberg's retry of overlapping same-version batches. These remain
+open questions, not approval of a faster closure rule or a sink lease. Kafka
+producer retries must re-evaluate current eligibility and committed definitions.
