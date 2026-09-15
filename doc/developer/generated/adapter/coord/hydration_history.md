@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/hydration_history.rs
-revision: 46ec25c090
+revision: 7cdbebdb15
 ---
 
 # `adapter::coord::hydration_history`
@@ -9,13 +9,13 @@ Durable history collection for completed object and replica hydration episodes.
 
 ## Overview
 
-Each sweep visits one user replica, installs a replica-targeted subscribe that diffs that replica's live hydration timestamps against the durable history tables, and appends missing rows through the timestamped OCC write path. Including each history table in its read expression makes the write idempotent across concurrent `environmentd` processes: two collectors that compute the same row race for one write timestamp, and the loser observes the winner's append through its own subscribe and finds nothing left to write.
+Each sweep visits one replica, installs a replica-targeted subscribe that diffs that replica's live hydration timestamps against the durable history tables, and appends missing rows through the timestamped OCC write path. Including each history table in its read expression makes the write idempotent across concurrent `environmentd` processes: two collectors that compute the same row race for one write timestamp, and the loser observes the winner's append through its own subscribe and finds nothing left to write.
 
 One replica is sampled per interval, so an environment with N eligible replicas revisits each one approximately every `N * interval`. Collection is sampling, not an event log. Replica history records only the latest completed episode visible in a sweep. Intermediate episodes and intervals retracted before collection leave no evidence and are not recorded.
 
 ## Key Types
 
-**`ReplicaTarget`** — A user replica eligible for one collection step, carrying `cluster_id`, `replica_id`, and `process_count`. The `process_count` is used by `replica_collection_sql` to gate the write on all configured processes having reported resource usage.
+**`ReplicaTarget`** — A replica eligible for one collection step, carrying `cluster_id`, `replica_id`, and `process_count`. The `process_count` is used by `replica_collection_sql` to gate the write on all configured processes having reported resource usage.
 
 **`Sweep`** — Context for one sweep run, holding the `PeekClient`, catalog reference, `object_history_id` and `replica_history_id` table IDs, metrics handle, wall time, and a `cutoff` string (RFC 3339 timestamp). The two operations are:
 - `collect` — appends one replica's completed object and replica episodes that their respective history tables are missing
@@ -25,7 +25,7 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 `Coordinator::schedule_hydration_history_collection` aligns sweep fires to interval boundaries, shifted per-environment by a SHA-256-derived offset so a fleet-wide interval does not create a fleet-wide burst. Each sleep is capped at `SCHEDULE_RECHECK_CAP` (5 s) so dynamic configuration changes take effect promptly. Sweeps do not overlap: the next one is scheduled only after the previous completes or fails.
 
-`Coordinator::run_hydration_history_collection` dispatches the sweep as a background task. The task runs `collect` against the selected user replica and `retain` against the catalog server cluster, then reschedules. The sweep handle is stored on the `Coordinator` so it is aborted when the coordinator drops.
+`Coordinator::run_hydration_history_collection` dispatches the sweep as a background task. The task runs `collect` against the selected replica and `retain` against the catalog server cluster, then reschedules. The sweep handle is stored on the `Coordinator` so it is aborted when the coordinator drops.
 
 ## Collection Queries
 

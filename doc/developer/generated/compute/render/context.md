@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/context.rs
-revision: 2564b843df
+revision: 4f9106d037
 ---
 
 # mz-compute::render::context
