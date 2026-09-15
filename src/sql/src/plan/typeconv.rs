@@ -1277,6 +1277,13 @@ fn get_cast(
     }
 }
 
+/// The base type pairs that have an entry in the cast table, for tests that
+/// want to prove they exercised every one.
+pub fn valid_cast_base_type_pairs() -> impl Iterator<Item = (SqlScalarBaseType, SqlScalarBaseType)>
+{
+    VALID_CASTS.keys().copied()
+}
+
 /// Converts an expression to `SqlScalarType::String`.
 ///
 /// Most types have an explicit cast to string, but a few do not: `mz_aclitem`
