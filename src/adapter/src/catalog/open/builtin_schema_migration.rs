@@ -472,6 +472,12 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_cluster_replica_metrics_history",
         ),
+        MigrationStep::evolution(
+            "26.43.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_replica_hydration_history",
+        ),
     ]
 });
 

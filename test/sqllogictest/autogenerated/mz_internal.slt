@@ -411,9 +411,10 @@ cluster_id  text  The␠ID␠of␠the␠replica's␠cluster.
 started_at  timestamp␠with␠time␠zone  The␠earliest␠maintained␠compute␠dataflow␠installation␠in␠the␠hydration␠episode.
 finished_at  timestamp␠with␠time␠zone  The␠latest␠maintained␠compute␠dataflow␠hydration␠in␠the␠hydration␠episode.
 object_count  uint8  The␠number␠of␠maintained␠compute␠dataflows␠in␠the␠hydration␠episode.
-peak_memory_bytes  uint8  The␠largest␠process-lifetime␠cgroup␠memory␠high-water␠mark␠reported␠by␠any␠process␠when␠the␠collector␠recorded␠the␠episode.␠`NULL`␠if␠the␠platform␠reports␠no␠cgroup␠memory␠peak.
-peak_disk_bytes  uint8  The␠largest␠process-lifetime␠scratch-filesystem␠or␠swap␠high-water␠mark␠reported␠by␠any␠process␠when␠the␠collector␠recorded␠the␠episode.␠Filesystem␠peaks␠are␠sampled␠lower␠bounds.␠`NULL`␠if␠neither␠measurement␠is␠available.
+peak_memory_bytes  uint8  The␠process-lifetime␠cgroup␠memory␠high-water␠mark␠when␠the␠collector␠recorded␠the␠episode.␠`NULL`␠if␠the␠platform␠reports␠no␠cgroup␠memory␠peak.
+peak_disk_bytes  uint8  The␠process-lifetime␠scratch-filesystem␠or␠swap␠high-water␠mark␠when␠the␠collector␠recorded␠the␠episode.␠Filesystem␠peaks␠are␠sampled␠lower␠bounds.␠`NULL`␠if␠neither␠measurement␠is␠available.
 status  text  The␠hydration␠episode's␠status.␠Currently␠always␠`hydrated`.
+process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.␠`NULL`␠identifies␠a␠replica-wide␠aggregate␠of␠the␠maximum␠peaks␠across␠processes␠rather␠than␠a␠per-process␠observation.␠Episode␠timing␠and␠object_count␠are␠replica-wide␠and␠repeated␠for␠each␠process.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
