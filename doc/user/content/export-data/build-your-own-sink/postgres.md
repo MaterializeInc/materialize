@@ -35,14 +35,16 @@ without duplicating or losing rows.
   GRANT USAGE, CREATE ON SCHEMA public TO sink;
   ```
 
-  `CREATE` on the schema is required on every run, not just the first: the sink
-  reissues `CREATE TABLE IF NOT EXISTS` inside each transaction. On PostgreSQL
-  15 and later, `public` no longer grants `CREATE` to `PUBLIC`, so the grant
-  above is mandatory.
+{{< note >}}
+`CREATE` on the schema is required on every run, not just the first: the sink
+reissues `CREATE TABLE IF NOT EXISTS` inside each transaction. On PostgreSQL 15
+and later, `public` no longer grants `CREATE` to `PUBLIC`, so the grant above is
+mandatory.
 
-  The sink must also own its checkpoint table, so two roles cannot share one.
-  To run a second sink under a different role in the same schema, give it its
-  own table with `PostgresSink(..., metadata_table="_mz_sink_meta_reporting")`.
+The sink must also own its checkpoint table, so two roles cannot share one. To
+run a second sink under a different role in the same schema, give it its own
+table with `PostgresSink(..., metadata_table="_mz_sink_meta_reporting")`.
+{{< /note >}}
 
 ## Step 1. Retain enough history
 
