@@ -279,11 +279,10 @@ fallback rather than the basis for a sizing decision.
 ## How do I speed up hydration?
 
 Hydration speed scales with cluster size, so a cluster can borrow capacity for
-hydration alone rather than running at the larger size permanently. An [`AUTO
-SCALING STRATEGY (ON
-HYDRATION)`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size)
-provisions an extra burst replica at a larger size whenever the cluster has
-un-hydrated objects, and removes it once a steady-size replica catches up.
+hydration alone rather than running at the larger size permanently. See
+[autoscaling for hydration](/clusters/autoscaling/), which provisions an extra
+burst replica at a larger size whenever the cluster has un-hydrated objects and
+removes it once a steady-size replica catches up.
 
 To reduce the work hydration has to do in the first place, see [hydration
 strategies](/fundamentals/concepts/hydration/#hydration-strategies).
@@ -293,6 +292,7 @@ strategies](/fundamentals/concepts/hydration/#hydration-strategies).
 - [Hydration](/fundamentals/concepts/hydration/)
 - [Clusters](/fundamentals/concepts/clusters/)
 - [Operational guidelines](/clusters/operational-guidelines/)
+- [Autoscaling for hydration](/clusters/autoscaling/)
 - [`CREATE CLUSTER`](/sql/create-cluster/)
 - [`ALTER CLUSTER`](/sql/alter-cluster/)
 - [Usage & billing](/materialize-cloud/billing/)
