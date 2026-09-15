@@ -99,6 +99,7 @@ pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
+pub use typeconv::valid_cast_base_type_pairs;
 pub(crate) mod with_options;
 
 use crate::plan;
