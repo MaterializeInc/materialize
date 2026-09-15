@@ -13,71 +13,16 @@
 //!
 //! See [parse_state_update] for details.
 
-use mz_catalog::builtin::BUILTIN_LOG_LOOKUP;
-use mz_catalog::memory::objects::{
-    CatalogItem, DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind,
-};
-use mz_catalog::{durable, memory};
-use mz_compute_client::logging::LogVariant;
-use mz_controller_types::ClusterId;
+use crate::builtin::BUILTIN_LOG_LOOKUP;
+use crate::memory::implications::{ParsedStateUpdate, ParsedStateUpdateKind};
+use crate::memory::objects::{CatalogItem, DataSourceDesc, StateUpdate, StateUpdateKind};
+use crate::{durable, memory};
 use mz_ore::instrument;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::CatalogItemId;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::sources::GenericSourceConnection;
 
-// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::CatalogState;
-
-/// An update that needs to be applied to a controller.
-#[derive(Debug, Clone)]
-pub struct ParsedStateUpdate {
-    pub kind: ParsedStateUpdateKind,
-    pub ts: Timestamp,
-    pub diff: StateDiff,
-}
-
-/// An update that needs to be applied to a controller.
-#[derive(Debug, Clone)]
-pub enum ParsedStateUpdateKind {
-    Item {
-        durable_item: durable::objects::Item,
-        parsed_item: memory::objects::CatalogItem,
-        connection: Option<GenericSourceConnection>,
-        parsed_full_name: String,
-    },
-    Cluster {
-        durable_cluster: durable::objects::Cluster,
-        parsed_cluster: memory::objects::Cluster,
-    },
-    ClusterReplica {
-        durable_cluster_replica: durable::objects::ClusterReplica,
-        parsed_cluster_replica: memory::objects::ClusterReplica,
-    },
-    IntrospectionSourceIndex {
-        cluster_id: ClusterId,
-        log: LogVariant,
-        index_id: GlobalId,
-    },
-    /// A replica-scoped system-parameter override changed. The implication
-    /// re-pushes the complete per-replica dyncfg layer from the catalog working
-    /// copy, so it does not consume `durable`. We keep the row only so it shows
-    /// up in the `tracing::trace!` of the parsed update.
-    ReplicaSystemConfiguration {
-        durable: durable::objects::ReplicaSystemConfiguration,
-    },
-    /// An environment-wide system-parameter changed. The implication re-runs the
-    /// `SystemVars` callbacks against the committed values, so it does not
-    /// consume `durable`. We keep the row only for the `tracing::trace!`.
-    SystemConfiguration {
-        durable: durable::objects::SystemConfiguration,
-    },
-    CollectionCompactionBound(durable::objects::CollectionCompactionBound),
-    WrittenPlan(durable::objects::WrittenPlan),
-    /// Storage lifetime can end after the SQL drop when the final reader releases it.
-    StorageCollectionMetadata {
-        id: GlobalId,
-    },
-}
 
 /// Potentially generate a [ParsedStateUpdate] that corresponds to the given
 /// change to the catalog.
@@ -224,8 +169,8 @@ fn parse_cluster_replica_update(
 
 #[cfg(test)]
 mod tests {
-    use mz_catalog::durable::objects::{ReplicaSystemConfiguration, SystemConfiguration};
-    use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+    use crate::durable::objects::{ReplicaSystemConfiguration, SystemConfiguration};
+    use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
     use mz_controller_types::ReplicaId;
     use mz_repr::Timestamp;
 

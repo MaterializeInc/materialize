@@ -300,7 +300,7 @@ impl Coordinator {
                         Box::pin(std::future::ready(()))
                     }
                     Some(session_uuid) => {
-                        let update = self.catalog().state().pack_subscribe_update(
+                        let update = crate::catalog::pack_subscribe_update(
                             id,
                             active_subscribe,
                             session_uuid,
@@ -382,7 +382,7 @@ impl Coordinator {
                             Box::pin(std::future::ready(()))
                         }
                         Some(session_uuid) => {
-                            let update = self.catalog().state().pack_subscribe_update(
+                            let update = crate::catalog::pack_subscribe_update(
                                 id,
                                 active_subscribe,
                                 session_uuid,

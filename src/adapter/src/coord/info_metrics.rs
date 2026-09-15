@@ -17,7 +17,7 @@
 //! The metrics are periodically reconciled with the catalog by a
 //! background task ([Coordinator::spawn_catalog_info_metrics_task], driven by an
 //! interval off the coordinator's main loop. It rebuilds the series whenever the
-//! catalog's [transient revision](Catalog::transient_revision) changes, from the
+//! catalog's [transient revision](mz_catalog::catalog::Catalog::transient_revision) changes, from the
 //! catalog. It's okay if the info metrics are not exactly up to date and
 //! eventually consistent.
 
@@ -73,7 +73,7 @@ pub(crate) struct CatalogInfoMetrics {
     /// the series from the registry. Series are only ever created and dropped
     /// wholesale, by [CatalogInfoMetrics::populate].
     series: Vec<InfoGauge>,
-    /// The [Catalog::transient_revision] the metrics were last populated
+    /// The [mz_catalog::catalog::Catalog::transient_revision] the metrics were last populated
     /// from. Used to avoid rebuilding the metrics if the catalog has not changed.
     last_revision: Option<u64>,
     /// Times a full (re)build of the series in [CatalogInfoMetrics::populate].

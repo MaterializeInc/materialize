@@ -15,13 +15,13 @@
 //! witness. Building the witness the same way wherever a write is conditioned
 //! and wherever it is checked keeps the compared fields from drifting apart.
 
+use crate::memory::objects::{
+    BurstState, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+};
 use mz_adapter_types::cluster_state::{
     AutoScalingPolicy, AvailabilityZones, BurstRecord, ClusterSchedule, ExpectedClusterState,
     OnHydrationPolicy, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
     ReconfigurationTarget,
-};
-use mz_catalog::memory::objects::{
-    BurstState, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
 };
 use mz_controller_types::ClusterId;
 use mz_sql::plan::OnTimeoutAction;
@@ -30,7 +30,7 @@ use crate::catalog::CatalogState;
 
 /// Project a managed cluster's durable config into the compare-and-append
 /// witness: the fields a conditional write is conditioned on.
-pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClusterState {
+pub fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClusterState {
     // Exhaustive destructure (no `..`): a field added to the managed config is a
     // compile error here until we decide whether the witness must cover it.
     let ClusterVariantManaged {
@@ -86,7 +86,7 @@ fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecor
         on_timeout: on_timeout_action,
         status,
     } = record;
-    let mz_catalog::memory::objects::ReconfigurationTarget {
+    let crate::memory::objects::ReconfigurationTarget {
         size,
         replication_factor,
         availability_zones,
@@ -108,22 +108,20 @@ fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecor
 }
 
 fn reconfiguration_status(
-    status: mz_catalog::memory::objects::ReconfigurationStatus,
+    status: crate::memory::objects::ReconfigurationStatus,
 ) -> ReconfigurationStatus {
     match status {
-        mz_catalog::memory::objects::ReconfigurationStatus::InProgress => {
+        crate::memory::objects::ReconfigurationStatus::InProgress => {
             ReconfigurationStatus::InProgress
         }
-        mz_catalog::memory::objects::ReconfigurationStatus::Finalized => {
+        crate::memory::objects::ReconfigurationStatus::Finalized => {
             ReconfigurationStatus::Finalized
         }
-        mz_catalog::memory::objects::ReconfigurationStatus::TimedOut => {
-            ReconfigurationStatus::TimedOut
-        }
-        mz_catalog::memory::objects::ReconfigurationStatus::Cancelled => {
+        crate::memory::objects::ReconfigurationStatus::TimedOut => ReconfigurationStatus::TimedOut,
+        crate::memory::objects::ReconfigurationStatus::Cancelled => {
             ReconfigurationStatus::Cancelled
         }
-        mz_catalog::memory::objects::ReconfigurationStatus::ResourceExhausted => {
+        crate::memory::objects::ReconfigurationStatus::ResourceExhausted => {
             ReconfigurationStatus::ResourceExhausted
         }
     }

@@ -15,6 +15,20 @@ use std::sync::Arc;
 use std::sync::atomic;
 use std::time::Duration;
 
+use crate::SYSTEM_CONN_ID;
+use crate::builtin::BuiltinLog;
+use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
+use crate::durable::{
+    CatalogError as DurableError, DryRunTransaction, DurableCatalogError, NetworkPolicy, Snapshot,
+    Transaction,
+};
+use crate::expr_cache::{LocalExpressions, latest_item_version};
+use crate::memory::error::{AmbiguousRename, Error, ErrorKind};
+use crate::memory::objects::{
+    CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
+    MaterializedView, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
+    SourceReferences, StateDiff, StateUpdateKind, TableDataSource,
+};
 use itertools::Itertools;
 use mz_adapter_types::cluster_state::{
     BurstAudit, BurstFinishCause, ExpectedClusterState, ReconfigurationAudit,
@@ -32,21 +46,8 @@ use mz_audit_log::{
     RefreshDecisionWithReasonV2, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV2,
     VersionedEvent,
 };
-use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
-use mz_catalog::durable::{
-    CatalogError, DryRunTransaction, DurableCatalogError, NetworkPolicy, Snapshot, Transaction,
-};
-use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
-use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
-use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
-    MaterializedView, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
-    SourceReferences, StateDiff, StateUpdateKind, TableDataSource,
-};
 use mz_cluster_controller::ctx::RefreshWindowDecision;
-use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
+use mz_controller_types::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::CollectionPlan;
 use mz_ore::collections::HashSet;
@@ -71,7 +72,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{NetworkPolicyRule, PlanError};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_sql::session::vars::OwnedVarInput;
+use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{DEFAULT_SCHEMA, rbac};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
@@ -82,8 +83,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 use uuid::Uuid;
 
-use crate::AdapterError;
+use crate::catalog::CatalogError;
+use crate::catalog::ResultExt;
 use crate::catalog::state::LocalExpressionCache;
+use crate::catalog::transaction_context::TransactionContext;
 use crate::catalog::{
     BuiltinTableUpdate, Catalog, CatalogState, UpdatePrivilegeVariant,
     catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
@@ -91,9 +94,32 @@ use crate::catalog::{
     system_object_type_to_audit_object_type,
 };
 use crate::config::{ScopedParameters, ScopedParametersScope};
-use crate::coord::ConnMeta;
-use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::util::ResultExt;
+use crate::memory::implications::ParsedStateUpdate;
+
+fn add_to_audit_log(
+    system_configuration: &SystemVars,
+    oracle_write_ts: mz_repr::Timestamp,
+    session: Option<&TransactionContext<'_>>,
+    tx: &mut crate::durable::Transaction,
+    audit_events: &mut Vec<VersionedEvent>,
+    event_type: EventType,
+    object_type: ObjectType,
+    details: EventDetails,
+) -> Result<(), Error> {
+    let user = session.map(|session| session.user().name.to_string());
+
+    // unsafe_mock_audit_event_timestamp can only be set to Some when running in unsafe mode.
+
+    let occurred_at = match system_configuration.unsafe_mock_audit_event_timestamp() {
+        Some(ts) => ts.into(),
+        _ => oracle_write_ts.into(),
+    };
+    let id = tx.allocate_audit_log_id()?;
+    let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
+    audit_events.push(event.clone());
+    tx.insert_audit_log_event(event);
+    Ok(())
+}
 
 /// A manually injected audit event.
 ///
@@ -346,7 +372,7 @@ pub enum DropObjectInfo {
 impl DropObjectInfo {
     /// Creates a `DropObjectInfo` from an `ObjectId`.
     /// If it is a `ClusterReplica`, the reason will be set to `ReplicaCreateDropReason::Manual`.
-    pub(crate) fn manual_drop_from_object_id(id: ObjectId) -> Self {
+    pub fn manual_drop_from_object_id(id: ObjectId) -> Self {
         match id {
             ObjectId::Cluster(cluster_id) => DropObjectInfo::Cluster(cluster_id),
             ObjectId::ClusterReplica((cluster_id, replica_id)) => DropObjectInfo::ClusterReplica((
@@ -501,7 +527,7 @@ impl Catalog {
     /// The cluster config's `reconfiguration` record, if any.
     fn reconfiguration_record_of(
         config: &ClusterConfig,
-    ) -> Option<&mz_catalog::memory::objects::ReconfigurationState> {
+    ) -> Option<&crate::memory::objects::ReconfigurationState> {
         match &config.variant {
             ClusterVariant::Managed(managed) => managed.reconfiguration.as_ref(),
             ClusterVariant::Unmanaged => None,
@@ -509,7 +535,7 @@ impl Catalog {
     }
 
     /// The cluster config's `burst` record, if any.
-    fn burst_record_of(config: &ClusterConfig) -> Option<&mz_catalog::memory::objects::BurstState> {
+    fn burst_record_of(config: &ClusterConfig) -> Option<&crate::memory::objects::BurstState> {
         match &config.variant {
             ClusterVariant::Managed(managed) => managed.burst.as_ref(),
             ClusterVariant::Unmanaged => None,
@@ -562,16 +588,16 @@ impl Catalog {
     /// `status` and the audited transition are two views of one decision, so a
     /// mismatch is a writer bug and fails the transaction rather than commit an
     /// event that contradicts the state. The valid pairings are tabulated on
-    /// [`mz_catalog::memory::objects::ReconfigurationStatus`].
+    /// [`crate::memory::objects::ReconfigurationStatus`].
     fn reconfiguration_audit_details(
         config: &ClusterConfig,
         cluster_id: ClusterId,
         cluster_name: &str,
         audit: ReconfigurationAudit,
-    ) -> Result<AlterClusterReconfigurationV1, AdapterError> {
+    ) -> Result<AlterClusterReconfigurationV1, CatalogError> {
         let record = Self::reconfiguration_record_of(config);
         let Some(record) = record else {
-            return Err(AdapterError::Internal(format!(
+            return Err(CatalogError::Internal(format!(
                 "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
                  without a reconfiguration record"
             )));
@@ -610,7 +636,7 @@ impl Catalog {
             )
         );
         if !coherent {
-            return Err(AdapterError::Internal(format!(
+            return Err(CatalogError::Internal(format!(
                 "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
                  contradicts the written record status {:?}",
                 record.status
@@ -662,7 +688,7 @@ impl Catalog {
         cluster_id: ClusterId,
         cluster_name: &str,
         audit: BurstAudit,
-    ) -> Result<ClusterHydrationBurstV1, AdapterError> {
+    ) -> Result<ClusterHydrationBurstV1, CatalogError> {
         let (transition, finish_cause, record) = match audit {
             BurstAudit::Started => (
                 HydrationBurstLifecycleV1::Started,
@@ -682,7 +708,7 @@ impl Catalog {
             }
         };
         let Some(record) = record else {
-            return Err(AdapterError::Internal(format!(
+            return Err(CatalogError::Internal(format!(
                 "burst audit transition {audit:?} for cluster {cluster_name} \
                  without a burst record on the corresponding side of the write"
             )));
@@ -738,12 +764,12 @@ impl Catalog {
         // dummy impl of `StorageController` for tests.
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&ConnMeta>,
+        session: Option<&TransactionContext<'_>>,
         ops: Vec<Op>,
-    ) -> Result<TransactionResult, AdapterError> {
+    ) -> Result<TransactionResult, CatalogError> {
         trace!("transact: {:?}", ops);
         fail::fail_point!("catalog_transact", |arg| {
-            Err(AdapterError::Unstructured(anyhow::anyhow!(
+            Err(CatalogError::Unstructured(anyhow::anyhow!(
                 "failpoint: {arg:?}"
             )))
         });
@@ -780,7 +806,7 @@ impl Catalog {
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
         let mut tx = match storage.transaction().await {
-            Err(error @ CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+            Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
                 return Err(error.into());
             }
             result => result.unwrap_or_terminate("starting catalog transaction"),
@@ -807,7 +833,7 @@ impl Catalog {
         // refresh its projection and revalidate before retrying. Other failures
         // can follow a successful append, so they still require recovery.
         match tx.commit(commit_ts).await {
-            Err(error @ CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+            Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
                 return Err(error.into());
             }
             result => {
@@ -863,10 +889,10 @@ impl Catalog {
         &self,
         base_state: &CatalogState,
         ops: Vec<Op>,
-        session: Option<&ConnMeta>,
+        session: Option<&TransactionContext<'_>>,
         prev_snapshot: Option<Snapshot>,
         oracle_write_ts: mz_repr::Timestamp,
-    ) -> Result<(CatalogState, Snapshot), AdapterError> {
+    ) -> Result<(CatalogState, Snapshot), CatalogError> {
         // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
         // but we still need to check for collisions.
         let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
@@ -982,7 +1008,7 @@ impl Catalog {
         mode: TransactInnerMode,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&ConnMeta>,
+        session: Option<&TransactionContext<'_>>,
         ops: Vec<Op>,
         temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
@@ -990,7 +1016,7 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
-    ) -> Result<Option<TransactInnerResult>, AdapterError> {
+    ) -> Result<Option<TransactInnerResult>, CatalogError> {
         // We come up with new catalog state, builtin state updates, and parsed
         // catalog updates (for deriving catalog implications) in two phases:
         //
@@ -1107,7 +1133,7 @@ impl Catalog {
                             .is_none()
                     }))
             {
-                return Err(AdapterError::DDLTransactionRace);
+                return Err(CatalogError::DDLTransactionRace);
             }
         }
 
@@ -1126,7 +1152,7 @@ impl Catalog {
             // Their completed requirements describe the retired definition.
             if id != mv.global_id_writes() {
                 if requirement.frontier.is_some() {
-                    return Err(AdapterError::internal(
+                    return Err(CatalogError::internal(
                         "materialized view read protection",
                         format!("retired writer {id} has an active recovery requirement"),
                     ));
@@ -1134,7 +1160,7 @@ impl Catalog {
                 continue;
             }
             if requirement.inputs != materialized_view_recovery_inputs(&preliminary_state, mv) {
-                return Err(AdapterError::internal(
+                return Err(CatalogError::internal(
                     "materialized view read protection",
                     format!("incomplete logical inputs for {id}"),
                 ));
@@ -1251,7 +1277,7 @@ impl Catalog {
     #[instrument]
     async fn transact_op(
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&ConnMeta>,
+        session: Option<&TransactionContext<'_>>,
         op: Op,
         temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
@@ -1261,7 +1287,7 @@ impl Catalog {
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
         created_client_incarnations: &mut Vec<u64>,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), CatalogError> {
         match op {
             Op::SetWrittenPlan {
                 id,
@@ -1271,13 +1297,13 @@ impl Catalog {
                 imports: _,
             } => {
                 if tx.get_written_plan(id, &build_version) != expected_revision {
-                    return Err(AdapterError::DDLTransactionRace);
+                    return Err(CatalogError::DDLTransactionRace);
                 }
                 tx.set_written_plan(id, &build_version, revision)?;
             }
             Op::CreateClientIncarnation => {
                 if !state.catalog_read_protection_enabled() {
-                    return Err(AdapterError::internal(
+                    return Err(CatalogError::internal(
                         "create query client",
                         "catalog read protection is not enabled",
                     ));
@@ -1308,7 +1334,7 @@ impl Catalog {
                 if !crate::catalog::cluster_state::cluster_matches_expected(
                     state, cluster_id, &expected,
                 ) {
-                    return Err(AdapterError::ClusterStateChanged { cluster_id });
+                    return Err(CatalogError::ClusterStateChanged { cluster_id });
                 }
             }
             Op::AlterRetainHistory { id, value, window } => {
@@ -1317,7 +1343,7 @@ impl Catalog {
                     let name = entry.name();
                     let full_name =
                         state.resolve_full_name(name, session.map(|session| session.conn_id()));
-                    return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
                         full_name.to_string(),
                     ))));
                 }
@@ -1327,7 +1353,7 @@ impl Catalog {
                     .item
                     .update_retain_history(value.clone(), window)
                     .map_err(|_| {
-                        AdapterError::Catalog(Error::new(ErrorKind::Internal(
+                        CatalogError::Catalog(Error::new(ErrorKind::Internal(
                             "planner should have rejected invalid alter retain history item type"
                                 .to_string(),
                         )))
@@ -1340,7 +1366,7 @@ impl Catalog {
                             old_history: previous.map(|previous| previous.to_string()),
                             new_history: value.map(|v| v.to_string()),
                         });
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1366,7 +1392,7 @@ impl Catalog {
                     let name = entry.name();
                     let full_name =
                         state.resolve_full_name(name, session.map(|session| session.conn_id()));
-                    return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
                         full_name.to_string(),
                     ))));
                 }
@@ -1376,7 +1402,7 @@ impl Catalog {
                     .item
                     .update_timestamp_interval(value.clone(), interval)
                     .map_err(|_| {
-                        AdapterError::Catalog(Error::new(ErrorKind::Internal(
+                        CatalogError::Catalog(Error::new(ErrorKind::Internal(
                             "planner should have rejected invalid alter timestamp interval item type"
                                 .to_string(),
                         )))
@@ -1390,7 +1416,7 @@ impl Catalog {
                             new_interval: value.map(|v| v.to_string()),
                         },
                     );
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1434,7 +1460,7 @@ impl Catalog {
                 };
                 tx.update_role(id, existing_role.into(), password_action)?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1460,13 +1486,13 @@ impl Catalog {
                 let mut policy: NetworkPolicy = existing_policy.into();
                 policy.rules = rules;
                 if is_reserved_name(&name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedNetworkPolicyName(name),
                     )));
                 }
                 tx.update_network_policy(id, policy.clone())?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1507,7 +1533,7 @@ impl Catalog {
 
                 // TODO(alter_table): Support adding columns to sources.
                 let CatalogItem::Table(table) = &mut new_entry.item else {
-                    return Err(AdapterError::Unsupported("adding columns to non-Table"));
+                    return Err(CatalogError::Unsupported("adding columns to non-Table"));
                 };
                 table.collections.insert(version, new_global_id);
 
@@ -1518,7 +1544,7 @@ impl Catalog {
                         column_type,
                         nullable,
                     });
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1541,13 +1567,13 @@ impl Catalog {
                     apply_replacement_audit_events(state, &new_entry, replacement);
 
                 let CatalogItem::MaterializedView(mv) = &mut new_entry.item else {
-                    return Err(AdapterError::internal(
+                    return Err(CatalogError::internal(
                         "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
                         "id must refer to a materialized view",
                     ));
                 };
                 let CatalogItem::MaterializedView(replacement_mv) = &replacement.item else {
-                    return Err(AdapterError::internal(
+                    return Err(CatalogError::internal(
                         "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
                         "replacement_id must refer to a materialized view",
                     ));
@@ -1575,7 +1601,7 @@ impl Catalog {
                 tx.drop_comments(&[comment_id].into())?;
 
                 for (event_type, details) in new_audit_events {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1648,7 +1674,7 @@ impl Catalog {
                     schema_privileges.clone(),
                     &temporary_oids,
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1663,7 +1689,7 @@ impl Catalog {
                 )?;
                 info!("create database {}", name);
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1684,14 +1710,14 @@ impl Catalog {
                 owner_id,
             } => {
                 if is_reserved_name(&schema_name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedSchemaName(schema_name),
                     )));
                 }
                 let database_id = match database_id {
                     ResolvedDatabaseSpecifier::Id(id) => id,
                     ResolvedDatabaseSpecifier::Ambient => {
-                        return Err(AdapterError::Catalog(Error::new(
+                        return Err(CatalogError::Catalog(Error::new(
                             ErrorKind::ReadOnlySystemSchema(schema_name),
                         )));
                     }
@@ -1719,7 +1745,7 @@ impl Catalog {
                     privileges.clone(),
                     &state.get_temporary_oids().collect(),
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1736,7 +1762,7 @@ impl Catalog {
             }
             Op::CreateRole { name, attributes } => {
                 if is_reserved_role_name(&name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedRoleName(name),
                     )));
                 }
@@ -1749,7 +1775,7 @@ impl Catalog {
                     vars.clone(),
                     &state.get_temporary_oids().collect(),
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1777,7 +1803,7 @@ impl Catalog {
                 config,
             } => {
                 if is_reserved_name(&name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedClusterName(name),
                     )));
                 }
@@ -1822,7 +1848,7 @@ impl Catalog {
                     config.clone().into(),
                     &state.get_temporary_oids().collect(),
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1846,7 +1872,7 @@ impl Catalog {
                 reason,
             } => {
                 if is_reserved_name(&name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedReplicaName(name),
                     )));
                 }
@@ -1882,7 +1908,7 @@ impl Catalog {
                             scheduling_policies,
                         },
                     );
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1965,7 +1991,7 @@ impl Catalog {
                         } else {
                             if state.catalog_read_protection_enabled() {
                                 let initial_as_of = mv.initial_as_of.as_ref().ok_or_else(|| {
-                                    AdapterError::internal(
+                                    CatalogError::internal(
                                         "create materialized view",
                                         "missing initial storage frontier",
                                     )
@@ -2006,7 +2032,7 @@ impl Catalog {
                 if !system_user {
                     if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
                         let cluster_name = state.clusters_by_id[&id].name.clone();
-                        return Err(AdapterError::Catalog(Error::new(
+                        return Err(CatalogError::Catalog(Error::new(
                             ErrorKind::ReadOnlyCluster(cluster_name),
                         )));
                     }
@@ -2046,7 +2072,7 @@ impl Catalog {
                     if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                         || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
                     {
-                        return Err(AdapterError::Catalog(Error::new(
+                        return Err(CatalogError::Catalog(Error::new(
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
@@ -2085,7 +2111,7 @@ impl Catalog {
                             })
                     {
                         let temp_item = state.get_entry(temp_id);
-                        return Err(AdapterError::Catalog(Error::new(
+                        return Err(CatalogError::Catalog(Error::new(
                             ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
                         )));
                     }
@@ -2095,7 +2121,7 @@ impl Catalog {
                         let schema_name = state
                             .resolve_full_name(&name, session.map(|session| session.conn_id()))
                             .schema;
-                        return Err(AdapterError::Catalog(Error::new(
+                        return Err(CatalogError::Catalog(Error::new(
                             ErrorKind::ReadOnlySystemSchema(schema_name),
                         )));
                     }
@@ -2189,7 +2215,7 @@ impl Catalog {
                             name,
                         }),
                     };
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2207,12 +2233,12 @@ impl Catalog {
                 owner_id,
             } => {
                 if state.network_policies_by_name.contains_key(&name) {
-                    return Err(AdapterError::PlanError(PlanError::Catalog(
+                    return Err(CatalogError::PlanError(PlanError::Catalog(
                         SqlCatalogError::NetworkPolicyAlreadyExists(name),
                     )));
                 }
                 if is_reserved_name(&name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedNetworkPolicyName(name),
                     )));
                 }
@@ -2243,7 +2269,7 @@ impl Catalog {
                     &temporary_oids,
                 )?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2275,7 +2301,7 @@ impl Catalog {
                 if let (Some(conn_id), true) =
                     (session.map(|session| session.conn_id()), should_log)
                 {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2336,7 +2362,7 @@ impl Catalog {
                     }
 
                     if Self::should_audit_log_item(entry.item()) {
-                        CatalogState::add_to_audit_log(
+                        add_to_audit_log(
                             &state.system_configuration,
                             oracle_write_ts,
                             session,
@@ -2386,7 +2412,7 @@ impl Catalog {
                         ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
                     };
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2409,7 +2435,7 @@ impl Catalog {
                 for database_id in delta.databases {
                     let database = state.get_database(&database_id).clone();
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2433,7 +2459,7 @@ impl Catalog {
                         .get(&role_id)
                         .expect("catalog out of sync");
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2458,7 +2484,7 @@ impl Catalog {
                         .get(&network_policy_id)
                         .expect("catalog out of sync");
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2492,7 +2518,7 @@ impl Catalog {
                             reason,
                             scheduling_policies,
                         });
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2510,7 +2536,7 @@ impl Catalog {
                 for cluster_id in delta.clusters {
                     let cluster = state.get_cluster(cluster_id);
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2535,7 +2561,7 @@ impl Catalog {
                 if state.collect_role_membership(&role_id).contains(&member_id) {
                     let group_role = state.get_role(&role_id);
                     let member_role = state.get_role(&member_id);
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::CircularRoleMembership {
                             role_name: group_role.name().to_string(),
                             member_name: member_role.name().to_string(),
@@ -2546,7 +2572,7 @@ impl Catalog {
                 member_role.membership.map.insert(role_id, grantor_id);
                 tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2576,7 +2602,7 @@ impl Catalog {
                 member_role.membership.map.remove(&role_id);
                 tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2672,7 +2698,7 @@ impl Catalog {
                 };
                 // One audit event per grantee, even though the batch is a single durable write.
                 for privilege in &privileges {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2712,7 +2738,7 @@ impl Catalog {
                     privilege_acl_item.grantee,
                     new_acl_mode.cloned(),
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2736,17 +2762,17 @@ impl Catalog {
                 check_reserved_names,
             } => {
                 if id.is_system() {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReadOnlyCluster(name.clone()),
                     )));
                 }
                 if check_reserved_names && is_reserved_name(&to_name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedClusterName(to_name),
                     )));
                 }
                 tx.rename_cluster(id, &name, &to_name)?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2769,12 +2795,12 @@ impl Catalog {
                 to_name,
             } => {
                 if is_reserved_name(&to_name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedReplicaName(to_name),
                     )));
                 }
                 tx.rename_cluster_replica(replica_id, &name, &to_name)?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2800,7 +2826,7 @@ impl Catalog {
 
                 let entry = state.get_entry(&id);
                 if let CatalogItem::Type(_) = entry.item() {
-                    return Err(AdapterError::Catalog(Error::new(ErrorKind::TypeRename(
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::TypeRename(
                         current_full_name.to_string(),
                     ))));
                 }
@@ -2808,7 +2834,7 @@ impl Catalog {
                 if entry.id().is_system() {
                     let name = state
                         .resolve_full_name(entry.name(), session.map(|session| session.conn_id()));
-                    return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
                         name.to_string(),
                     ))));
                 }
@@ -2825,7 +2851,7 @@ impl Catalog {
                     new_name: Self::full_name_detail(&to_full_name),
                 });
                 if Self::should_audit_log_item(entry.item()) {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2897,7 +2923,7 @@ impl Catalog {
                 check_reserved_names,
             } => {
                 if check_reserved_names && is_reserved_name(&new_name) {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedSchemaName(new_name),
                     )));
                 }
@@ -2910,7 +2936,7 @@ impl Catalog {
                 let cur_name = schema.name().schema.clone();
 
                 let ResolvedDatabaseSpecifier::Id(database_id) = database_spec else {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::AmbientSchemaRename(cur_name),
                     )));
                 };
@@ -2950,7 +2976,7 @@ impl Catalog {
                     items_to_update.insert(*id, state.durable_item(new_entry)?);
                     updates.push(*id);
 
-                    Ok::<_, AdapterError>(())
+                    Ok::<_, CatalogError>(())
                 };
 
                 // Update all of the items in the schema. A schema holds items,
@@ -2978,7 +3004,7 @@ impl Catalog {
                 // Renaming temporary schemas is not supported.
                 let SchemaSpecifier::Id(schema_id) = *schema.id() else {
                     let schema_name = schema.name().schema.clone();
-                    return Err(AdapterError::Catalog(crate::catalog::Error::new(
+                    return Err(CatalogError::Catalog(crate::catalog::Error::new(
                         crate::catalog::ErrorKind::ReadOnlySystemSchema(schema_name),
                     )));
                 };
@@ -2993,7 +3019,7 @@ impl Catalog {
                     new_name: new_name.clone(),
                     database_name,
                 });
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3024,7 +3050,7 @@ impl Catalog {
                     ObjectId::Cluster(id) => {
                         let mut cluster = state.get_cluster(*id).clone();
                         if id.is_system() {
-                            return Err(AdapterError::Catalog(Error::new(
+                            return Err(CatalogError::Catalog(Error::new(
                                 ErrorKind::ReadOnlyCluster(cluster.name),
                             )));
                         }
@@ -3043,7 +3069,7 @@ impl Catalog {
                             .expect("catalog out of sync")
                             .clone();
                         if replica_id.is_system() {
-                            return Err(AdapterError::Catalog(Error::new(
+                            return Err(CatalogError::Catalog(Error::new(
                                 ErrorKind::ReadOnlyClusterReplica(replica.name),
                             )));
                         }
@@ -3053,7 +3079,7 @@ impl Catalog {
                     ObjectId::Database(id) => {
                         let mut database = state.get_database(id).clone();
                         if id.is_system() {
-                            return Err(AdapterError::Catalog(Error::new(
+                            return Err(CatalogError::Catalog(Error::new(
                                 ErrorKind::ReadOnlyDatabase(database.name),
                             )));
                         }
@@ -3073,7 +3099,7 @@ impl Catalog {
                         if schema_id.is_system() {
                             let name = schema.name();
                             let full_name = state.resolve_full_schema_name(name);
-                            return Err(AdapterError::Catalog(Error::new(
+                            return Err(CatalogError::Catalog(Error::new(
                                 ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
                             )));
                         }
@@ -3093,7 +3119,7 @@ impl Catalog {
                                 new_entry.name(),
                                 session.map(|session| session.conn_id()),
                             );
-                            return Err(AdapterError::Catalog(Error::new(
+                            return Err(CatalogError::Catalog(Error::new(
                                 ErrorKind::ReadOnlyItem(full_name.to_string()),
                             )));
                         }
@@ -3108,7 +3134,7 @@ impl Catalog {
                     ObjectId::NetworkPolicy(id) => {
                         let mut policy = state.get_network_policy(id).clone();
                         if id.is_system() {
-                            return Err(AdapterError::Catalog(Error::new(
+                            return Err(CatalogError::Catalog(Error::new(
                                 ErrorKind::ReadOnlyNetworkPolicy(policy.name),
                             )));
                         }
@@ -3123,7 +3149,7 @@ impl Catalog {
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
                 let object_type = state.get_object_type(&id);
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3170,7 +3196,7 @@ impl Catalog {
                 if reconfiguration_audit.is_none()
                     && Self::reconfiguration_lifecycle_moved(&cluster.config, &config)
                 {
-                    return Err(AdapterError::Internal(format!(
+                    return Err(CatalogError::Internal(format!(
                         "cluster {name} reconfiguration record moved without a declared \
                          audit intent"
                     )));
@@ -3179,7 +3205,7 @@ impl Catalog {
                 // or disappearing without a declared intent would silently lose
                 // the started/finished audit transition.
                 if burst_audit.is_none() && Self::burst_lifecycle_moved(&cluster.config, &config) {
-                    return Err(AdapterError::Internal(format!(
+                    return Err(CatalogError::Internal(format!(
                         "cluster {name} burst record moved without a declared audit intent"
                     )));
                 }
@@ -3195,7 +3221,7 @@ impl Catalog {
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3210,7 +3236,7 @@ impl Catalog {
                 )?;
 
                 if let Some(details) = reconfiguration_event {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -3223,7 +3249,7 @@ impl Catalog {
                 }
 
                 if let Some(details) = burst_event {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -3253,7 +3279,7 @@ impl Catalog {
                             })
                     {
                         let temp_item = state.get_entry(temp_id);
-                        return Err(AdapterError::Catalog(Error::new(
+                        return Err(CatalogError::Catalog(Error::new(
                             ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
                         )));
                     }
@@ -3272,7 +3298,7 @@ impl Catalog {
                         .maintained_read_requirements()
                         .get(&owner)
                         .ok_or_else(|| {
-                            AdapterError::internal(
+                            CatalogError::internal(
                                 "update storage item",
                                 format!("missing read requirement for {owner}"),
                             )
@@ -3286,7 +3312,7 @@ impl Catalog {
                     );
                     full_name.item = name.item;
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -3328,7 +3354,7 @@ impl Catalog {
                     tx.set_enable_0dt_deployment_panic_after_timeout(panic_after_timeout)?;
                 }
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3356,7 +3382,7 @@ impl Catalog {
                     tx.reset_enable_0dt_deployment_panic_after_timeout()?;
                 }
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3373,7 +3399,7 @@ impl Catalog {
                 tx.reset_0dt_deployment_ddl_check_interval()?;
                 tx.reset_enable_0dt_deployment_panic_after_timeout()?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3563,13 +3589,13 @@ impl CatalogState {
     /// index grant. They retain their metadata and history if the index is dropped.
     /// A retired identity can retain or advance an existing grant, but
     /// cannot be used to introduce protection for a new reader.
-    pub(crate) fn expand_client_read_requirements(
+    pub fn expand_client_read_requirements(
         &self,
         incarnation: u64,
         mut requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
-    ) -> Result<BTreeMap<GlobalId, mz_repr::Timestamp>, AdapterError> {
+    ) -> Result<BTreeMap<GlobalId, mz_repr::Timestamp>, CatalogError> {
         if !self.client_incarnations().contains_key(&incarnation) {
-            return Err(AdapterError::internal(
+            return Err(CatalogError::internal(
                 "publish client read protection",
                 format!("client incarnation {incarnation} is closed"),
             ));
@@ -3587,7 +3613,7 @@ impl CatalogState {
                 if retained {
                     continue;
                 }
-                return Err(AdapterError::internal(
+                return Err(CatalogError::internal(
                     "publish client read protection",
                     format!("collection {id} is not available"),
                 ));
@@ -3608,7 +3634,7 @@ impl CatalogState {
                         .or_insert(frontier);
                 }
             } else if !entry.item().is_storage_collection() {
-                return Err(AdapterError::internal(
+                return Err(CatalogError::internal(
                     "publish client read protection",
                     format!("collection {id} is not readable"),
                 ));
@@ -3636,16 +3662,16 @@ fn materialized_view_recovery_inputs(
 fn validate_materialized_view_birth(
     mv: &MaterializedView,
     frontier: Option<mz_repr::Timestamp>,
-) -> Result<(), AdapterError> {
+) -> Result<(), CatalogError> {
     let initial_as_of = mv.initial_as_of.as_ref().and_then(|f| f.as_option());
     let (Some(frontier), Some(initial_as_of)) = (frontier, initial_as_of) else {
-        return Err(AdapterError::internal(
+        return Err(CatalogError::internal(
             "create materialized view",
             "missing readable birth or initial storage frontier",
         ));
     };
     if frontier > *initial_as_of {
-        return Err(AdapterError::internal(
+        return Err(CatalogError::internal(
             "create materialized view",
             "input protection exceeds initial storage visibility",
         ));
@@ -3653,20 +3679,20 @@ fn validate_materialized_view_birth(
     if let Some(schedule) = &mv.refresh_schedule {
         for refresh_at in &schedule.ats {
             if frontier > *refresh_at {
-                return Err(AdapterError::InputNotReadableAtRefreshAtTime(
+                return Err(CatalogError::InputNotReadableAtRefreshAtTime(
                     *refresh_at,
                     timely::progress::Antichain::from_elem(frontier),
                 ));
             }
             if initial_as_of > refresh_at {
-                return Err(AdapterError::internal(
+                return Err(CatalogError::internal(
                     "create materialized view",
                     "initial storage visibility skips an explicit refresh",
                 ));
             }
         }
         if schedule.round_up_timestamp(*initial_as_of) != Some(*initial_as_of) {
-            return Err(AdapterError::internal(
+            return Err(CatalogError::internal(
                 "create materialized view",
                 "initial storage visibility is not a refresh timestamp",
             ));
@@ -3679,7 +3705,7 @@ fn validate_materialized_view_birth(
 fn source_initial_compaction_bound(
     state: &CatalogState,
     desc: &DataSourceDesc,
-) -> Result<Option<mz_repr::Timestamp>, AdapterError> {
+) -> Result<Option<mz_repr::Timestamp>, CatalogError> {
     match source_initialization_dependency(state, desc)? {
         Some(id) => dependency_compaction_bound(state, id),
         None => Ok(Some(mz_repr::Timestamp::MIN)),
@@ -3689,7 +3715,7 @@ fn source_initial_compaction_bound(
 fn source_initialization_dependency(
     state: &CatalogState,
     desc: &DataSourceDesc,
-) -> Result<Option<GlobalId>, AdapterError> {
+) -> Result<Option<GlobalId>, CatalogError> {
     let dependency = match desc {
         DataSourceDesc::IngestionExport {
             ingestion_id,
@@ -3700,7 +3726,7 @@ fn source_initialization_dependency(
                 None
             } else {
                 Some(state.get_entry(ingestion_id).progress_id().ok_or_else(|| {
-                    AdapterError::internal(
+                    CatalogError::internal(
                         "source birth permission",
                         "ingestion export must refer to an ingestion with a remap collection",
                     )
@@ -3723,7 +3749,7 @@ fn source_initialization_dependency(
 fn storage_recovery_inputs(
     state: &CatalogState,
     item: &CatalogItem,
-) -> Result<Option<(GlobalId, BTreeSet<GlobalId>)>, AdapterError> {
+) -> Result<Option<(GlobalId, BTreeSet<GlobalId>)>, CatalogError> {
     let (id, desc) = match item {
         CatalogItem::Source(source) => (source.global_id(), &source.data_source),
         CatalogItem::Table(table) => match &table.data_source {
@@ -3757,7 +3783,7 @@ fn storage_recovery_inputs(
 fn dependency_compaction_bound(
     state: &CatalogState,
     id: GlobalId,
-) -> Result<Option<mz_repr::Timestamp>, AdapterError> {
+) -> Result<Option<mz_repr::Timestamp>, CatalogError> {
     // Storage initializes a dependent at least as far as its dependency's since.
     // Governance proves since <= bound without making physical readability the
     // authority. The preliminary state includes permissions from preceding ops,
@@ -3767,7 +3793,7 @@ fn dependency_compaction_bound(
         .get(&id)
         .map(|bound| bound.as_option().copied())
         .ok_or_else(|| {
-            AdapterError::internal(
+            CatalogError::internal(
                 "storage birth permission",
                 format!("missing compaction permission for dependency {id}"),
             )
@@ -3782,12 +3808,12 @@ fn dependency_compaction_bound(
 /// mapping matches the creating session.
 fn temporary_item_owner_session(
     state: &CatalogState,
-    session: Option<&ConnMeta>,
+    session: Option<&TransactionContext<'_>>,
     item: &CatalogItem,
     item_name: &str,
-) -> Result<Uuid, AdapterError> {
+) -> Result<Uuid, CatalogError> {
     let session = session.ok_or_else(|| {
-        AdapterError::Internal("temporary items must have an owner session".to_string())
+        CatalogError::Internal("temporary items must have an owner session".to_string())
     })?;
     let owner_session = session.uuid();
     soft_assert_or_log!(
@@ -3795,7 +3821,7 @@ fn temporary_item_owner_session(
         "temporary item connection must match the creating session"
     );
     if state.temporary_namespaces.uuid_for_conn(session.conn_id()) != Some(owner_session) {
-        return Err(AdapterError::Internal(format!(
+        return Err(CatalogError::Internal(format!(
             "connection {} has no temporary namespace while creating temporary item {}",
             session.conn_id(),
             item_name,
@@ -3817,7 +3843,7 @@ fn tx_replace_item(
     state: &CatalogState,
     id: CatalogItemId,
     new_entry: CatalogEntry,
-) -> Result<(), AdapterError> {
+) -> Result<(), CatalogError> {
     let new_id = new_entry.id;
 
     // Rewrite dependent objects to point to the new ID.
@@ -3844,7 +3870,7 @@ fn tx_replace_item(
         }
     }
 
-    let mz_catalog::durable::Item {
+    let crate::durable::Item {
         id: _,
         oid,
         global_id,
@@ -3953,8 +3979,8 @@ impl ObjectsToDrop {
     pub fn generate(
         drop_object_infos: impl IntoIterator<Item = DropObjectInfo>,
         state: &CatalogState,
-        session: Option<&ConnMeta>,
-    ) -> Result<Self, AdapterError> {
+        session: Option<&TransactionContext<'_>>,
+    ) -> Result<Self, CatalogError> {
         let mut delta = ObjectsToDrop::default();
 
         for drop_object_info in drop_object_infos {
@@ -3968,8 +3994,8 @@ impl ObjectsToDrop {
         &mut self,
         drop_object_info: DropObjectInfo,
         state: &CatalogState,
-        session: Option<&ConnMeta>,
-    ) -> Result<(), AdapterError> {
+        session: Option<&TransactionContext<'_>>,
+    ) -> Result<(), CatalogError> {
         self.comments
             .insert(state.get_comment_id(drop_object_info.to_object_id()));
 
@@ -3977,7 +4003,7 @@ impl ObjectsToDrop {
             DropObjectInfo::Database(database_id) => {
                 let database = &state.database_by_id[&database_id];
                 if database_id.is_system() {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReadOnlyDatabase(database.name().to_string()),
                     )));
                 }
@@ -3996,7 +4022,7 @@ impl ObjectsToDrop {
                 if schema_id.is_system() {
                     let name = schema.name();
                     let full_name = state.resolve_full_schema_name(name);
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
                     )));
                 }
@@ -4006,7 +4032,7 @@ impl ObjectsToDrop {
             DropObjectInfo::Role(role_id) => {
                 let name = state.get_role(&role_id).name().to_string();
                 if role_id.is_system() || role_id.is_predefined() {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReservedRoleName(name.clone()),
                     )));
                 }
@@ -4018,7 +4044,7 @@ impl ObjectsToDrop {
                 let cluster = state.get_cluster(cluster_id);
                 let name = &cluster.name;
                 if cluster_id.is_system() {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReadOnlyCluster(name.clone()),
                     )));
                 }
@@ -4070,7 +4096,7 @@ impl ObjectsToDrop {
                     let name = entry.name();
                     let full_name =
                         state.resolve_full_name(name, session.map(|session| session.conn_id()));
-                    return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
                         full_name.to_string(),
                     ))));
                 }
@@ -4081,7 +4107,7 @@ impl ObjectsToDrop {
                 let policy = state.get_network_policy(&network_policy_id);
                 let name = &policy.name;
                 if network_policy_id.is_system() {
-                    return Err(AdapterError::Catalog(Error::new(
+                    return Err(CatalogError::Catalog(Error::new(
                         ErrorKind::ReadOnlyNetworkPolicy(name.clone()),
                     )));
                 }
@@ -4098,10 +4124,10 @@ impl ObjectsToDrop {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use mz_catalog::SYSTEM_CONN_ID;
-    use mz_catalog::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
-    use mz_catalog::memory::error::{Error, ErrorKind};
-    use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
+    use crate::SYSTEM_CONN_ID;
+    use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
+    use crate::memory::error::{Error, ErrorKind};
+    use crate::memory::objects::{CatalogItem, Table, TableDataSource};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
     use mz_repr::role_id::RoleId;
     use mz_repr::{RelationDesc, RelationVersion, VersionedRelationDesc};
@@ -4113,9 +4139,9 @@ mod tests {
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::{self, MAX_CONNECTIONS, OwnedVarInput, SystemVars};
 
-    use crate::AdapterError;
+    use crate::catalog::CatalogError;
     use crate::catalog::{Catalog, Op};
-    use crate::session::DEFAULT_DATABASE_NAME;
+    use mz_sql::session::vars::DEFAULT_DATABASE_NAME;
 
     #[mz_ore::test(tokio::test)]
     async fn written_plan_selection_validates_transaction_state() {
@@ -4126,10 +4152,10 @@ mod tests {
 
         Catalog::with_debug(|catalog| async move {
             let base = catalog.state().clone();
-            let index_id = base.resolve_builtin_object(&mz_catalog::builtin::Builtin::<
+            let index_id = base.resolve_builtin_object(&crate::builtin::Builtin::<
                 mz_sql::catalog::IdReference,
             >::Index(
-                &mz_catalog::builtin::MZ_TABLES_IND
+                &crate::builtin::MZ_TABLES_IND
             ));
             let CatalogItem::Index(index) = base.get_entry(&index_id).item() else {
                 unreachable!("resolved a builtin index");
@@ -4167,7 +4193,7 @@ mod tests {
                     1.into(),
                 )
                 .await;
-            assert!(matches!(stale, Err(AdapterError::DDLTransactionRace)));
+            assert!(matches!(stale, Err(CatalogError::DDLTransactionRace)));
             let missing_import = catalog
                 .transact_incremental_dry_run(
                     &selected,
@@ -4183,7 +4209,7 @@ mod tests {
                 .await;
             assert!(matches!(
                 missing_import,
-                Err(AdapterError::DDLTransactionRace)
+                Err(CatalogError::DDLTransactionRace)
             ));
             assert_eq!(catalog.state().written_plan(id, "test-build"), None);
 
@@ -4245,7 +4271,7 @@ mod tests {
                     .transact_incremental_dry_run(&base, ops, None, None, 1.into())
                     .await;
                 assert!(
-                    matches!(result, Err(AdapterError::DDLTransactionRace)),
+                    matches!(result, Err(CatalogError::DDLTransactionRace)),
                     "selection_first={selection_first}: {result:?}"
                 );
             }
@@ -4267,7 +4293,7 @@ mod tests {
         let persist = PersistClient::new_for_tests().await;
         let organization = Uuid::new_v4();
         let bootstrap = crate::catalog::test_bootstrap_args();
-        let storage = mz_catalog::durable::TestCatalogStateBuilder::new(persist.clone())
+        let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
             .with_organization_id(organization)
             .with_default_deploy_generation()
             .unwrap_build()
@@ -5284,14 +5310,14 @@ mod tests {
     async fn test_read_protection_admission_and_committed_updates() {
         use std::collections::{BTreeMap, BTreeSet};
 
-        use mz_catalog::memory::objects::StateDiff;
+        use crate::memory::objects::StateDiff;
         use mz_persist_client::ShardId;
         use mz_repr::{GlobalId, Timestamp};
         use mz_storage_client::controller::StorageTxn;
         use timely::progress::Antichain;
 
         use crate::catalog::state::LocalExpressionCache;
-        use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdateKind;
+        use crate::memory::implications::ParsedStateUpdateKind;
 
         Catalog::with_debug(|mut catalog| async move {
             let input = GlobalId::User(100_000);
@@ -5662,14 +5688,14 @@ mod tests {
     fn test_reconfiguration_audit_details() {
         use std::time::Duration;
 
-        use mz_adapter_types::cluster_state::ReconfigurationAudit;
-        use mz_audit_log::ReconfigurationLifecycleV1;
-        use mz_catalog::memory::objects::{
+        use crate::memory::objects::{
             ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
             ReconfigurationStatus, ReconfigurationTarget,
         };
-        use mz_controller::clusters::ReplicaLogging;
+        use mz_adapter_types::cluster_state::ReconfigurationAudit;
+        use mz_audit_log::ReconfigurationLifecycleV1;
         use mz_controller_types::ClusterId;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::Timestamp;
         use mz_repr::optimize::OptimizerFeatureOverrides;
 
@@ -5769,11 +5795,11 @@ mod tests {
     fn test_reconfiguration_lifecycle_moved() {
         use std::time::Duration;
 
-        use mz_catalog::memory::objects::{
+        use crate::memory::objects::{
             ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
             ReconfigurationStatus, ReconfigurationTarget,
         };
-        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::Timestamp;
         use mz_repr::optimize::OptimizerFeatureOverrides;
 
@@ -5853,10 +5879,10 @@ mod tests {
     fn test_burst_lifecycle_moved() {
         use std::time::Duration;
 
-        use mz_catalog::memory::objects::{
+        use crate::memory::objects::{
             BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
         };
-        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::Timestamp;
         use mz_repr::optimize::OptimizerFeatureOverrides;
 
@@ -5926,8 +5952,8 @@ mod tests {
     fn test_has_unwarranted_burst_record() {
         use std::time::Duration;
 
-        use mz_catalog::memory::objects::{BurstState, ClusterVariantManaged};
-        use mz_controller::clusters::ReplicaLogging;
+        use crate::memory::objects::{BurstState, ClusterVariantManaged};
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::optimize::OptimizerFeatureOverrides;
         use mz_sql::plan::{AutoScalingStrategy, OnHydration};
 
@@ -6021,13 +6047,13 @@ mod tests {
     fn test_burst_audit_details() {
         use std::time::Duration;
 
-        use mz_adapter_types::cluster_state::{BurstAudit, BurstFinishCause};
-        use mz_audit_log::{BurstFinishCauseV1, HydrationBurstLifecycleV1};
-        use mz_catalog::memory::objects::{
+        use crate::memory::objects::{
             BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
         };
-        use mz_controller::clusters::ReplicaLogging;
+        use mz_adapter_types::cluster_state::{BurstAudit, BurstFinishCause};
+        use mz_audit_log::{BurstFinishCauseV1, HydrationBurstLifecycleV1};
         use mz_controller_types::ClusterId;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::optimize::OptimizerFeatureOverrides;
 
         let cluster_id = ClusterId::user(1).expect("valid id");
@@ -6291,9 +6317,9 @@ mod tests {
             assert!(
                 matches!(
                     result,
-                    Err(AdapterError::Catalog(Error {
+                    Err(CatalogError::Catalog(Error {
                         kind: ErrorKind::Durable(
-                            mz_catalog::durable::DurableCatalogError::InvalidReadProtection(_)
+                            crate::durable::DurableCatalogError::InvalidReadProtection(_)
                         ),
                     }))
                 ),
@@ -6422,7 +6448,7 @@ mod tests {
     async fn test_transact_update_scoped_system_parameters_prune() {
         use std::collections::{BTreeMap, BTreeSet};
 
-        use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
+        use crate::memory::objects::{ClusterConfig, ClusterVariant};
         use mz_controller_types::ClusterId;
 
         use crate::catalog::DropObjectInfo;

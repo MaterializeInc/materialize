@@ -10,12 +10,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use crate::builtin::{BUILTINS, BuiltinTable};
+use crate::durable::objects::{SystemObjectDescription, SystemObjectMapping};
+use crate::durable::{MOCK_AUTHENTICATION_NONCE_KEY, Transaction};
+use crate::memory::objects::{StateUpdate, StateUpdateKind};
 use base64::prelude::*;
 use maplit::btreeset;
-use mz_catalog::builtin::{BUILTINS, BuiltinTable};
-use mz_catalog::durable::objects::{SystemObjectDescription, SystemObjectMapping};
-use mz_catalog::durable::{MOCK_AUTHENTICATION_NONCE_KEY, Transaction};
-use mz_catalog::memory::objects::{StateUpdate, StateUpdateKind};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_persist_types::ShardId;
@@ -39,11 +39,10 @@ use semver::Version;
 use tracing::info;
 use uuid::Uuid;
 
-// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
-use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
-use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
+use crate::catalog::{BuiltinTableUpdate, CatalogState, CatalogStateView};
+use crate::memory::implications::ParsedStateUpdate;
 
 /// Catalog key of the `migration_version` setting.
 ///
@@ -64,7 +63,7 @@ pub(crate) fn get_migration_version(txn: &Transaction<'_>) -> Option<Version> {
 pub(crate) fn set_migration_version(
     txn: &mut Transaction<'_>,
     version: Version,
-) -> Result<(), mz_catalog::durable::CatalogError> {
+) -> Result<(), crate::durable::CatalogError> {
     txn.set_setting(MIGRATION_VERSION_KEY.into(), Some(version.to_string()))
 }
 
@@ -92,13 +91,13 @@ where
 
 fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
-    cat: &ConnCatalog<'_>,
+    cat: &CatalogStateView<'_>,
     mut f: F,
 ) -> Result<(), anyhow::Error>
 where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
-        &'a &ConnCatalog<'_>,
+        &'a &CatalogStateView<'_>,
         CatalogItemId,
         &'a mut Statement<Raw>,
     ) -> Result<(), anyhow::Error>,
@@ -348,7 +347,7 @@ pub(crate) async fn migrate(
 /// `progress_id`).
 fn rewrite_sources_to_tables(
     tx: &mut Transaction<'_>,
-    catalog: &ConnCatalog<'_>,
+    catalog: &CatalogStateView<'_>,
 ) -> Result<(), anyhow::Error> {
     use mz_sql::ast::{
         CreateSourceConnection, CreateSourceStatement, CreateSubsourceOptionName,

@@ -1013,3 +1013,17 @@ Before storage cutover, settle the takeover latency implied by incarnation
 reclamation and Iceberg's retry of overlapping same-version batches. These remain
 open questions, not approval of a faster closure rule or a sink lease. Kafka
 producer retries must re-evaluate current eligibility and committed definitions.
+
+### 2026-09-20: Shared native catalog path
+
+Native loading, update application and state-owned transactions now live in
+mz-catalog. Adapter keeps serving/session behavior and DDL admission. Clusterd
+uses the same committed loader and implications, with initialization shard
+identities captured from that prefix rather than repeated snapshot lookups.
+
+Next is replica-owned worker sequencing and aggregated progress, then storage
+enactment. Cold recovery must establish dependent holds before activating index
+read policies. Pending incremental installations need local import holds across
+retries. The adapter-loss target now restarts a compute replica after compaction,
+stops its surviving sibling, and requires a fresh source-fed result without SQL
+ingress. Sink takeover latency and Iceberg overlap remain pre-cutover decisions.

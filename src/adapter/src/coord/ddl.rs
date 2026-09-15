@@ -53,11 +53,11 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReaso
 use crate::catalog::{DropObjectInfo, Op, TransactionResult};
 use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
-use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog};
+use mz_catalog::memory::implications::ParsedStateUpdate;
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].

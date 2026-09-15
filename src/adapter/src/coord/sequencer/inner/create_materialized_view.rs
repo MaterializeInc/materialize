@@ -1422,10 +1422,9 @@ mod tests {
                 ("mv", format!("CREATE MATERIALIZED VIEW {prefix}.mv IN CLUSTER quickstart AS SELECT * FROM {prefix}.v")),
             ] {
                 let (id, gid) = catalog.allocate_user_id_for_test().await.expect("allocate fixture IDs");
-                let (item, _) = state.with_enable_for_item_parsing(|state| state.parse_item_inner(
-                    gid, &sql, &BTreeMap::new(), None, false, None,
-                    None, None,
-                )).expect("parse fixture definition");
+                let item = mz_catalog::catalog::test_support::parse_item(
+                    &mut state, gid, &sql, &BTreeMap::new(),
+                ).expect("parse fixture definition");
                 ids.insert(name, (id, gid));
                 let (next, next_snapshot) = catalog.transact_incremental_dry_run(
                     &state,

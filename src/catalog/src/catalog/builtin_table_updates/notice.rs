@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use mz_catalog::builtin::BuiltinTable;
-use mz_catalog::builtin::notice::MZ_OPTIMIZER_NOTICES;
+use crate::builtin::BuiltinTable;
+use crate::builtin::notice::MZ_OPTIMIZER_NOTICES;
 use mz_ore::now::EpochMillis;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -130,7 +130,7 @@ impl CatalogState {
 impl CatalogState {
     /// Pack a [`BuiltinTableUpdate`] with the given `diff` for each
     /// [`OptimizerNotice`] in `notices` into `updates`.
-    pub(crate) fn pack_optimizer_notices<'a>(
+    pub fn pack_optimizer_notices<'a>(
         &self,
         updates: &mut Vec<BuiltinTableUpdate>,
         notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,

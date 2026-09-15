@@ -4533,7 +4533,7 @@ where
 mod tests {
     use super::*;
 
-    use mz_controller::clusters::ReplicaLogging;
+    use mz_controller_types::clusters::ReplicaLogging;
     use mz_ore::now::SYSTEM_TIME;
     use mz_ore::{assert_none, assert_ok};
     use mz_persist_client::cache::PersistClientCache;

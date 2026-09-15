@@ -60,6 +60,45 @@ pub(crate) struct PreparedRead {
     pub(crate) read_ts: Option<Timestamp>,
 }
 
+impl PreparedRead {
+    /// A definitive permission rejection is retryable only when publication
+    /// overtook an observed floor. Repreparation must retain `read_ts`, and the
+    /// caller must still validate its timestamp against the resulting holds.
+    pub(crate) async fn retry_publication(
+        &self,
+        client: &QueryClient,
+        catalog: &Catalog,
+        error: &AdapterError,
+    ) -> Result<Option<Self>, AdapterError> {
+        let raced = matches!(error, AdapterError::Catalog(error) if matches!(
+            &error.kind,
+            mz_catalog::memory::error::ErrorKind::Durable(
+                mz_catalog::durable::DurableCatalogError::InvalidReadProtection(_)
+            )
+        )) && self.frontiers.iter().any(|(id, frontier)| {
+            catalog
+                .state()
+                .collection_compaction_bounds()
+                .get(id)
+                .is_some_and(|bound| !bound.less_equal(frontier))
+        });
+        if !raced
+            || !catalog
+                .state()
+                .client_incarnations()
+                .contains_key(&client.protection.incarnation())
+        {
+            return Ok(None);
+        }
+        let fresh = client
+            .prepare_read(catalog, &self.bundle, |_| Ok(self.read_ts))
+            .await?;
+        // Cached grants or unrelated validation failures must not cause an
+        // endless retry. A permission race changes acquisition requirements.
+        Ok((fresh.frontiers != self.frontiers).then_some(fresh))
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct QueryClient {
     coordinator: CoordinatorClient,
@@ -1037,6 +1076,17 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn historical_acquisition_publishes_before_returning_and_preserves_upper() {
+        acquisition_catalog_harness(None).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn competing_permission_publication_reobserves_without_reselecting_timestamp() {
+        for read_ts in [None, Some(Timestamp::from(50))] {
+            acquisition_catalog_harness(Some(read_ts)).await;
+        }
+    }
+
+    async fn acquisition_catalog_harness(race: Option<Option<Timestamp>>) {
         let persist = PersistClient::new_for_tests().await;
         let bootstrap = test_bootstrap_args();
         let organization = Uuid::new_v4();
@@ -1083,6 +1133,10 @@ mod tests {
                 .expect("can install shard metadata");
             tx.set_collection_compaction_bound(id, Some(Timestamp::MIN))
                 .expect("can set initial permission");
+            if race.is_some() {
+                tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+                    .expect("can enable joined protection writers");
+            }
             let incarnation = tx
                 .create_client_incarnation()
                 .expect("can create client incarnation");
@@ -1166,6 +1220,154 @@ mod tests {
             storage_ids: BTreeSet::from([id]),
             compute_ids: BTreeMap::new(),
         };
+        if let Some(read_ts) = race {
+            let selected = std::cell::Cell::new(0);
+            let prepared = client
+                .prepare_read(&catalog, &bundle, |_| {
+                    selected.set(selected.get() + 1);
+                    Ok(read_ts)
+                })
+                .await
+                .expect("can observe candidate before competing publication");
+            let requirements = client
+                .protection
+                .prepare_publication(prepared.frontiers.clone());
+
+            // Deterministically interleave a real permission commit between
+            // observation and grant publication. No grant protects the candidate.
+            let mut peer = TestCatalogStateBuilder::new(persist.clone())
+                .with_organization_id(organization)
+                .with_default_deploy_generation()
+                .unwrap_build()
+                .await
+                .join()
+                .await
+                .expect("peer joins the active generation");
+            peer.sync_to_current_updates()
+                .await
+                .expect("peer consumes its initial projection");
+            let mut publication = peer.transaction().await.expect("peer starts publication");
+            publication
+                .set_collection_compaction_bound(id, Some(Timestamp::from(60)))
+                .expect("peer can advance permission");
+            let _ = publication.get_and_commit_op_updates();
+            let ts = publication.upper();
+            publication
+                .commit(ts)
+                .await
+                .expect("peer publishes permission");
+            reader.downgrade_since(&frontier(60)).await;
+            let op = Op::PublishClientReadRequirements {
+                incarnation,
+                requirements,
+            };
+            let ts = catalog.current_upper().await;
+            let conflict = catalog
+                .transact(None, ts, None, vec![op.clone()])
+                .await
+                .err()
+                .expect("peer publication invalidates the catalog snapshot");
+            assert!(matches!(conflict, AdapterError::Catalog(error) if matches!(
+                error.kind,
+                mz_catalog::memory::error::ErrorKind::Durable(
+                    mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                )
+            )));
+            catalog
+                .sync_to_current_updates()
+                .await
+                .expect("writer consumes the competing permission");
+            // The transaction retry refreshes the projection but retains the
+            // original operation. Acquisition must rebuild after its rejection.
+            let ts = catalog.current_upper().await;
+            let error = catalog
+                .transact(None, ts, None, vec![op])
+                .await
+                .err()
+                .expect("stale acquisition must not grant compactable history");
+            client.protection.finish_publication(false);
+            assert_eq!(client.protection.granted_frontier(id), None);
+            assert!(!client.protection.publication_pending());
+            let fresh = prepared
+                .retry_publication(&client, &catalog, &error)
+                .await
+                .expect("can reobserve after definitive rejection")
+                .expect("advanced permission requires a fresh candidate");
+            assert_eq!(selected.get(), 1);
+            assert_eq!(fresh.read_ts, read_ts);
+            assert_eq!(fresh.frontiers[&id], Timestamp::from(60));
+            assert!(
+                fresh
+                    .retry_publication(&client, &catalog, &error)
+                    .await
+                    .expect("can classify unchanged rejection")
+                    .is_none(),
+                "InvalidReadProtection without a permission race is terminal"
+            );
+            assert!(
+                prepared
+                    .retry_publication(&client, &catalog, &AdapterError::ReadOnly)
+                    .await
+                    .expect("can classify unrelated failure")
+                    .is_none()
+            );
+            let requirements = client
+                .protection
+                .prepare_publication(fresh.frontiers.clone());
+            let ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    ts,
+                    None,
+                    vec![Op::PublishClientReadRequirements {
+                        incarnation,
+                        requirements,
+                    }],
+                )
+                .await
+                .expect("fresh acquisition commits");
+            client.protection.finish_publication(true);
+            let holds = client
+                .protection
+                .try_acquire(&bundle, &fresh.frontiers, &fresh.index_inputs)
+                .expect("client remains open")
+                .expect("fresh publication grants protection");
+            assert_eq!(holds.since(&id), frontier(60));
+            if let Some(read_ts) = read_ts {
+                // Acquisition returns the actual floor. An exact historical
+                // caller must reject it, not silently read at the newer floor.
+                assert!(!holds.since(&id).less_equal(&read_ts));
+            }
+            drop(holds);
+
+            let ts = catalog.current_upper().await;
+            let expected_heartbeat = catalog.state().client_incarnations()[&incarnation];
+            catalog
+                .transact(
+                    None,
+                    ts,
+                    None,
+                    vec![Op::ReclaimClientIncarnation {
+                        incarnation,
+                        expected_heartbeat,
+                    }],
+                )
+                .await
+                .expect("can close incarnation");
+            assert!(
+                prepared
+                    .retry_publication(&client, &catalog, &error)
+                    .await
+                    .expect("can classify closure")
+                    .is_none(),
+                "closed incarnations do not retry"
+            );
+            peer.expire().await;
+            reader.expire().await;
+            writer.expire().await;
+            return;
+        }
         // A timeline window requests its oracle floor on first acquisition,
         // even when the collection is readable all the way back to MIN.
         let initial = client

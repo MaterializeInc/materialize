@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use mz_catalog::builtin::{BuiltinSource, BuiltinTable};
+use crate::builtin::{BuiltinSource, BuiltinTable};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
 use mz_repr::{RelationDesc, SqlScalarType};

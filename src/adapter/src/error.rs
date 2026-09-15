@@ -1658,6 +1658,43 @@ impl From<mz_catalog::memory::error::Error> for AdapterError {
     }
 }
 
+impl From<mz_catalog::memory::error::ItemError> for AdapterError {
+    fn from(error: mz_catalog::memory::error::ItemError) -> Self {
+        use mz_catalog::memory::error::ItemError;
+        match error {
+            ItemError::ParseError(error) => error.into(),
+            ItemError::PlanError(error) => error.into(),
+            ItemError::Optimizer(error) => error.into(),
+            ItemError::Catalog(error) => error.into(),
+            ItemError::Internal(error) => Self::Internal(error),
+            ItemError::Unstructured(error) => Self::Unstructured(error),
+        }
+    }
+}
+
+impl From<mz_catalog::catalog::CatalogError> for AdapterError {
+    fn from(error: mz_catalog::catalog::CatalogError) -> Self {
+        use mz_catalog::catalog::CatalogError;
+        match error {
+            CatalogError::Catalog(error) => error.into(),
+            CatalogError::Item(error) => error.into(),
+            CatalogError::PlanError(error) => error.into(),
+            CatalogError::Storage(error) => error.into(),
+            CatalogError::Internal(error) => Self::Internal(error),
+            CatalogError::Unstructured(error) => Self::Unstructured(error),
+            CatalogError::Unsupported(feature) => Self::Unsupported(feature),
+            CatalogError::ReadOnly => Self::ReadOnly,
+            CatalogError::DDLTransactionRace => Self::DDLTransactionRace,
+            CatalogError::ClusterStateChanged { cluster_id } => {
+                Self::ClusterStateChanged { cluster_id }
+            }
+            CatalogError::InputNotReadableAtRefreshAtTime(time, frontier) => {
+                Self::InputNotReadableAtRefreshAtTime(time, frontier)
+            }
+        }
+    }
+}
+
 impl From<mz_catalog::durable::CatalogError> for AdapterError {
     fn from(e: mz_catalog::durable::CatalogError) -> Self {
         mz_catalog::memory::error::Error::from(e).into()
@@ -1831,6 +1868,29 @@ impl Error for AdapterError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn catalog_item_errors_preserve_sql_error_responses() {
+        use mz_catalog::memory::error::ItemError;
+
+        fn check(expected: AdapterError, actual: ItemError) {
+            let expected = expected.into_response(Severity::Error);
+            let actual = AdapterError::from(actual).into_response(Severity::Error);
+            assert_eq!(actual.code, expected.code);
+            assert_eq!(actual.message, expected.message);
+            assert_eq!(actual.detail, expected.detail);
+            assert_eq!(actual.hint, expected.hint);
+        }
+
+        let plan_error =
+            || PlanError::Catalog(mz_sql::catalog::CatalogError::UnknownItem("missing".into()));
+        check(plan_error().into(), plan_error().into());
+        let eval_error = || OptimizerError::EvalError(EvalError::DivisionByZero);
+        check(eval_error().into(), eval_error().into());
+        let restricted =
+            || OptimizerError::RestrictedFunction(mz_expr::UnmaterializableFunc::CurrentTimestamp);
+        check(restricted().into(), restricted().into());
+    }
 
     #[mz_ore::test]
     fn alter_cluster_resource_exhausted_is_specific() {
