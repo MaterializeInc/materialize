@@ -39,6 +39,10 @@ class Clusterd(Service):
         workers: int = 1,
         process_names: list[str] = [],
         mz_service: str = "materialized",
+        # Matches the CI default of the `enable_unified_cluster` system
+        # parameter, so unorchestrated clusterds run the same topology as
+        # controller-provisioned replicas. Old images ignore the env var.
+        unified_cluster: bool = True,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -57,6 +61,9 @@ class Clusterd(Service):
             f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
             *environment_extra,
         ]
+
+        if unified_cluster:
+            environment += ["CLUSTERD_UNIFIED_CLUSTER=true"]
 
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
