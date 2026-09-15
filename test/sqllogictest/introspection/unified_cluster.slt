@@ -1,0 +1,112 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Introspection topology of unified and two-cluster replicas. A unified
+# replica hosts storage objects on the compute Timely cluster; a two-cluster
+# replica forwards storage's Timely log events to compute over a log bridge.
+# The topology is baked into a replica at provisioning time, so each flag
+# value must be set before the respective cluster is created.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unified_cluster = on;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER uc REPLICAS (r1 (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL '50 milliseconds', INTROSPECTION DEBUGGING));
+
+statement ok
+SET cluster = uc;
+
+# Wait for the introspection interval to pass before querying the
+# introspection relations.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+# On a unified cluster there is no separate storage Timely cluster, so the
+# logging dataflow has no bridge operator replaying storage's Timely log
+# events into the compute cluster.
+query I
+SELECT count(*)
+FROM mz_introspection.mz_dataflow_operators
+WHERE name = 'Replay storage timely logs';
+----
+0
+
+# The Timely log replay feeds the demux directly.
+query I
+SELECT count(*)
+FROM
+    mz_introspection.mz_dataflow_channel_operators mdco
+    JOIN mz_introspection.mz_dataflow_operators mdo_from
+        ON mdco.from_operator_id = mdo_from.id
+    JOIN mz_introspection.mz_dataflow_operators mdo_to
+        ON mdco.to_operator_id = mdo_to.id
+WHERE mdo_from.name = 'Replay timely logs'
+    AND mdo_to.name = 'Timely Logging Demux';
+----
+1
+
+# A two-cluster replica needs both flags pinned: the bridge exists only on the
+# separate-cluster topology and only when storage introspection logs are on.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unified_cluster = off;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_storage_introspection_logs = on;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER tc REPLICAS (r1 (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL '50 milliseconds', INTROSPECTION DEBUGGING));
+
+statement ok
+SET cluster = tc;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+# On a two-cluster replica the log bridge replays storage's Timely log events
+# into the compute cluster's logging dataflow.
+query I
+SELECT count(*)
+FROM mz_introspection.mz_dataflow_operators
+WHERE name = 'Replay storage timely logs';
+----
+1
+
+# The replays are concatenated before the demux, so there is no direct edge.
+query I
+SELECT count(*)
+FROM
+    mz_introspection.mz_dataflow_channel_operators mdco
+    JOIN mz_introspection.mz_dataflow_operators mdo_from
+        ON mdco.from_operator_id = mdo_from.id
+    JOIN mz_introspection.mz_dataflow_operators mdo_to
+        ON mdco.to_operator_id = mdo_to.id
+WHERE mdo_from.name = 'Replay timely logs'
+    AND mdo_to.name = 'Timely Logging Demux';
+----
+0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unified_cluster;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_storage_introspection_logs;
+----
+COMPLETE 0

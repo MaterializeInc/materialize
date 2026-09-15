@@ -26,7 +26,8 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER,
+    TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -725,6 +726,7 @@ impl Controller {
             zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get_with_overrides(&self.dyncfg, overrides),
             ..Default::default()
         };
+        let unified_cluster = ENABLE_UNIFIED_CLUSTER.get_with_overrides(&self.dyncfg, overrides);
 
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
@@ -812,6 +814,9 @@ impl Controller {
                     }
                     if enable_storage_introspection_logs {
                         args.push("--enable-storage-introspection-logs".into());
+                    }
+                    if unified_cluster {
+                        args.push("--unified-cluster".into());
                     }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());

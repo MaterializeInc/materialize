@@ -198,7 +198,7 @@ impl<'w> Worker<'w> {
 }
 
 impl StorageState {
-    /// SPIKE(unified-cluster): Creates per-worker storage state, for hosting on any Timely worker.
+    /// Creates per-worker storage state, for hosting on any Timely worker.
     ///
     /// The caller provides the internal command channel endpoints: the native storage worker wires
     /// them to the sequencer dataflow, a foreign host wires them to its own sequencing channel.
@@ -1068,7 +1068,7 @@ impl<'w> Worker<'w> {
         Ok(())
     }
 
-    /// SPIKE(unified-cluster): Reconciles the worker state with the given target command state,
+    /// Reconciles the worker state with the given target command state,
     /// which the caller has drained from a new client connection up to (exclusive) the
     /// `InitializationComplete` marker.
     pub fn reconcile_commands(&mut self, mut commands: Vec<StorageCommand>) {

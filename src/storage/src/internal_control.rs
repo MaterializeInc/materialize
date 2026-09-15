@@ -134,7 +134,7 @@ pub struct InternalCommandSender {
 }
 
 impl InternalCommandSender {
-    /// SPIKE(unified-cluster): Creates a sender from externally provided parts, for hosts that
+    /// Creates a sender from externally provided parts, for hosts that
     /// route internal commands through their own sequencing channel instead of
     /// `setup_command_sequencer`.
     pub fn from_parts(
@@ -160,7 +160,7 @@ pub struct InternalCommandReceiver {
 }
 
 impl InternalCommandReceiver {
-    /// SPIKE(unified-cluster): Creates a receiver from an externally provided channel.
+    /// Creates a receiver from an externally provided channel.
     pub fn from_parts(rx: mpsc::Receiver<InternalStorageCommand>) -> Self {
         Self { rx }
     }

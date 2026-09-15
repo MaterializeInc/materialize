@@ -152,11 +152,13 @@ struct Config {
     /// The number of timely workers per process.
     pub workers_per_process: usize,
     /// Bounds how many offloaded peek walks run at once, shared by every worker this server runs.
+    ///
+    /// NOTE: per compute runtime, not global. A process running a maintenance and an interactive
+    /// runtime calls `serve` twice and admits the bound once per call.
     pub peek_permits: Arc<PeekPermits>,
     /// A reader for each storage worker in this process.
     pub storage_log_readers: Arc<Mutex<Vec<Option<StorageTimelyLogReader>>>>,
-    /// SPIKE(unified-cluster): Configuration for hosting storage objects on this cluster, if
-    /// enabled.
+    /// Configuration for hosting storage objects on this cluster, if enabled.
     pub storage_guest: Option<Arc<StorageGuestConfig>>,
 }
 
@@ -167,7 +169,7 @@ type StorageClientRx = mpsc::UnboundedReceiver<(
     mpsc::UnboundedSender<StorageResponse>,
 )>;
 
-/// SPIKE(unified-cluster): Configuration for hosting storage objects on the compute cluster.
+/// Configuration for hosting storage objects on the compute cluster.
 pub struct StorageGuestConfig {
     /// Per-worker channels delivering storage client connections, indexed by local worker index.
     client_rxs: Mutex<Vec<Option<StorageClientRx>>>,
@@ -204,12 +206,6 @@ pub async fn serve(
         assert_eq!(storage_log_readers.len(), workers_per_process);
         storage_log_readers.into_iter().map(Some).collect()
     };
-    mz_timely_util::column_pager::metrics::register(
-        metrics_registry,
-        mz_timely_util::column_pager::tiered_policy(),
-    );
-    mz_timely_util::pool_config::metrics::register(metrics_registry);
-
     let config = Config {
         persist_clients,
         txns_ctx,
@@ -218,29 +214,17 @@ pub async fn serve(
         context,
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
-        // NOTE: per compute runtime, not global. A process running a maintenance and an
-        // interactive runtime calls `serve` twice and admits the bound once per call.
         peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
         storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
         storage_guest: None,
     };
-    let tokio_executor = tokio::runtime::Handle::current();
 
-    let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
-    let timely_container = Arc::new(Mutex::new(timely_container));
-
-    let client_builder = move || {
-        let client = ClusterClient::new(Arc::clone(&timely_container));
-        let client: Box<dyn ComputeClient> = Box::new(client);
-        client
-    };
-
+    let (_worker_threads, client_builder) = serve_inner(config, timely_config).await?;
     Ok(client_builder)
 }
 
-/// SPIKE(unified-cluster): Initiates a timely dataflow computation that processes compute commands
-/// and additionally hosts storage objects, processing storage commands received over a separate
-/// client connection.
+/// Initiates a timely dataflow computation that processes compute commands and additionally hosts
+/// storage objects, processing storage commands received over a separate client connection.
 ///
 /// Returns client builders for both the compute and the storage side.
 pub async fn serve_unified(
@@ -262,11 +246,6 @@ pub async fn serve_unified(
     Error,
 > {
     let workers_per_process = timely_config.workers;
-    mz_timely_util::column_pager::metrics::register(
-        metrics_registry,
-        mz_timely_util::column_pager::tiered_policy(),
-    );
-    mz_timely_util::pool_config::metrics::register(metrics_registry);
 
     // Per-worker channels over which storage client connections are delivered.
     let mut storage_client_txs = Vec::new();
@@ -294,23 +273,12 @@ pub async fn serve_unified(
         context,
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
-        // NOTE: per compute runtime, not global. A process running a maintenance and an
-        // interactive runtime calls `serve` twice and admits the bound once per call.
         peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
         storage_log_readers: Arc::new(Mutex::new((0..workers_per_process).map(|_| None).collect())),
         storage_guest: Some(Arc::new(storage_guest)),
     };
-    let tokio_executor = tokio::runtime::Handle::current();
 
-    let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
-    let worker_threads = timely_container.worker_threads();
-    let timely_container = Arc::new(Mutex::new(timely_container));
-
-    let compute_client_builder = move || {
-        let client = ClusterClient::new(Arc::clone(&timely_container));
-        let client: Box<dyn ComputeClient> = Box::new(client);
-        client
-    };
+    let (worker_threads, compute_client_builder) = serve_inner(config, timely_config).await?;
 
     let storage_client_txs = Arc::new(storage_client_txs);
     let storage_client_builder = move || {
@@ -321,6 +289,39 @@ pub async fn serve_unified(
     };
 
     Ok((compute_client_builder, storage_client_builder))
+}
+
+/// Builds the Timely cluster for the given config and returns its worker threads along with a
+/// builder for compute clients to it.
+async fn serve_inner(
+    config: Config,
+    timely_config: TimelyConfig,
+) -> Result<
+    (
+        Vec<std::thread::Thread>,
+        impl Fn() -> Box<dyn ComputeClient> + use<>,
+    ),
+    Error,
+> {
+    mz_timely_util::column_pager::metrics::register(
+        &config.metrics_registry,
+        mz_timely_util::column_pager::tiered_policy(),
+    );
+    mz_timely_util::pool_config::metrics::register(&config.metrics_registry);
+
+    let tokio_executor = tokio::runtime::Handle::current();
+
+    let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
+    let worker_threads = timely_container.worker_threads();
+    let timely_container = Arc::new(Mutex::new(timely_container));
+
+    let client_builder = move || {
+        let client = ClusterClient::new(Arc::clone(&timely_container));
+        let client: Box<dyn ComputeClient> = Box::new(client);
+        client
+    };
+
+    Ok((worker_threads, client_builder))
 }
 
 /// Error type returned on connection nonce changes.
@@ -470,11 +471,11 @@ struct Worker<'w> {
     peek_permits: Arc<PeekPermits>,
     /// Reader for storage timely logging events.
     storage_log_reader: Option<StorageTimelyLogReader>,
-    /// SPIKE(unified-cluster): The hosted storage guest, if any.
+    /// The hosted storage guest, if any.
     storage: Option<StorageGuest>,
 }
 
-/// SPIKE(unified-cluster): Per-worker state for hosting storage objects on the compute cluster.
+/// Per-worker state for hosting storage objects on the compute cluster.
 struct StorageGuest {
     /// Channel delivering new storage client connections.
     client_rx: StorageClientRx,
@@ -488,6 +489,42 @@ struct StorageGuest {
     last_maintenance: Instant,
     /// The last time storage statistics were reported.
     last_stats_time: Instant,
+}
+
+impl StorageGuest {
+    /// The longest the worker may park before the guest's next periodic duty (frontier reporting
+    /// or statistics collection) comes due, or `None` when no duty is pending.
+    ///
+    /// Mirrors the parking of storage's own server loop: the maintenance and statistics intervals
+    /// bound the park. A maintenance deadline in the past does not bound it, because maintenance
+    /// runs on the next wakeup anyway; the initial zero maintenance interval would otherwise turn
+    /// every park into a spin.
+    fn park_cap(&self) -> Option<Duration> {
+        // Periodic duties run only on a reconciled connection. Without one there is no deadline
+        // to meet, and connection and command arrivals unpark the worker.
+        let conn_serving = self
+            .conn
+            .as_ref()
+            .is_some_and(|conn| conn.reconcile_buf.is_none());
+        if !conn_serving {
+            return None;
+        }
+
+        let maintenance_interval = self.storage_state.server_maintenance_interval;
+        let stats_interval = self
+            .storage_state
+            .storage_configuration
+            .parameters
+            .statistics_collection_interval;
+
+        let next_maintenance =
+            (self.last_maintenance + maintenance_interval).checked_duration_since(Instant::now());
+        let next_stats = stats_interval.saturating_sub(self.last_stats_time.elapsed());
+        match next_maintenance {
+            Some(maintenance) => Some(maintenance.min(next_stats)),
+            None => Some(next_stats),
+        }
+    }
 }
 
 /// A storage client connection.
@@ -528,7 +565,7 @@ impl ClusterSpec for Config {
         let local_index = worker_id % self.workers_per_process;
         let storage_log_reader = self.storage_log_readers.lock().unwrap()[local_index].take();
 
-        // SPIKE(unified-cluster): Prepare the storage guest's inputs to the command channel, so
+        // Prepare the storage guest's inputs to the command channel, so
         // storage-internal commands are sequenced through the same lane as compute commands.
         let guest_setup = self.storage_guest.as_ref().map(|cfg| {
             let storage_client_rx = cfg.client_rxs.lock().expect("poisoned")[local_index]
@@ -562,7 +599,7 @@ impl ClusterSpec for Config {
 
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
 
-        // SPIKE(unified-cluster): Create the storage guest state.
+        // Create the storage guest state.
         let storage = guest_setup.map(|(cfg, storage_client_rx, internal_tx, activator_slot)| {
             let internal_cmd_tx = InternalCommandSender::from_parts(internal_tx, activator_slot);
             // The guest's internal command receiver is unused: the host dispatches internal
@@ -723,14 +760,11 @@ impl<'w> Worker<'w> {
                 _ => sleep_duration,
             };
 
-            // SPIKE(unified-cluster): With a storage guest, cap the park duration so storage
-            // maintenance and statistics reporting run on time, and don't park at all while the
-            // guest has pending work.
-            let sleep_duration = if self.storage.is_some() {
-                let cap = Duration::from_millis(100);
-                Some(sleep_duration.map_or(cap, |d| d.min(cap)))
-            } else {
-                sleep_duration
+            // With a storage guest, cap the park duration so the guest's periodic duties run on
+            // time.
+            let sleep_duration = match self.storage.as_ref().and_then(StorageGuest::park_cap) {
+                Some(cap) => Some(sleep_duration.map_or(cap, |d| d.min(cap))),
+                None => sleep_duration,
             };
 
             // Step the timely worker, recording the time taken.
@@ -764,7 +798,7 @@ impl<'w> Worker<'w> {
         Ok(())
     }
 
-    /// SPIKE(unified-cluster): Whether the storage guest has pending work that forbids parking.
+    /// Whether the storage guest has pending work that forbids parking.
     ///
     /// It is critical that we allow Timely to park iff there are no pending commands or async
     /// worker responses, since those are delivered by other threads that only unpark us once, at
@@ -780,7 +814,7 @@ impl<'w> Worker<'w> {
         })
     }
 
-    /// SPIKE(unified-cluster): Dispatch a storage-internal command from the command channel to
+    /// Dispatch a storage-internal command from the command channel to
     /// the storage guest. This is where all storage dataflow rendering happens.
     fn handle_storage_internal_command(&mut self, cmd: InternalStorageCommand) {
         let Some(mut guest) = self.storage.take() else {
@@ -804,7 +838,7 @@ impl<'w> Worker<'w> {
         self.storage = Some(guest);
     }
 
-    /// SPIKE(unified-cluster): Process the storage guest's per-iteration duties: accept client
+    /// Process the storage guest's per-iteration duties: accept client
     /// connections, handle external storage commands (buffering for reconciliation until
     /// `InitializationComplete`), forward async worker responses, and report frontiers, dropped
     /// collections, status updates, and statistics.
@@ -943,7 +977,7 @@ impl<'w> Worker<'w> {
             if let Some(cmd) = self.command_rx.try_recv()? {
                 match cmd {
                     WorkerCommand::Compute(cmd) => return Ok(cmd),
-                    // SPIKE(unified-cluster): Storage-internal commands are dispatched even while
+                    // Storage-internal commands are dispatched even while
                     // waiting for compute commands (e.g. during compute reconciliation), so
                     // storage dataflow construction keeps its lane position on all workers.
                     WorkerCommand::Storage(cmd) => {
@@ -953,16 +987,16 @@ impl<'w> Worker<'w> {
                 }
             }
 
-            // SPIKE(unified-cluster): Keep serving the storage guest while blocked on compute
-            // commands, and avoid unbounded parks that would stall its maintenance.
+            // Keep serving the storage guest while blocked on compute
+            // commands, and avoid unbounded parks that would stall its periodic duties.
             self.process_storage_guest();
-            let park = self.storage.is_some().then(|| Duration::from_millis(100));
+            let park_cap = self.storage.as_ref().and_then(StorageGuest::park_cap);
 
             let start = Instant::now();
             if self.storage_guest_busy() {
                 self.timely_worker.step();
-            } else if let Some(park) = park {
-                self.timely_worker.step_or_park(Some(park));
+            } else if let Some(cap) = park_cap {
+                self.timely_worker.step_or_park(Some(cap));
             } else {
                 self.timely_worker.step_or_park(None);
             }

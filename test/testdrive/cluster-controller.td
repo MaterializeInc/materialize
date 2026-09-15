@@ -1385,12 +1385,13 @@ no-longer-warranted
 > DROP TABLE cc_burst_e2e_t
 
 # NOTE: There is deliberately no coverage here for a singleton source riding a
-# hydration burst (source and sleep-gate on the same cluster). Storage and
-# compute objects share one Timely worker pool per replica, so a blocking
-# dataflow like the mz_sleep gate starves co-hosted sources and the storage
-# command processing of its replica outright, rather than merely delaying
-# hydration. Such coverage needs an unhydrated-but-nonblocking gate or
-# liveness-aware singleton-source scheduling.
+# hydration burst (source and sleep-gate on the same cluster). With
+# enable_unified_cluster, storage and compute objects share one Timely worker
+# pool per replica, so a blocking dataflow like the mz_sleep gate starves
+# co-hosted sources and the storage command processing of its replica outright,
+# rather than merely delaying hydration. Such coverage needs an
+# unhydrated-but-nonblocking gate or liveness-aware singleton-source
+# scheduling.
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false

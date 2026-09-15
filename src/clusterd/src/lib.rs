@@ -172,6 +172,12 @@ struct Args {
     /// `mz_introspection.mz_dataflow_*` tables.
     #[clap(long)]
     enable_storage_introspection_logs: bool,
+
+    /// Host storage objects on the compute Timely cluster instead of building a separate
+    /// storage Timely cluster. The storage and compute controller protocols are served
+    /// unchanged, from the same cluster.
+    #[clap(long, env = "CLUSTERD_UNIFIED_CLUSTER")]
+    unified_cluster: bool,
 }
 
 /// The process ordinal for a StatefulSet pod, taken from the trailing
@@ -433,13 +439,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
-    // SPIKE(unified-cluster): Host storage objects on the compute Timely cluster instead of
-    // building a separate storage cluster. The storage and compute controller protocols are
-    // served unchanged, from the same cluster. Default on; set MZ_UNIFIED_CLUSTER=0 to fall
-    // back to separate storage and compute clusters.
-    let unified_cluster = std::env::var("MZ_UNIFIED_CLUSTER").map_or(true, |v| v != "0");
-    if unified_cluster {
-        info!("SPIKE: running with a unified timely cluster");
+    if args.unified_cluster {
+        info!("running with a unified timely cluster");
 
         let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
             compute_timely_config,

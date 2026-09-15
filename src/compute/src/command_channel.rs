@@ -22,7 +22,7 @@
 //! compute protocol the command belongs to, allowing workers to recognize client reconnects that
 //! require a reconciliation.
 //!
-//! SPIKE(unified-cluster): The channel optionally also carries storage-internal commands, for
+//! The channel optionally also carries storage-internal commands, for
 //! clusters that host storage objects alongside compute objects. Both command kinds are sequenced
 //! through a single lane, so all workers observe one consistent interleaving and therefore
 //! construct all dataflows, compute and storage alike, in the same order. Unlike compute commands,
@@ -104,7 +104,7 @@ impl Receiver {
 
 /// Per-worker storage-side inputs to the command channel.
 ///
-/// SPIKE(unified-cluster): Created by the host before rendering the channel; the sending halves
+/// Created by the host before rendering the channel; the sending halves
 /// back the guest's `InternalCommandSender`.
 pub struct StorageLaneInput {
     /// Receiver for storage-internal commands injected on this worker.

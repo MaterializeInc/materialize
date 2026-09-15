@@ -71,7 +71,7 @@ impl<C: ClusterSpec> TimelyContainer<C> {
     }
 }
 
-/// SPIKE(unified-cluster): A client to a secondary ("guest") command stream served by workers of
+/// A client to a secondary ("guest") command stream served by workers of
 /// an existing Timely cluster. Like [`ClusterClient`], but the per-worker client channels are
 /// provided externally instead of coming from a [`TimelyContainer`] built for this command type.
 pub struct GuestClusterClient<Cmd, Resp>
