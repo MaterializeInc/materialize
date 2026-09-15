@@ -75,7 +75,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, CreateWebhookSourceBody, CreateWebhookSourceCheck,
+    AsOf, Assignment, AstInfo, CastFailureMode, CreateWebhookSourceBody, CreateWebhookSourceCheck,
     CreateWebhookSourceHeader, CreateWebhookSourceSecret, CteBlock, DeleteStatement, Distinct,
     Expr, Function, FunctionArgs, HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join,
     JoinConstraint, JoinOperator, Limit, MapEntry, MutRecBlock, MutRecBlockOption,
@@ -3691,7 +3691,9 @@ fn invent_column_name(
             Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
             Expr::Map { .. } | Expr::MapSubquery(_) => Some(("map".into(), NameQuality::High)),
-            Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names)? {
+            Expr::Cast {
+                expr, data_type, ..
+            } => match invent(ecx, expr, table_func_names)? {
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                 _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
             },
@@ -4190,7 +4192,11 @@ fn plan_expr_inner<'a>(
         Expr::Op { op, expr1, expr2 } => {
             Ok(plan_op(ecx, normalize::op(op)?, expr1, expr2.as_deref())?.into())
         }
-        Expr::Cast { expr, data_type } => plan_cast(ecx, expr, data_type),
+        Expr::Cast {
+            expr,
+            data_type,
+            failure_mode,
+        } => plan_cast(ecx, expr, data_type, *failure_mode),
         Expr::Function(func) => Ok(plan_function(ecx, func)?.into()),
 
         // Special functions and operators.
@@ -4298,11 +4304,21 @@ fn plan_row(ecx: &ExprContext, exprs: &[Expr<Aug>]) -> Result<CoercibleScalarExp
     Ok(CoercibleScalarExpr::LiteralRecord(out))
 }
 
+/// Plans `CAST(expr AS data_type)` or, under
+/// [`CastFailureMode::NullFallback`], `TRY_CAST(expr AS data_type)`.
 fn plan_cast(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
     data_type: &ResolvedDataType,
+    failure_mode: CastFailureMode,
 ) -> Result<CoercibleScalarExpr, PlanError> {
+    let (name, failure_mode) = match failure_mode {
+        CastFailureMode::Error => ("CAST", mz_expr::CastFailureMode::Error),
+        CastFailureMode::NullFallback => {
+            ecx.qcx.scx.require_feature_flag(&vars::ENABLE_TRY_CAST)?;
+            ("TRY_CAST", mz_expr::CastFailureMode::NullFallback)
+        }
+    };
     let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
     let expr = match expr {
         // Special case a direct cast of an ARRAY, LIST, or MAP expression so
@@ -4318,9 +4334,17 @@ fn plan_cast(
         Expr::Map(exprs) => plan_map(ecx, exprs, Some(&to_scalar_type))?,
         _ => plan_expr(ecx, expr)?,
     };
-    let ecx = &ecx.with_name("CAST");
-    let expr = typeconv::plan_coerce(ecx, expr, &to_scalar_type)?;
-    let expr = typeconv::plan_cast(ecx, CastContext::Explicit, expr, &to_scalar_type)?;
+    let ecx = &ecx.with_name(name);
+    // A string literal reaches its cast through coercion, so the failure mode
+    // has to apply there too, or `TRY_CAST('abc' AS int4)` would still error.
+    let expr = typeconv::plan_coerce_with_failure_mode(ecx, expr, &to_scalar_type, failure_mode)?;
+    let expr = typeconv::plan_cast_with_failure_mode(
+        ecx,
+        CastContext::Explicit,
+        failure_mode,
+        expr,
+        &to_scalar_type,
+    )?;
     Ok(expr.into())
 }
 
