@@ -281,6 +281,19 @@ impl PartitionedComputeState {
             .or_insert_with(|| PendingSubscribe::new(self.parts));
 
         let emit_response = match response {
+            // A batch whose bounds coincide is a piece of a timestamp that is
+            // not complete yet, which a persist-backed subscribe ships early
+            // (see `ComputeCommand::Subscribe`). It moves no frontier and
+            // consolidates with nothing that follows, so it goes straight
+            // through rather than waiting in the stash for the frontier.
+            SubscribeResponse::Batch(batch)
+                if batch.lower == batch.upper && !batch.upper.is_empty() && !tracked.dropped =>
+            {
+                Some(ComputeResponse::SubscribeResponse(
+                    subscribe_id,
+                    SubscribeResponse::Batch(batch),
+                ))
+            }
             SubscribeResponse::Batch(batch) => {
                 let frontiers = &mut tracked.frontiers;
                 let old_frontier = frontiers.frontier().to_owned();

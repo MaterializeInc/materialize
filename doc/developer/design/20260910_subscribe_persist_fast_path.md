@@ -142,6 +142,54 @@ case the tail cannot resume. It is also where the dataflow path errors today,
 since a client that slow accumulates the whole formatted snapshot in the
 coordinator.
 
+### Hosting the tail on a replica
+
+Persist peeks were once served from `environmentd` and moved to `clusterd`
+because their memory is shaped by the shard, not by anything `environmentd`
+controls. The same holds for a subscribe's snapshot: what has to be resident
+is one part per overlapping run of the shard, times the number of concurrent
+cursors, and in `environmentd` that is a bound it cannot enforce. So the same
+tail can run on a replica instead, behind
+`enable_subscribe_persist_fast_path_on_cluster`, and the two placements are
+measured against each other below.
+
+The replica-hosted variant follows the persist peek. `ComputeCommand::Subscribe`
+carries what `PeekTarget::Persist` carries plus the subscribe's `as_of`,
+`up_to`, snapshot flag, row order, and buffer budget, and one worker per
+replica runs it as a tokio task rather than a dataflow. The worker is chosen
+by hashing the target collection, so every subscribe of one collection on a
+replica lands on the same worker and shares its `SharedTail`. The task cuts the
+tail's events with the same `PersistTailBatcher` and emits
+`SubscribeResponse` batches through the worker's response channel, so from the
+controller onward the subscribe is a subscribe sink: the controller tracks it
+as a write-only collection, forwards its batches, and ends it by allowing
+compaction to the empty frontier, which the task answers with `DroppedAt`.
+
+Two protocol details are load-bearing. The controller merges a subscribe's
+responses expecting one stream per replica process, as a sink emits from one
+worker, so exactly one worker per process speaks for a subscribe: the chosen
+worker in its process, and the first worker of every other process, which
+reports the empty frontier at once so the merge is driven by the chosen worker
+alone. And an error ends the subscribe with a batch at the empty frontier,
+because both the partitioned merge and the controller forward a batch only
+when it moves the frontier.
+
+`environmentd` needs less on this path than on its own: `ActiveSubscribe`,
+coordinator formatting, cancellation, dependency drops, and
+`mz_subscriptions` all work unchanged, and only the choice of command differs
+from shipping a dataflow. What it gives up is fetch-driven backpressure. The
+replica pushes batches as the shard produces them, the coordinator formats
+them into the client's backlog, and a client that stops reading is retired at
+`subscribe_max_buffered_bytes` with the fell-behind error, exactly as on the
+dataflow path today. The replica's queue budget and resume are never reached.
+Persist readers live on the replica, which survives an `environmentd` crash,
+so the stale-reader window of the `environmentd` variant does not arise.
+
+On reconciliation a replica aborts its subscribe tasks without a word and the
+controller reissues the retained `Subscribe` commands, so a subscribe restarts
+from its `as_of` and the controller drops what the client already has by
+frontier, as it does for a recreated subscribe sink.
+
 ## What stays the same
 
 Cancellation, dependency drops, `mz_subscriptions`, statement logging, and
@@ -218,6 +266,62 @@ against 160 MB in `environmentd`. Read the figures as a bound on the
 difference rather than a measurement of it. What the latencies show is that
 the client no longer waits for the whole snapshot to be read, consolidated
 and formatted before its first rows.
+
+### The tail on a replica, compared
+
+The same sweep with the tail hosted on the replica, at the sizes where the
+placements diverge. Memory is what one run at that size added to a process's
+resident set, as a range over the runs, in processes that do not return
+memory promptly.
+
+| 2048 clients, 10,000 rows | Dataflow | Tail in `environmentd` | Tail on replica |
+|---|---|---|---|
+| Storm | 47.9 s | 5.8 s | 7.6 s |
+| Statement to snapshot p95 | 45.9 s | 4.2 s | 6.5 s |
+| `environmentd` CPU s | 23.6 | 39.1 | 21.2 |
+| `clusterd` CPU s | 45.1 | 1.6 | 22.4 |
+| `environmentd` memory added per run | 100 to 270 MB | about 1500 MB | 20 to 340 MB |
+| `clusterd` memory added per run | 100 to 240 MB | 0 to 130 MB | about 1400 MB |
+
+| Clients | Tail on replica, p50 / p95 | Storm | CPU s, `environmentd` + `clusterd` |
+|---|---|---|---|
+| 256 | 0.52 s / 0.83 s | 0.93 s | 2.5 + 2.5 |
+| 512 | 0.95 s / 1.56 s | 1.75 s | 4.9 + 5.1 |
+| 1024 | 1.86 s / 3.16 s | 3.51 s | 10.1 + 10.7 |
+| 2048 | 4.01 s / 6.54 s | 7.62 s | 21.2 + 22.4 |
+
+The replica-hosted tail keeps most of the storm win, about a third slower
+than the `environmentd` tail for the protocol hop and the coordinator's
+formatting, and costs the same total CPU. What moves is the per-subscriber
+memory: the cursors' 1.4 GB at 2048 clients lands on the replica instead of
+in `environmentd`, whose growth falls to what the connections cost. It did
+not shrink, since nothing yet shares the snapshot between subscribers.
+
+One client against the 1,000,000-row view, each placement on a freshly
+started `environmentd` with a warm-up pass, all against the same shard:
+
+| One client, 1,000,000 rows | Dataflow | Tail in `environmentd` | Tail on replica |
+|---|---|---|---|
+| `FETCH 10` from a new cursor | 0.52 s | 0.34 s | 0.84 s |
+| First row over `COPY` | 0.62 s | 0.28 s | 0.83 s |
+| Whole snapshot delivered | 1.50 s | 1.55 s | 1.68 s |
+| `environmentd` resident growth | 158 MB | 113 MB | 4 MB |
+| `clusterd` resident growth | 195 MB | 22 MB | 115 MB |
+
+The snapshot never sits in `environmentd` on the replica path: its pieces
+cross the protocol as they are read and are formatted and handed on as they
+arrive. The first row costs the hop, a command to the replica, its handles
+opened there, and each piece serialized, merged and formatted on the
+coordinator's loop before the session sees it. These sub-second figures vary
+by up to 2x between runs, so the columns should be read against one another.
+
+Chunked snapshot delivery needed one change to reach the client through the
+protocol. Both the partitioned response merge and the controller forwarded a
+subscribe batch only when it moved the frontier, so a piece of the snapshot,
+whose bounds are both the `as_of`, waited in the merge's stash until the
+first real frontier advance and arrived as one batch. Both now pass such a
+batch straight through without touching the frontier, which is sound for the
+same reason the piece could ship early in the first place.
 
 ## Follow-ups
 

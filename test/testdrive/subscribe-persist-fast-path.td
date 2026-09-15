@@ -14,6 +14,7 @@
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_subscribe_persist_fast_path = true
+ALTER SYSTEM SET enable_subscribe_persist_fast_path_on_cluster = false
 ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
 ALTER SYSTEM SET enable_logical_compaction_window = true
 
@@ -63,10 +64,11 @@ INSERT INTO t VALUES (4, 'four')
 > COMMIT
 
 # Progress messages, ENVELOPE UPSERT, and WITHIN TIMESTAMP ORDER BY are
-# formatted the same way as for a dataflow.
+# formatted the same way as for a dataflow. A fetch of the snapshot waits for it,
+# since on every path it arrives asynchronously.
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE mv WITH (PROGRESS) ENVELOPE UPSERT (KEY (a))
-> FETCH 4 c
+> FETCH 4 c WITH (TIMEOUT = '30s')
 <TIMESTAMP> true <null> <null> <null>
 <TIMESTAMP> false upsert 2 two
 <TIMESTAMP> false upsert 3 three
@@ -273,7 +275,7 @@ INSERT INTO t VALUES (6, 'six')
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE mv WITH (PROGRESS) ENVELOPE UPSERT (KEY (a))
-> FETCH 5 c
+> FETCH 5 c WITH (TIMEOUT = '30s')
 <TIMESTAMP> true <null> <null> <null>
 <TIMESTAMP> false upsert 3 three
 <TIMESTAMP> false upsert 4 FOUR
@@ -283,5 +285,83 @@ INSERT INTO t VALUES (6, 'six')
 <TIMESTAMP> true <null> <null> <null>
 > COMMIT
 
+# And once more with the tail hosted on a replica of the session's cluster
+# rather than in environmentd, which must also be indistinguishable. The
+# snapshot arrives through the controller, so a fetch waits for it rather
+# than racing it.
 $ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_subscribe_persist_fast_path = true
+ALTER SYSTEM SET enable_subscribe_persist_fast_path_on_cluster = true
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE t
+> FETCH 4 c WITH (TIMEOUT = '30s')
+<TIMESTAMP> 1 3 three
+<TIMESTAMP> 1 4 FOUR
+<TIMESTAMP> 1 5 five
+<TIMESTAMP> 1 6 six
+$ postgres-execute connection=writer
+INSERT INTO t VALUES (7, 'seven')
+> FETCH 1 c WITH (TIMEOUT = '30s')
+<TIMESTAMP> 1 7 seven
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE big
+> FETCH 3 c WITH (TIMEOUT = '30s')
+<TIMESTAMP> 1 00001
+<TIMESTAMP> 1 00002
+<TIMESTAMP> 1 00003
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE consolidated
+> FETCH 2 c WITH (TIMEOUT = '30s')
+<TIMESTAMP> 1 2
+<TIMESTAMP> 1 3
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE mv WITH (PROGRESS) ENVELOPE UPSERT (KEY (a))
+> FETCH 6 c WITH (TIMEOUT = '30s')
+<TIMESTAMP> true <null> <null> <null>
+<TIMESTAMP> false upsert 3 three
+<TIMESTAMP> false upsert 4 FOUR
+<TIMESTAMP> false upsert 5 five
+<TIMESTAMP> false upsert 6 six
+<TIMESTAMP> false upsert 7 seven
+> FETCH 1 c WITH (TIMEOUT = '30s')
+<TIMESTAMP> true <null> <null> <null>
+> COMMIT
+
+# A stalled client is cut off on this path, as on the dataflow path today:
+# the replica pushes batches to the coordinator, which formats them into the
+# client's backlog and retires the subscribe once that exceeds the budget.
+# The replica's own queue budget and resume never come into play.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET subscribe_max_buffered_bytes = 16384
+
+> CREATE TABLE stalled_on_cluster (a int, b text) WITH (RETAIN HISTORY FOR '10 minutes')
+> INSERT INTO stalled_on_cluster VALUES (0, 'start')
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE stalled_on_cluster
+> FETCH 1 c WITH (TIMEOUT = '30s')
+<TIMESTAMP> 1 0 start
+
+$ postgres-execute connection=writer
+INSERT INTO stalled_on_cluster SELECT g, repeat('x', 2000) FROM generate_series(1, 10) g
+INSERT INTO stalled_on_cluster SELECT g, repeat('x', 2000) FROM generate_series(11, 20) g
+INSERT INTO stalled_on_cluster VALUES (21, 'end')
+
+! FETCH 21 c WITH (TIMEOUT = '60s')
+contains:fell behind
+
+> ROLLBACK
+
+$ set-regex match=\d{13,20} replacement=<TIMESTAMP>
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET subscribe_max_buffered_bytes
+ALTER SYSTEM RESET enable_subscribe_persist_fast_path_on_cluster
 ALTER SYSTEM RESET enable_subscribe_persist_fast_path

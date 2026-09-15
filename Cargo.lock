@@ -6988,6 +6988,7 @@ dependencies = [
  "mz-repr",
  "mz-row-spine",
  "mz-secrets",
+ "mz-storage-client",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",

@@ -260,7 +260,9 @@ impl CommandReceiver {
 /// Endpoint used by workers to send sending compute responses.
 ///
 /// Tags responses with the current nonce, allowing receivers to filter out responses intended for
-/// previous client connections.
+/// previous client connections. A clone carries the nonce of the moment it was made, which is
+/// what a task spawned by the worker wants: its responses belong to that incarnation.
+#[derive(Clone)]
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
     inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
@@ -769,6 +771,9 @@ impl<'w> Worker<'w> {
             // re-using the same identifiers.
             // All re-used dataflows should roll back any believed communicated information (e.g. frontiers)
             // so that they recommunicate that information as if from scratch.
+
+            // Persist subscribes restart from the reissued commands, like subscribe sinks.
+            compute_state.persist_subscribes.abort_all();
 
             // Remove all peeks, whether they have started or are still awaiting a turn.
             let queued = std::mem::take(&mut compute_state.queued_peeks);

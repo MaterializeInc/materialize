@@ -496,19 +496,22 @@ impl Coordinator {
                             sink_id,
                             as_of,
                             arity,
-                        } => self.implement_persist_subscribe(
-                            &mut ctx_extra,
-                            from_id,
-                            sink_id,
-                            as_of,
-                            arity,
-                            dependency_ids,
-                            cluster_id,
-                            conn_id,
-                            session_uuid,
-                            read_holds,
-                            plan,
-                        ),
+                        } => {
+                            self.implement_persist_subscribe(
+                                &mut ctx_extra,
+                                from_id,
+                                sink_id,
+                                as_of,
+                                arity,
+                                dependency_ids,
+                                cluster_id,
+                                conn_id,
+                                session_uuid,
+                                read_holds,
+                                plan,
+                            )
+                            .await
+                        }
                     };
                     match result {
                         Ok((resp, write_notify)) => {

@@ -29,7 +29,6 @@ use mz_ore::now::NowFn;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::schema::CaESchema;
@@ -71,7 +70,9 @@ use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics}
 mod metrics;
 mod subscribe;
 
-pub use subscribe::{SubscribeEvent, SubscribeLimits, Update};
+pub use subscribe::{
+    SharedTails, SubscribeEvent, SubscribeLimits, TailHandles, Update, open_tail_handles,
+};
 
 /// An abstraction for keeping track of storage collections and managing access
 /// to them.
@@ -1034,41 +1035,7 @@ impl StorageCollectionsImpl {
         metadata: &CollectionMetadata,
         id: GlobalId,
     ) -> Result<ReadHandle<SourceData, (), Timestamp, StorageDiff>, StorageError> {
-        Self::open_leased_reader(persist, metadata, id, "snapshot").await
-    }
-
-    /// Opens a leased reader on the shard of `id`, starting at the critical
-    /// since so that anything the controller's read holds cover is readable.
-    async fn open_leased_reader(
-        persist: Arc<PersistClientCache>,
-        metadata: &CollectionMetadata,
-        id: GlobalId,
-        purpose: &str,
-    ) -> Result<ReadHandle<SourceData, (), Timestamp, StorageDiff>, StorageError> {
-        let persist_client = persist
-            .open(metadata.persist_location.clone())
-            .await
-            .unwrap();
-
-        // We create a new read handle every time someone requests a snapshot
-        // and then immediately expire it instead of keeping a read handle
-        // permanently in our state to avoid having it heartbeat continually.
-        // The assumption is that calls to snapshot are rare and therefore worth
-        // it to always create a new handle.
-        let read_handle = persist_client
-            .open_leased_reader::<SourceData, (), _, _>(
-                metadata.data_shard,
-                Arc::new(metadata.relation_desc.clone()),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: id.to_string(),
-                    handle_purpose: format!("{purpose} {id}"),
-                },
-                USE_CRITICAL_SINCE_SNAPSHOT.get(&persist.cfg),
-            )
-            .await
-            .expect("invalid persist usage");
-        Ok(read_handle)
+        subscribe::open_leased_reader(persist, metadata, id, "snapshot").await
     }
 
     fn snapshot(
@@ -1196,7 +1163,6 @@ impl StorageCollectionsImpl {
         });
         let persist = Arc::clone(&self.persist);
         let shared_tails = Arc::clone(&self.shared_tails);
-        let collections = Arc::clone(&self.collections);
         let limits = SubscribeLimits {
             max_buffered_bytes,
             snapshot_chunk: SUBSCRIBE_SNAPSHOT_CHUNK_SIZE
@@ -1205,66 +1171,13 @@ impl StorageCollectionsImpl {
 
         async move {
             let open = move |as_of| {
-                Self::open_tail_handles(persist, metadata, id, txns_read, as_of).boxed()
+                subscribe::open_tail_handles(persist, metadata, id, txns_read, as_of).boxed()
             };
             shared_tails
-                .join(id, as_of, with_snapshot, limits, collections, open)
+                .join(id, as_of, with_snapshot, limits, open)
                 .await
         }
         .boxed()
-    }
-
-    /// Opens the persist handles for tailing `id` from `as_of`, see
-    /// `storage_collections::subscribe`. A txn-wal backed collection also gets
-    /// its remap subscription, which unblocks the shard at `as_of` first.
-    async fn open_tail_handles(
-        persist: Arc<PersistClientCache>,
-        metadata: CollectionMetadata,
-        id: GlobalId,
-        txns_read: Option<TxnsRead<Timestamp>>,
-        as_of: Timestamp,
-    ) -> Result<subscribe::TailHandles, StorageError> {
-        let (txns, remap_rx) = match txns_read {
-            None => (None, None),
-            Some(txns_read) => {
-                txns_read.update_gt(as_of).await;
-                let persist_client = persist
-                    .open(metadata.persist_location.clone())
-                    .await
-                    .expect("invalid persist usage");
-                let unblock = persist_client
-                    .open_writer::<SourceData, (), Timestamp, StorageDiff>(
-                        metadata.data_shard,
-                        Arc::new(metadata.relation_desc.clone()),
-                        Arc::new(UnitSchema),
-                        Diagnostics {
-                            shard_name: id.to_string(),
-                            handle_purpose: format!("subscribe unblock {id}"),
-                        },
-                    )
-                    .await
-                    .expect("invalid persist usage");
-                let remap_rx = txns_read
-                    .data_subscribe(metadata.data_shard, as_of, unblock)
-                    .await;
-                (Some((txns_read, metadata.data_shard)), Some(remap_rx))
-            }
-        };
-
-        let snapshot_handle =
-            Self::open_leased_reader(Arc::clone(&persist), &metadata, id, "subscribe snapshot")
-                .await?;
-        let listen = Self::open_leased_reader(persist, &metadata, id, "subscribe listen")
-            .await?
-            .listen(Antichain::from_elem(as_of))
-            .await
-            .map_err(|_| StorageError::ReadBeforeSince(id))?;
-        Ok(subscribe::TailHandles {
-            listen,
-            snapshot_handle,
-            remap_rx,
-            txns,
-        })
     }
 
     fn set_read_policies_inner(

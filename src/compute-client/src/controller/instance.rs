@@ -60,7 +60,7 @@ use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
 use crate::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget, PersistSubscribe,
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
@@ -1197,6 +1197,9 @@ impl Instance {
             | ComputeCommand::AllowCompaction { id, .. } => {
                 self.expect_collection(*id).target_replica
             }
+            ComputeCommand::Subscribe(subscribe) => {
+                self.expect_collection(subscribe.id).target_replica
+            }
             ComputeCommand::CreateDataflow(desc) => {
                 let mut target_replica = None;
                 for id in desc.export_ids() {
@@ -1815,6 +1818,57 @@ impl Instance {
         Ok(())
     }
 
+    /// Starts a subscribe served from `subscribe.target`'s persist shard, see
+    /// [`ComputeCommand::Subscribe`]. The subscribe is tracked as a collection
+    /// under `subscribe.id`, so its responses route like a sink's and
+    /// [`Self::drop_collections`] ends it.
+    ///
+    /// `read_hold` must be on the target and hold its since at or below
+    /// `subscribe.as_of`. It is kept for the subscribe's life, which keeps the
+    /// target readable at the `as_of` a reconnecting replica restarts from.
+    #[mz_ore::instrument(level = "debug")]
+    pub fn subscribe_persist(
+        &mut self,
+        subscribe: PersistSubscribe,
+        shared: SharedCollectionState,
+        mut read_hold: ReadHold,
+        target_replica: Option<ReplicaId>,
+    ) -> Result<(), PeekError> {
+        use PeekError::*;
+
+        if read_hold.id() != subscribe.target {
+            return Err(ReadHoldIdMismatch(read_hold.id()));
+        }
+        let as_of = Antichain::from_elem(subscribe.as_of);
+        read_hold
+            .try_downgrade(as_of.clone())
+            .map_err(|_| ReadHoldInsufficient(subscribe.target))?;
+        if let Some(target) = target_replica {
+            if !self.replica_exists(target) {
+                return Err(ReplicaMissing(target));
+            }
+        }
+
+        let storage_dependencies = BTreeMap::from([(subscribe.target, read_hold.clone())]);
+        self.add_collection(
+            subscribe.id,
+            as_of,
+            shared,
+            storage_dependencies,
+            BTreeMap::new(),
+            vec![read_hold],
+            true,
+            false,
+            None,
+            None,
+            target_replica,
+        );
+        self.subscribes
+            .insert(subscribe.id, ActiveSubscribe::default());
+        self.send(ComputeCommand::Subscribe(Box::new(subscribe)));
+        Ok(())
+    }
+
     /// Cancels an existing peek request.
     #[mz_ore::instrument(level = "debug")]
     pub fn cancel_peek(&mut self, uuid: Uuid, reason: PeekResponse) {
@@ -2246,6 +2300,20 @@ impl Instance {
         self.maybe_update_global_write_frontier(subscribe_id, write_frontier);
 
         match response {
+            // A piece of a timestamp the subscribe has not completed, see the
+            // same case in `PartitionedComputeState::absorb_subscribe_response`.
+            // It is delivered as long as the subscribe has not moved past it,
+            // and leaves the frontier alone.
+            SubscribeResponse::Batch(batch)
+                if batch.lower == batch.upper
+                    && !batch.upper.is_empty()
+                    && PartialOrder::less_equal(&subscribe.frontier, &batch.upper) =>
+            {
+                self.deliver_response(ComputeControllerResponse::SubscribeResponse(
+                    subscribe_id,
+                    batch,
+                ));
+            }
             SubscribeResponse::Batch(batch) => {
                 let upper = batch.upper;
                 let mut updates = batch.updates;

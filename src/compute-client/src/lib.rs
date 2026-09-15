@@ -15,5 +15,6 @@ pub mod as_of_selection;
 pub mod controller;
 pub mod logging;
 pub mod metrics;
+pub mod persist_subscribe;
 pub mod protocol;
 pub mod service;

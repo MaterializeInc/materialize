@@ -20,6 +20,7 @@ mod compute_state;
 mod extensions;
 mod logging;
 mod metrics;
+mod persist_subscribe;
 mod render;
 /// MV sink machinery, exposed for benchmarks.
 #[cfg(feature = "bench")]

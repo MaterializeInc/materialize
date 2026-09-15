@@ -12,6 +12,8 @@ use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::SUBSCRIBE_MAX_BUFFERED_BYTES;
 use mz_cluster_client::ReplicaId;
+use mz_compute_client::persist_subscribe::PersistTailBatcher;
+use mz_compute_client::protocol::command::PersistSubscribe;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
@@ -40,9 +42,7 @@ use crate::active_compute_sink::{
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::persist_tail::{
-    AttachFn, PersistTailBatcher, PersistTailStream, persist_tail_source,
-};
+use crate::coord::persist_tail::{AttachFn, PersistTailStream, persist_tail_source};
 use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
@@ -576,19 +576,22 @@ impl Coordinator {
                 sink_id,
                 as_of,
                 arity,
-            } => self.implement_persist_subscribe(
-                ctx.extra_mut(),
-                from_id,
-                sink_id,
-                as_of,
-                arity,
-                dependency_ids,
-                cluster_id,
-                conn_id,
-                session_uuid,
-                txn_read_holds,
-                plan,
-            )?,
+            } => {
+                self.implement_persist_subscribe(
+                    ctx.extra_mut(),
+                    from_id,
+                    sink_id,
+                    as_of,
+                    arity,
+                    dependency_ids,
+                    cluster_id,
+                    conn_id,
+                    session_uuid,
+                    txn_read_holds,
+                    plan,
+                )
+                .await?
+            }
         };
         // Wait for the `mz_subscriptions` bookkeeping write off the coordinator
         // loop before returning the `SUBSCRIBE` response to the subscribing
@@ -709,7 +712,7 @@ impl Coordinator {
     /// so cancellation, dependency drops, and `mz_subscriptions` work the same.
     /// `read_holds` are released once the collection is being read.
     #[instrument]
-    pub(crate) fn implement_persist_subscribe(
+    pub(crate) async fn implement_persist_subscribe(
         &mut self,
         ctx_extra: &mut ExecuteContextGuard,
         from_id: GlobalId,
@@ -723,6 +726,27 @@ impl Coordinator {
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
+        let on_cluster = self
+            .catalog()
+            .system_config()
+            .enable_subscribe_persist_fast_path_on_cluster();
+        if on_cluster {
+            return self
+                .implement_cluster_subscribe(
+                    ctx_extra,
+                    from_id,
+                    sink_id,
+                    as_of,
+                    arity,
+                    dependency_ids,
+                    cluster_id,
+                    conn_id,
+                    session_uuid,
+                    read_holds,
+                    plan,
+                )
+                .await;
+        }
         let system_config = self.catalog().system_config();
         let max_buffered_bytes = SUBSCRIBE_MAX_BUFFERED_BYTES.get(system_config.dyncfgs());
         let max_result_size = usize::cast_from(system_config.max_result_size());
@@ -805,6 +829,115 @@ impl Coordinator {
 
         let resp =
             Self::subscribing_response(Box::new(stream), ctx_extra, cluster_id, plan.copy_to);
+        Ok((resp, write_notify))
+    }
+
+    /// Serves a `SUBSCRIBE` on a storage collection by tailing its persist
+    /// shard from a replica of `cluster_id`, as a task rather than a dataflow,
+    /// see `ComputeCommand::Subscribe`.
+    ///
+    /// The replica emits the batches a subscribe sink would, so from here on
+    /// the subscribe is handled exactly like a dataflow-backed one: the
+    /// coordinator formats each batch as it arrives and the compute controller
+    /// ends it when the sink is dropped. `read_holds` are handed to the
+    /// controller, which keeps the one on `from_id` for the subscribe's life.
+    #[instrument]
+    async fn implement_cluster_subscribe(
+        &mut self,
+        ctx_extra: &mut ExecuteContextGuard,
+        from_id: GlobalId,
+        sink_id: GlobalId,
+        as_of: Timestamp,
+        arity: usize,
+        dependency_ids: BTreeSet<GlobalId>,
+        cluster_id: ComputeInstanceId,
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+        mut read_holds: ReadHolds,
+        plan: plan::SubscribePlan,
+    ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
+        let max_buffered_bytes =
+            SUBSCRIBE_MAX_BUFFERED_BYTES.get(self.catalog().system_config().dyncfgs());
+
+        let (tx, rx) = mpsc::unbounded_channel::<PeekResponseUnary>();
+        let backlog_accounting = Arc::new(Mutex::new(SubscribeBacklogAccounting::default()));
+        let active_subscribe = ActiveSubscribe {
+            owner: ActiveSubscribeOwner::Session {
+                conn_id,
+                session_uuid,
+            },
+            emitter: SubscribeEmitter {
+                channel: tx,
+                backlog_accounting: Arc::clone(&backlog_accounting),
+                max_buffered_bytes,
+                formatter: SubscribeFormatter {
+                    emit_progress: plan.emit_progress,
+                    as_of,
+                    arity,
+                    output: plan.output.clone(),
+                },
+            },
+            // Its batches arrive through the compute controller and its end
+            // goes through it too, which is what this variant means.
+            execution: SubscribeExecution::Dataflow,
+            cluster_id,
+            depends_on: dependency_ids,
+            start_time: self.now(),
+            internal: false,
+        };
+        active_subscribe.emitter.initialize();
+        let write_notify =
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
+
+        let metadata = match self
+            .controller
+            .storage_collections
+            .collection_metadata(from_id)
+        {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                self.remove_active_compute_sink(sink_id).await;
+                return Err(AdapterError::concurrent_dependency_drop_from_peek_error(
+                    mz_compute_client::controller::error::PeekError::CollectionMissing(from_id),
+                ));
+            }
+        };
+        let read_hold = read_holds
+            .storage_holds
+            .remove(&from_id)
+            .expect("sequencing holds the subscribed collection");
+        let subscribe = PersistSubscribe {
+            id: sink_id,
+            target: from_id,
+            metadata,
+            as_of,
+            up_to: plan.up_to,
+            with_snapshot: plan.with_snapshot,
+            order: plan.output.row_order().to_vec(),
+            // Only diff output leaves a timestamp's rows independent of one
+            // another, see `implement_persist_subscribe`.
+            chunk_snapshot: matches!(plan.output, SubscribeOutput::Diffs),
+            max_buffered_bytes,
+        };
+        if let Err(e) = self
+            .controller
+            .compute
+            .subscribe_persist(cluster_id, subscribe, read_hold, None)
+        {
+            self.remove_active_compute_sink(sink_id).await;
+            return Err(AdapterError::concurrent_dependency_drop_from_peek_error(e));
+        }
+        drop(read_holds);
+        tracing::debug!(%sink_id, %from_id, %as_of, "subscribe served by a persist tail on the cluster");
+
+        let rx = UnboundedReceiverStream::new(rx).map(move |response| {
+            backlog_accounting
+                .lock()
+                .expect("subscribe backlog accounting poisoned")
+                .pop();
+            response
+        });
+        let resp = Self::subscribing_response(Box::new(rx), ctx_extra, cluster_id, plan.copy_to);
         Ok((resp, write_notify))
     }
 

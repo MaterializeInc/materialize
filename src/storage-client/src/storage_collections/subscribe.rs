@@ -39,13 +39,16 @@ use std::time::{Duration, Instant};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
-use mz_persist_client::ShardId;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::fetch::LeasedBatchPart;
 use mz_persist_client::read::{Cursor, Listen, ReadHandle};
 use mz_persist_client::write::WriteHandle;
+use mz_persist_client::{Diagnostics, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_types::StorageDiff;
-use mz_storage_types::controller::StorageError;
+use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::sources::SourceData;
 use mz_txn_wal::txn_read::{DataRemapEntry, TxnsRead};
 use timely::PartialOrder;
@@ -53,8 +56,6 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::debug;
-
-use super::CollectionState;
 
 /// An update of a collection, as stored in its shard.
 pub type Update = (SourceData, Timestamp, StorageDiff);
@@ -118,7 +119,7 @@ const SINCE_DOWNGRADE_INTERVAL: Duration = Duration::from_secs(10);
 const QUEUED_EVENT_OVERHEAD_BYTES: usize = 1024;
 
 /// The persist handles a [`SharedTail`] runs on.
-pub(super) struct TailHandles {
+pub struct TailHandles {
     pub listen: Listen<SourceData, (), Timestamp, StorageDiff>,
     pub snapshot_handle: ReadHandle<SourceData, (), Timestamp, StorageDiff>,
     /// `Some` for txn-wal backed collections, see [`raw_stream`].
@@ -130,7 +131,7 @@ pub(super) struct TailHandles {
 
 /// The shared tails of all collections, keyed by collection.
 #[derive(Debug, Default)]
-pub(super) struct SharedTails {
+pub struct SharedTails {
     /// An async lock, since creating a tail opens persist handles. Joining an
     /// existing tail holds it only briefly.
     tails: tokio::sync::Mutex<BTreeMap<GlobalId, Arc<SharedTail>>>,
@@ -141,13 +142,12 @@ impl SharedTails {
     /// if there is none. A subscriber whose `as_of` is older than what the
     /// shared tail retains gets a tail of its own instead, opened the same way
     /// but not offered to others.
-    pub(super) async fn join(
+    pub async fn join(
         self: &Arc<Self>,
         id: GlobalId,
         as_of: Timestamp,
         with_snapshot: bool,
         limits: SubscribeLimits,
-        collections: Arc<Mutex<BTreeMap<GlobalId, CollectionState>>>,
         open: impl FnOnce(Timestamp) -> BoxFuture<'static, Result<TailHandles, StorageError>>,
     ) -> Result<BoxStream<'static, SubscribeEvent>, StorageError> {
         let SubscribeLimits {
@@ -174,14 +174,7 @@ impl SharedTails {
                         let open = open.take().expect("opens at most once");
                         let handles = open(as_of).await?;
                         debug!(%id, %as_of, "as_of older than the shared tail retains, tailing privately");
-                        break SharedTail::start(
-                            id,
-                            as_of,
-                            handles,
-                            None,
-                            collections,
-                            max_buffered_bytes,
-                        );
+                        break SharedTail::start(id, as_of, handles, None, max_buffered_bytes);
                     }
                 },
                 None => {
@@ -192,7 +185,6 @@ impl SharedTails {
                         as_of,
                         handles,
                         Some(Arc::clone(self)),
-                        collections,
                         max_buffered_bytes,
                     );
                     tails.insert(id, Arc::clone(&tail));
@@ -214,7 +206,7 @@ impl SharedTails {
 
 /// One listen over a collection's shard, fanned out to all its subscribers.
 #[derive(Debug)]
-pub(super) struct SharedTail {
+pub struct SharedTail {
     id: GlobalId,
     /// Requests to the snapshot task, which owns the snapshot reader and
     /// serves each subscriber its snapshot at its own `as_of`, see
@@ -315,7 +307,6 @@ impl SharedTail {
         as_of: Timestamp,
         handles: TailHandles,
         tails: Option<Arc<SharedTails>>,
-        collections: Arc<Mutex<BTreeMap<GlobalId, CollectionState>>>,
         max_buffered_bytes: usize,
     ) -> (Arc<Self>, Joined) {
         let TailHandles {
@@ -347,7 +338,7 @@ impl SharedTail {
         debug!(%id, %as_of, shared = tails.is_some(), "starting subscribe tail");
         let task_tail = Arc::clone(&tail);
         mz_ore::task::spawn(|| format!("shared-tail-{id}"), async move {
-            task_tail.run(listen, remap_rx, collections).await;
+            task_tail.run(listen, remap_rx).await;
             if let Some(tails) = tails {
                 tails.remove(id, &task_tail).await;
             }
@@ -380,7 +371,6 @@ impl SharedTail {
         self: &Arc<Self>,
         listen: Listen<SourceData, (), Timestamp, StorageDiff>,
         remap_rx: Option<mpsc::UnboundedReceiver<DataRemapEntry<Timestamp>>>,
-        collections: Arc<Mutex<BTreeMap<GlobalId, CollectionState>>>,
     ) {
         let mut events = Box::pin(raw_stream(listen, remap_rx));
         let mut pending = Vec::new();
@@ -402,7 +392,7 @@ impl SharedTail {
                 }
             }
             if last_downgrade.elapsed() >= SINCE_DOWNGRADE_INTERVAL {
-                self.downgrade_snapshot_since(&collections);
+                self.downgrade_snapshot_since();
                 last_downgrade = Instant::now();
             }
         }
@@ -473,21 +463,21 @@ impl SharedTail {
         true
     }
 
-    /// Lets the snapshot reader's since follow the collection's since. Every
-    /// subscriber holds a read hold on the collection until its snapshot is
-    /// taken, so the collection's since is always early enough for them.
-    fn downgrade_snapshot_since(&self, collections: &Mutex<BTreeMap<GlobalId, CollectionState>>) {
-        let since = {
-            let collections = collections.lock().expect("lock poisoned");
-            collections
-                .get(&self.id)
-                .map(|c| c.read_capabilities.frontier().to_owned())
-        };
-        if let Some(since) = since {
-            let _ = self
-                .snapshot_tx
-                .send(SnapshotRequest::DowngradeSince(since));
-        }
+    /// Lets the snapshot reader's since follow the oldest `as_of` the tail
+    /// still admits, which is where its retained window starts. A subscriber
+    /// older than that is refused and opens its own handles, so the reader
+    /// never needs to serve anything earlier, and holding its since back
+    /// would only hold back compaction.
+    fn downgrade_snapshot_since(&self) {
+        let since = self
+            .state
+            .lock()
+            .expect("shared tail state poisoned")
+            .retained_from
+            .clone();
+        let _ = self
+            .snapshot_tx
+            .send(SnapshotRequest::DowngradeSince(since));
     }
 
     /// The subscriber's snapshot at `as_of` through the shared snapshot reader.
@@ -811,4 +801,90 @@ fn raw_stream(
             }
         }
     }
+}
+
+/// Opens a leased reader on the shard of `id`, starting at the critical since
+/// so that anything the controller's read holds cover is readable.
+pub async fn open_leased_reader(
+    persist: Arc<PersistClientCache>,
+    metadata: &CollectionMetadata,
+    id: GlobalId,
+    purpose: &str,
+) -> Result<ReadHandle<SourceData, (), Timestamp, StorageDiff>, StorageError> {
+    let persist_client = persist
+        .open(metadata.persist_location.clone())
+        .await
+        .unwrap();
+
+    // We create a new read handle every time someone requests a snapshot
+    // and then immediately expire it instead of keeping a read handle
+    // permanently in our state to avoid having it heartbeat continually.
+    // The assumption is that calls to snapshot are rare and therefore worth
+    // it to always create a new handle.
+    let read_handle = persist_client
+        .open_leased_reader::<SourceData, (), _, _>(
+            metadata.data_shard,
+            Arc::new(metadata.relation_desc.clone()),
+            Arc::new(UnitSchema),
+            Diagnostics {
+                shard_name: id.to_string(),
+                handle_purpose: format!("{purpose} {id}"),
+            },
+            USE_CRITICAL_SINCE_SNAPSHOT.get(&persist.cfg),
+        )
+        .await
+        .expect("invalid persist usage");
+    Ok(read_handle)
+}
+
+/// Opens the handles a tail of `id` runs on, with its listen starting at
+/// `as_of`. For a txn-wal backed collection this also unblocks reads at
+/// `as_of` and subscribes to the txns shard's remap entries.
+pub async fn open_tail_handles(
+    persist: Arc<PersistClientCache>,
+    metadata: CollectionMetadata,
+    id: GlobalId,
+    txns_read: Option<TxnsRead<Timestamp>>,
+    as_of: Timestamp,
+) -> Result<TailHandles, StorageError> {
+    let (txns, remap_rx) = match txns_read {
+        None => (None, None),
+        Some(txns_read) => {
+            txns_read.update_gt(as_of).await;
+            let persist_client = persist
+                .open(metadata.persist_location.clone())
+                .await
+                .expect("invalid persist usage");
+            let unblock = persist_client
+                .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                    metadata.data_shard,
+                    Arc::new(metadata.relation_desc.clone()),
+                    Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: id.to_string(),
+                        handle_purpose: format!("subscribe unblock {id}"),
+                    },
+                )
+                .await
+                .expect("invalid persist usage");
+            let remap_rx = txns_read
+                .data_subscribe(metadata.data_shard, as_of, unblock)
+                .await;
+            (Some((txns_read, metadata.data_shard)), Some(remap_rx))
+        }
+    };
+
+    let snapshot_handle =
+        open_leased_reader(Arc::clone(&persist), &metadata, id, "subscribe snapshot").await?;
+    let listen = open_leased_reader(persist, &metadata, id, "subscribe listen")
+        .await?
+        .listen(Antichain::from_elem(as_of))
+        .await
+        .map_err(|_| StorageError::ReadBeforeSince(id))?;
+    Ok(TailHandles {
+        listen,
+        snapshot_handle,
+        remap_rx,
+        txns,
+    })
 }

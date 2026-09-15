@@ -1879,6 +1879,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_subscribe_persist_fast_path_on_cluster,
+        desc: "serving a persist fast path SUBSCRIBE from a replica of the session's cluster, as a task rather than a dataflow, instead of from environmentd",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_envelope_materialize,
         desc: "ENVELOPE MATERIALIZE",
         default: false,
