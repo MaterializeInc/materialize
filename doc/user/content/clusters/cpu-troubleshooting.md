@@ -24,6 +24,7 @@ stopped being spread evenly across the replica's workers.
 | **Ad-hoc query load**: `SELECT`s served by the cluster compete with its maintenance work. | [Check ad-hoc query load](#check-ad-hoc-query-load) |
 | **Upstream volume**: more data is arriving from sources, so there is more incremental work to do. | [Check upstream data volume](#check-upstream-data-volume) |
 | **Memory pressure**: a replica that is paging to disk burns CPU on I/O rather than on your dataflows. | [Rule out memory pressure](#rule-out-memory-pressure) |
+| **An undersized cluster**: the workload is spread evenly and nothing has changed; there is simply not enough compute. | [Rule out general cluster overload](#rule-out-general-cluster-overload) |
 
 ## Confirm the spike window and scope
 
@@ -161,10 +162,10 @@ operators are busy at this moment, use
 [`mz_compute_operator_durations_histogram`](/transform-data/dataflow-troubleshooting/#debugging-expensive-dataflows-and-operators).
 {{< /note >}}
 
-To resolve, [optimize the expensive object](/transform-data/optimization/) —
-cross joins and joins without a suitable index are the usual culprits — move it
-to its own cluster, or size the cluster up with [`ALTER CLUSTER ... SET (SIZE =
-'<new size>')`](/sql/alter-cluster/).
+To resolve, [optimize the expensive object](/transform-data/optimization/), move
+it to its own cluster, or size the cluster up with [`ALTER CLUSTER ... SET (SIZE
+= '<new size>')`](/sql/alter-cluster/). Cross joins and joins without a suitable
+index are the usual culprits.
 
 ## Check for recent hydration
 
