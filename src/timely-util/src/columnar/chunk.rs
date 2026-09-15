@@ -1090,9 +1090,18 @@ pub struct UnchunkBuilder<Bu, D: Columnar, T: Columnar, R: Columnar> {
     _marker: std::marker::PhantomData<(D, T, R)>,
 }
 
+impl<Bu: Default, D: Columnar, T: Columnar, R: Columnar> Default for UnchunkBuilder<Bu, D, T, R> {
+    fn default() -> Self {
+        Self {
+            inner: Bu::default(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
 impl<Bu, D, T, R> differential_dataflow::trace::Builder for UnchunkBuilder<Bu, D, T, R>
 where
-    Bu: differential_dataflow::trace::Builder<Input = Column<(D, T, R)>>,
+    Bu: differential_dataflow::trace::Builder<Input = Column<(D, T, R)>> + Default,
     D: Columnar + 'static,
     T: Columnar + 'static,
     R: Columnar + 'static,
@@ -1101,37 +1110,38 @@ where
     type Time = Bu::Time;
     type Output = Bu::Output;
 
-    fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
-        Self {
-            inner: Bu::with_capacity(keys, vals, upds),
-            _marker: std::marker::PhantomData,
-        }
-    }
-
     fn push(&mut self, chunk: &mut Self::Input) {
         let mut column = std::mem::take(chunk).into_column();
         self.inner.push(&mut column);
     }
 
-    fn done(
-        self,
-        description: differential_dataflow::trace::Description<Self::Time>,
-    ) -> Self::Output {
-        self.inner.done(description)
+    fn done(self) -> Option<Self::Output> {
+        self.inner.done()
     }
+}
 
-    fn seal(
-        chain: &mut Vec<Self::Input>,
-        description: differential_dataflow::trace::Description<Self::Time>,
-    ) -> Self::Output {
+impl<Bu, D, T, R>
+    differential_dataflow::trace::implementations::merge_batcher::Sealer<ColumnChunk<D, T, R>>
+    for UnchunkBuilder<Bu, D, T, R>
+where
+    Bu: differential_dataflow::trace::Builder<Input = Column<(D, T, R)>> + Default,
+    D: Columnar + 'static,
+    T: Columnar + 'static,
+    R: Columnar + 'static,
+{
+    type Output = Bu::Output;
+
+    fn seal(chain: &mut Vec<ColumnChunk<D, T, R>>) -> Option<Self::Output> {
+        use differential_dataflow::trace::Builder;
+
         // One chunk at a time through `push`, so peak transient memory is a
         // single loaded body rather than the whole chain at once.
-        let mut builder = Self::new();
+        let mut builder = Self::default();
         for chunk in chain.iter_mut() {
             builder.push(chunk);
         }
         chain.clear();
-        builder.done(description)
+        builder.done()
     }
 }
 
@@ -1202,8 +1212,8 @@ mod tests {
     //! `D = (u64, u64)`, `T = u64`, `R = i64` from small ranges so equal-key
     //! collisions are common and consolidation actually runs.
 
-    use differential_dataflow::trace::chunk::{ChunkBatch, ChunkBatcher};
-    use differential_dataflow::trace::{Batcher, Description};
+    use differential_dataflow::trace::Batcher;
+    use differential_dataflow::trace::chunk::ChunkBatch;
     use mz_ore::pool::Pool;
     use proptest::prelude::*;
     use timely::container::PushInto;
@@ -1215,6 +1225,11 @@ mod tests {
 
     type Tuple = ((u64, u64), u64, i64);
     type TestChunk = ColumnChunk<(u64, u64), u64, i64>;
+    /// A batcher over [`TestChunk`]s that hands its chain back rather than sealing it.
+    type TestChunkBatcher = crate::operator::ConsolidatingBatcher<
+        ChunkChunker<(u64, u64), u64, i64>,
+        differential_dataflow::trace::chunk::ChunkMerger<TestChunk>,
+    >;
 
     /// The delegated codec's stored form is byte-identical to the extent
     /// store's previous hard-coded framing: a little-endian `u32`
@@ -1366,16 +1381,17 @@ mod tests {
             inputs in prop::collection::vec(arb_consolidated(), 1..6),
             cuts in prop::collection::vec(0usize..7, 0..8),
         ) {
-            let mut batcher: ChunkBatcher<TestChunk> = Batcher::new(None, 0);
+            let mut batcher = TestChunkBatcher::new(None, 0);
             let mut union = Vec::new();
             for input in &inputs {
                 Extend::extend(&mut union, input.iter().copied());
                 for chunk in chunked(input, &cuts) {
-                    batcher.push_into(chunk);
+                    batcher.push_chunk(chunk);
                 }
             }
             // An empty upper ships everything.
-            let (sealed, _description) = batcher.seal(Antichain::new());
+            let (sealed, _frontier) = batcher.extract(Antichain::new().borrow());
+            let sealed = sealed.unwrap_or_default();
             prop_assert_eq!(collect_chunks(sealed), consolidate(union));
         }
 
@@ -1388,15 +1404,16 @@ mod tests {
             cuts in prop::collection::vec(0usize..7, 0..6),
         ) {
             let pool = test_pool();
-            let mut batcher: ChunkBatcher<TestChunk> = Batcher::new(None, 0);
+            let mut batcher = TestChunkBatcher::new(None, 0);
             let mut union = Vec::new();
             for input in &inputs {
                 Extend::extend(&mut union, input.iter().copied());
                 for chunk in chunked_spilled(input, &cuts, &pool) {
-                    batcher.push_into(chunk);
+                    batcher.push_chunk(chunk);
                 }
             }
-            let (sealed, _description) = batcher.seal(Antichain::new());
+            let (sealed, _frontier) = batcher.extract(Antichain::new().borrow());
+            let sealed = sealed.unwrap_or_default();
             prop_assert_eq!(collect_chunks(sealed), consolidate(union));
         }
 
@@ -1409,20 +1426,22 @@ mod tests {
             cuts in prop::collection::vec(0usize..7, 0..8),
             upper in 0u64..5,
         ) {
-            let mut batcher: ChunkBatcher<TestChunk> = Batcher::new(None, 0);
+            let mut batcher = TestChunkBatcher::new(None, 0);
             for chunk in chunked(&input, &cuts) {
-                batcher.push_into(chunk);
+                batcher.push_chunk(chunk);
             }
-            let (shipped, _) = batcher.seal(Antichain::from_elem(upper));
+            let (shipped, frontier) = batcher.extract(Antichain::from_elem(upper).borrow());
+            let shipped = shipped.unwrap_or_default();
+            let frontier = frontier.to_owned();
             let expected_shipped: Vec<Tuple> =
                 input.iter().copied().filter(|(_, t, _)| *t < upper).collect();
             prop_assert_eq!(collect_chunks(shipped), consolidate(expected_shipped));
 
             let kept_min = input.iter().filter(|(_, t, _)| *t >= upper).map(|(_, t, _)| *t).min();
-            let frontier = batcher.frontier().to_owned();
             prop_assert_eq!(frontier.elements().first().copied(), kept_min);
 
-            let (rest, _) = batcher.seal(Antichain::new());
+            let (rest, _frontier) = batcher.extract(Antichain::new().borrow());
+            let rest = rest.unwrap_or_default();
             let expected_rest: Vec<Tuple> =
                 input.iter().copied().filter(|(_, t, _)| *t >= upper).collect();
             prop_assert_eq!(collect_chunks(rest), consolidate(expected_rest));
@@ -1439,20 +1458,22 @@ mod tests {
             upper in 0u64..5,
         ) {
             let pool = test_pool();
-            let mut batcher: ChunkBatcher<TestChunk> = Batcher::new(None, 0);
+            let mut batcher = TestChunkBatcher::new(None, 0);
             for chunk in chunked_spilled(&input, &cuts, &pool) {
-                batcher.push_into(chunk);
+                batcher.push_chunk(chunk);
             }
-            let (shipped, _) = batcher.seal(Antichain::from_elem(upper));
+            let (shipped, frontier) = batcher.extract(Antichain::from_elem(upper).borrow());
+            let shipped = shipped.unwrap_or_default();
+            let frontier = frontier.to_owned();
             let expected_shipped: Vec<Tuple> =
                 input.iter().copied().filter(|(_, t, _)| *t < upper).collect();
             prop_assert_eq!(collect_chunks(shipped), consolidate(expected_shipped));
 
             let kept_min = input.iter().filter(|(_, t, _)| *t >= upper).map(|(_, t, _)| *t).min();
-            let frontier = batcher.frontier().to_owned();
             prop_assert_eq!(frontier.elements().first().copied(), kept_min);
 
-            let (rest, _) = batcher.seal(Antichain::new());
+            let (rest, _frontier) = batcher.extract(Antichain::new().borrow());
+            let rest = rest.unwrap_or_default();
             let expected_rest: Vec<Tuple> =
                 input.iter().copied().filter(|(_, t, _)| *t >= upper).collect();
             prop_assert_eq!(collect_chunks(rest), consolidate(expected_rest));
@@ -1522,12 +1543,7 @@ mod tests {
             } else {
                 chunked(&input, &cuts).into()
             };
-            let description = Description::new(
-                Antichain::from_elem(0u64),
-                Antichain::new(),
-                Antichain::from_elem(0u64),
-            );
-            let batch = ChunkBatch::new(chunks, description);
+                        let batch = ChunkBatch::new(chunks);
 
             let mut probe_col = <u64 as Columnar>::Container::default();
             for key in &probe_keys {
@@ -1743,11 +1759,12 @@ mod tests {
         assert_eq!(committed.len(), data.len());
         assert_eq!(collect_column(&committed.clone().into_column()), data);
 
-        let mut batcher: ChunkBatcher<TestChunk> = Batcher::new(None, 0);
+        let mut batcher = TestChunkBatcher::new(None, 0);
         for piece in data.chunks(10_000) {
-            batcher.push_into(ColumnChunk::from_column(build_column(piece)));
+            batcher.push_chunk(ColumnChunk::from_column(build_column(piece)));
         }
-        let (sealed, _) = batcher.seal(Antichain::new());
+        let (sealed, _frontier) = batcher.extract(Antichain::new().borrow());
+        let sealed = sealed.unwrap_or_default();
         assert!(
             sealed.iter().any(ColumnChunk::is_spilled),
             "sealed output should contain spilled chunks",

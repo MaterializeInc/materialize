@@ -117,7 +117,8 @@ use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchKey, BatchVal};
-use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -139,6 +140,7 @@ use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, RowArena, SharedRow};
+use mz_row_spine::{DatumSeq, RowRowBatcher};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
@@ -146,13 +148,22 @@ use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+use std::task::Poll;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
 use timely::dataflow::operators::vec::Filter;
 use timely::dataflow::operators::vec::ToStream;
-use timely::dataflow::operators::{Capability, Operator, Probe, probe};
+use timely::dataflow::operators::{Capability, CapabilitySet, Operator, Probe, probe};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
@@ -173,8 +184,8 @@ use crate::render::columnar::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
-use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
+use crate::typedefs::ConsolidateBatcher;
+use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
 pub(crate) mod columnar;
@@ -188,7 +199,6 @@ mod threshold;
 mod top_k;
 
 pub use context::CollectionBundle;
-pub use join::LinearJoinSpec;
 
 /// Guard that presses a differential [`ShutdownButton`] when dropped.
 ///
@@ -819,20 +829,17 @@ where
                 let mut oks = oks
                     .as_collection(|k, v| (k.to_row(), v.to_row()))
                     .leave(outer)
-                    .mz_arrange::<
-                        ColumnationChunker<_>,
-                        RowRowBatcher<_, _>,
-                        RowRowBuilder<_, _>,
-                        _,
-                    >(
+                    .mz_arrange::<RowRowBatcher<_, _, ColumnationChunker<_>>, _>(
                         "Arrange export iterative",
+                        MergeBatcher::new,
                     );
 
                 let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave(outer)
-                    .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                    .mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, _>(
                         "Arrange export iterative err",
+                        MergeBatcher::new,
                     );
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
@@ -999,7 +1006,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                let mut oks = CollectionExt::consolidate_named::<ConsolidateBatcher<_, _, _>>(
                     oks,
                     "LetRecConsolidation",
                 );
@@ -1041,12 +1048,10 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
                 let errs = err
-                    .mz_arrange::<
-                        ColumnationChunker<_>,
-                        ErrBatcher<_, _>,
-                        ErrBuilder<_, _>,
-                        ErrSpine<_, _>,
-                    >("Arrange recursive err")
+                    .mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, ErrSpine<_, _>>(
+                        "Arrange recursive err",
+                        MergeBatcher::new,
+                    )
                     .mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
                         "Distinct recursive err",
                         move |_k, _s, t| t.push(((), Diff::ONE)),
@@ -1956,6 +1961,8 @@ where
 
         move |(input, frontier), output| {
             input.for_each_time(|data_cap, data| {
+                // The persist source stamps one capability per message.
+                #[allow(clippy::disallowed_methods)]
                 if as_of.less_than(data_cap.time()) {
                     let mut session = output.session(&data_cap);
                     for data in data {
@@ -2068,8 +2075,10 @@ where
             self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
                 // Times that we've observed on our input.
                 let mut pending_times: BTreeSet<mz_repr::Timestamp> = BTreeSet::new();
-                // Capability for the lower bound of `pending_times`, if any.
-                let mut retained_cap: Option<Capability<mz_repr::Timestamp>> = None;
+                // Capabilities for the lower bound of `pending_times`, if any. A set rather
+                // than one capability: a message is stamped by a multiset of them, and
+                // inserting keeps the antichain, which is the earliest we need to hold.
+                let mut retained_cap: Option<CapabilitySet<mz_repr::Timestamp>> = None;
 
                 let activator = scope.activator_for(info.address);
                 handle.activate(activator.clone());
@@ -2093,10 +2102,12 @@ where
                             }
                         });
                         output.session(&cap).give_container(data);
-                        if retained_cap.as_ref().is_none_or(|c| {
-                            !c.time().less_than(cap.time()) && !upper.less_than(cap.time())
-                        }) {
-                            retained_cap = Some(cap.retain(0));
+                        for capability in cap.retain_stamp(0).iter() {
+                            if !upper.less_than(capability.time()) {
+                                retained_cap
+                                    .get_or_insert_with(CapabilitySet::new)
+                                    .insert(capability.clone());
+                            }
                         }
                     });
 
@@ -2114,7 +2125,7 @@ where
                     }
 
                     match (retained_cap.as_mut(), pending_times.first()) {
-                        (Some(cap), Some(first)) => cap.downgrade(first),
+                        (Some(cap), Some(first)) => cap.downgrade([first]),
                         (_, None) => retained_cap = None,
                         _ => {}
                     }

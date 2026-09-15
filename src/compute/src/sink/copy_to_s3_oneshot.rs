@@ -7,10 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
@@ -20,9 +16,11 @@ use mz_compute_types::dyncfgs::{
 use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_timely_util::columnation::ColumnationChunker;
-use mz_timely_util::operator::consolidate_pact;
+use mz_timely_util::operator::{ConsolidatingBatcher, consolidate_pact};
 use mz_timely_util::probe::{Handle, ProbeNotify};
+use std::any::Any;
+use std::cell::RefCell;
+use std::rc::Rc;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
@@ -30,7 +28,7 @@ use timely::progress::Antichain;
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
-use crate::typedefs::KeyBatcher;
+use crate::typedefs::ConsolidateBatcher;
 
 impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
     fn render_sink(
@@ -62,20 +60,22 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
 
         // We exchange the data according to batch, but we don't want to send the batch ID to the
         // sink. The sink can re-compute the batch ID from the data.
-        let input = consolidate_pact::<ColumnationChunker<_>, KeyBatcher<_, _, _>, _, _>(
+        let input = consolidate_pact::<ConsolidateBatcher<_, _, _>, _, _>(
             sinked_collection.map(move |row| (row, ())).inner,
             Exchange::new(move |((row, ()), _, _): &((Row, _), _, _)| row.hashed() % batch_count),
             "Consolidated COPY TO S3 input",
+            ConsolidatingBatcher::new,
         )
         .probe_notify_with(vec![output_probe.clone()]);
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
-        let error = consolidate_pact::<ColumnationChunker<_>, KeyBatcher<_, _, _>, _, _>(
+        let error = consolidate_pact::<ConsolidateBatcher<_, _, _>, _, _>(
             err_collection.map(move |err| (err, ())).inner,
             Exchange::new(move |((err, _), _, _): &((DataflowErrorSer, _), _, _)| {
                 err.hashed() % batch_count
             }),
             "Consolidated COPY TO S3 errors",
+            ConsolidatingBatcher::new,
         );
 
         // We can only propagate the one error back to the client, so filter the error
@@ -88,6 +88,8 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
                 let mut received_one = false;
                 move |(input, _), output| {
                     input.for_each_time(|time, data| {
+                        // `consolidate_pact` ships under a single capability.
+                        #[allow(clippy::disallowed_methods)]
                         if !up_to.less_equal(time.time()) && !received_one {
                             received_one = true;
                             output.session(&time).give_iterator(

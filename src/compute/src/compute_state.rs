@@ -5,15 +5,6 @@
 
 //! Worker-local state for compute timely instances.
 
-use std::any::Any;
-use std::cell::RefCell;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::num::NonZeroUsize;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use differential_dataflow::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::TraceReader;
@@ -56,6 +47,14 @@ use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
+use std::any::Any;
+use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::num::NonZeroUsize;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -67,6 +66,7 @@ use uuid::Uuid;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::compute_state::peek_budget::InlineBudget;
 use crate::compute_state::peek_metrics::{IndexPeekMetrics, PeekWalkMetrics};
+
 pub(crate) use crate::compute_state::peek_offload::PeekPermits;
 use crate::compute_state::peek_offload::{OffloadConfig, OffloadedPeek};
 use crate::compute_state::peek_scan::{
@@ -76,7 +76,7 @@ use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
-use crate::render::{LinearJoinSpec, StartSignal};
+use crate::render::StartSignal;
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod error_scan;
@@ -221,7 +221,6 @@ pub struct ComputeState {
     /// Max size in bytes of any result.
     max_result_size: u64,
     /// Specification for rendering linear joins.
-    pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this worker.
     pub metrics: WorkerMetrics,
     /// A process-global handle to tracing configuration.
@@ -337,7 +336,6 @@ impl ComputeState {
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
-            linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
             context,
@@ -389,8 +387,6 @@ impl ComputeState {
         use mz_compute_types::dyncfgs::*;
 
         let config = &self.worker_config;
-
-        self.linear_join_spec = LinearJoinSpec::from_config(config);
 
         if ENABLE_LGALLOC.get(config) {
             if let Some(path) = &self.context.scratch_directory {

@@ -102,10 +102,10 @@ where
             let mut ok_output = ok_output.activate();
             let mut err_output = err_output.activate();
             input.for_each(|time, data| {
-                // Retain the input capability to derive a `Capability` for each
-                // output. The `Session` type alias is fixed to `Capability<T>`.
-                let ok_cap = time.retain(0);
-                let err_cap = time.retain(1);
+                // Retain the input capability to derive a capability for each
+                // output. The `Session` type alias is fixed to `CapabilitySet<T>`.
+                let ok_cap = time.retain_stamp(0);
+                let err_cap = time.retain_stamp(1);
                 let mut ok_session = ok_output.session_with_builder(&ok_cap);
                 let mut err_session = err_output.session_with_builder(&err_cap);
                 // Rows are read from the borrowed column, never materialized as
