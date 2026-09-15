@@ -410,6 +410,17 @@ creates:
     Rerun the previous query on `flip_activities`. The query should return
     faster.
 
+    The indexes make each query cheaper to compute, but they do not change how
+    much the view returns. The number of matching pairs still grows as
+    `winning_bids` grows, and the 8-day bound in the `WHERE` clause is what
+    keeps that growth linear rather than quadratic. Because `flip_activities`
+    is a plain view, this work happens only when you query it. If you later
+    create an index on `flip_activities` or turn it into a materialized view,
+    Materialize retains that state continuously as the load generator keeps
+    producing auctions. Keep the time bound in place, or add a [temporal
+    filter](/transform-data/patterns/temporal-filters/) to `winning_bids`, so
+    that the retained state stays bounded.
+
 1. Use [`CREATE TABLE`](/sql/create-table) to create a `known_flippers` table
    that you can manually populate with known flippers. That is, assume that
    separate from your auction activities data, you receive independent data
