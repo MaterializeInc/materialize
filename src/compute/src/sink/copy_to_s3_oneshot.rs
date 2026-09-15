@@ -87,10 +87,11 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
                 let up_to = sink.up_to.clone();
                 let mut received_one = false;
                 move |(input, _), output| {
-                    input.for_each_time(|time, data| {
-                        // `consolidate_pact` ships under a single capability.
-                        #[allow(clippy::disallowed_methods)]
-                        if !up_to.less_equal(time.time()) && !received_one {
+                    input.for_each_stamp(|time, data| {
+                        // A message may carry an error before `up_to` if any time it is stamped
+                        // with is before `up_to`.
+                        let before_up_to = time.stamp().iter().any(|t| !up_to.less_equal(t));
+                        if before_up_to && !received_one {
                             received_one = true;
                             output.session(&time).give_iterator(
                                 data.flatten()

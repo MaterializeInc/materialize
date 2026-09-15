@@ -28,11 +28,12 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::columnar_consolidate_exchange;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::columnar::merge_batcher::ConsolidatingColumnBatcher;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, NoopBuilder};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{Operator, OutputBuilder};
 use timely::dataflow::{Scope, Stream, StreamVec};
@@ -259,14 +260,23 @@ pub fn columnar_leave_dynamic<'scope>(
         move |_frontier| {
             let mut output = output.activate();
             input.for_each(|cap, data| {
-                let mut time = cap.time().clone();
-                let mut coordinates = std::mem::take(&mut time.inner).into_inner();
-                coordinates.truncate(level - 1);
-                time.inner = PointStamp::new(coordinates);
-                let cap = cap.delayed(&time, 0);
+                // The iteration coordinates make the scope partially ordered, so a message
+                // can carry several capabilities and none of them dominates the rest. Each
+                // one holds for the records it covers, so each one is truncated and kept.
+                let caps: CapabilitySet<_> = cap
+                    .stamp()
+                    .iter()
+                    .map(|time| {
+                        let mut time = time.clone();
+                        let mut coordinates = std::mem::take(&mut time.inner).into_inner();
+                        coordinates.truncate(level - 1);
+                        time.inner = PointStamp::new(coordinates);
+                        cap.delayed(&time, 0)
+                    })
+                    .collect();
                 let mut truncated = truncate_times(std::mem::take(data), level);
                 output
-                    .session_with_builder(&cap)
+                    .session_with_builder(&caps)
                     .give_container(&mut truncated);
             });
         }
@@ -304,7 +314,7 @@ where
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
 /// A [`ColumnChunker`] sorts and consolidates the input columns and a
-/// [`ColumnMergeBatcher`] merges them, both holding their data in [`Column`], so nothing
+/// [`ConsolidatingColumnBatcher`] merges them, both holding their data in [`Column`], so nothing
 /// outside the exchange pact visits a record or materializes an owned [`Row`].
 ///
 /// Uses [`consolidate_pact`] rather than `mz_arrange_core`: a consolidate emits a
@@ -324,11 +334,15 @@ where
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
     let consolidated = consolidate_pact::<
-        ColumnChunker<(Row, T, Diff)>,
-        ColumnMergeBatcher<Row, T, Diff>,
+        ConsolidatingColumnBatcher<ColumnChunker<(Row, T, Diff)>, Row, T, Diff>,
         _,
         _,
-    >(collection.inner, exchange, name);
+    >(
+        collection.inner,
+        exchange,
+        name,
+        ConsolidatingColumnBatcher::new,
+    );
 
     // Flatten the sealed chain into one container per chunk, moving containers and
     // visiting no record.

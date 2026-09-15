@@ -833,7 +833,10 @@ mod test {
                 // empty frontier since the other update is still pending.
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Messages(0u64, vec![(1, 1000, Diff::ONE),]))
+                    Ok(Event::Messages(
+                        Stamp::from_elem(0u64),
+                        vec![(1, 1000, Diff::ONE)]
+                    ))
                 );
                 assert_eq!(
                     reclocked.try_recv(),
@@ -857,7 +860,10 @@ mod test {
                 // is still at [2001].
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Messages(1001u64, vec![(2, 2000, Diff::ONE),]))
+                    Ok(Event::Messages(
+                        Stamp::from_elem(1001u64),
+                        vec![(2, 2000, Diff::ONE)]
+                    ))
                 );
                 assert_eq!(reclocked.try_recv(), Ok(Event::Progress(vec![(1001, -1)])));
             },

@@ -493,7 +493,7 @@ fn synthesize_probes<'scope, T: timely::progress::Timestamp>(
 
     let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
     let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
-    let mut input = op.new_input_for(progress, Pipeline, &output);
+    let mut input = op.new_input_for_stamp(progress, Pipeline, &output);
 
     op.build(|caps| async move {
         if !is_active_worker {

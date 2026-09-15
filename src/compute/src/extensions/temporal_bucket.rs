@@ -97,7 +97,7 @@ where
                     }
                 }
 
-                input.for_each_time(|time, data| {
+                input.for_each_stamp(|time, data| {
                     let mut session = output.session_with_builder(&time);
                     for data in data {
                         let borrowed = data.borrow();
@@ -243,7 +243,7 @@ where
                         }
                     }
 
-                    input.for_each_time(|time, data| {
+                    input.for_each_stamp(|time, data| {
                         let mut session = output.session_with_builder(&time);
                         for data in data {
                             // Skip data that is about to be revealed.
@@ -390,7 +390,7 @@ where
 
     /// Flush any partial chunk still held by the chunker into the batcher.
     fn flush(&mut self) {
-        use timely::container::{ContainerBuilder as _, PushInto as _};
+        use timely::container::ContainerBuilder as _;
         while let Some(chunk) = self.chunker.finish() {
             self.inner
                 .push_chunk(ColumnChunk::from_column(std::mem::take(chunk)));
@@ -419,7 +419,6 @@ where
     type Timestamp = T;
 
     fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
-        use timely::container::PushInto as _;
         self.flush();
         let upper = Antichain::from_elem(timestamp.clone());
         let mut lower = Self::new(self.logger.clone(), self.operator_id);

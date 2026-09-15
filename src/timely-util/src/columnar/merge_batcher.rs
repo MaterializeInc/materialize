@@ -276,6 +276,63 @@ where
     }
 }
 
+/// A [`ColumnMergeBatcher`] whose output is the merged chain rather than a batch.
+///
+/// Consolidation wants the updates themselves, so nothing seals them, and the chain keeps the
+/// paging the batcher applies to every chunk it holds.
+pub struct ConsolidatingColumnBatcher<Chu, D, T, R>
+where
+    D: Columnar,
+    T: Columnar,
+    R: Columnar,
+{
+    // The sealer is never invoked, so it is filled in with a type that implements no `Sealer`.
+    inner: ColumnMergeBatcher<Chu, D, T, R, ()>,
+}
+
+impl<Chu: Default, D, T, R> ConsolidatingColumnBatcher<Chu, D, T, R>
+where
+    D: Columnar,
+    T: Columnar + Timestamp,
+    R: Columnar,
+{
+    /// Allocates a new empty batcher. See [`ColumnMergeBatcher::new`].
+    pub fn new(logger: Option<Logger>, operator_id: usize) -> Self {
+        Self {
+            inner: ColumnMergeBatcher::new(logger, operator_id),
+        }
+    }
+}
+
+impl<C, Chu, D, T, R> Batcher<C> for ConsolidatingColumnBatcher<Chu, D, T, R>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Timestamp + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    for<'a> columnar::Ref<'a, R>: Ord,
+    Chu: ContainerBuilder<Container = Column<(D, T, R)>> + for<'a> PushInto<&'a mut C>,
+{
+    type Output = Vec<Column<(D, T, R)>>;
+    type Time = T;
+
+    fn insert(&mut self, container: &mut C) {
+        self.inner.chunker.push_into(container);
+        while let Some(chunk) = self.inner.chunker.extract().map(std::mem::take) {
+            self.inner.push_chunk(chunk);
+        }
+    }
+
+    fn extract<'a>(
+        &'a mut self,
+        upper: AntichainRef<'_, Self::Time>,
+    ) -> (Option<Self::Output>, AntichainRef<'a, Self::Time>) {
+        let (readied, frontier) = self.inner.extract_chain(upper);
+        ((!readied.is_empty()).then_some(readied), frontier)
+    }
+}
+
 impl<Chu, D, T, R, S> ColumnMergeBatcher<Chu, D, T, R, S>
 where
     D: Columnar,

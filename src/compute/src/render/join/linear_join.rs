@@ -27,7 +27,7 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, UnchunkBuilder};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, UnchunkBuilder};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::operator::StreamExt;
@@ -66,6 +66,70 @@ where
     I: IntoIterator<Item: Data> + 'static,
 {
     encode_updates::<_, _, CB>(arranged1.join_core(arranged2, result), "JoinCoreEncode")
+}
+
+/// Applies `closure` to the datums of one record, packing the row it computes.
+///
+/// The two finalization paths differ only in where the datums come from, so this is what
+/// they share.
+fn apply_closure<'a>(
+    closure: &'a JoinClosure,
+    datums: &mut DatumVecBorrow<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Option<Row>, DataflowErrorSer> {
+    let mut row_builder = SharedRow::get();
+    // `cloned` detaches the result from `temp_storage` and the shared row builder, both of
+    // which drop at the end of the caller's per-record work.
+    closure
+        .apply(datums, temp_storage, &mut row_builder)
+        .map(|row| row.cloned())
+        .map_err(DataflowErrorSer::from)
+}
+
+/// Applies `closure` to every record of `edge`, writing the rows it computes onto the
+/// output edge.
+///
+/// The closure borrows the row it reads, so reading the edge costs nothing, whereas
+/// decoding it would cost an owned [`Row`] per record.
+fn apply_closure_to_edge<'s, T>(
+    edge: ColCollection<'s, T>,
+    name: &str,
+    closure: JoinClosure,
+) -> (
+    ColCollection<'s, T>,
+    VecCollection<'s, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    let (oks, errs) = flat_map_datums::<_, ConsolidatingColumnBuilder<Row, T, Diff>, _>(
+        edge,
+        name,
+        usize::MAX,
+        {
+            let mut datum_vec = DatumVec::new();
+            move |row_datums, time, diff, ok_session, err_session| {
+                // `JoinClosure::apply` unifies the lifetimes of `&self`, the datums, and
+                // the arena. Copying the datums into a local vec lets that lifetime shrink
+                // to this call. The copy moves datum references, not row data.
+                let temp_storage = RowArena::new();
+                let mut datums = datum_vec.borrow();
+                datums.extend(row_datums.iter());
+                match apply_closure(&closure, &mut datums, &temp_storage) {
+                    Ok(Some(row)) => {
+                        ok_session.give((row, time, diff));
+                        1
+                    }
+                    Ok(None) => 0,
+                    Err(e) => {
+                        err_session.give((e, time, diff));
+                        1
+                    }
+                }
+            }
+        },
+    );
+    (oks.as_collection(), errs.as_collection())
 }
 
 /// Different forms the streamed data might take.
@@ -393,7 +457,7 @@ where
 
 /// Splits a stage's `Result`s, writing the rows onto the edge and the errors to a `Vec`.
 ///
-/// [`LinearJoinSpec::render`] has one output, so a stage whose closure can error produces
+/// [`join_arranged`] has one output, so a stage whose closure can error produces
 /// `Result`s and separates them afterwards. The rows are pushed borrowed, so the split is
 /// also the encode.
 fn demux_join_results<'s, T>(
@@ -467,26 +531,34 @@ where
     let exchange =
         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
     let arranged = match batcher {
-        ArrangementBatcher::Chunked => keyed.mz_arrange_core::<
-            _,
-            AccountedChunkBatcher<
+        ArrangementBatcher::Chunked => {
+            keyed.mz_arrange_core::<_, AccountedChunkBatcher<
                 (Row, Row),
                 T,
                 Diff,
                 UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
-            >,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage", AccountedChunkBatcher::new),
-        ArrangementBatcher::Columnar => keyed.mz_arrange_core::<
+            >, RowRowSpine<_, _>>(exchange, "JoinStage", AccountedChunkBatcher::new)
+        }
+        ArrangementBatcher::Columnar => {
+            keyed.mz_arrange_core::<_, Col2ValColBatcher<
+                _,
+                _,
+                _,
+                _,
+                batcher::ColumnChunker<_>,
+                RowRowColPagedBuilder<_, _>,
+            >, RowRowSpine<_, _>>(exchange, "JoinStage", MergeBatcher::new)
+        }
+        ArrangementBatcher::Columnation => keyed.mz_arrange_core::<_, Col2ValBatcher<
             _,
-            Col2ValColBatcher<_, _, _, _, batcher::ColumnChunker<_>, RowRowColPagedBuilder<_, _>>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage", MergeBatcher::new),
-        ArrangementBatcher::Columnation => keyed.mz_arrange_core::<
             _,
-            Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage", MergeBatcher::new),
+            _,
+            _,
+            batcher::Chunker<_>,
+            RowRowBuilder<_, _>,
+        >, RowRowSpine<_, _>>(
+            exchange, "JoinStage", MergeBatcher::new
+        ),
     };
     (arranged, errs.as_collection())
 }
