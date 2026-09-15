@@ -489,10 +489,7 @@ where
     D: Monoid + Codec64 + Send + Sync,
 {
     /// Fetches the contents of `part` and returns its lease.
-    ///
-    /// This is broken out into its own function to provide a trivial means for
-    /// [`Subscribe`], which contains a [`Listen`], to fetch batches.
-    async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
+    pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
         let fetched_part = fetch_leased_part(
             &self.handle.cfg,
             &part,

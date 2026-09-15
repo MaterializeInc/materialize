@@ -203,6 +203,17 @@ pub enum AdapterError {
         /// The `subscribe_max_buffered_bytes` budget that was exceeded.
         max_buffered_bytes: usize,
     },
+    /// A subscribe served from persist exceeded its buffer budget and the
+    /// collection no longer retains the history it would have resumed from.
+    /// Presented exactly like [`AdapterError::SubscribeFellBehind`], which is
+    /// what a client sees for the same situation on the dataflow path; only
+    /// the hint differs, since retained history would have let it resume.
+    SubscribeHistoryCompacted {
+        /// Bytes queued when the budget was exceeded.
+        buffered_bytes: usize,
+        /// The `subscribe_max_buffered_bytes` budget that was exceeded.
+        max_buffered_bytes: usize,
+    },
     /// A query exceeded the configured compute peek row iteration limit.
     PeekRowIterationLimitExceeded {
         /// The configured per-worker limit.
@@ -798,6 +809,13 @@ impl AdapterError {
                 without buffering, or raise the subscribe_max_buffered_bytes system variable."
                     .to_string(),
             ),
+            AdapterError::SubscribeHistoryCompacted { .. } => Some(
+                "The client is not reading results fast enough. Use a client that reads output \
+                without buffering, raise the subscribe_max_buffered_bytes system variable, or \
+                set RETAIN HISTORY on the subscribed object so a slow reader can resume from \
+                where it stopped."
+                    .to_string(),
+            ),
             AdapterError::Dataflow(e) => match &**e {
                 DataflowError::EvalError(e) => e.hint(),
                 DataflowError::SourceError(e) => e.hint.as_ref().map(|hint| hint.to_string()),
@@ -1024,6 +1042,7 @@ impl AdapterError {
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SubscribeFellBehind { .. } => SqlState::OUT_OF_MEMORY,
+            AdapterError::SubscribeHistoryCompacted { .. } => SqlState::OUT_OF_MEMORY,
             AdapterError::PeekRowIterationLimitExceeded { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
@@ -1446,6 +1465,10 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ResultSize(e) => write!(f, "{e}"),
             AdapterError::SubscribeFellBehind {
+                buffered_bytes,
+                max_buffered_bytes,
+            }
+            | AdapterError::SubscribeHistoryCompacted {
                 buffered_bytes,
                 max_buffered_bytes,
             } => {

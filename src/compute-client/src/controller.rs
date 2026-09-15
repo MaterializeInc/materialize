@@ -80,7 +80,7 @@ use crate::controller::introspection::{IntrospectionUpdates, spawn_introspection
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
-use crate::protocol::command::{ComputeParameters, PeekTarget};
+use crate::protocol::command::{ComputeParameters, PeekTarget, PersistSubscribe};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
 mod instance;
@@ -1018,6 +1018,50 @@ impl ComputeController {
             .expect("validated")
         });
 
+        Ok(())
+    }
+
+    /// Start a subscribe served from a persist shard on `instance_id`, see
+    /// [`Instance::subscribe_persist`]. The read hold must be on the target
+    /// collection with its since at or below the subscribe's `as_of`.
+    pub fn subscribe_persist(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        subscribe: PersistSubscribe,
+        read_hold: ReadHold,
+        target_replica: Option<ReplicaId>,
+    ) -> Result<(), PeekError> {
+        use PeekError::*;
+
+        let instance = self.instance(instance_id)?;
+        if let Some(replica_id) = target_replica {
+            if !instance.replicas.contains(&replica_id) {
+                return Err(ReplicaMissing(replica_id));
+            }
+        }
+        if read_hold.id() != subscribe.target {
+            return Err(ReadHoldIdMismatch(read_hold.id()));
+        }
+        if !read_hold.since().less_equal(&subscribe.as_of) {
+            return Err(SinceViolation(subscribe.target));
+        }
+
+        // Registered like a dataflow export, so that frontier queries and
+        // `drop_collections` find it here as well as in the instance.
+        let instance = self.instance_mut(instance_id).expect("validated");
+        let shared = SharedCollectionState::new(Antichain::from_elem(subscribe.as_of));
+        let collection = Collection {
+            write_only: true,
+            compute_dependencies: BTreeSet::new(),
+            shared: shared.clone(),
+            time_dependence: None,
+        };
+        instance.collections.insert(subscribe.id, collection);
+
+        instance.call(move |i| {
+            i.subscribe_persist(subscribe, shared, read_hold, target_replica)
+                .expect("validated")
+        });
         Ok(())
     }
 

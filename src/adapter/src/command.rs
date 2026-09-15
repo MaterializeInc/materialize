@@ -52,7 +52,7 @@ use crate::coord::appends::{BuiltinTableAppendNotify, WriteResult};
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::coord::{ExecuteContextExtra, ExecuteContextGuard};
+use crate::coord::{ExecuteContextExtra, ExecuteContextGuard, SubscribeImplementation};
 use crate::error::AdapterError;
 use crate::optimize::LirDataflowDescription;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -297,7 +297,7 @@ pub enum Command {
     },
 
     ExecuteSubscribe {
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        implementation: SubscribeImplementation,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,

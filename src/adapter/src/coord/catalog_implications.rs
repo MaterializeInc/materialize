@@ -877,7 +877,7 @@ impl Coordinator {
         // Clean up any active compute sinks like subscribes or copy to-s that
         // rely on dropped relations or clusters.
         for (sink_id, sink) in &self.active_compute_sinks {
-            let cluster_id = sink.cluster_id();
+            let cluster_id = sink.compute_collection_cluster();
             if let Some(id) = sink
                 .depends_on()
                 .iter()
@@ -893,7 +893,9 @@ impl Coordinator {
                         name,
                     }),
                 );
-            } else if clusters_to_drop.contains(&cluster_id) {
+            } else if let Some(cluster_id) =
+                cluster_id.filter(|cluster_id| clusters_to_drop.contains(cluster_id))
+            {
                 let name = dropped_cluster_names
                     .get(&cluster_id)
                     .cloned()

@@ -15,11 +15,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::Hashable;
+use mz_storage_types::dyncfgs::SUBSCRIBE_SNAPSHOT_CHUNK_SIZE;
+
+use crate::persist_subscribe::PersistSubscribes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::TraceReader;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget, PersistSubscribe,
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
@@ -216,6 +219,8 @@ pub struct ComputeState {
     pub persist_clients: Arc<PersistClientCache>,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
+    /// Subscribes served from persist shards by tasks rather than dataflows.
+    pub persist_subscribes: PersistSubscribes,
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
@@ -335,6 +340,7 @@ impl ComputeState {
             compute_logger: None,
             persist_clients,
             txns_ctx,
+            persist_subscribes: Default::default(),
             command_history,
             max_result_size: u64::MAX,
             linear_join_spec: Default::default(),
@@ -695,6 +701,7 @@ impl<'a> ActiveComputeState<'a> {
             AllowWrites(id) => {
                 self.handle_allow_writes(id);
             }
+            Subscribe(subscribe) => self.handle_persist_subscribe(*subscribe),
         }
 
         timer.observe_duration();
@@ -903,13 +910,34 @@ impl<'a> ActiveComputeState<'a> {
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
         if frontier.is_empty() {
+            // A persist subscribe ends here, like a sink, but is not a collection.
+            if self.compute_state.persist_subscribes.end(id) {
+                return;
+            }
             // Indicates that we may drop `id`, as there are no more valid times to read.
             self.drop_collection(id);
+        } else if self.compute_state.persist_subscribes.contains(id) {
+            // Nothing is read from a subscribe, so there is nothing to compact.
         } else {
             self.compute_state
                 .traces
                 .allow_compaction(id, frontier.borrow());
         }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    fn handle_persist_subscribe(&mut self, subscribe: PersistSubscribe) {
+        let snapshot_chunk = SUBSCRIBE_SNAPSHOT_CHUNK_SIZE.get(&self.compute_state.worker_config);
+        let max_result_size = usize::cast_from(self.compute_state.max_result_size);
+        self.compute_state.persist_subscribes.start(
+            subscribe,
+            Arc::clone(&self.compute_state.persist_clients),
+            self.response_tx.clone(),
+            self.timely_worker.index(),
+            self.timely_worker.peers(),
+            max_result_size,
+            snapshot_chunk,
+        );
     }
 
     #[mz_ore::instrument(level = "debug")]

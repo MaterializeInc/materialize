@@ -89,6 +89,7 @@ where
         let mut created_dataflows = Vec::new();
         let mut scheduled_collections = Vec::new();
         let mut live_peeks = BTreeMap::new();
+        let mut live_subscribes = BTreeMap::new();
 
         let mut hello_command = None;
         let mut create_inst_command = None;
@@ -137,7 +138,20 @@ where
                 ComputeCommand::AllowWrites(id) => {
                     allow_writes.insert(id);
                 }
+                ComputeCommand::Subscribe(subscribe) => {
+                    live_subscribes.insert(subscribe.id, subscribe);
+                }
             }
+        }
+
+        // A subscribe ends with compaction to the empty frontier, like a sink.
+        // Any other compaction of its id says nothing about what it has
+        // emitted, since it is not a collection replicas read from, so the
+        // command is kept whole and the frontier dropped.
+        live_subscribes.retain(|id, _| final_frontiers.get(id) != Some(&Antichain::new()));
+        final_frontiers.retain(|id, _| !live_subscribes.contains_key(id));
+        for id in live_subscribes.keys() {
+            final_frontiers.remove(id);
         }
 
         // Update dataflow `as_of` frontiers according to allowed compaction.
@@ -231,6 +245,12 @@ where
         }
 
         command_counts.cancel_peek.borrow().set(0);
+
+        let count = u64::cast_from(live_subscribes.len());
+        command_counts.subscribe.borrow().set(count);
+        for subscribe in live_subscribes.into_values() {
+            self.commands.push(ComputeCommand::Subscribe(subscribe));
+        }
 
         // Allow compaction only after emitting peek commands.
         let count = u64::cast_from(final_frontiers.len());

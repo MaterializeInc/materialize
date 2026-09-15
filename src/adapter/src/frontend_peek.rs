@@ -15,7 +15,6 @@ use std::time::Duration;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -47,10 +46,14 @@ use crate::catalog::Catalog;
 use crate::command::Command;
 use crate::coord;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
+use crate::coord::persist_tail::persist_tail_source;
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
+use crate::coord::{
+    Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, SubscribeImplementation,
+    TargetCluster,
+};
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
@@ -570,9 +573,24 @@ impl PeekClient {
 
         // # From peek_timestamp_read_hold
 
+        let persist_tail = match query_plan {
+            QueryPlan::Subscribe(plan) => {
+                persist_tail_source(&catalog, &*self.storage_collections, plan)
+            }
+            QueryPlan::Select(..) | QueryPlan::CopyTo(..) => None,
+        };
         let dataflow_builder =
             DataflowBuilder::new(catalog.state(), compute_instance_snapshot.clone());
-        let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
+        let input_id_bundle = match persist_tail {
+            // A persist tail reads only the collection itself, so the timestamp
+            // and the read holds are chosen for it rather than for the index a
+            // dataflow would have read.
+            Some(source) => CollectionIdBundle {
+                storage_ids: BTreeSet::from([source.from_id]),
+                compute_ids: BTreeMap::new(),
+            },
+            None => dataflow_builder.sufficient_collections(source_ids.clone()),
+        };
 
         // ## From sequence_peek_timestamp
 
@@ -1074,9 +1092,7 @@ impl PeekClient {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                            let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
                             let as_of = timestamp_context.timestamp_or_default();
-
                             if let Some(up_to) = optimizer.up_to() {
                                 if as_of > up_to {
                                     return Err(AdapterError::AbsurdSubscribeBounds {
@@ -1085,6 +1101,24 @@ impl PeekClient {
                                     });
                                 }
                             }
+
+                            // A persist tail runs no dataflow, so there is
+                            // nothing to optimize.
+                            if let Some(source) = persist_tail {
+                                return Ok(Execution::Subscribe {
+                                    subscribe_plan: plan,
+                                    implementation: SubscribeImplementation::PersistTail {
+                                        from_id: source.from_id,
+                                        sink_id: index_id,
+                                        as_of,
+                                        arity: source.arity,
+                                    },
+                                    df_meta: Default::default(),
+                                    optimization_finished_at: now(),
+                                });
+                            }
+
+                            let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
                             let local_mir_plan =
                                 global_mir_plan.resolve(Antichain::from_elem(as_of));
 
@@ -1095,7 +1129,7 @@ impl PeekClient {
                             let (df_desc, df_meta) = global_lir_plan.unapply();
                             Ok(Execution::Subscribe {
                                 subscribe_plan: plan,
-                                df_desc,
+                                implementation: SubscribeImplementation::Dataflow(df_desc),
                                 df_meta,
                                 optimization_finished_at,
                             })
@@ -1371,14 +1405,21 @@ impl PeekClient {
             }
             Execution::Subscribe {
                 subscribe_plan,
-                df_desc,
+                implementation,
                 df_meta,
                 optimization_finished_at: _optimization_finished_at,
             } => {
-                if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
-                    session.add_notice(AdapterNotice::EqualSubscribeBounds {
-                        bound: *df_desc.until.as_option().expect("as of set"),
-                    });
+                let equal_bounds = match &implementation {
+                    SubscribeImplementation::Dataflow(df_desc) => {
+                        (df_desc.as_of.as_ref().expect("as of set") == &df_desc.until)
+                            .then(|| *df_desc.until.as_option().expect("as of set"))
+                    }
+                    SubscribeImplementation::PersistTail { as_of, .. } => {
+                        subscribe_plan.up_to.filter(|up_to| up_to == as_of)
+                    }
+                };
+                if let Some(bound) = equal_bounds {
+                    session.add_notice(AdapterNotice::EqualSubscribeBounds { bound });
                 }
                 coord::sequencer::emit_optimizer_notices(
                     &*catalog,
@@ -1394,7 +1435,7 @@ impl PeekClient {
 
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSubscribe {
-                        df_desc,
+                        implementation,
                         dependency_ids: subscribe_plan.from.depends_on(),
                         cluster_id: target_cluster_id,
                         replica_id: target_replica,
@@ -1637,7 +1678,10 @@ impl PeekClient {
                 // No read holds assertions needed for EXPLAIN variants
                 return;
             }
-            Execution::Subscribe { df_desc, .. } => {
+            Execution::Subscribe {
+                implementation: SubscribeImplementation::Dataflow(df_desc),
+                ..
+            } => {
                 let as_of = df_desc
                     .as_of
                     .clone()
@@ -1650,6 +1694,10 @@ impl PeekClient {
                     "Subscribe",
                 )
             }
+            Execution::Subscribe {
+                implementation: SubscribeImplementation::PersistTail { from_id, as_of, .. },
+                ..
+            } => (vec![*from_id], vec![], *as_of, "PersistTail"),
         };
 
         // Assert that we have some read holds for all the imports of the dataflow.
@@ -1723,7 +1771,8 @@ enum Execution {
     },
     Subscribe {
         subscribe_plan: SubscribePlan,
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        implementation: SubscribeImplementation,
+        /// Empty for a persist tail, which runs no optimizer.
         df_meta: DataflowMetainfo,
         optimization_finished_at: EpochMillis,
     },

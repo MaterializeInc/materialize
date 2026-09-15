@@ -15,7 +15,7 @@ use mz_cluster_client::client::TryIntoProtocolNonce;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
-use mz_expr::RowSetFinishing;
+use mz_expr::{ColumnOrder, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
@@ -263,6 +263,22 @@ pub enum ComputeCommand {
         /// This Value must match a [`Peek::uuid`] value transmitted in a previous `Peek` command.
         uuid: Uuid,
     },
+    /// `Subscribe` instructs the replica to serve a `SUBSCRIBE` on a persist-backed collection
+    /// by tailing its shard directly, without a dataflow.
+    ///
+    /// The replica emits [`SubscribeResponse`]s for [`PersistSubscribe::id`] exactly as a
+    /// subscribe sink would: one `Batch` per frontier advance, consolidated within a
+    /// timestamp, and a final batch at the empty frontier once `up_to` is reached. Every worker
+    /// receives the command; one of them tails the shard, and the others report the empty
+    /// frontier at once so the partitioned response stream is driven by that one alone.
+    ///
+    /// The controller ends a subscribe with an [`AllowCompaction`] to the empty frontier for its
+    /// id, like a sink. The replica answers with a `DroppedAt` unless the subscribe already
+    /// produced its final batch.
+    ///
+    /// [`SubscribeResponse`]: super::response::SubscribeResponse
+    /// [`AllowCompaction`]: ComputeCommand::AllowCompaction
+    Subscribe(Box<PersistSubscribe>),
 }
 
 /// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
@@ -472,6 +488,31 @@ pub struct Peek {
     /// to the compute worker to allow associating traces between
     /// the compute controller and the compute worker.
     pub otel_ctx: OpenTelemetryContext,
+}
+
+/// A `SUBSCRIBE` served from a persist shard, see [`ComputeCommand::Subscribe`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PersistSubscribe {
+    /// The subscribe's id, which its responses carry.
+    pub id: GlobalId,
+    /// The collection to tail.
+    pub target: GlobalId,
+    /// The identifying metadata of the collection's shard.
+    pub metadata: CollectionMetadata,
+    /// The timestamp of the snapshot, and the first timestamp of interest.
+    pub as_of: Timestamp,
+    /// Nothing at or beyond this timestamp is emitted, and the subscribe ends once reached.
+    pub up_to: Option<Timestamp>,
+    /// Whether to emit the snapshot at `as_of`, or only the updates after it.
+    pub with_snapshot: bool,
+    /// The row order within a timestamp, see `SubscribeSinkConnection::output`.
+    pub order: Vec<ColumnOrder>,
+    /// Whether the snapshot may be emitted in pieces, which the output allows only when its rows
+    /// are independent of one another within a timestamp.
+    pub chunk_snapshot: bool,
+    /// Bytes of decoded updates queued for this subscribe before the replica cuts it off and
+    /// resumes it from its frontier.
+    pub max_buffered_bytes: usize,
 }
 
 impl TryIntoProtocolNonce for ComputeCommand {

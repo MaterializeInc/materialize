@@ -50,6 +50,16 @@ pub const SUSPENDABLE_SOURCES: Config<bool> = Config::new(
 
 // Controller
 
+/// Updates of a subscriber's snapshot delivered in one event by
+/// `StorageCollections::subscribe`. Bounds what a single poll of a subscribe
+/// decodes and formats, not what its persist cursor holds.
+pub const SUBSCRIBE_SNAPSHOT_CHUNK_SIZE: Config<usize> = Config::new(
+    "storage_subscribe_snapshot_chunk_size",
+    4096,
+    "Updates of a subscriber's snapshot delivered in one event.",
+    ParameterScope::Environment,
+);
+
 /// When enabled, force-downgrade the controller's since handle on the shard
 /// during shard finalization.
 pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::new(
@@ -555,6 +565,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SINK_PROGRESS_SEARCH)
         .add(&SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
+        .add(&SUBSCRIBE_SNAPSHOT_CHUNK_SIZE)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
