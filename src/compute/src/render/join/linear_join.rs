@@ -28,8 +28,8 @@ use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
+use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::columnar::{
     Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
 };
@@ -398,22 +398,23 @@ where
         type VecCB<D, T> = CapacityContainerBuilder<Vec<(D, T, Diff)>>;
 
         if closure.could_error() {
-            let (oks, err) = join_arranged::<T, _, _, _, _, VecCB<Result<Row, DataflowErrorSer>, T>>(
-                prev_keyed,
-                next_input,
-                move |key, old, new| {
-                    apply_join_closure(&closure, &mut datums, key, old, new)
-                        .map_err(DataflowErrorSer::from)
-                        .transpose()
-                },
-            )
-            .ok_err(|(x, t, d)| {
-                // TODO(mcsherry): consider `ok_err()` for `Collection`.
-                match x {
-                    Ok(x) => Ok((x, t, d)),
-                    Err(x) => Err((x, t, d)),
-                }
-            });
+            let (oks, err) =
+                join_arranged::<T, _, _, _, _, VecCB<Result<Row, DataflowErrorSer>, T>>(
+                    prev_keyed,
+                    next_input,
+                    move |key, old, new| {
+                        apply_join_closure(&closure, &mut datums, key, old, new)
+                            .map_err(DataflowErrorSer::from)
+                            .transpose()
+                    },
+                )
+                .ok_err(|(x, t, d)| {
+                    // TODO(mcsherry): consider `ok_err()` for `Collection`.
+                    match x {
+                        Ok(x) => Ok((x, t, d)),
+                        Err(x) => Err((x, t, d)),
+                    }
+                });
 
             let oks = oks.as_collection();
             let oks = if terminal {
@@ -576,21 +577,36 @@ where
     let exchange =
         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
     let arranged = match batcher {
-        ArrangementBatcher::ColumnarPaged => keyed.mz_arrange_core::<
+        ArrangementBatcher::ColumnarPaged => {
+            keyed.mz_arrange_core::<_, Col2ValPagedBatcher<
+                _,
+                _,
+                _,
+                _,
+                batcher::ColumnChunker<_>,
+                RowRowColPagedBuilder<_, _>,
+            >, RowRowSpine<_, _>>(exchange, "JoinStage", ColumnMergeBatcher::new)
+        }
+        ArrangementBatcher::Columnar => {
+            keyed.mz_arrange_core::<_, Col2ValColBatcher<
+                _,
+                _,
+                _,
+                _,
+                batcher::ColumnChunker<_>,
+                RowRowColPagedBuilder<_, _>,
+            >, RowRowSpine<_, _>>(exchange, "JoinStage", MergeBatcher::new)
+        }
+        ArrangementBatcher::Columnation => keyed.mz_arrange_core::<_, Col2ValBatcher<
             _,
-            Col2ValPagedBatcher<_, _, _, _, batcher::ColumnChunker<_>, RowRowColPagedBuilder<_, _>>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage", ColumnMergeBatcher::new),
-        ArrangementBatcher::Columnar => keyed.mz_arrange_core::<
             _,
-            Col2ValColBatcher<_, _, _, _, batcher::ColumnChunker<_>, RowRowColPagedBuilder<_, _>>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage", MergeBatcher::new),
-        ArrangementBatcher::Columnation => keyed.mz_arrange_core::<
             _,
-            Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
-            RowRowSpine<_, _>,
-        >(exchange, "JoinStage", MergeBatcher::new),
+            _,
+            batcher::Chunker<_>,
+            RowRowBuilder<_, _>,
+        >, RowRowSpine<_, _>>(
+            exchange, "JoinStage", MergeBatcher::new
+        ),
     };
     (arranged, errs.as_collection())
 }

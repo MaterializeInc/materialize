@@ -27,7 +27,7 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::columnar_consolidate_exchange;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::columnar::merge_batcher::ConsolidatingColumnBatcher;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
@@ -221,11 +221,15 @@ where
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
     let consolidated = consolidate_pact::<
-        ColumnChunker<(Row, T, Diff)>,
-        ColumnMergeBatcher<Row, T, Diff>,
+        ConsolidatingColumnBatcher<ColumnChunker<(Row, T, Diff)>, Row, T, Diff>,
         _,
         _,
-    >(collection.inner, exchange, name);
+    >(
+        collection.inner,
+        exchange,
+        name,
+        ConsolidatingColumnBatcher::new,
+    );
 
     // Flatten the sealed chain into one container per chunk, moving containers and
     // visiting no record.

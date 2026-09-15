@@ -38,7 +38,7 @@ use std::time::Instant;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
@@ -657,7 +657,7 @@ where
     let (fetched_output, fetched_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (completed_fetches_output, completed_fetches_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
-    let mut descs_input = builder.new_input_for_many(
+    let mut descs_input = builder.new_input_for_many_stamp(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
         [&fetched_output, &completed_fetches_output],
@@ -703,7 +703,7 @@ where
         // come back with the result. The missing-blob diagnostics round-trip
         // happens inside the future, so the error surfaces only after the fetch
         // has truly failed.
-        let fetch_one = |caps: [Capability<TInner>; 2], part: ExchangeableBatchPart<T>| {
+        let fetch_one = |caps: [CapabilitySet<TInner>; 2], part: ExchangeableBatchPart<T>| {
             let mut fetcher = fetcher.clone();
             async move {
                 let reader_id = part.reader_id().clone();
@@ -747,7 +747,7 @@ where
         // worker via the completed-fetches feedback. Carrying capabilities
         // rather than a separate time-keyed map makes correctness independent of
         // the order results come back in.
-        let mut pending: VecDeque<([Capability<TInner>; 2], ExchangeableBatchPart<T>)> =
+        let mut pending: VecDeque<([CapabilitySet<TInner>; 2], ExchangeableBatchPart<T>)> =
             VecDeque::new();
         let mut in_flight = FuturesUnordered::new();
         let mut input_done = false;

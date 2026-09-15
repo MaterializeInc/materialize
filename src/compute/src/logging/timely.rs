@@ -210,7 +210,7 @@ pub(super) fn construct(
             |_cap, _info| {
                 let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
                 move |input, output| {
-                    input.for_each_time(|time, data| {
+                    input.for_each_stamp(|time, data| {
                         let mut session = output.session_with_builder(&time);
                         for d in data.flat_map(|c| c.borrow().into_index_iter()) {
                             let ((datum, ()), time, diff) = d;

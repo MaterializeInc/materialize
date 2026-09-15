@@ -1188,8 +1188,11 @@ mod dictionary {
             }
         }
 
-        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
-            RowBuilder<T, R>
+        impl<T, R, DC> RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
         {
             /// Allocates a builder sized for the counts a chain reports.
             ///
@@ -1203,18 +1206,24 @@ mod dictionary {
             }
         }
 
-        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
-            Default for RowBuilder<T, R>
+        impl<T, R, DC> Default for RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
         {
             fn default() -> Self {
                 Self::with_capacity(0, 0, 0)
             }
         }
 
-        impl<T: Lattice + Timestamp + Columnation, R: Ord + Semigroup + Columnation + 'static>
-            Sealer<TimelyStack<((Row, ()), T, R)>> for RowBuilder<T, R>
+        impl<T, R, DC> Sealer<TimelyStack<((Row, ()), T, R)>> for RowBuilder<T, R, DC>
+        where
+            T: Lattice + Timestamp + Columnation,
+            R: Ord + Semigroup + Columnation + 'static,
+            DC: BatchContainer<Owned = R>,
         {
-            type Output = OrdKeyBatch<RowLayout<((Row, ()), T, R)>>;
+            type Output = OrdKeyBatch<RowLayout<((Row, ()), T, R), DC>>;
 
             fn seal(chain: &mut Vec<TimelyStack<((Row, ()), T, R)>>) -> Option<Self::Output> {
                 let key_codec = build_codec(

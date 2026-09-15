@@ -10,9 +10,6 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
 use columnar::{Columnar, Index};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
@@ -30,7 +27,7 @@ use mz_expr::{Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
-use mz_row_spine::{DatumSeq, RowRowBuilder, RowRowColPagedBuilder};
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
@@ -62,7 +59,6 @@ use crate::render::{MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
-use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -1799,12 +1795,10 @@ mod tests {
                     );
                 let err_arranged = {
                     let kc: KeyCollection<_, _, _> = arr_errs.into();
-                    kc.mz_arrange::<
-                        ColumnationChunker<_>,
-                        ErrBatcher<_, _>,
-                        ErrBuilder<_, _>,
-                        ErrSpine<_, _>,
-                    >("agg-errs")
+                    kc.mz_arrange::<ErrBatcher<_, _, ColumnationChunker<_>>, ErrSpine<_, _>>(
+                        "agg-errs",
+                        MergeBatcher::new,
+                    )
                 };
                 // An arrangement-only bundle, as Reduce/Threshold/TopK produce.
                 let bundle = CollectionBundle::from_columns(

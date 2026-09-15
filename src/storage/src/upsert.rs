@@ -39,7 +39,7 @@ use mz_timely_util::builder_async::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Capability, InputCapability, Operator};
+use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
@@ -768,7 +768,7 @@ where
         .inner
         .unary(Pipeline, "UpsertThinning", |_, _| {
             // A capability suitable to emit all updates in `updates`, if any.
-            let mut capability: Option<InputCapability<T>> = None;
+            let mut capability: Option<Capability<T>> = None;
             // A batch of received updates
             let mut updates = Vec::new();
             move |input, output| {
@@ -778,11 +778,13 @@ where
                         "invalid upsert input"
                     );
                     updates.append(data);
+                    // `T: TotalOrder`, so the message's stamp has a least element, and holding
+                    // that one capability suffices to emit every update in the message.
+                    let cap = cap
+                        .retain_least(0)
+                        .expect("message stamped with no capabilities");
                     match capability.as_mut() {
                         Some(capability) => {
-                            // `T: TotalOrder` here, and this stream is not downstream of a
-                            // scope boundary, so the stamp is a singleton.
-                            #[allow(clippy::disallowed_methods)]
                             if cap.time() <= capability.time() {
                                 *capability = cap;
                             }

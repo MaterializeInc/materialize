@@ -97,7 +97,7 @@ where
                     }
                 }
 
-                input.for_each_time(|time, data| {
+                input.for_each_stamp(|time, data| {
                     let mut session = output.session_with_builder(&time);
                     for data in data {
                         let borrowed = data.borrow();
@@ -241,7 +241,7 @@ where
                         }
                     }
 
-                    input.for_each_time(|time, data| {
+                    input.for_each_stamp(|time, data| {
                         let mut session = output.session_with_builder(&time);
                         for data in data {
                             // Skip data that is about to be revealed.

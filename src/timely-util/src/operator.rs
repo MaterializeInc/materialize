@@ -317,7 +317,7 @@ where
     {
         self.unary_fallible::<DCB, ECB, _, _>(Pipeline, name, move |_, _| {
             Box::new(move |input, ok_output, err_output| {
-                input.for_each_time(|time, data| {
+                input.for_each_stamp(|time, data| {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session_with_builder(&time);
                     for r in data
@@ -348,7 +348,7 @@ where
     {
         self.unary_fallible::<CB, CB, _, _>(Pipeline, name, move |_, _| {
             Box::new(move |input, matching_output, rest_output| {
-                input.for_each_time(|time, data| {
+                input.for_each_stamp(|time, data| {
                     let mut matching = matching_output.session_with_builder(&time);
                     let mut rest = rest_output.session_with_builder(&time);
                     for item in data.flat_map(DrainContainer::drain) {
@@ -965,7 +965,7 @@ where
             move |_frontier| {
                 let mut output = output.activate();
                 for handle in handles.iter_mut() {
-                    handle.for_each_time(|time, data| {
+                    handle.for_each_stamp(|time, data| {
                         output
                             .session_with_builder(&time)
                             .give_iterator(data.flat_map(DrainContainer::drain));

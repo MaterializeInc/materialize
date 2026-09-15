@@ -100,16 +100,6 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::any::Any;
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
-use std::convert::Infallible;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::{Rc, Weak};
-use std::sync::Arc;
-use std::task::Poll;
-
 use ::columnar::{Columnar as ColumnarData, Index as ColumnarIndex, Push as ColumnarPush};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
@@ -163,7 +153,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
 use timely::dataflow::operators::vec::Filter;
 use timely::dataflow::operators::vec::ToStream;
-use timely::dataflow::operators::{Capability, CapabilitySet, Operator, Probe, probe};
+use timely::dataflow::operators::{CapabilitySet, Operator, Probe, probe};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
@@ -1960,10 +1950,11 @@ where
         let mut early_cap = Some(default_cap);
 
         move |(input, frontier), output| {
-            input.for_each_time(|data_cap, data| {
-                // The persist source stamps one capability per message.
-                #[allow(clippy::disallowed_methods)]
-                if as_of.less_than(data_cap.time()) {
+            input.for_each_stamp(|data_cap, data| {
+                // A message whose stamp lies entirely beyond the `as_of` carries no snapshot
+                // updates and keeps its own capability. Any other message travels under the
+                // minimum capability, which is what suppresses the early progress.
+                if data_cap.stamp().iter().all(|time| as_of.less_than(time)) {
                     let mut session = output.session(&data_cap);
                     for data in data {
                         session.give_container(data);
