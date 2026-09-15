@@ -29,16 +29,10 @@
 //!     --sample-secs 30
 //! ```
 
-use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::implementations::Vector;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
-use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
 use mz_ore::cast::{CastFrom, CastLossy, ReinterpretCast};
 use mz_ore::pager::{self, Backend};
 use mz_timely_util::column_pager::policy::TieredPolicy;
@@ -47,6 +41,11 @@ use mz_timely_util::columnar::Col2ValPagedBatcher;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use timely::dataflow::InputHandle;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Input;
@@ -55,8 +54,8 @@ use timely::dataflow::operators::probe::{Handle as ProbeHandle, Probe};
 type Update = ((u64, u64), u64, i64);
 
 type MyChunker = ColumnChunker<Update>;
-type MyBatcher = Col2ValPagedBatcher<u64, u64, u64, i64>;
-type MyBuilder = RcBuilder<OrdValBuilder<Vector<Update>, Column<Update>>>;
+type MyBatcher = Col2ValPagedBatcher<u64, u64, u64, i64, MyChunker, MyBuilder>;
+type MyBuilder = OrdValBuilder<Vector<Update>, Column<Update>>;
 type MySpine = Spine<Rc<OrdValBatch<Vector<Update>>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -131,10 +130,11 @@ fn run_dataflow(cfg: &Config, label: &str) -> Duration {
             // Demo wires the raw DD operator; production paths go through
             // `MzArrange::mz_arrange_core` in `mz-compute`.
             #[allow(clippy::disallowed_methods)]
-            let arranged = arrange_core::<_, _, MyChunker, MyBatcher, MyBuilder, MySpine>(
+            let arranged = arrange_core::<_, _, MyBatcher, MySpine>(
                 stream,
                 Pipeline,
                 "ColumnPagedSpillArrange",
+                ColumnMergeBatcher::new,
             );
             arranged.stream.probe_with(&probe);
         });

@@ -28,15 +28,15 @@
 //!
 //! [`differential_dataflow`]: differential_dataflow::trace::implementations::merge_batcher
 
-use std::collections::VecDeque;
-
 use columnar::{Columnar, Index, Len};
+use differential_dataflow::batcher::Batcher;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::logging::{BatcherEvent, Logger};
-use differential_dataflow::trace::{Batcher, Description};
+use differential_dataflow::trace::implementations::merge_batcher::Sealer;
+use std::collections::VecDeque;
 use timely::Accountable;
 use timely::PartialOrder;
-use timely::container::{PushInto, SizableContainer};
+use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
@@ -91,14 +91,15 @@ fn recycle_capped<C: Columnar>(chunk: Column<C>, stash: &mut Vec<Column<C>>) {
 /// late-arriving dyncfg updates (e.g. `enable_column_paged_batcher` flipping
 /// on after the batcher was constructed) take effect without rebuilding the
 /// operator. Tests may override that lookup via [`Self::set_pager`].
-pub struct ColumnMergeBatcher<D, T, R>
+pub struct ColumnMergeBatcher<Chu, D, T, R, S>
 where
     D: Columnar,
     T: Columnar,
     R: Columnar,
 {
+    /// Melds raw input containers into sorted, consolidated chunks.
+    chunker: Chu,
     chains: Vec<VecDeque<PagedColumn<(D, T, R)>>>,
-    lower: Antichain<T>,
     frontier: Antichain<T>,
     /// Recycled empty `Column::Typed` chunks. Drained heads and shipped result
     /// buffers feed in here; subsequent merge / extract calls pop from here
@@ -115,9 +116,35 @@ where
     pager_override: Option<ColumnPager>,
     logger: Option<Logger>,
     operator_id: usize,
+    /// Seals each extracted chain into a batch.
+    sealer: std::marker::PhantomData<S>,
 }
 
-impl<D, T, R> ColumnMergeBatcher<D, T, R>
+impl<Chu: Default, D, T, R, S> ColumnMergeBatcher<Chu, D, T, R, S>
+where
+    D: Columnar,
+    T: Columnar + Timestamp,
+    R: Columnar,
+{
+    /// Allocates a new empty batcher.
+    ///
+    /// The logger and operator identifier are used to report the batcher's
+    /// memory footprint, attributed to the operator that owns it.
+    pub fn new(logger: Option<Logger>, operator_id: usize) -> Self {
+        Self {
+            chunker: Chu::default(),
+            chains: Vec::new(),
+            frontier: Antichain::new(),
+            stash: Vec::new(),
+            pager_override: None,
+            logger,
+            operator_id,
+            sealer: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<Chu, D, T, R, S> ColumnMergeBatcher<Chu, D, T, R, S>
 where
     D: Columnar,
     T: Columnar,
@@ -187,7 +214,7 @@ where
     }
 }
 
-impl<D, T, R> Drop for ColumnMergeBatcher<D, T, R>
+impl<Chu, D, T, R, S> Drop for ColumnMergeBatcher<Chu, D, T, R, S>
 where
     D: Columnar,
     T: Columnar,
@@ -219,7 +246,7 @@ fn account_chunk<C: Columnar>(entry: &PagedColumn<C>) -> (usize, usize, usize, u
     }
 }
 
-impl<D, T, R> Batcher for ColumnMergeBatcher<D, T, R>
+impl<C, Chu, D, T, R, S> Batcher<C> for ColumnMergeBatcher<Chu, D, T, R, S>
 where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -227,26 +254,52 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> columnar::Ref<'a, R>: Ord,
+    Chu: ContainerBuilder<Container = Column<(D, T, R)>> + for<'a> PushInto<&'a mut C>,
+    S: Sealer<Column<(D, T, R)>>,
 {
-    type Output = Column<(D, T, R)>;
+    type Output = S::Output;
     type Time = T;
 
-    fn new(logger: Option<Logger>, operator_id: usize) -> Self {
-        Self {
-            chains: Vec::new(),
-            lower: Antichain::from_elem(T::minimum()),
-            frontier: Antichain::new(),
-            stash: Vec::new(),
-            pager_override: None,
-            logger,
-            operator_id,
+    fn insert(&mut self, container: &mut C) {
+        self.chunker.push_into(container);
+        while let Some(chunk) = self.chunker.extract().map(std::mem::take) {
+            self.push_chunk(chunk);
         }
     }
 
-    fn seal(
-        &mut self,
-        upper: Antichain<Self::Time>,
-    ) -> (Vec<Self::Output>, Description<Self::Time>) {
+    fn extract<'a>(
+        &'a mut self,
+        upper: AntichainRef<'_, Self::Time>,
+    ) -> (Option<Self::Output>, AntichainRef<'a, Self::Time>) {
+        let (mut readied, frontier) = self.extract_chain(upper);
+        (S::seal(&mut readied), frontier)
+    }
+}
+
+impl<Chu, D, T, R, S> ColumnMergeBatcher<Chu, D, T, R, S>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Timestamp + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    for<'a> columnar::Ref<'a, R>: Ord,
+    Chu: ContainerBuilder<Container = Column<(D, T, R)>>,
+{
+    /// Carves out the updates `upper` unblocks, and lower bounds the times of those retained.
+    ///
+    /// The chunks come back as they are. [`Batcher::extract`] is this plus a seal, for callers
+    /// that want a batch rather than the updates.
+    pub fn extract_chain<'a>(
+        &'a mut self,
+        upper: AntichainRef<'_, T>,
+    ) -> (Vec<Column<(D, T, R)>>, AntichainRef<'a, T>) {
+        // Flush whatever the chunker is still accumulating: a partial final chunk would
+        // otherwise never reach the merge ladder.
+        while let Some(chunk) = self.chunker.finish().map(std::mem::take) {
+            self.push_chunk(chunk);
+        }
+
         let pager = self.pager();
         // Merge all remaining chains into one.
         while self.chains.len() > 1 {
@@ -257,9 +310,8 @@ where
         }
         let merged = self.chain_pop().unwrap_or_default();
 
-        // Extract `merged` into `readied` (ship side, materialized for the
-        // builder) and `kept_chain` (keep side, stays paged for the next
-        // round).
+        // Extract `merged` into `readied` (ship side, materialized for the builder) and
+        // `kept_chain` (keep side, stays paged for the next round).
         let mut readied: Vec<Column<(D, T, R)>> = Vec::new();
         let mut kept_chain: VecDeque<PagedColumn<(D, T, R)>> = VecDeque::new();
         self.frontier.clear();
@@ -269,7 +321,7 @@ where
             let stash = &mut self.stash;
             extract_chain(
                 FetchIter::new(merged, pager),
-                upper.borrow(),
+                upper,
                 frontier,
                 |paged| readied.push(pager.take(paged)),
                 |paged| kept_chain.push_back(paged),
@@ -281,28 +333,16 @@ where
             self.chain_push(kept_chain);
         }
 
-        let description = Description::new(
-            self.lower.clone(),
-            upper.clone(),
-            Antichain::from_elem(T::minimum()),
-        );
-        self.lower = upper;
-
-        // Drop the recycle stash now that this round's hot work is done:
-        // the next merge re-pays one chunk's worth of leaf grow tax, and in
-        // exchange the leaf bytes are not held resident across what may be
-        // a quiet stretch.
+        // Drop the recycle stash now that this round's hot work is done: the next merge
+        // re-pays one chunk's worth of leaf grow tax, and in exchange the leaf bytes are not
+        // held resident across what may be a quiet stretch.
         self.stash.clear();
 
-        (readied, description)
-    }
-
-    fn frontier(&mut self) -> AntichainRef<'_, Self::Time> {
-        self.frontier.borrow()
+        (readied, self.frontier.borrow())
     }
 }
 
-impl<D, T, R> PushInto<Column<(D, T, R)>> for ColumnMergeBatcher<D, T, R>
+impl<Chu, D, T, R, S> PushInto<Column<(D, T, R)>> for ColumnMergeBatcher<Chu, D, T, R, S>
 where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -312,14 +352,12 @@ where
 {
     /// Accept an already-consolidated chunk from the upstream chunker, route
     /// it through the pager, and insert it as a singleton chain.
-    fn push_into(&mut self, mut chunk: Column<(D, T, R)>) {
-        let pager = self.pager();
-        let paged = pager.page(&mut chunk);
-        self.insert_chain(VecDeque::from([paged]));
+    fn push_into(&mut self, chunk: Column<(D, T, R)>) {
+        self.push_chunk(chunk);
     }
 }
 
-impl<D, T, R> ColumnMergeBatcher<D, T, R>
+impl<Chu, D, T, R, S> ColumnMergeBatcher<Chu, D, T, R, S>
 where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -327,6 +365,14 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
+    /// Route an already-consolidated chunk through the pager and insert it
+    /// as a singleton chain.
+    pub fn push_chunk(&mut self, mut chunk: Column<(D, T, R)>) {
+        let pager = self.pager();
+        let paged = pager.page(&mut chunk);
+        self.insert_chain(VecDeque::from([paged]));
+    }
+
     /// Insert `chain` and rebalance: while the youngest chain is at least
     /// half the size of its predecessor, merge them.
     fn insert_chain(&mut self, chain: VecDeque<PagedColumn<(D, T, R)>>) {
@@ -664,6 +710,15 @@ pub fn extract_chain<D, T, R, SinkShip, SinkKeep>(
 #[cfg(test)]
 #[allow(clippy::clone_on_ref_ptr)]
 mod tests {
+    /// The paged batcher under test, with no sealer: these tests read the chain directly.
+    type TestPagedBatcher = super::ColumnMergeBatcher<
+        crate::columnar::batcher::ColumnChunker<((u64, u64), u64, i64)>,
+        (u64, u64),
+        u64,
+        i64,
+        (),
+    >;
+
     use std::sync::Arc;
 
     use columnar::Index;
@@ -968,8 +1023,7 @@ mod tests {
 
     #[mz_ore::test]
     fn batcher_seal_round_trip() {
-        let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
-            differential_dataflow::trace::Batcher::new(None, 0);
+        let mut b = TestPagedBatcher::new(None, 0);
         // Two pushes; second has an equal-key collision with the first.
         // Inputs arrive pre-consolidated chunk-by-chunk, as from the upstream
         // chunker.
@@ -980,7 +1034,7 @@ mod tests {
 
         // Seal everything (upper = ∞-ish, here just past any time we used).
         let upper = Antichain::from_elem(u64::MAX);
-        let (chain, _description) = differential_dataflow::trace::Batcher::seal(&mut b, upper);
+        let (chain, _frontier) = b.extract_chain(upper.borrow());
         let out: Vec<KvUpdate> = chain.iter().flat_map(collect_column).collect();
 
         // (2, 0)@0 was pushed with +1 then +2; sums to +3 after consolidation.
@@ -1024,8 +1078,7 @@ mod tests {
         let policy = ForcePagePolicy::new();
         let pager = ColumnPager::new(policy.clone());
 
-        let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
-            differential_dataflow::trace::Batcher::new(None, 0);
+        let mut b = TestPagedBatcher::new(None, 0);
         b.set_pager(pager);
 
         // Push records straddling an upper of 5 — half should be kept, half
@@ -1036,7 +1089,7 @@ mod tests {
             b.push_into(input);
         }
         let upper = Antichain::from_elem(5u64);
-        let _ = differential_dataflow::trace::Batcher::seal(&mut b, upper);
+        let _ = b.extract_chain(upper.borrow());
 
         // Anything kept (times >= 5) should be sitting in b.chains as paged.
         let kept_records: usize = b

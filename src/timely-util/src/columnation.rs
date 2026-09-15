@@ -19,15 +19,15 @@
 //! columnation library, along with [`ColumnationChunker`] for organizing streams into sorted
 //! chunks, and the [`ColInternalMerger`] [`Merger`] implementation needed by the merge batcher.
 
-use std::collections::VecDeque;
-use std::iter::FromIterator;
-
 use columnation::{Columnation, Region};
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::Merger;
-use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput};
+use differential_dataflow::trace::implementations::ord_neu::BuilderInput;
+use std::collections::VecDeque;
+use std::iter::FromIterator;
 use timely::container::{ContainerBuilder, DrainContainer, PushInto, SizableContainer};
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
