@@ -24,6 +24,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -46,7 +47,7 @@ use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
-use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
+use mz_ore::metrics::{ComputedGauge, ComputedUIntGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::task::{JoinSetExt, spawn};
@@ -72,13 +73,14 @@ use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 use tower::Service;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
-    has_tracing_config_update, tracing_config,
+    INJECT_PROXY_PROTOCOL_HEADER_HTTP, MAX_CONNECTIONS, MAX_PRE_RESOLVED_CONNECTIONS,
+    PRE_RESOLVED_TIMEOUT, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT, has_tracing_config_update,
+    tracing_config,
 };
 
 /// Balancer build information.
@@ -315,6 +317,9 @@ impl BalancerService {
         };
 
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
+        let limiter = ConnectionLimiter::resolved(&self.cfg.metrics_registry, self.configs.clone());
+        let pre_resolved_limiter =
+            ConnectionLimiter::pre_resolved(&self.cfg.metrics_registry, self.configs.clone());
 
         let mut set = JoinSet::new();
         let mut server_handles = Vec::new();
@@ -338,6 +343,9 @@ impl BalancerService {
                 tls: pgwire_tls,
                 internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
+                limiter: Arc::clone(&limiter),
+                pre_resolved_limiter: Arc::clone(&pre_resolved_limiter),
+                configs: self.configs.clone(),
                 now: SYSTEM_TIME.clone(),
             };
             let (handle, stream) = self.pgwire;
@@ -365,11 +373,13 @@ impl BalancerService {
             let port: u16 = port.parse().expect("unexpected port");
 
             let https = HttpsBalancer {
+                pre_resolved_limiter: Arc::clone(&pre_resolved_limiter),
                 resolver: shared_dns,
                 tls: https_tls,
                 resolve_template: Arc::from(addr),
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
+                limiter,
                 configs: self.configs.clone(),
                 internal_tls: self.cfg.internal_tls,
             };
@@ -613,17 +623,176 @@ impl ServerMetrics {
     }
 }
 
+/// Ceiling on the number of client connections proxied at once, shared by the pgwire and HTTPS
+/// listeners.
+///
+/// balancerd's memory use scales with the number of connections it proxies. Without a ceiling it
+/// keeps accepting until the container is OOM killed, which drops every established connection.
+/// Refusing new connections instead sheds only the load we cannot serve.
+#[derive(Debug)]
+struct ConnectionLimiter {
+    configs: ConfigSet,
+    /// Reads this pool's ceiling out of `configs`.
+    limit: fn(&ConfigSet) -> u32,
+    /// Names this pool in log lines, e.g. "connections".
+    what: &'static str,
+    active: AtomicU32,
+    /// Whether connections are currently being refused, so that reaching and clearing the limit
+    /// are logged once each rather than once per connection.
+    limited: AtomicBool,
+    rejected: IntCounter,
+    _limit: ComputedUIntGauge,
+}
+
+impl ConnectionLimiter {
+    /// Ceiling on connections that have resolved to a backend and are being proxied.
+    fn resolved(registry: &MetricsRegistry, configs: ConfigSet) -> Arc<Self> {
+        let rejected = registry.register(metric!(
+            name: "mz_balancer_connection_rejected_total",
+            help: "Count of connections refused because the connection limit was reached.",
+        ));
+        let limit = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_limit",
+                help: "Maximum number of connections proxied at once, 0 if unlimited.",
+            ),
+            {
+                let configs = configs.clone();
+                move || u64::from(MAX_CONNECTIONS.get(&configs))
+            },
+        );
+        Arc::new(ConnectionLimiter {
+            configs,
+            limit: |configs| MAX_CONNECTIONS.get(configs),
+            what: "connections",
+            active: AtomicU32::new(0),
+            limited: AtomicBool::new(false),
+            rejected,
+            _limit: limit,
+        })
+    }
+
+    /// Ceiling on connections that have not yet resolved to a backend.
+    ///
+    /// Everything before resolution is paced by the client: the TLS handshake, the startup
+    /// sequence, and any credential exchange. A connection holds one of these permits for that
+    /// whole phase and hands it back on resolving, so the pool only stays full while clients are
+    /// actively arriving. [`PRE_RESOLVED_TIMEOUT`] is what guarantees that, and the two must be
+    /// configured together: without the deadline a client that connects and then says nothing
+    /// holds a permit forever, and the pool becomes an admission bottleneck rather than a bound.
+    fn pre_resolved(registry: &MetricsRegistry, configs: ConfigSet) -> Arc<Self> {
+        let rejected = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_connection_rejected_total",
+            help: "Count of connections closed because the pre-resolved connection limit was reached.",
+        ));
+        let limit = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_pre_resolved_connection_limit",
+                help: "Maximum number of unresolved connections at once, 0 if unlimited.",
+            ),
+            {
+                let configs = configs.clone();
+                move || u64::from(MAX_PRE_RESOLVED_CONNECTIONS.get(&configs))
+            },
+        );
+        Arc::new(ConnectionLimiter {
+            configs,
+            limit: |configs| MAX_PRE_RESOLVED_CONNECTIONS.get(configs),
+            what: "unresolved connections",
+            active: AtomicU32::new(0),
+            limited: AtomicBool::new(false),
+            rejected,
+            _limit: limit,
+        })
+    }
+
+    /// Reserves capacity for one connection, or returns `None` if the limit has been reached, in
+    /// which case the caller must refuse the connection.
+    fn acquire(self: &Arc<Self>) -> Option<ConnectionGuard> {
+        let limit = (self.limit)(&self.configs);
+        let unlimited = limit == 0;
+        match self
+            .active
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                (unlimited || active < limit).then(|| active + 1)
+            }) {
+            Ok(prev) => {
+                // Only clear the limited state once comfortably below the limit, so that
+                // connections churning at the ceiling do not flap the log lines.
+                if unlimited || prev + 1 <= limit - limit / 10 {
+                    if self.limited.swap(false, Ordering::Relaxed) {
+                        info!("accepting new {} again, limit is {limit}", self.what);
+                    }
+                }
+                Some(ConnectionGuard(Arc::clone(self)))
+            }
+            Err(active) => {
+                self.rejected.inc();
+                if !self.limited.swap(true, Ordering::Relaxed) {
+                    warn!(
+                        "refusing new {}: at the limit of {limit} ({active} active)",
+                        self.what,
+                    );
+                }
+                None
+            }
+        }
+    }
+}
+
+/// Deadline for the pre-resolved phase, or `None` when [`PRE_RESOLVED_TIMEOUT`] disables it.
+fn pre_resolved_deadline(timeout: Duration) -> Option<tokio::time::Instant> {
+    (!timeout.is_zero()).then(|| tokio::time::Instant::now() + timeout)
+}
+
+/// Runs `fut` under `deadline`, reporting an overrun as an `io::Error`.
+///
+/// The deadline is absolute and shared across every step of the pre-resolved phase, so a client
+/// cannot extend its stay by dribbling one step at a time. A `None` deadline runs `fut` unbounded,
+/// which is what a zero [`PRE_RESOLVED_TIMEOUT`] asks for.
+async fn with_deadline<F>(
+    deadline: Option<tokio::time::Instant>,
+    fut: F,
+) -> Result<F::Output, io::Error>
+where
+    F: Future,
+{
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, fut).await.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out before resolving a backend",
+            )
+        }),
+        None => Ok(fut.await),
+    }
+}
+
+/// Releases the connection reserved by [`ConnectionLimiter::acquire`] when dropped.
+struct ConnectionGuard(Arc<ConnectionLimiter>);
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 pub enum CancellationResolver {
     Directory(PathBuf),
     Static(String),
 }
 
 struct PgwireBalancer {
+    /// Ceiling on connections that have not yet resolved to a backend.
+    pre_resolved_limiter: Arc<ConnectionLimiter>,
+    /// Read for [`PRE_RESOLVED_TIMEOUT`] at connection time.
+    configs: ConfigSet,
     tls: Option<ReloadingTlsConfig>,
     internal_tls: bool,
     cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<BalancerResolver>,
     metrics: ServerMetrics,
+    limiter: Arc<ConnectionLimiter>,
     now: NowFn,
 }
 
@@ -637,6 +806,9 @@ impl PgwireBalancer {
         tls_mode: Option<TlsMode>,
         internal_tls: bool,
         metrics: &ServerMetrics,
+        limiter: &Arc<ConnectionLimiter>,
+        pre_resolved_guard: ConnectionGuard,
+        deadline: Option<tokio::time::Instant>,
     ) -> Result<(), io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -663,7 +835,7 @@ impl PgwireBalancer {
             return conn.send(err).await;
         }
 
-        let resolved = match resolver.resolve(conn, user, metrics).await {
+        let resolved = match with_deadline(deadline, resolver.resolve(conn, user, metrics)).await? {
             Ok(v) => v,
             Err(err) => {
                 let sql_state = match &err {
@@ -686,6 +858,19 @@ impl PgwireBalancer {
                     .await;
             }
         };
+
+        // Hand over hand. Taking the resolved permit before releasing the pre-resolved one means
+        // the connection is never outside both pools, and a full resolved pool refuses while this
+        // connection still holds its pre-resolved permit rather than after it has given it up.
+        let Some(_conn_guard) = limiter.acquire() else {
+            return conn
+                .send(ErrorResponse::fatal(
+                    SqlState::TOO_MANY_CONNECTIONS,
+                    "balancer is at its connection limit",
+                ))
+                .await;
+        };
+        drop(pre_resolved_guard);
 
         let _active_guard = resolved
             .tenant
@@ -837,6 +1022,9 @@ impl mz_server_core::Server for PgwireBalancer {
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
+        let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_limiter = Arc::clone(&self.pre_resolved_limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
         let conn_uuid = epoch_to_uuid_v7(&(self.now)());
         let peer_addr = conn.peer_addr();
@@ -846,9 +1034,17 @@ impl mz_server_core::Server for PgwireBalancer {
             // worth it.
             let active_guard = outer_metrics.active_connections();
             let result: Result<(), anyhow::Error> = async move {
+                // Everything up to resolution is paced by the client, so it is bounded by a pool
+                // and a deadline rather than by trust. Nothing can be said to the client yet: we
+                // have not read a byte, so we do not know it speaks pgwire at all. Close instead.
+                let Some(pre_resolved_guard) = pre_resolved_limiter.acquire() else {
+                    return Ok(());
+                };
+                let deadline = pre_resolved_deadline(pre_resolved_timeout);
+
                 let mut conn = Conn::Unencrypted(conn);
                 loop {
-                    let message = decode_startup(&mut conn).await?;
+                    let message = with_deadline(deadline, decode_startup(&mut conn)).await??;
                     conn = match message {
                         // Clients sometimes hang up during the startup sequence, e.g.
                         // because they receive an unacceptable response to an
@@ -910,6 +1106,9 @@ impl mz_server_core::Server for PgwireBalancer {
                                 tls.map(|tls| tls.mode),
                                 internal_tls,
                                 &inner_metrics,
+                                &limiter,
+                                pre_resolved_guard,
+                                deadline,
                             )
                             .await?;
                             conn.flush().await?;
@@ -1107,12 +1306,33 @@ async fn cancel_request(
     }
 }
 
+/// Writes an HTTP error response to a client and closes the connection.
+///
+/// The proxied connections are raw TCP streams, so the HTTP framing has to be written by hand.
+/// Errors are ignored: the connection is going away regardless.
+async fn send_http_error(client_stream: &mut Box<dyn ClientStream>, status: &str, body: &str) {
+    let response = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: text/plain\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        body.len(),
+    );
+    let _ = client_stream.write_all(response.as_bytes()).await;
+    let _ = client_stream.shutdown().await;
+}
+
 struct HttpsBalancer {
+    /// Ceiling on connections that have not yet resolved to a backend.
+    pre_resolved_limiter: Arc<ConnectionLimiter>,
     resolver: Arc<TenantDnsResolver>,
     tls: Option<ReloadingSslContext>,
     resolve_template: Arc<str>,
     port: u16,
     metrics: Arc<ServerMetrics>,
+    limiter: Arc<ConnectionLimiter>,
     configs: ConfigSet,
     internal_tls: bool,
 }
@@ -1203,18 +1423,31 @@ impl mz_server_core::Server for HttpsBalancer {
         let port = self.port;
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
+        let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_limiter = Arc::clone(&self.pre_resolved_limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let peer_addr = conn.peer_addr();
         let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
+                // The handshake below is paced by the client, so admission and a deadline cover it
+                // the same way they cover pgwire's startup sequence. Nothing can be said to the
+                // client before the handshake, so a refusal here just closes.
+                let Some(pre_resolved_guard) = pre_resolved_limiter.acquire() else {
+                    return Ok(());
+                };
+                let deadline = pre_resolved_deadline(pre_resolved_timeout);
+
                 let peer_addr = peer_addr.context("fetching peer addr")?;
                 let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
                     match tls_context {
                         Some(tls_context) => {
                             let mut ssl_stream =
                                 SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
-                            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            if let Err(e) =
+                                with_deadline(deadline, Pin::new(&mut ssl_stream).accept()).await?
+                            {
                                 let _ = ssl_stream.get_mut().shutdown().await;
                                 return Err(e.into());
                             }
@@ -1231,9 +1464,24 @@ impl mz_server_core::Server for HttpsBalancer {
                         }
                         _ => (Box::new(conn), None),
                     };
-                let resolved =
-                    Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
-                        .await?;
+                let resolved = with_deadline(
+                    deadline,
+                    Self::resolve(&resolver, &resolve_template, port, servername.as_deref()),
+                )
+                .await??;
+
+                // Hand over hand, as in the pgwire path: the resolved permit is taken before the
+                // pre-resolved one is released.
+                let Some(_conn_guard) = limiter.acquire() else {
+                    send_http_error(
+                        &mut client_stream,
+                        "503 Service Unavailable",
+                        "balancer is at its connection limit",
+                    )
+                    .await;
+                    return Ok(());
+                };
+                drop(pre_resolved_guard);
                 let inner_active_guard = resolved
                     .tenant
                     .as_ref()
@@ -1242,24 +1490,12 @@ impl mz_server_core::Server for HttpsBalancer {
                     Ok(stream) => stream,
                     Err(e) => {
                         error!("failed to connect to upstream server: {e}");
-                        let body = "upstream server not available";
-                        // We know this is an HTTPs stream (see name
-                        // HttpsBalancer), but we actually don't care what type
-                        // of traffic it is and we only use raw tcp streams.In
-                        // order to respond with HTTP we have to write this as a
-                        // raw http message.
-                        let response = format!(
-                            "HTTP/1.1 502 Bad Gateway\r\n\
-                             Content-Type: text/plain\r\n\
-                             Content-Length: {}\r\n\
-                             Connection: close\r\n\
-                             \r\n\
-                             {}",
-                            body.len(),
-                            body
-                        );
-                        let _ = client_stream.write_all(response.as_bytes()).await;
-                        let _ = client_stream.shutdown().await;
+                        send_http_error(
+                            &mut client_stream,
+                            "502 Bad Gateway",
+                            "upstream server not available",
+                        )
+                        .await;
                         return Ok(());
                     }
                 };
@@ -1654,6 +1890,8 @@ struct ResolvedAddr {
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
+
     use super::*;
 
     #[mz_ore::test]
@@ -1725,5 +1963,94 @@ mod tests {
         assert_eq!(strip_ipv6_brackets("host.example.com"), "host.example.com");
         assert_eq!(strip_ipv6_brackets("[unclosed"), "[unclosed");
         assert_eq!(strip_ipv6_brackets("unopened]"), "unopened]");
+    }
+
+    #[mz_ore::test]
+    fn test_connection_limiter() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let set_max = |max: u32| {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&MAX_CONNECTIONS, max);
+            updates.apply(&configs);
+        };
+
+        set_max(2);
+        let limiter = ConnectionLimiter::resolved(&MetricsRegistry::new(), configs.clone());
+        let first = limiter.acquire().expect("under the limit");
+        let second = limiter.acquire().expect("at the limit");
+        assert!(limiter.acquire().is_none());
+        assert_eq!(limiter.rejected.get(), 1);
+
+        // A connection closing frees capacity for a new one.
+        drop(second);
+        let _third = limiter.acquire().expect("capacity freed");
+        drop(first);
+
+        // Lowering the limit below the current count refuses new connections but leaves the
+        // established ones alone.
+        set_max(1);
+        assert!(limiter.acquire().is_none());
+
+        // Zero disables the limit.
+        set_max(0);
+        assert!(limiter.acquire().is_some());
+    }
+
+    /// The two pools are independent: filling one must not refuse the other, or a flood of
+    /// connections that never resolve would shut out connections that have.
+    #[mz_ore::test]
+    fn test_pre_resolved_limiter_is_independent() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let mut updates = ConfigUpdates::default();
+        updates.add(&MAX_CONNECTIONS, 2);
+        updates.add(&MAX_PRE_RESOLVED_CONNECTIONS, 1);
+        updates.apply(&configs);
+
+        let registry = MetricsRegistry::new();
+        let resolved = ConnectionLimiter::resolved(&registry, configs.clone());
+        let pre_resolved = ConnectionLimiter::pre_resolved(&registry, configs.clone());
+
+        let _held = pre_resolved.acquire().expect("under the limit");
+        assert!(
+            pre_resolved.acquire().is_none(),
+            "pre-resolved pool is full"
+        );
+        assert!(
+            resolved.acquire().is_some(),
+            "a full pre-resolved pool must not refuse resolved connections",
+        );
+    }
+
+    /// The handover must never leave a connection outside both pools, so the resolved permit is
+    /// taken before the pre-resolved one is released.
+    #[mz_ore::test]
+    fn test_handover_holds_a_permit_throughout() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let mut updates = ConfigUpdates::default();
+        updates.add(&MAX_CONNECTIONS, 1);
+        updates.add(&MAX_PRE_RESOLVED_CONNECTIONS, 1);
+        updates.apply(&configs);
+
+        let registry = MetricsRegistry::new();
+        let resolved = ConnectionLimiter::resolved(&registry, configs.clone());
+        let pre_resolved = ConnectionLimiter::pre_resolved(&registry, configs.clone());
+
+        let pre_guard = pre_resolved.acquire().expect("under the limit");
+        assert_eq!(pre_resolved.active.load(Ordering::SeqCst), 1);
+
+        let resolved_guard = resolved.acquire().expect("under the limit");
+        drop(pre_guard);
+
+        assert_eq!(pre_resolved.active.load(Ordering::SeqCst), 0);
+        assert_eq!(resolved.active.load(Ordering::SeqCst), 1);
+        drop(resolved_guard);
+        assert_eq!(resolved.active.load(Ordering::SeqCst), 0);
+    }
+
+    /// A zero timeout disables the deadline, which is what leaves the phase unbounded.
+    #[mz_ore::test]
+    fn test_pre_resolved_deadline_zero_disables() {
+        assert!(pre_resolved_deadline(Duration::ZERO).is_none());
+        assert!(pre_resolved_deadline(Duration::from_secs(30)).is_some());
     }
 }
