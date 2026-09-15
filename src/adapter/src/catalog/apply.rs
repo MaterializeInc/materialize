@@ -64,11 +64,13 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use tracing::{info_span, warn};
 
-use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
-use crate::coord::catalog_implications::parsed_state_updates::{self, ParsedStateUpdate};
 use crate::util::{index_sql, sort_topological};
+use mz_catalog::memory::error::ItemError;
+use mz_catalog::memory::implications::ParsedStateUpdate;
+
+mod parsed_state_updates;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
 /// [`CatalogState`] maintains denormalized state for certain catalog objects. Updating an object
@@ -2038,7 +2040,7 @@ impl CatalogState {
                 }
                 // If we were missing a dependency, wait for it to be added.
                 Err((
-                    AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep)),
+                    ItemError::PlanError(plan::PlanError::InvalidId(missing_dep)),
                     cached_expr,
                 )) => {
                     insert_cached_expr(cached_expr);
@@ -2053,9 +2055,9 @@ impl CatalogState {
                 }
                 // If we were missing a dependency, wait for it to be added.
                 Err((
-                    AdapterError::PlanError(plan::PlanError::Catalog(
-                        SqlCatalogError::UnknownItem(missing_dep),
-                    )),
+                    ItemError::PlanError(plan::PlanError::Catalog(SqlCatalogError::UnknownItem(
+                        missing_dep,
+                    ))),
                     cached_expr,
                 )) => {
                     insert_cached_expr(cached_expr);
@@ -2082,10 +2084,7 @@ impl CatalogState {
                         }
                     }
                 }
-                Err((
-                    AdapterError::PlanError(plan::PlanError::InvalidCast { .. }),
-                    cached_expr,
-                )) => {
+                Err((ItemError::PlanError(plan::PlanError::InvalidCast { .. }), cached_expr)) => {
                     insert_cached_expr(cached_expr);
                     awaiting_all.push(id);
                 }

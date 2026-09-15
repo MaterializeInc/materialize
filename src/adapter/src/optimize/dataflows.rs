@@ -21,6 +21,7 @@ use maplit::{btreemap, btreeset};
 use tracing::warn;
 
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, TableDataSource, View};
+pub use mz_catalog::optimize::ExprPrep;
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
@@ -128,27 +129,6 @@ pub struct DataflowBuilder<'a> {
     pub replan: Option<GlobalId>,
     /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
-}
-
-/// Behavior to prepare relation and scalar expressions for use in a dataflow.
-pub trait ExprPrep {
-    /// Prepare a relation expression.
-    fn prep_relation_expr(&self, expr: &mut OptimizedMirRelationExpr)
-    -> Result<(), OptimizerError>;
-
-    /// Prepare a scalar expression.
-    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError>;
-}
-
-/// A no-op expression preparer.
-pub struct ExprPrepNoop;
-impl ExprPrep for ExprPrepNoop {
-    fn prep_relation_expr(&self, _: &mut OptimizedMirRelationExpr) -> Result<(), OptimizerError> {
-        Ok(())
-    }
-    fn prep_scalar_expr(&self, _expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
-        Ok(())
-    }
 }
 
 /// Preparing an expression for maintained dataflow, e.g., index, materialized view, or subscribe.

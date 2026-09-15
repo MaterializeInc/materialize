@@ -708,6 +708,7 @@ async fn upgrade_check(
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).
     let InitializeStateResult {
         state,
+        catalog_updates: _,
         migrated_storage_collections_0dt: _,
         new_builtin_collections: _,
         builtin_table_updates: _,

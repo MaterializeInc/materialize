@@ -74,6 +74,8 @@ use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Config, is_reserved_name};
 
 pub struct InitializeStateResult {
+    /// Parsed effects emitted by native initialization, in application order.
+    pub catalog_updates: Vec<mz_catalog::memory::implications::ParsedStateUpdate>,
     /// An initialized [`CatalogState`].
     pub state: CatalogState,
     /// Items whose builtin schema migration allocated a fresh, self-owned persist shard. Only used
@@ -171,11 +173,26 @@ impl Catalog {
         Self::reconstruct_state_from_config(config, input).await
     }
 
-    /// Replays a committed snapshot without committing or accepting durable changes.
     pub(super) async fn reconstruct_state_from_config(
         config: StateConfig,
         input: mz_catalog::durable::CatalogSnapshot,
     ) -> Result<CatalogState, AdapterError> {
+        Self::reconstruct_state_and_updates(config, input)
+            .await
+            .map(|(state, _)| state)
+    }
+
+    /// Replays a committed snapshot without committing or accepting durable changes.
+    pub(super) async fn reconstruct_state_and_updates(
+        config: StateConfig,
+        input: mz_catalog::durable::CatalogSnapshot,
+    ) -> Result<
+        (
+            CatalogState,
+            Vec<mz_catalog::memory::implications::ParsedStateUpdate>,
+        ),
+        AdapterError,
+    > {
         let mut config = Self::diagnostic_state_config(&config);
         config.boot_ts = input.upper;
         let before = input.snapshot;
@@ -194,7 +211,7 @@ impl Catalog {
                 "catalog reconstruction requires durable changes".into(),
             ));
         }
-        Ok(result.state)
+        Ok((result.state, result.catalog_updates))
     }
 
     /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
@@ -462,7 +479,7 @@ impl Catalog {
             }
         }
 
-        let (builtin_table_update, _catalog_updates) = state
+        let (builtin_table_update, mut catalog_updates) = state
             .apply_updates(pre_item_updates, &mut LocalExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
@@ -564,14 +581,10 @@ impl Catalog {
             expr_cache_start.elapsed()
         );
 
-        // When initializing/bootstrapping, we don't use the catalog updates but
-        // instead load the catalog fully and then go ahead and apply commands
-        // to the controller(s). Maybe we _should_ instead use the same logic
-        // and return and use the updates from here. But that's at the very
-        // least future work.
-        let (builtin_table_update, _catalog_updates) = state
+        let (builtin_table_update, parsed_updates) = state
             .apply_updates(system_item_updates, &mut local_expr_cache)
             .await;
+        catalog_updates.extend(parsed_updates);
         builtin_table_updates.extend(builtin_table_update);
 
         let last_seen_version = get_migration_version(txn);
@@ -612,7 +625,7 @@ impl Catalog {
         state.mock_authentication_nonce = Some(mz_authentication_mock_nonce);
 
         // Migrate item ASTs.
-        let (builtin_table_update, _catalog_updates) = if !config.skip_migrations {
+        let (builtin_table_update, parsed_updates) = if !config.skip_migrations {
             let migrate_result = migrate::migrate(
                 &mut state,
                 txn,
@@ -654,6 +667,7 @@ impl Catalog {
                 .await
         };
         builtin_table_updates.extend(builtin_table_update);
+        catalog_updates.extend(parsed_updates);
 
         let post_item_updates = post_item_updates
             .into_iter()
@@ -663,9 +677,10 @@ impl Catalog {
                 diff: diff.try_into().expect("valid diff"),
             })
             .collect();
-        let (builtin_table_update, _catalog_updates) = state
+        let (builtin_table_update, parsed_updates) = state
             .apply_updates(post_item_updates, &mut local_expr_cache)
             .await;
+        catalog_updates.extend(parsed_updates);
         builtin_table_updates.extend(builtin_table_update);
 
         // We don't need to apply the audit logs in memory, yet apply can be expensive when the
@@ -694,14 +709,10 @@ impl Catalog {
         txn.finalize_index_compaction_bounds();
         let state_updates = txn.get_and_commit_op_updates();
 
-        // When initializing/bootstrapping, we don't use the catalog updates but
-        // instead load the catalog fully and then go ahead and apply commands
-        // to the controller(s). Maybe we _should_ instead use the same logic
-        // and return and use the updates from here. But that's at the very
-        // least future work.
-        let (table_updates, _catalog_updates) = state
+        let (table_updates, parsed_updates) = state
             .apply_updates(state_updates, &mut local_expr_cache)
             .await;
+        catalog_updates.extend(parsed_updates);
         builtin_table_updates.extend(table_updates);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
@@ -711,6 +722,7 @@ impl Catalog {
         Ok((
             InitializeStateResult {
                 state,
+                catalog_updates,
                 migrated_storage_collections_0dt: schema_migration_result.replaced_items,
                 new_builtin_collections: new_builtin_collections.into_iter().collect(),
                 builtin_table_updates,
@@ -741,6 +753,7 @@ impl Catalog {
 
             let InitializeStateResult {
                 state,
+                catalog_updates: _,
                 migrated_storage_collections_0dt,
                 new_builtin_collections,
                 mut builtin_table_updates,

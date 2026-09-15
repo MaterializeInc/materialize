@@ -21,5 +21,6 @@ pub mod config;
 pub mod durable;
 pub mod expr_cache;
 pub mod memory;
+pub mod optimize;
 
 pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);

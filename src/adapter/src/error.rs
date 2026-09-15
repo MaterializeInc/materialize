@@ -1681,6 +1681,20 @@ impl From<mz_catalog::memory::error::Error> for AdapterError {
     }
 }
 
+impl From<mz_catalog::memory::error::ItemError> for AdapterError {
+    fn from(error: mz_catalog::memory::error::ItemError) -> Self {
+        use mz_catalog::memory::error::ItemError;
+        match error {
+            ItemError::ParseError(error) => error.into(),
+            ItemError::PlanError(error) => error.into(),
+            ItemError::Optimizer(error) => error.into(),
+            ItemError::Catalog(error) => error.into(),
+            ItemError::Internal(error) => Self::Internal(error),
+            ItemError::Unstructured(error) => Self::Unstructured(error),
+        }
+    }
+}
+
 impl From<mz_catalog::durable::CatalogError> for AdapterError {
     fn from(e: mz_catalog::durable::CatalogError) -> Self {
         mz_catalog::memory::error::Error::from(e).into()
@@ -1854,6 +1868,53 @@ impl Error for AdapterError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn catalog_invalid_cast_remains_typed() {
+        use crate::catalog::{Catalog, CatalogState};
+        use mz_catalog::memory::error::ItemError;
+
+        Catalog::with_debug(|catalog| async move {
+            let error = CatalogState::parse_plan(
+                "CREATE VIEW materialize.public.v AS SELECT CAST(ARRAY[1] AS INTEGER)",
+                None,
+                &catalog.for_system_session(),
+            )
+            .expect_err("array cannot be cast to integer");
+            let ItemError::PlanError(error @ PlanError::InvalidCast { .. }) = error else {
+                panic!("native catalog parsing lost the invalid-cast cause");
+            };
+            assert!(matches!(
+                ItemError::from(OptimizerError::PlanError(error)),
+                ItemError::PlanError(PlanError::InvalidCast { .. })
+            ));
+        })
+        .await;
+    }
+
+    #[mz_ore::test]
+    fn catalog_item_errors_preserve_sql_error_responses() {
+        use mz_catalog::memory::error::ItemError;
+
+        fn check(expected: AdapterError, actual: ItemError) {
+            let expected = expected.into_response(Severity::Error);
+            let actual = AdapterError::from(actual).into_response(Severity::Error);
+            assert_eq!(actual.code, expected.code);
+            assert_eq!(actual.message, expected.message);
+            assert_eq!(actual.detail, expected.detail);
+            assert_eq!(actual.hint, expected.hint);
+        }
+
+        let plan_error =
+            || PlanError::Catalog(mz_sql::catalog::CatalogError::UnknownItem("missing".into()));
+        check(plan_error().into(), plan_error().into());
+        let eval_error = || OptimizerError::EvalError(EvalError::DivisionByZero);
+        check(eval_error().into(), eval_error().into());
+        let restricted =
+            || OptimizerError::RestrictedFunction(mz_expr::UnmaterializableFunc::CurrentTimestamp);
+        check(restricted().into(), restricted().into());
+    }
 
     #[mz_ore::test]
     fn alter_cluster_resource_exhausted_is_specific() {

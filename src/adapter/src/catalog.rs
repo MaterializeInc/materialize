@@ -87,11 +87,11 @@ use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnectio
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use tokio::sync::MutexGuard;
-use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::conn_catalog::ConnCatalog;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
@@ -99,12 +99,13 @@ pub use crate::catalog::transact::{
 };
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
-use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::session::{Portal, PreparedStatement, Session};
+use crate::session::Session;
 use crate::util::ResultExt;
-use crate::{AdapterError, AdapterNotice, ExecuteResponse};
+use crate::{AdapterError, ExecuteResponse};
+use mz_catalog::memory::implications::ParsedStateUpdate;
 
 mod builtin_table_updates;
+mod conn_catalog;
 pub(crate) mod consistency;
 mod migrate;
 
@@ -265,11 +266,14 @@ impl Catalog {
     }
 }
 
+/// A catalog snapshot and resolution context, independent of a serving session.
+///
+/// Prepared statements and portals are absent, and plan notices are discarded.
 #[derive(Debug)]
-pub struct ConnCatalog<'a> {
+pub struct CatalogStateView<'a> {
     state: Cow<'a, CatalogState>,
     /// Because we don't have any way of removing items from the catalog
-    /// temporarily, we allow the ConnCatalog to pretend that a set of items
+    /// temporarily, we allow the catalog view to pretend that a set of items
     /// don't exist during resolution.
     ///
     /// This feature is necessary to allow re-planning of statements, which is
@@ -283,13 +287,10 @@ pub struct ConnCatalog<'a> {
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     role_id: RoleId,
-    prepared_statements: Option<&'a BTreeMap<String, PreparedStatement>>,
-    portals: Option<&'a BTreeMap<String, Portal>>,
-    notices_tx: UnboundedSender<AdapterNotice>,
     restrict_to_user_objects: bool,
 }
 
-impl ConnCatalog<'_> {
+impl CatalogStateView<'_> {
     pub fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
     }
@@ -329,7 +330,7 @@ impl ConnCatalog<'_> {
     }
 }
 
-impl ConnectionResolver for ConnCatalog<'_> {
+impl ConnectionResolver for CatalogStateView<'_> {
     fn resolve_connection(
         &self,
         id: CatalogItemId,
@@ -731,15 +732,41 @@ impl Catalog {
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
-        self.state.for_session(session)
+        // Resolution defaults come from the serving catalog, even when planning
+        // uses the transaction's catalog snapshot.
+        let search_path = self.state.resolve_search_path(session);
+        let database = self
+            .state
+            .database_by_name
+            .get(session.vars().database())
+            .map(|id| id.clone());
+        let state = match session.transaction().catalog_state() {
+            Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
+            None => Cow::Borrowed(&self.state),
+        };
+        ConnCatalog {
+            view: CatalogStateView {
+                state,
+                unresolvable_ids: BTreeSet::new(),
+                conn_id: session.conn_id().clone(),
+                cluster: session.vars().cluster().into(),
+                database,
+                search_path,
+                role_id: session.current_role_id().clone(),
+                restrict_to_user_objects: session.vars().restrict_to_user_objects(),
+            },
+            prepared_statements: Some(session.prepared_statements()),
+            portals: Some(session.portals()),
+            notices_tx: Some(session.retain_notice_transmitter()),
+        }
     }
 
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog<'_> {
-        self.state.for_sessionless_user(role_id)
+        self.state.for_sessionless_user(role_id).into()
     }
 
     pub fn for_system_session(&self) -> ConnCatalog<'_> {
-        self.state.for_system_session()
+        self.state.for_system_session().into()
     }
 
     async fn storage<'a>(
@@ -1411,19 +1438,22 @@ impl Catalog {
     ) -> Result<Self, AdapterError> {
         let mut config = Self::diagnostic_state_config(&self.diagnostic_config);
         config.system_parameter_defaults = self.state.system_config().defaults();
-        Self::open_committed(config, storage).await
+        Self::open_committed(config, storage)
+            .await
+            .map(|(catalog, _)| catalog)
     }
 
     /// Opens an independent projection of an initialized, same-version catalog.
     ///
     /// `storage` must be an already joined handle whose initial updates have not
     /// been consumed. This does not bootstrap, migrate, reconcile, or produce
-    /// plans. It rejects reconstruction that would require durable changes.
+    /// executable dataflow plans. It rejects reconstruction that would require durable changes.
     /// The caller owns generation admission and any downstream runtime setup.
+    /// Initial parsed updates are returned before subsequent stream updates.
     pub(crate) async fn open_committed(
         config: StateConfig,
         mut storage: Box<dyn DurableCatalogState>,
-    ) -> Result<Self, AdapterError> {
+    ) -> Result<(Self, Vec<ParsedStateUpdate>), AdapterError> {
         let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config));
         let deployment_generation = storage.get_deployment_generation().await?;
         let is_bootstrap_complete = storage.is_bootstrap_complete();
@@ -1438,7 +1468,7 @@ impl Catalog {
                 Err(error) => return Err(error.into()),
             }
         };
-        let state = Self::reconstruct_state_from_config(
+        let (state, catalog_updates) = Self::reconstruct_state_and_updates(
             config,
             mz_catalog::durable::CatalogSnapshot {
                 snapshot,
@@ -1450,14 +1480,17 @@ impl Catalog {
         )
         .await?;
         storage.mark_bootstrap_complete().await;
-        Ok(Self {
-            state,
-            expr_cache_handle: None,
-            storage: Arc::new(tokio::sync::Mutex::new(storage)),
-            transient_revision: 1,
-            shared_transient_revision: Arc::new(AtomicU64::new(1)),
-            diagnostic_config,
-        })
+        Ok((
+            Self {
+                state,
+                expr_cache_handle: None,
+                storage: Arc::new(tokio::sync::Mutex::new(storage)),
+                transient_revision: 1,
+                shared_transient_revision: Arc::new(AtomicU64::new(1)),
+                diagnostic_config,
+            },
+            catalog_updates,
+        ))
     }
 
     /// Checks the [`Catalog`]s internal consistency.
@@ -1704,6 +1737,7 @@ impl Catalog {
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         self.state
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
+            .map_err(Into::into)
     }
 
     pub(crate) fn expression_build_version(
@@ -2058,7 +2092,7 @@ impl From<UpdatePrivilegeVariant> for EventType {
     }
 }
 
-impl ConnCatalog<'_> {
+impl CatalogStateView<'_> {
     fn resolve_item_name(
         &self,
         name: &PartialItemName,
@@ -2081,7 +2115,7 @@ impl ConnCatalog<'_> {
     }
 }
 
-impl ExprHumanizer for ConnCatalog<'_> {
+impl ExprHumanizer for CatalogStateView<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
         let entry = self.state.try_get_entry_by_global_id(&id)?;
         Some(self.resolve_full_name(entry.name()).to_string())
@@ -2231,7 +2265,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 }
 
-impl SessionCatalog for ConnCatalog<'_> {
+impl SessionCatalog for CatalogStateView<'_> {
     fn active_role_id(&self) -> &RoleId {
         &self.role_id
     }
@@ -2240,16 +2274,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.restrict_to_user_objects
     }
 
-    fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {
-        self.prepared_statements
-            .as_ref()
-            .map(|ps| ps.get(name).map(|ps| ps.desc()))
-            .flatten()
+    fn get_prepared_statement_desc(&self, _name: &str) -> Option<&StatementDesc> {
+        None
     }
 
-    fn get_portal_desc_unverified(&self, portal_name: &str) -> Option<&StatementDesc> {
-        self.portals
-            .and_then(|portals| portals.get(portal_name).map(|portal| &portal.desc))
+    fn get_portal_desc_unverified(&self, _portal_name: &str) -> Option<&StatementDesc> {
+        None
     }
 
     fn active_database(&self) -> Option<&DatabaseId> {
@@ -2773,9 +2803,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         res
     }
 
-    fn add_notice(&self, notice: PlanNotice) {
-        let _ = self.notices_tx.send(notice.into());
-    }
+    fn add_notice(&self, _notice: PlanNotice) {}
 
     fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>> {
         let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
@@ -5026,9 +5054,20 @@ mod tests {
             Some(BTreeMap::from([("max_tables".into(), "999".into())]));
         config.external_login_password_mz_system = Some("not-a-committed-password".into());
         config.enable_expression_cache_override = Some(true);
-        let mut writer_catalog_peer = Catalog::open_committed(config, joined)
+        let (mut writer_catalog_peer, initial_updates) = Catalog::open_committed(config, joined)
             .await
             .expect("open independent committed catalog");
+        let initial = mz_catalog::memory::implications::CatalogImplications::from_updates(
+            initial_updates,
+            &Catalog::expression_build_version(writer_catalog.config().build_info).to_string(),
+        );
+        assert_eq!(
+            initial.clusters.keys().copied().collect::<BTreeSet<_>>(),
+            writer_catalog
+                .clusters()
+                .map(|cluster| cluster.id)
+                .collect(),
+        );
         assert!(writer_catalog_peer.expr_cache_handle.is_none());
         assert_eq!(
             writer_catalog_peer.state().dump(None).expect("dump peer"),

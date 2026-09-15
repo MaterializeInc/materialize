@@ -20,7 +20,6 @@ use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
@@ -92,17 +91,15 @@ use mz_storage_types::connections::inline::{
 use mz_transform::notice::OptimizerNotice;
 use serde::Serialize;
 use timely::progress::Antichain;
-use tokio::sync::mpsc;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::AdapterError;
-use crate::catalog::{Catalog, ConnCatalog};
-use crate::config::ScopedParameters;
-use crate::coord::{ConnMeta, infer_sql_type_for_catalog};
-use crate::optimize::{self, Optimize, OptimizerCatalog};
-use crate::session::Session;
+use crate::catalog::{Catalog, CatalogStateView};
+use crate::optimize::OptimizerCatalog;
+use mz_catalog::config::ScopedParameters;
+use mz_catalog::memory::error::ItemError;
+use mz_catalog::optimize::{self, Optimize, infer_sql_type_for_catalog};
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
 /// metadata to persistent storage. For persistent metadata see
@@ -518,36 +515,10 @@ impl CatalogState {
         }
     }
 
-    pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
-        let search_path = self.resolve_search_path(session);
-        let database = self
-            .database_by_name
-            .get(session.vars().database())
-            .map(|id| id.clone());
-        let state = match session.transaction().catalog_state() {
-            Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
-            None => Cow::Borrowed(self),
-        };
-        ConnCatalog {
-            state,
-            unresolvable_ids: BTreeSet::new(),
-            conn_id: session.conn_id().clone(),
-            cluster: session.vars().cluster().into(),
-            database,
-            search_path,
-            role_id: session.current_role_id().clone(),
-            prepared_statements: Some(session.prepared_statements()),
-            portals: Some(session.portals()),
-            notices_tx: session.retain_notice_transmitter(),
-            restrict_to_user_objects: session.vars().restrict_to_user_objects(),
-        }
-    }
-
-    pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog<'_> {
-        let (notices_tx, _notices_rx) = mpsc::unbounded_channel();
+    pub fn for_sessionless_user(&self, role_id: RoleId) -> CatalogStateView<'_> {
         let cluster = self.system_configuration.default_cluster();
 
-        ConnCatalog {
+        CatalogStateView {
             state: Cow::Borrowed(self),
             unresolvable_ids: BTreeSet::new(),
             conn_id: SYSTEM_CONN_ID.clone(),
@@ -560,14 +531,11 @@ impl CatalogState {
             // where catalog object names have not been normalized correctly.
             search_path: Vec::new(),
             role_id,
-            prepared_statements: None,
-            portals: None,
-            notices_tx,
             restrict_to_user_objects: false,
         }
     }
 
-    pub fn for_system_session(&self) -> ConnCatalog<'_> {
+    pub fn for_system_session(&self) -> CatalogStateView<'_> {
         self.for_sessionless_user(MZ_SYSTEM_ROLE_ID)
     }
 
@@ -1081,14 +1049,14 @@ impl CatalogState {
     pub(super) fn durable_item(
         &self,
         entry: CatalogEntry,
-    ) -> Result<mz_catalog::durable::Item, AdapterError> {
+    ) -> Result<mz_catalog::durable::Item, ItemError> {
         let ephemeral_owner_session = entry
             .conn_id()
             .map(|conn_id| {
                 self.temporary_namespaces
                     .uuid_for_conn(conn_id)
                     .ok_or_else(|| {
-                        AdapterError::Internal(format!(
+                        ItemError::Internal(format!(
                             "no session record for connection {conn_id} owning temporary item"
                         ))
                     })
@@ -1316,7 +1284,7 @@ impl CatalogState {
         &mut self,
         create_sql: &str,
         force_if_exists_skip: bool,
-    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+    ) -> Result<(Plan, ResolvedIds), ItemError> {
         self.with_enable_for_item_parsing(|state| {
             let pcx = PlanContext::zero().with_ignore_if_exists_errors(force_if_exists_skip);
             let pcx = Some(&pcx);
@@ -1336,8 +1304,8 @@ impl CatalogState {
     pub(crate) fn parse_plan(
         create_sql: &str,
         pcx: Option<&PlanContext>,
-        catalog: &ConnCatalog,
-    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        catalog: &CatalogStateView,
+    ) -> Result<(Plan, ResolvedIds), ItemError> {
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
         let (plan, _sql_impl_ids) =
@@ -1354,7 +1322,7 @@ impl CatalogState {
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
         local_expression_cache: &mut LocalExpressionCache,
         previous_item: Option<CatalogItem>,
-    ) -> Result<CatalogItem, AdapterError> {
+    ) -> Result<CatalogItem, ItemError> {
         self.parse_item(
             global_id,
             create_sql,
@@ -1379,7 +1347,7 @@ impl CatalogState {
         custom_logical_compaction_window: Option<CompactionWindow>,
         local_expression_cache: &mut LocalExpressionCache,
         previous_item: Option<CatalogItem>,
-    ) -> Result<CatalogItem, AdapterError> {
+    ) -> Result<CatalogItem, ItemError> {
         let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
         match self.parse_item_inner(
             global_id,
@@ -1433,7 +1401,7 @@ impl CatalogState {
             CatalogItem,
             Option<(OptimizedMirRelationExpr, OptimizerFeatures)>,
         ),
-        (AdapterError, Option<LocalExpressions>),
+        (ItemError, Option<LocalExpressions>),
     > {
         let session_catalog = self.for_system_session();
 
@@ -1517,7 +1485,7 @@ impl CatalogState {
                             },
                             _ => {
                                 return Err((
-                                    AdapterError::Unstructured(anyhow::anyhow!(
+                                    ItemError::Unstructured(anyhow::anyhow!(
                                         "unsupported data source for table"
                                     )),
                                     cached_expr,
@@ -1541,7 +1509,7 @@ impl CatalogState {
                             Some(id) => id,
                             None => {
                                 return Err((
-                                    AdapterError::Unstructured(anyhow::anyhow!(
+                                    ItemError::Unstructured(anyhow::anyhow!(
                                         "ingestion-based sources must have cluster specified"
                                     )),
                                     cached_expr,
@@ -1563,7 +1531,7 @@ impl CatalogState {
                             Some(id) => id,
                             None => {
                                 return Err((
-                                    AdapterError::Unstructured(anyhow::anyhow!(
+                                    ItemError::Unstructured(anyhow::anyhow!(
                                         "ingestion-based sources must have cluster specified"
                                     )),
                                     cached_expr,
@@ -2859,33 +2827,6 @@ impl CatalogState {
         }
     }
 
-    // TODO(mjibson): Is there a way to make this a closure to avoid explicitly
-    // passing tx, and session?
-    pub(crate) fn add_to_audit_log(
-        system_configuration: &SystemVars,
-        oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&ConnMeta>,
-        tx: &mut mz_catalog::durable::Transaction,
-        audit_events: &mut Vec<VersionedEvent>,
-        event_type: EventType,
-        object_type: ObjectType,
-        details: EventDetails,
-    ) -> Result<(), Error> {
-        let user = session.map(|session| session.user().name.to_string());
-
-        // unsafe_mock_audit_event_timestamp can only be set to Some when running in unsafe mode.
-
-        let occurred_at = match system_configuration.unsafe_mock_audit_event_timestamp() {
-            Some(ts) => ts.into(),
-            _ => oracle_write_ts.into(),
-        };
-        let id = tx.allocate_audit_log_id()?;
-        let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
-        audit_events.push(event.clone());
-        tx.insert_audit_log_event(event);
-        Ok(())
-    }
-
     pub(super) fn get_owner_id(&self, id: &ObjectId, conn_id: &ConnectionId) -> Option<RoleId> {
         match id {
             ObjectId::Cluster(id) => Some(self.get_cluster(*id).owner_id()),
@@ -3267,8 +3208,8 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn written_plan_selection_emits_notice_implications_without_installation() {
-        use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdateKind;
         use mz_catalog::durable::objects::WrittenPlan;
+        use mz_catalog::memory::implications::ParsedStateUpdateKind;
         use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
         let id = GlobalId::User(42);

@@ -42,8 +42,8 @@ use uuid::Uuid;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
-use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
-use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
+use crate::catalog::{BuiltinTableUpdate, CatalogState, CatalogStateView};
+use mz_catalog::memory::implications::ParsedStateUpdate;
 
 /// Catalog key of the `migration_version` setting.
 ///
@@ -92,13 +92,13 @@ where
 
 fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
-    cat: &ConnCatalog<'_>,
+    cat: &CatalogStateView<'_>,
     mut f: F,
 ) -> Result<(), anyhow::Error>
 where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
-        &'a &ConnCatalog<'_>,
+        &'a &CatalogStateView<'_>,
         CatalogItemId,
         &'a mut Statement<Raw>,
     ) -> Result<(), anyhow::Error>,
@@ -348,7 +348,7 @@ pub(crate) async fn migrate(
 /// `progress_id`).
 fn rewrite_sources_to_tables(
     tx: &mut Transaction<'_>,
-    catalog: &ConnCatalog<'_>,
+    catalog: &CatalogStateView<'_>,
 ) -> Result<(), anyhow::Error> {
     use mz_sql::ast::{
         CreateSourceConnection, CreateSourceStatement, CreateSubsourceOptionName,

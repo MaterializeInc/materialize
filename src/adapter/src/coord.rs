@@ -122,7 +122,7 @@ use mz_controller::clusters::{
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_dyncfg::{ConfigUpdates, ParameterScope};
-use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
@@ -145,9 +145,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
-use mz_repr::{
-    CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, SqlRelationType, Timestamp,
-};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -6454,14 +6452,7 @@ pub(crate) fn validate_ip_with_policy_rules(
     }
 }
 
-pub(crate) fn infer_sql_type_for_catalog(
-    hir_expr: &HirRelationExpr,
-    mir_expr: &MirRelationExpr,
-) -> SqlRelationType {
-    let mut typ = hir_expr.top_level_typ();
-    typ.backport_nullability_and_keys(&mir_expr.typ());
-    typ
-}
+pub(crate) use mz_catalog::optimize::infer_sql_type_for_catalog;
 
 #[cfg(test)]
 mod execute_context_tests {

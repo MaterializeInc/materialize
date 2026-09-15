@@ -35,9 +35,12 @@ use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, SINCE_GRANULARITY};
 use mz_catalog::expr_cache::{GlobalExpressions, latest_item_version};
+use mz_catalog::memory::implications::{
+    CatalogImplication, CatalogImplicationKind, CatalogImplications, ParsedStateUpdate,
+};
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
-    MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, MetricSink, Source, Table,
+    TableDataSource,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
@@ -66,9 +69,6 @@ use timely::progress::Antichain;
 use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
-use crate::coord::catalog_implications::parsed_state_updates::{
-    ParsedStateUpdate, ParsedStateUpdateKind,
-};
 use crate::coord::peek::DroppedDependency;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{BuiltinTableAppendNotify, Coordinator};
@@ -76,8 +76,6 @@ use crate::optimize::OptimizerConfig;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, dataflow_import_id_bundle};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt, flags};
-
-pub mod parsed_state_updates;
 
 impl Coordinator {
     /// Applies implications from the given bucket of [ParsedStateUpdate] to our
@@ -96,113 +94,22 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
 
-        let mut catalog_implications: BTreeMap<CatalogItemId, CatalogImplication> = BTreeMap::new();
-        let mut cluster_commands: BTreeMap<ClusterId, CatalogImplication> = BTreeMap::new();
-        let mut cluster_replica_commands: BTreeMap<(ClusterId, ReplicaId), CatalogImplication> =
-            BTreeMap::new();
-        // Introspection source index additions, collected separately and
-        // merged into the AddCluster handler. Not routed through the
-        // absorb machinery since they are simple additions that don't
-        // need Altered support.
-        let mut introspection_source_indexes: BTreeMap<ClusterId, BTreeMap<LogVariant, GlobalId>> =
-            BTreeMap::new();
-        // Whether any replica-scoped system-parameter override changed in this
-        // batch. The push re-pushes the complete per-replica dyncfg layer, so we
-        // only track that a change happened, not the individual rows.
-        let mut replica_scoped_config_changed = false;
-        // Whether any environment-wide system-parameter changed in this batch.
-        // Runtime consumers refresh from the committed configuration once per
-        // batch, so we only track that a change happened, not individual vars.
-        let mut system_config_changed = false;
-        let mut compaction_bounds = BTreeMap::new();
-        let mut retired_storage_metadata = BTreeSet::new();
-        let mut written_plans = BTreeSet::new();
         let build =
             crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
                 .to_string();
-
-        // Whether to wake the cluster controller once the implications below are
-        // applied. Decided from the committed diff, see the method.
-        let should_reconcile_now = Self::should_reconcile_now(&catalog_updates);
-
-        for update in catalog_updates {
-            tracing::trace!(?update, "got parsed state update");
-            match &update.kind {
-                ParsedStateUpdateKind::Item {
-                    durable_item,
-                    parsed_item: _,
-                    connection: _,
-                    parsed_full_name: _,
-                } => {
-                    let entry = catalog_implications
-                        .entry(durable_item.id.clone())
-                        .or_insert_with(|| CatalogImplication::None);
-                    entry.absorb(update);
-                }
-                ParsedStateUpdateKind::Cluster {
-                    durable_cluster,
-                    parsed_cluster: _,
-                } => {
-                    let entry = cluster_commands
-                        .entry(durable_cluster.id)
-                        .or_insert_with(|| CatalogImplication::None);
-                    entry.absorb(update.clone());
-                }
-                ParsedStateUpdateKind::ClusterReplica {
-                    durable_cluster_replica,
-                    parsed_cluster_replica: _,
-                } => {
-                    let entry = cluster_replica_commands
-                        .entry((
-                            durable_cluster_replica.cluster_id,
-                            durable_cluster_replica.replica_id,
-                        ))
-                        .or_insert_with(|| CatalogImplication::None);
-                    entry.absorb(update.clone());
-                }
-                ParsedStateUpdateKind::IntrospectionSourceIndex {
-                    cluster_id,
-                    log,
-                    index_id,
-                } => {
-                    if update.diff == StateDiff::Addition {
-                        introspection_source_indexes
-                            .entry(*cluster_id)
-                            .or_default()
-                            .insert(log.clone(), *index_id);
-                    }
-                    // Retractions don't need handling: introspection
-                    // source indexes are dropped with their cluster.
-                }
-                ParsedStateUpdateKind::ReplicaSystemConfiguration { durable: _ } => {
-                    // Additions and retractions both re-derive the full
-                    // per-replica layer from the working copy, so the diff sign
-                    // does not matter here.
-                    replica_scoped_config_changed = true;
-                }
-                ParsedStateUpdateKind::SystemConfiguration { durable: _ } => {
-                    // Additions and retractions both refresh consumers from
-                    // the committed values, including defaults after a reset.
-                    system_config_changed = true;
-                }
-                ParsedStateUpdateKind::CollectionCompactionBound(bound) => {
-                    if update.diff == StateDiff::Addition {
-                        compaction_bounds.insert(bound.id, bound.frontier.into_iter().collect());
-                    }
-                    // Collection drops release installed bounds, not record retractions.
-                }
-                ParsedStateUpdateKind::StorageCollectionMetadata { id } => {
-                    if update.diff == StateDiff::Retraction {
-                        retired_storage_metadata.insert(*id);
-                    }
-                }
-                ParsedStateUpdateKind::WrittenPlan(plan) => {
-                    if plan.build_version == build {
-                        written_plans.insert(plan.id);
-                    }
-                }
-            }
-        }
+        let CatalogImplications {
+            items: catalog_implications,
+            clusters: cluster_commands,
+            replicas: cluster_replica_commands,
+            introspection_source_indexes,
+            replica_scoped_config_changed,
+            system_config_changed,
+            compaction_bounds,
+            mut retired_storage_metadata,
+            written_plans,
+        } = CatalogImplications::from_updates(catalog_updates, &build);
+        let should_reconcile_now =
+            !cluster_commands.is_empty() || !cluster_replica_commands.is_empty();
 
         if written_plans
             .iter()
@@ -453,28 +360,6 @@ impl Coordinator {
             .webhook_concurrent_request_limit();
         self.webhook_concurrency_limit
             .set_limit(webhook_request_limit);
-    }
-
-    /// Whether a batch of committed catalog updates should wake the cluster
-    /// controller. True when any cluster or cluster-replica durable state
-    /// changed, the only catalog changes the controller reconciles against.
-    ///
-    /// We key the wake off the committed diff rather than the input ops so it
-    /// fires the same way whether this node applied the change or is following
-    /// another writer's diff. NOTE: environment-wide system-config changes (the
-    /// controller's gate and tick interval) do parse into
-    /// `ParsedStateUpdateKind::SystemConfiguration`, but we deliberately do not
-    /// match on them here, so they do not wake the controller. The controller
-    /// re-reads both each tick, so a config change is picked up on the next tick
-    /// without a wake.
-    fn should_reconcile_now(updates: &[ParsedStateUpdate]) -> bool {
-        updates.iter().any(|update| {
-            matches!(
-                update.kind,
-                ParsedStateUpdateKind::Cluster { .. }
-                    | ParsedStateUpdateKind::ClusterReplica { .. }
-            )
-        })
     }
 
     #[instrument(level = "debug")]
@@ -2651,248 +2536,6 @@ impl Coordinator {
     }
 }
 
-/// A state machine for building catalog implications from catalog updates.
-///
-/// Once all [ParsedStateUpdate] of a timestamp are ingested this is a command
-/// that has to potentially be applied to in-memory state and/or the
-/// controller(s).
-#[derive(Debug, Clone)]
-enum CatalogImplication {
-    None,
-    Table(CatalogImplicationKind<Table>),
-    Source(CatalogImplicationKind<(Source, Option<GenericSourceConnection>)>),
-    Sink(CatalogImplicationKind<Sink>),
-    Index(CatalogImplicationKind<Index>),
-    MetricSink(CatalogImplicationKind<MetricSink>),
-    MaterializedView(CatalogImplicationKind<MaterializedView>),
-    View(CatalogImplicationKind<View>),
-    Secret(CatalogImplicationKind<Secret>),
-    Connection(CatalogImplicationKind<Connection>),
-    Cluster(CatalogImplicationKind<Cluster>),
-    ClusterReplica(CatalogImplicationKind<ClusterReplica>),
-}
-
-#[derive(Debug, Clone)]
-enum CatalogImplicationKind<T> {
-    /// No operations seen yet.
-    None,
-    /// Item was added.
-    Added(T),
-    /// Item was dropped (with its name retained for error messages).
-    Dropped(T, String),
-    /// Item is being altered from one state to another.
-    Altered { prev: T, new: T },
-}
-
-impl<T: Clone> CatalogImplicationKind<T> {
-    /// Apply a state transition based on a diff. Returns an error message if
-    /// the transition is invalid.
-    fn transition(&mut self, item: T, name: Option<String>, diff: StateDiff) -> Result<(), String> {
-        use CatalogImplicationKind::*;
-        use StateDiff::*;
-
-        let new_state = match (&*self, diff) {
-            // Initial state transitions
-            (None, Addition) => Added(item),
-            (None, Retraction) => Dropped(item, name.unwrap_or_else(|| "<unknown>".to_string())),
-
-            // From Added state
-            (Added(existing), Retraction) => {
-                // Add -> Drop means the item is being altered
-                Altered {
-                    prev: item,
-                    new: existing.clone(),
-                }
-            }
-            (Added(_), Addition) => {
-                return Err("Cannot add an already added object".to_string());
-            }
-
-            // From Dropped state
-            (Dropped(existing, _), Addition) => {
-                // Drop -> Add means the item is being altered
-                Altered {
-                    prev: existing.clone(),
-                    new: item,
-                }
-            }
-            (Dropped(_, _), Retraction) => {
-                return Err("Cannot drop an already dropped object".to_string());
-            }
-
-            // From Altered state
-            (Altered { .. }, _) => {
-                return Err(format!(
-                    "Cannot apply {:?} to an object in Altered state",
-                    diff
-                ));
-            }
-        };
-
-        *self = new_state;
-        Ok(())
-    }
-}
-
-/// Macro to generate absorb methods for each item type.
-macro_rules! impl_absorb_method {
-    (
-        $method_name:ident,
-        $variant:ident,
-        $item_type:ty
-    ) => {
-        fn $method_name(
-            &mut self,
-            item: $item_type,
-            parsed_full_name: Option<String>,
-            diff: StateDiff,
-        ) {
-            let state = match self {
-                CatalogImplication::$variant(state) => state,
-                CatalogImplication::None => {
-                    *self = CatalogImplication::$variant(CatalogImplicationKind::None);
-                    match self {
-                        CatalogImplication::$variant(state) => state,
-                        _ => unreachable!(),
-                    }
-                }
-                _ => {
-                    panic!(
-                        "Unexpected command type for {:?}: {} {:?}",
-                        self,
-                        stringify!($variant),
-                        diff,
-                    );
-                }
-            };
-
-            if let Err(e) = state.transition(item, parsed_full_name, diff) {
-                panic!(
-                    "Invalid state transition for {}: {}",
-                    stringify!($variant),
-                    e
-                );
-            }
-        }
-    };
-}
-
-impl CatalogImplication {
-    /// Absorbs the given catalog update into this [CatalogImplication], causing
-    /// a state transition or error.
-    fn absorb(&mut self, catalog_update: ParsedStateUpdate) {
-        match catalog_update.kind {
-            ParsedStateUpdateKind::Item {
-                durable_item: _,
-                parsed_item,
-                connection,
-                parsed_full_name,
-            } => match parsed_item {
-                CatalogItem::Table(table) => {
-                    self.absorb_table(table, Some(parsed_full_name), catalog_update.diff)
-                }
-                CatalogItem::Source(source) => {
-                    self.absorb_source(
-                        (source, connection),
-                        Some(parsed_full_name),
-                        catalog_update.diff,
-                    );
-                }
-                CatalogItem::Sink(sink) => {
-                    self.absorb_sink(sink, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::Index(index) => {
-                    self.absorb_index(index, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::MaterializedView(mv) => {
-                    self.absorb_materialized_view(mv, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::View(view) => {
-                    self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
-                }
-
-                CatalogItem::Secret(secret) => {
-                    self.absorb_secret(secret, None, catalog_update.diff);
-                }
-                CatalogItem::Connection(connection) => {
-                    self.absorb_connection(connection, None, catalog_update.diff);
-                }
-                CatalogItem::MetricSink(metric_sink) => {
-                    self.absorb_metric_sink(
-                        metric_sink,
-                        Some(parsed_full_name),
-                        catalog_update.diff,
-                    );
-                }
-                CatalogItem::Log(_) => {}
-                CatalogItem::Type(_) => {}
-                CatalogItem::Func(_) => {}
-            },
-            ParsedStateUpdateKind::Cluster {
-                durable_cluster: _,
-                parsed_cluster,
-            } => {
-                let name = parsed_cluster.name.clone();
-                self.absorb_cluster(parsed_cluster, Some(name), catalog_update.diff);
-            }
-            ParsedStateUpdateKind::ClusterReplica {
-                durable_cluster_replica: _,
-                parsed_cluster_replica,
-            } => {
-                let name = parsed_cluster_replica.name.clone();
-                self.absorb_cluster_replica(
-                    parsed_cluster_replica,
-                    Some(name),
-                    catalog_update.diff,
-                );
-            }
-            ParsedStateUpdateKind::IntrospectionSourceIndex { .. } => {
-                // IntrospectionSourceIndex updates are collected
-                // separately in apply_catalog_implications and not
-                // routed through absorb.
-                unreachable!("IntrospectionSourceIndex should not be passed to absorb");
-            }
-            ParsedStateUpdateKind::ReplicaSystemConfiguration { .. } => {
-                // ReplicaSystemConfiguration updates are collected separately in
-                // apply_catalog_implications and not routed through absorb.
-                unreachable!("ReplicaSystemConfiguration should not be passed to absorb");
-            }
-            ParsedStateUpdateKind::SystemConfiguration { .. } => {
-                // SystemConfiguration updates are collected separately in
-                // apply_catalog_implications and not routed through absorb.
-                unreachable!("SystemConfiguration should not be passed to absorb");
-            }
-            ParsedStateUpdateKind::CollectionCompactionBound(_) => {
-                unreachable!("CollectionCompactionBound should not be passed to absorb");
-            }
-            ParsedStateUpdateKind::WrittenPlan(_) => {
-                unreachable!("WrittenPlan should not be passed to absorb");
-            }
-            ParsedStateUpdateKind::StorageCollectionMetadata { .. } => {
-                unreachable!("StorageCollectionMetadata should not be passed to absorb");
-            }
-        }
-    }
-
-    impl_absorb_method!(absorb_table, Table, Table);
-    impl_absorb_method!(
-        absorb_source,
-        Source,
-        (Source, Option<GenericSourceConnection>)
-    );
-    impl_absorb_method!(absorb_sink, Sink, Sink);
-    impl_absorb_method!(absorb_index, Index, Index);
-    impl_absorb_method!(absorb_metric_sink, MetricSink, MetricSink);
-    impl_absorb_method!(absorb_materialized_view, MaterializedView, MaterializedView);
-    impl_absorb_method!(absorb_view, View, View);
-
-    impl_absorb_method!(absorb_secret, Secret, Secret);
-    impl_absorb_method!(absorb_connection, Connection, Connection);
-
-    impl_absorb_method!(absorb_cluster, Cluster, Cluster);
-    impl_absorb_method!(absorb_cluster_replica, ClusterReplica, ClusterReplica);
-}
-
 fn partition_cluster_replica_drops(
     clusters_with_creates: &BTreeSet<ClusterId>,
     drops: Vec<(ClusterId, ReplicaId)>,
@@ -2905,26 +2548,6 @@ fn partition_cluster_replica_drops(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::{GlobalId, RelationDesc, RelationVersion, VersionedRelationDesc};
-    use mz_sql::names::ResolvedIds;
-    use std::collections::BTreeMap;
-
-    fn create_test_table(name: &str) -> Table {
-        Table {
-            desc: VersionedRelationDesc::new(
-                RelationDesc::builder()
-                    .with_column(name, mz_repr::SqlScalarType::String.nullable(false))
-                    .finish(),
-            ),
-            create_sql: None,
-            collections: BTreeMap::from([(RelationVersion::root(), GlobalId::System(1))]),
-            conn_id: None,
-            resolved_ids: ResolvedIds::empty(),
-            custom_logical_compaction_window: None,
-            is_retained_metrics_object: false,
-            data_source: TableDataSource::TableWrites { defaults: vec![] },
-        }
-    }
 
     #[mz_ore::test]
     fn mixed_replica_drops_are_applied_before_creates() {
@@ -2939,201 +2562,5 @@ mod tests {
 
         assert_eq!(before_creates, vec![(c1, r1)]);
         assert_eq!(deferred, vec![(c2, r2)]);
-    }
-
-    #[mz_ore::test]
-    fn test_item_state_transitions() {
-        // Test None -> Added
-        let mut state = CatalogImplicationKind::None;
-        assert!(
-            state
-                .transition("item1".to_string(), None, StateDiff::Addition)
-                .is_ok()
-        );
-        assert!(matches!(state, CatalogImplicationKind::Added(_)));
-
-        // Test Added -> Altered (via retraction)
-        let mut state = CatalogImplicationKind::Added("new_item".to_string());
-        assert!(
-            state
-                .transition("old_item".to_string(), None, StateDiff::Retraction)
-                .is_ok()
-        );
-        match &state {
-            CatalogImplicationKind::Altered { prev, new } => {
-                // The retracted item is the OLD state
-                assert_eq!(prev, "old_item");
-                // The existing Added item is the NEW state
-                assert_eq!(new, "new_item");
-            }
-            _ => panic!("Expected Altered state"),
-        }
-
-        // Test None -> Dropped
-        let mut state = CatalogImplicationKind::None;
-        assert!(
-            state
-                .transition(
-                    "item1".to_string(),
-                    Some("test_name".to_string()),
-                    StateDiff::Retraction
-                )
-                .is_ok()
-        );
-        assert!(matches!(state, CatalogImplicationKind::Dropped(_, _)));
-
-        // Test Dropped -> Altered (via addition)
-        let mut state = CatalogImplicationKind::Dropped("old_item".to_string(), "name".to_string());
-        assert!(
-            state
-                .transition("new_item".to_string(), None, StateDiff::Addition)
-                .is_ok()
-        );
-        match &state {
-            CatalogImplicationKind::Altered { prev, new } => {
-                // The existing Dropped item is the OLD state
-                assert_eq!(prev, "old_item");
-                // The added item is the NEW state
-                assert_eq!(new, "new_item");
-            }
-            _ => panic!("Expected Altered state"),
-        }
-
-        // Test invalid transitions
-        let mut state = CatalogImplicationKind::Added("item".to_string());
-        assert!(
-            state
-                .transition("item2".to_string(), None, StateDiff::Addition)
-                .is_err()
-        );
-
-        let mut state = CatalogImplicationKind::Dropped("item".to_string(), "name".to_string());
-        assert!(
-            state
-                .transition("item2".to_string(), None, StateDiff::Retraction)
-                .is_err()
-        );
-    }
-
-    #[mz_ore::test]
-    fn test_table_absorb_state_machine() {
-        let table1 = create_test_table("table1");
-        let table2 = create_test_table("table2");
-
-        // Test None -> AddTable
-        let mut cmd = CatalogImplication::None;
-        cmd.absorb_table(
-            table1.clone(),
-            Some("schema.table1".to_string()),
-            StateDiff::Addition,
-        );
-        // Check that we have an Added state
-        match &cmd {
-            CatalogImplication::Table(state) => match state {
-                CatalogImplicationKind::Added(t) => {
-                    assert_eq!(t.desc.latest().arity(), table1.desc.latest().arity())
-                }
-                _ => panic!("Expected Added state"),
-            },
-            _ => panic!("Expected Table command"),
-        }
-
-        // Test AddTable -> AlterTable (via retraction)
-        // This tests the bug fix: when we have AddTable(table1) and receive Retraction(table2),
-        // table2 is the old state being removed, table1 is the new state
-        cmd.absorb_table(
-            table2.clone(),
-            Some("schema.table2".to_string()),
-            StateDiff::Retraction,
-        );
-        match &cmd {
-            CatalogImplication::Table(state) => match state {
-                CatalogImplicationKind::Altered { prev, new } => {
-                    // Verify the fix: prev should be the retracted table, new should be the added table
-                    assert_eq!(prev.desc.latest().arity(), table2.desc.latest().arity());
-                    assert_eq!(new.desc.latest().arity(), table1.desc.latest().arity());
-                }
-                _ => panic!("Expected Altered state"),
-            },
-            _ => panic!("Expected Table command"),
-        }
-
-        // Test None -> DropTable
-        let mut cmd = CatalogImplication::None;
-        cmd.absorb_table(
-            table1.clone(),
-            Some("schema.table1".to_string()),
-            StateDiff::Retraction,
-        );
-        match &cmd {
-            CatalogImplication::Table(state) => match state {
-                CatalogImplicationKind::Dropped(t, name) => {
-                    assert_eq!(t.desc.latest().arity(), table1.desc.latest().arity());
-                    assert_eq!(name, "schema.table1");
-                }
-                _ => panic!("Expected Dropped state"),
-            },
-            _ => panic!("Expected Table command"),
-        }
-
-        // Test DropTable -> AlterTable (via addition)
-        cmd.absorb_table(
-            table2.clone(),
-            Some("schema.table2".to_string()),
-            StateDiff::Addition,
-        );
-        match &cmd {
-            CatalogImplication::Table(state) => match state {
-                CatalogImplicationKind::Altered { prev, new } => {
-                    // prev should be the dropped table, new should be the added table
-                    assert_eq!(prev.desc.latest().arity(), table1.desc.latest().arity());
-                    assert_eq!(new.desc.latest().arity(), table2.desc.latest().arity());
-                }
-                _ => panic!("Expected Altered state"),
-            },
-            _ => panic!("Expected Table command"),
-        }
-    }
-
-    #[mz_ore::test]
-    #[should_panic(expected = "Cannot add an already added object")]
-    fn test_invalid_double_add() {
-        let table = create_test_table("table");
-        let mut cmd = CatalogImplication::None;
-
-        // First addition
-        cmd.absorb_table(
-            table.clone(),
-            Some("schema.table".to_string()),
-            StateDiff::Addition,
-        );
-
-        // Second addition should panic
-        cmd.absorb_table(
-            table.clone(),
-            Some("schema.table".to_string()),
-            StateDiff::Addition,
-        );
-    }
-
-    #[mz_ore::test]
-    #[should_panic(expected = "Cannot drop an already dropped object")]
-    fn test_invalid_double_drop() {
-        let table = create_test_table("table");
-        let mut cmd = CatalogImplication::None;
-
-        // First drop
-        cmd.absorb_table(
-            table.clone(),
-            Some("schema.table".to_string()),
-            StateDiff::Retraction,
-        );
-
-        // Second drop should panic
-        cmd.absorb_table(
-            table.clone(),
-            Some("schema.table".to_string()),
-            StateDiff::Retraction,
-        );
     }
 }

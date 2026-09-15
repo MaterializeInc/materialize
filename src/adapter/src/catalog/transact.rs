@@ -71,7 +71,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{NetworkPolicyRule, PlanError};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_sql::session::vars::OwnedVarInput;
+use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{DEFAULT_SCHEMA, rbac};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
@@ -92,8 +92,33 @@ use crate::catalog::{
 };
 use crate::config::{ScopedParameters, ScopedParametersScope};
 use crate::coord::ConnMeta;
-use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::util::ResultExt;
+use mz_catalog::memory::implications::ParsedStateUpdate;
+
+fn add_to_audit_log(
+    system_configuration: &SystemVars,
+    oracle_write_ts: mz_repr::Timestamp,
+    session: Option<&ConnMeta>,
+    tx: &mut mz_catalog::durable::Transaction,
+    audit_events: &mut Vec<VersionedEvent>,
+    event_type: EventType,
+    object_type: ObjectType,
+    details: EventDetails,
+) -> Result<(), Error> {
+    let user = session.map(|session| session.user().name.to_string());
+
+    // unsafe_mock_audit_event_timestamp can only be set to Some when running in unsafe mode.
+
+    let occurred_at = match system_configuration.unsafe_mock_audit_event_timestamp() {
+        Some(ts) => ts.into(),
+        _ => oracle_write_ts.into(),
+    };
+    let id = tx.allocate_audit_log_id()?;
+    let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
+    audit_events.push(event.clone());
+    tx.insert_audit_log_event(event);
+    Ok(())
+}
 
 /// A manually injected audit event.
 ///
@@ -1340,7 +1365,7 @@ impl Catalog {
                             old_history: previous.map(|previous| previous.to_string()),
                             new_history: value.map(|v| v.to_string()),
                         });
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1390,7 +1415,7 @@ impl Catalog {
                             new_interval: value.map(|v| v.to_string()),
                         },
                     );
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1434,7 +1459,7 @@ impl Catalog {
                 };
                 tx.update_role(id, existing_role.into(), password_action)?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1466,7 +1491,7 @@ impl Catalog {
                 }
                 tx.update_network_policy(id, policy.clone())?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1518,7 +1543,7 @@ impl Catalog {
                         column_type,
                         nullable,
                     });
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1575,7 +1600,7 @@ impl Catalog {
                 tx.drop_comments(&[comment_id].into())?;
 
                 for (event_type, details) in new_audit_events {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -1648,7 +1673,7 @@ impl Catalog {
                     schema_privileges.clone(),
                     &temporary_oids,
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1663,7 +1688,7 @@ impl Catalog {
                 )?;
                 info!("create database {}", name);
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1719,7 +1744,7 @@ impl Catalog {
                     privileges.clone(),
                     &state.get_temporary_oids().collect(),
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1749,7 +1774,7 @@ impl Catalog {
                     vars.clone(),
                     &state.get_temporary_oids().collect(),
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1822,7 +1847,7 @@ impl Catalog {
                     config.clone().into(),
                     &state.get_temporary_oids().collect(),
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -1882,7 +1907,7 @@ impl Catalog {
                             scheduling_policies,
                         },
                     );
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2189,7 +2214,7 @@ impl Catalog {
                             name,
                         }),
                     };
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2243,7 +2268,7 @@ impl Catalog {
                     &temporary_oids,
                 )?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2275,7 +2300,7 @@ impl Catalog {
                 if let (Some(conn_id), true) =
                     (session.map(|session| session.conn_id()), should_log)
                 {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2336,7 +2361,7 @@ impl Catalog {
                     }
 
                     if Self::should_audit_log_item(entry.item()) {
-                        CatalogState::add_to_audit_log(
+                        add_to_audit_log(
                             &state.system_configuration,
                             oracle_write_ts,
                             session,
@@ -2386,7 +2411,7 @@ impl Catalog {
                         ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
                     };
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2409,7 +2434,7 @@ impl Catalog {
                 for database_id in delta.databases {
                     let database = state.get_database(&database_id).clone();
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2433,7 +2458,7 @@ impl Catalog {
                         .get(&role_id)
                         .expect("catalog out of sync");
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2458,7 +2483,7 @@ impl Catalog {
                         .get(&network_policy_id)
                         .expect("catalog out of sync");
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2492,7 +2517,7 @@ impl Catalog {
                             reason,
                             scheduling_policies,
                         });
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2510,7 +2535,7 @@ impl Catalog {
                 for cluster_id in delta.clusters {
                     let cluster = state.get_cluster(cluster_id);
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2546,7 +2571,7 @@ impl Catalog {
                 member_role.membership.map.insert(role_id, grantor_id);
                 tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2576,7 +2601,7 @@ impl Catalog {
                 member_role.membership.map.remove(&role_id);
                 tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2672,7 +2697,7 @@ impl Catalog {
                 };
                 // One audit event per grantee, even though the batch is a single durable write.
                 for privilege in &privileges {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2712,7 +2737,7 @@ impl Catalog {
                     privilege_acl_item.grantee,
                     new_acl_mode.cloned(),
                 )?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2746,7 +2771,7 @@ impl Catalog {
                     )));
                 }
                 tx.rename_cluster(id, &name, &to_name)?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2774,7 +2799,7 @@ impl Catalog {
                     )));
                 }
                 tx.rename_cluster_replica(replica_id, &name, &to_name)?;
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -2825,7 +2850,7 @@ impl Catalog {
                     new_name: Self::full_name_detail(&to_full_name),
                 });
                 if Self::should_audit_log_item(entry.item()) {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -2993,7 +3018,7 @@ impl Catalog {
                     new_name: new_name.clone(),
                     database_name,
                 });
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3123,7 +3148,7 @@ impl Catalog {
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
                 let object_type = state.get_object_type(&id);
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3195,7 +3220,7 @@ impl Catalog {
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3210,7 +3235,7 @@ impl Catalog {
                 )?;
 
                 if let Some(details) = reconfiguration_event {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -3223,7 +3248,7 @@ impl Catalog {
                 }
 
                 if let Some(details) = burst_event {
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -3286,7 +3311,7 @@ impl Catalog {
                     );
                     full_name.item = name.item;
 
-                    CatalogState::add_to_audit_log(
+                    add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
                         session,
@@ -3328,7 +3353,7 @@ impl Catalog {
                     tx.set_enable_0dt_deployment_panic_after_timeout(panic_after_timeout)?;
                 }
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3356,7 +3381,7 @@ impl Catalog {
                     tx.reset_enable_0dt_deployment_panic_after_timeout()?;
                 }
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -3373,7 +3398,7 @@ impl Catalog {
                 tx.reset_0dt_deployment_ddl_check_interval()?;
                 tx.reset_enable_0dt_deployment_panic_after_timeout()?;
 
-                CatalogState::add_to_audit_log(
+                add_to_audit_log(
                     &state.system_configuration,
                     oracle_write_ts,
                     session,
@@ -5291,7 +5316,7 @@ mod tests {
         use timely::progress::Antichain;
 
         use crate::catalog::state::LocalExpressionCache;
-        use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdateKind;
+        use mz_catalog::memory::implications::ParsedStateUpdateKind;
 
         Catalog::with_debug(|mut catalog| async move {
             let input = GlobalId::User(100_000);
