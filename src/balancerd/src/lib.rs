@@ -54,7 +54,8 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ErrorResponse, FrontendMessage,
-    FrontendStartupMessage, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3, decode_startup,
+    FrontendStartupMessage, MAX_STARTUP_FRAME_SIZE, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
+    VERSION_3, decode_startup,
 };
 use mz_server_core::{
     Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
@@ -848,7 +849,7 @@ impl mz_server_core::Server for PgwireBalancer {
             let result: Result<(), anyhow::Error> = async move {
                 let mut conn = Conn::Unencrypted(conn);
                 loop {
-                    let message = decode_startup(&mut conn).await?;
+                    let message = decode_startup(&mut conn, MAX_STARTUP_FRAME_SIZE).await?;
                     conn = match message {
                         // Clients sometimes hang up during the startup sequence, e.g.
                         // because they receive an unacceptable response to an
