@@ -9,8 +9,8 @@
 //! operator, which resumes maintenance on its Timely worker.
 
 use super::merge::ReadBudget;
+use super::native::Exertion;
 pub use super::native::{Batcher, Spine};
-use super::native::{Exertion, maintain};
 use super::{ChunkChunker, Column, ColumnChunk};
 use crate::builder_async::{Event, OperatorBuilder, PressOnDropButton};
 use columnar::Columnar;
@@ -77,21 +77,21 @@ where
         let mut batcher = Batcher::new(budget.clone());
         let mut chunker = ChunkChunker::<D, T, R>::default();
         let mut upper = Antichain::from_elem(T::minimum());
-        const INPUT_EVENTS_PER_TURN: usize = 32;
+        // Maintenance runs alongside input. A turn drains every queued input
+        // event and seals each frontier advance before it advances maintenance
+        // by one poll, so a merge waiting on a read never stalls input or delays
+        // publication. The spine holds sealed batches as pending until its
+        // current maintenance completes.
         loop {
-            let mut event = tokio::select! {
+            tokio::select! {
                 biased;
-                _ = input.ready(), if !upper.is_empty() => input.next_sync(),
-                _ = notify.notified() => None,
-            };
+                _ = input.ready(), if !upper.is_empty() => {},
+                _ = notify.notified() => {},
+            }
             let mut next_upper = None;
-            // Extra exertion can introduce virtual batches and change subsequent
-            // merge work. Amortize it over queued input, with a finite scheduling
-            // quantum so other operators still get a turn. The latest observed
-            // frontier suffices for sealing, including data read after it.
-            for index in 0..INPUT_EVENTS_PER_TURN {
-                match event.take() {
-                    Some(Event::Data(time, mut data)) => {
+            while let Some(event) = input.next_sync() {
+                match event {
+                    Event::Data(time, mut data) => {
                         super::metrics::record(
                             super::metrics::Stage::AsyncInput,
                             columnar::Len::len(&data.borrow()),
@@ -105,11 +105,7 @@ where
                             batcher.push(std::mem::take(chunk)).await;
                         }
                     }
-                    Some(Event::Progress(next)) => next_upper = Some(next),
-                    None => break,
-                }
-                if index + 1 < INPUT_EVENTS_PER_TURN {
-                    event = input.next_sync();
+                    Event::Progress(next) => next_upper = Some(next),
                 }
             }
             if let Some(next) = next_upper {
@@ -137,15 +133,22 @@ where
                     upper = next;
                 }
             }
-            // Queued input funds its own introductions.
-            let exertion = if !input.is_empty() {
-                Exertion::Merges
-            } else if upper.is_empty() {
+            // A read completion resumes the existing allowance; only a spine with
+            // no maintenance in flight asks policy for another. No trace borrow
+            // may cross an await: reader compaction can change the same spine.
+            let exertion = if upper.is_empty() {
                 Exertion::Idle
             } else {
                 Exertion::Funded
             };
-            maintain(&state, &notify, exertion).await;
+            {
+                let mut spine = state.borrow_mut();
+                if spine.maintenance_pending() {
+                    spine.resume_maintenance();
+                } else {
+                    spine.exert(exertion);
+                }
+            }
             tokio::task::yield_now().await;
         }
     });
@@ -163,6 +166,7 @@ mod operator_tests;
 
 #[cfg(test)]
 mod tests {
+    use super::super::native::maintain;
     use super::*;
     use columnar::{Index, Len};
     use differential_dataflow::trace::Batcher as SyncBatcher;
