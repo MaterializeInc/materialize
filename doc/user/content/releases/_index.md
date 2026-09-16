@@ -80,6 +80,12 @@ Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_repli
 - **Pod priority classes in Self-Managed deployments**: Operators can set `environmentd.priorityClassName` and `clusterd.priorityClassName` in the Helm chart, so a higher-priority pod scheduled onto a full node no longer evicts Materialize ahead of other workloads.
 - **Composite types in `mz-deploy` projects**: `mz-deploy` records the full catalog type for composite types such as records in `types.lock`, so views that read a dependency's record-typed column type check offline instead of resolving to a pseudo type.
 
+### Guides {#v26.42-guides}
+- [Size clusters for hydration](/clusters/sizing/)
+- [Optimize hydration requirements](/clusters/optimize-hydration-requirements/)
+- [Autoscaling for hydration](/clusters/autoscaling/)
+- [Troubleshoot a cluster memory spike](/clusters/troubleshoot-clusters/memory-spike/)
+
 ### Bug Fixes {#v26.42-bug-fixes}
 - Fixed `CREATE TABLE ... FROM SOURCE` and `ALTER SOURCE` connecting to a source's upstream system before checking the caller's privileges on that source, which let a role holding no privilege on the source read upstream schema, table, and column names out of the resulting purification errors; `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source plus schema `USAGE`, and `ALTER SOURCE` requires ownership.
 - Fixed `ALTER CLUSTER` resource-limit enforcement during graceful reconfiguration, which predicted a reshape's peak replica overlap instead of checking the replica set actually being created; a target that does not fit now leaves the existing replicas serving and reports `INSUFFICIENT_RESOURCES` with a hint.
