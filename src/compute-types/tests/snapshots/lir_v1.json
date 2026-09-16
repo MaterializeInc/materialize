@@ -176,6 +176,11 @@
       },
       "LagLead": {
         "STRUCT": {
+          "args": {
+            "OPTION": {
+              "TYPENAME": "LagLeadArgs"
+            }
+          },
           "ignore_nulls": "BOOL",
           "lag_lead": {
             "TYPENAME": "LagLeadType"
@@ -2447,6 +2452,19 @@
       },
       "val_plan": {
         "TYPENAME": "SafeMfpPlan"
+      }
+    }
+  },
+  "LagLeadArgs": {
+    "STRUCT": {
+      "default": {
+        "TYPENAME": "StableRow"
+      },
+      "offset": {
+        "OPTION": "I32"
+      },
+      "value": {
+        "OPTION": "U64"
       }
     }
   },
