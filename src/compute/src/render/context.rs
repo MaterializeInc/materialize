@@ -51,7 +51,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
-use crate::render::columnar::{CollectionEdge, flat_map_datums};
+use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -447,16 +447,16 @@ pub(crate) fn distinct_errs_collection<'a, T: RenderTimestamp>(
 #[derive(Clone)]
 pub struct CollectionBundle<'scope, T: RenderTimestamp> {
     pub collection: Option<(
-        CollectionEdge<'scope, T>,
+        ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )>,
     pub arranged: BTreeMap<Vec<LirScalarExpr>, ArrangementFlavor<'scope, T>>,
 }
 
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
-    /// Construct a new collection bundle from a [`CollectionEdge`] and an error stream.
+    /// Construct a new collection bundle from a [`ColCollection`] and an error stream.
     pub fn from_edge(
-        oks: CollectionEdge<'scope, T>,
+        oks: ColCollection<'scope, T>,
         errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) -> Self {
         Self {
@@ -603,7 +603,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         &self,
         key: Option<&[LirScalarExpr]>,
     ) -> (
-        CollectionEdge<'scope, T>,
+        ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         // Any operator that uses this method was told to use a particular
@@ -940,7 +940,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
     ) -> (
-        CollectionEdge<'scope, T>,
+        ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         // Unwrap the stable-serialization row wrapper, seeking works on
@@ -1167,14 +1167,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// teeing the stream.
     fn arrange_collection(
         name: &String,
-        oks: CollectionEdge<'scope, T>,
+        oks: ColCollection<'scope, T>,
         key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
         batcher: ArrangementBatcher,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
-        CollectionEdge<'scope, T>,
+        ColCollection<'scope, T>,
     ) {
         // Spelled out rather than `map_fallible`, whose closure cannot return the references
         // a columnar stream is pushed from.

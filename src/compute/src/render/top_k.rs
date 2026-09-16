@@ -49,7 +49,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
-use crate::render::columnar::{CollectionEdge, flat_map_datums};
+use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -348,7 +348,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
     /// Constructs a TopK dataflow subgraph.
     fn build_topk<'s>(
         &self,
-        collection: CollectionEdge<'s, T>,
+        collection: ColCollection<'s, T>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
@@ -356,7 +356,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         arity: usize,
         buckets: Vec<u64>,
     ) -> (
-        CollectionEdge<'s, T>,
+        ColCollection<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let pairer = Pairer::new(1);
@@ -536,7 +536,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 
     fn render_top1_monotonic<'s>(
         &self,
-        collection: CollectionEdge<'s, T>,
+        collection: ColCollection<'s, T>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         arity: usize,
@@ -625,7 +625,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 /// intermediate container, not the decode itself, which needs a columnar batcher to push
 /// borrowed rows into. The key is formed from the borrowed datums.
 fn map_topk_key<'s, T, L>(
-    edge: CollectionEdge<'s, T>,
+    edge: ColCollection<'s, T>,
     name: &str,
     mut key: L,
 ) -> VecCollection<'s, T, (Row, Row), Diff>
@@ -673,7 +673,7 @@ where
 /// monotonic path would remove it, leaving a projection that drops the hash.
 fn topk_result_to_columnar<'s, T>(
     collection: VecCollection<'s, T, (Row, Row), Diff>,
-) -> CollectionEdge<'s, T>
+) -> ColCollection<'s, T>
 where
     T: crate::render::RenderTimestamp,
 {
