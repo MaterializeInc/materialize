@@ -224,7 +224,7 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
 /// Split the given command into one part per target worker.
 ///
-/// `CreateDataflow` commands are partitioned among the workers; every other command is replicated
+/// `CreateDataflow` commands are partitioned among the workers. Every other command is replicated
 /// to all workers.
 fn split_command(
     command: ComputeCommand,
