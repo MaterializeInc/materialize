@@ -21,7 +21,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import IO
+from typing import IO, TypeVar
 
 from materialize import ui
 
@@ -144,7 +144,10 @@ def run_and_get_return_code(
         return e.returncode
 
 
-def run_with_retries[T](fn: Callable[[], T], max_duration: int = 60) -> T:
+T = TypeVar("T")  # Generic type variable
+
+
+def run_with_retries(fn: Callable[[], T], max_duration: int = 60) -> T:
     """Retry a function until it doesn't raise a `CalledProcessError`, uses
     exponential backoff until `max_duration` is reached."""
     for retry in range(math.ceil(math.log2(max_duration))):

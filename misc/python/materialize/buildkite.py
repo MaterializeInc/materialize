@@ -13,7 +13,7 @@ import os
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import yaml
 
@@ -227,7 +227,10 @@ def notify_qa_team_about_failure(failure: str) -> None:
     )
 
 
-def shard_list[T](items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
+T = TypeVar("T")
+
+
+def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
     if len(items) == 0:
         return []
 

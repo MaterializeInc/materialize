@@ -124,7 +124,7 @@ def expand_globs(root: Path, *specs: Path | str) -> set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags[VERSION_TYPE: TypedVersionBase](
+def get_version_tags(
     *,
     version_type: type[VERSION_TYPE],
     newest_first: bool = True,
@@ -157,7 +157,7 @@ def get_version_tags[VERSION_TYPE: TypedVersionBase](
     return sorted(tags, reverse=newest_first)
 
 
-def get_latest_version[VERSION_TYPE: TypedVersionBase](
+def get_latest_version(
     version_type: type[VERSION_TYPE],
     excluded_versions: set[VERSION_TYPE] | None = None,
     current_version: VERSION_TYPE | None = None,
@@ -377,7 +377,7 @@ def contains_commit(
     return is_ancestor(commit_sha, target)
 
 
-def get_tagged_release_version[VERSION_TYPE: TypedVersionBase](
+def get_tagged_release_version(
     version_type: type[VERSION_TYPE],
 ) -> VERSION_TYPE | None:
     """
