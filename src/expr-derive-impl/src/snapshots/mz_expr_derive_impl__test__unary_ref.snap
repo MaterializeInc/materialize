@@ -41,7 +41,7 @@ impl crate::func::FuncName for UnaryFn {
     const NAME: &'static str = stringify!(unary_fn);
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(test = true)] fn unary_fn<'a>(a: &i16) -> bool",
-        body_fingerprint: 9814741405877077832u64,
+        body_fingerprint: 4726381389472009124u64,
     });
 }
 fn unary_fn<'a>(a: &i16) -> bool {

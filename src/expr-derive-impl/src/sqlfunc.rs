@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use darling::FromMeta;
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::{Delimiter, Ident, Spacing, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
 use syn::spanned::Spanned;
 use syn::{Expr, Lifetime, Lit};
@@ -137,37 +137,85 @@ pub fn sqlfunc(
     })
 }
 
-/// Renders a token stream as compact source text.
+/// Renders a token stream as compact, canonical source text.
 ///
-/// `TokenStream::to_string` separates every token with whitespace, and the
-/// compiler's implementation wraps long streams onto several lines. This
-/// collapses the whitespace and drops it around punctuation, so the result
-/// reads like formatted code on one line, independent of how the source was
-/// actually formatted.
-fn compact_tokens(tokens: &TokenStream) -> String {
-    let rendered = tokens
-        .to_string()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut out = String::with_capacity(rendered.len());
-    let mut chars = rendered.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == ' ' {
-            let after_opener = out
-                .chars()
-                .last()
-                .is_some_and(|prev| "([<&.!'".contains(prev));
-            let before_closer = chars
-                .peek()
-                .is_some_and(|next| "()[],:;<>.?".contains(*next));
-            if after_opener || before_closer {
-                continue;
-            }
-        }
-        out.push(c);
-    }
+/// The rendering walks the token trees rather than calling
+/// `TokenStream::to_string`, whose spacing differs between the compiler and
+/// the proc-macro2 fallback and has changed across rustc releases. Idents
+/// and literals are rendered verbatim, so whitespace inside a string literal
+/// is preserved and distinguishes two bodies. Spacing between tokens follows
+/// fixed rules that read like formatted code for signatures and attribute
+/// arguments, and is merely deterministic for bodies.
+fn render_tokens(tokens: &TokenStream) -> String {
+    let mut out = String::new();
+    render_into(tokens.clone(), &mut out);
     out
+}
+
+fn render_into(tokens: TokenStream, out: &mut String) {
+    /// What the previous token was, as far as spacing cares.
+    enum Last {
+        Start,
+        Ident,
+        Punct { ch: char, joint: bool },
+        Other,
+    }
+    let mut last = Last::Start;
+    for tree in tokens {
+        let glue = match &last {
+            Last::Start => true,
+            Last::Punct { joint: true, .. } => true,
+            Last::Punct { ch, .. } if "&.!#<".contains(*ch) => true,
+            _ => out.ends_with("::"),
+        } || match &tree {
+            TokenTree::Punct(p) if ",;:.?>".contains(p.as_char()) => true,
+            // Generic parameter lists and macro invocations attach to the
+            // preceding ident.
+            TokenTree::Punct(p) if "<!".contains(p.as_char()) => matches!(last, Last::Ident),
+            // Call and index groups attach to the callee, including a closing
+            // generic angle bracket, but not to an arrow's `>`.
+            TokenTree::Group(g) => {
+                matches!(g.delimiter(), Delimiter::Parenthesis | Delimiter::Bracket)
+                    && (matches!(last, Last::Ident)
+                        || (matches!(last, Last::Punct { ch: '>', .. })
+                            && !out.ends_with("->")
+                            && !out.ends_with("=>")))
+            }
+            _ => false,
+        };
+        if !glue {
+            out.push(' ');
+        }
+        last = match tree {
+            TokenTree::Ident(ident) => {
+                out.push_str(&ident.to_string());
+                Last::Ident
+            }
+            TokenTree::Literal(lit) => {
+                out.push_str(&lit.to_string());
+                Last::Other
+            }
+            TokenTree::Punct(p) => {
+                out.push(p.as_char());
+                Last::Punct {
+                    ch: p.as_char(),
+                    joint: p.spacing() == Spacing::Joint,
+                }
+            }
+            TokenTree::Group(g) => {
+                let (open, close) = match g.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::None => ("", ""),
+                };
+                out.push_str(open);
+                render_into(g.stream(), out);
+                out.push_str(close);
+                Last::Other
+            }
+        };
+    }
 }
 
 /// FNV-1a, 64 bit. A fingerprint, not a secure hash: it only needs to be
@@ -180,10 +228,10 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 /// Emits the `SQLFUNC` const of the generated `FuncName` impl: the
 /// declaration (attribute arguments and signature) as text and a fingerprint
-/// of the body. Both come from token streams, so formatting and comments do
-/// not affect them.
+/// of the body. Both come from the token trees via [`render_tokens`], so
+/// formatting and comments do not affect them.
 fn sqlfunc_source(attr: &TokenStream, func: &syn::ItemFn) -> TokenStream {
-    let attr = compact_tokens(attr);
+    let attr = render_tokens(attr);
     let attr = if attr.is_empty() {
         String::new()
     } else {
@@ -191,9 +239,9 @@ fn sqlfunc_source(attr: &TokenStream, func: &syn::ItemFn) -> TokenStream {
     };
     let decl = format!(
         "#[sqlfunc{attr}] {}",
-        compact_tokens(&func.sig.to_token_stream())
+        render_tokens(&func.sig.to_token_stream())
     );
-    let body_fingerprint = fnv1a64(compact_tokens(&func.block.to_token_stream()).as_bytes());
+    let body_fingerprint = fnv1a64(render_tokens(&func.block.to_token_stream()).as_bytes());
     quote! {
         const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
             decl: #decl,
@@ -1699,4 +1747,42 @@ fn variadic_func(
     };
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::render_tokens;
+
+    #[test]
+    fn signature_reads_like_formatted_code() {
+        let sig: proc_macro2::TokenStream = syn::parse_quote! {
+            fn f<'a>(mut a: &'a str, b: Option<i32>) -> Result<Cow<'a, str>, E>
+        };
+        assert_eq!(
+            render_tokens(&sig),
+            "fn f<'a>(mut a: &'a str, b: Option<i32>) -> Result<Cow<'a, str>, E>"
+        );
+        let attr: proc_macro2::TokenStream = syn::parse_quote! {
+            is_monotone = "(true, true)", sqlname = "+", could_error = false
+        };
+        assert_eq!(
+            render_tokens(&attr),
+            "is_monotone = \"(true, true)\", sqlname = \"+\", could_error = false"
+        );
+    }
+
+    #[test]
+    fn literal_contents_are_verbatim() {
+        let a: proc_macro2::TokenStream = syn::parse_quote! { format!("({x})") };
+        let b: proc_macro2::TokenStream = syn::parse_quote! { format!("( {x})") };
+        assert_ne!(render_tokens(&a), render_tokens(&b));
+        assert_eq!(render_tokens(&a), "format!(\"({x})\")");
+    }
+
+    #[test]
+    fn formatting_is_invisible() {
+        let a: proc_macro2::TokenStream = "fn f ( a : i32 ) -> i32 { a + 1 }".parse().unwrap();
+        let b: proc_macro2::TokenStream = "fn f(a:i32)->i32{a+1}".parse().unwrap();
+        assert_eq!(render_tokens(&a), render_tokens(&b));
+    }
 }

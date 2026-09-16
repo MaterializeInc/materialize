@@ -53,7 +53,7 @@ impl crate::func::FuncName for RangeLower {
     const NAME: &'static str = stringify!(range_lower);
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(sqlname = \"rangelower\", is_monotone = true,)] fn range_lower<'a, T>(a: Range<T>) -> Option<T>",
-        body_fingerprint: 9617721996965895957u64,
+        body_fingerprint: 17676087085653280109u64,
     });
 }
 fn range_lower<'a, T>(a: Range<T>) -> Option<T> {

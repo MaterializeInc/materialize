@@ -56,7 +56,7 @@ impl crate::func::FuncName for Infallible1 {
     const NAME: &'static str = stringify!(infallible1);
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(sqlname = \"INFALLIBLE\", is_infix_op = true, test = true)] fn infallible1(a: f32, b: f32) -> f32",
-        body_fingerprint: 12806331427928595705u64,
+        body_fingerprint: 8548268880028836169u64,
     });
 }
 #[allow(dead_code)]
