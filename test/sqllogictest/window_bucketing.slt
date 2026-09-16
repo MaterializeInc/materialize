@@ -254,3 +254,47 @@ FROM outer_t ORDER BY y
 1  30
 2  30
 3  30
+
+# ---------------------------------------------------------------------------
+# The `WINDOW ORDER KEY RANGE` hint sets the bucket width. It tunes a constant
+# inside the bucket expression, so it must not change results whatever value it
+# takes, including values that leave the partition in a single bucket or give it
+# a bucket per row.
+
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_narrow AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
+FROM src
+OPTIONS (WINDOW ORDER KEY RANGE = 16)
+
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_wide AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
+FROM src
+OPTIONS (WINDOW ORDER KEY RANGE = 100000000)
+
+# A zero width cannot be honoured, so it falls back rather than dividing by zero.
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_zero AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
+FROM src
+OPTIONS (WINDOW ORDER KEY RANGE = 0)
+
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_ts AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY ts, rid) AS r
+FROM src
+OPTIONS (WINDOW ORDER KEY RANGE = 86400)
+
+query IIIIIIII
+SELECT
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_narrow)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_narrow EXCEPT ALL SELECT * FROM ref_ignore)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_wide)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_wide EXCEPT ALL SELECT * FROM ref_ignore)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_zero)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_zero EXCEPT ALL SELECT * FROM ref_ignore)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ts EXCEPT ALL SELECT * FROM opt_hint_ts)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_ts EXCEPT ALL SELECT * FROM ref_ts))
+----
+0  0  0  0  0  0  0  0

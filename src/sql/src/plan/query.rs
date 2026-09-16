@@ -2270,7 +2270,8 @@ generate_extracted_config!(
     (ExpectedGroupSize, u64),
     (AggregateInputGroupSize, u64),
     (DistinctOnInputGroupSize, u64),
-    (LimitInputGroupSize, u64)
+    (LimitInputGroupSize, u64),
+    (WindowOrderKeyRange, u64)
 );
 
 /// Plans a SELECT query. The SELECT query may contain an intrusive ORDER BY clause.
@@ -2302,6 +2303,7 @@ fn plan_select_from_where(
 
     // Extract query options.
     let select_option_extracted = SelectOptionExtracted::try_from(s.options.clone())?;
+    let window_order_key_range = select_option_extracted.window_order_key_range;
     let group_size_hints = GroupSizeHints::try_from(select_option_extracted)?;
 
     // Step 1. Handle FROM clause, including joins.
@@ -2856,12 +2858,38 @@ fn plan_select_from_where(
     // associated with any table.
     let scope = Scope::from_source(None, projection.into_iter().map(|(_expr, name)| name));
 
+    if let Some(range) = window_order_key_range {
+        stamp_window_order_key_range(&mut relation_expr, range);
+    }
+
     Ok(SelectPlan {
         expr: relation_expr,
         scope,
         order_by,
         project: project_key,
     })
+}
+
+/// Records the `WINDOW ORDER KEY RANGE` hint on the window functions of one
+/// `SELECT`.
+///
+/// Only calls that do not already carry a value are stamped. A subquery is
+/// planned before the query containing it reaches here and has already stamped
+/// its own calls, so this leaves the innermost hint in place, which is the one
+/// the user wrote closest to the window.
+fn stamp_window_order_key_range(expr: &mut HirRelationExpr, range: u64) {
+    #[allow(deprecated)]
+    let _ = expr.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _depth| {
+        let _ = e.visit_recursively_mut(0, &mut |_depth, e: &mut HirScalarExpr| {
+            if let HirScalarExpr::Windowing(window, _name) = e {
+                if window.bucket_key_range.is_none() {
+                    window.bucket_key_range = Some(range);
+                }
+            }
+            Ok::<(), mz_ore::stack::RecursionLimitError>(())
+        });
+        Ok::<(), mz_ore::stack::RecursionLimitError>(())
+    });
 }
 
 fn plan_scalar_table_funcs(
@@ -3487,6 +3515,7 @@ fn plan_table_function_internal(
                                 }),
                                 partition_by: vec![],
                                 order_by: vec![],
+                                bucket_key_range: None,
                             })])
                         } else {
                             bail_unsupported!(format!(
@@ -5606,6 +5635,7 @@ fn plan_function<'a>(
                 }),
                 partition_by,
                 order_by: order_by_exprs,
+                bucket_key_range: None,
             }));
         }
         Func::ValueWindow(impls) => {
@@ -5633,6 +5663,7 @@ fn plan_function<'a>(
                 }),
                 partition_by,
                 order_by: order_by_exprs,
+                bucket_key_range: None,
             }));
         }
         Func::Aggregate(_) => {
@@ -5701,6 +5732,7 @@ fn plan_function<'a>(
                     }),
                     partition_by,
                     order_by: order_by_exprs,
+                    bucket_key_range: None,
                 }));
             }
         }

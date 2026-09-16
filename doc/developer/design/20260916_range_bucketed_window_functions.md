@@ -41,8 +41,8 @@ changes are unavoidable and no amount of restructuring helps.
 - No regression in arrangement memory. This matters because the operators that
   motivate the work are already memory-bound, so trading memory for CPU makes
   their situation worse rather than better.
-- No regression for partitions the split cannot help, which is a separate
-  criterion from the one above and the harder one to meet. See "Eligibility".
+- A way out for partitions the split cannot help, which is a separate criterion
+  from the one above and the harder one to meet. See "Eligibility".
 - No change to results, with the exception discussed under
   "Ordering must be total" below.
 - Opt-in, so that the existing path stays the default until the bucketing
@@ -237,40 +237,50 @@ relation is the hard part and both framings assume it.
 
 ## Open Questions
 
-**How is the bucket width chosen?** This is the one genuinely unresolved
-question, and it is exactly why the existing hierarchical path uses hashes: a
-monotone bucket function needs some knowledge of the key distribution, whereas
-a hash needs none.
+**How is the bucket width chosen?** A `WINDOW ORDER KEY RANGE` query hint, in
+units of the `ORDER BY` key, or seconds when the key is a timestamp. Absent the
+hint the width falls back to a constant per key type.
 
-The choice is more forgiving than it looks, because the cost is not symmetric
-around an optimum. Too wide merely dilutes the benefit, since per-update cost
-follows bucket size. Too narrow is worse: the boundary level grows as buckets
-shrink and eventually dominates, and its arrangements are sized by bucket count
-rather than row count, so they become a real overhead on small partitions. The
-width therefore only has to be large enough, and erring high is much safer than
-erring low. A fixed width applied to the high bits of an integer, date, or
-timestamp key is a plausible default, and the existing hierarchical path already
-builds its bucket ladder in powers of 16 from a fan-in of 16, so a comparable
-fixed choice here would not be a new kind of magic constant.
+The hint is deliberately the weakest instrument that solves the problem. It sets
+a divisor inside one expression, so the plan's shape, its operator count and its
+results are identical whatever value it takes; an unhelpful value costs
+performance and nothing else. That is less than the existing group size hints
+do, since `AGGREGATE INPUT GROUP SIZE` feeds `bucketing_of_expected_group_size`
+and so decides how many levels the hierarchical reduce renders. A hint that
+switched this optimization on or off would be a stronger thing again, and is not
+what this is.
 
-Options, roughly in increasing ambition: a `dyncfg`-supplied constant; a
-per-object hint in the spirit of `EXPECTED GROUP SIZE` (which today reaches only
-`bucketing_of_expected_group_size` and so does nothing at all for window
-functions); or statistics-driven selection.
+Naming follows the three hints that replaced `EXPECTED GROUP SIZE`, which were
+introduced because a generic name did not say which operation it tuned.
 
-**Eligibility, and the case that argues for opt-in.** A partition whose key
-span falls inside a single bucket width cannot be split at all, so the rewrite
-buys nothing and still pays for its marker constituents, its second reduce and
-its union. Such a partition is materially slower than it is today, which means
-the rewrite cannot be applied to everything that is merely expressible.
+The width has to be matched to the key's density, and the failure is two-sided.
+Too wide and the partition falls into one bucket, where the split cannot help
+and its overhead is pure loss. Too narrow and the boundary level approaches the
+whole partition, so the work is done twice. Neither is expressible as a fixed
+constant, because what a good width is depends on the units someone chose for
+their key: seconds and milliseconds since the epoch differ by three orders of
+magnitude, and a version counter differs from both. The fallback constants are
+therefore a convenience for keys shaped like epoch seconds or hourly timestamps,
+not a general answer, and anything else should carry the hint.
 
-The awkward part is that the condition is not a property of the plan. What
-decides it is how many buckets the partition's key span actually covers, which
-depends on the data, so a row-count threshold cannot express it and neither can
-anything else available at planning time. Absent a source for that estimate, the
-conservative reading is that this wants an explicit opt-in per object rather
-than a global default, and that is the main question to settle before it is
-enabled anywhere by default.
+Deriving the width from statistics remains the better long-term answer. Note
+that the leading `ORDER BY` key's distribution is exactly what would be needed,
+and is not something the planner has today.
+
+**Eligibility.** A partition whose key span falls inside a single bucket width
+cannot be split at all, so the rewrite buys nothing and still pays for its
+marker constituents, its second reduce and its union. Such a partition is
+materially slower than it is today.
+
+The condition is not a property of the plan: what decides it is how many buckets
+the partition's key span covers, which depends on the data, so neither a
+row-count threshold nor anything else available at planning time can express it.
+Nor can type-based exclusion, since what matters is a key's range rather than
+its type, and the clearest example of the problem is an `int4` version counter
+whose values never approach what the type allows. The mitigation is the width
+hint above, which lets such a window be bucketed usefully rather than not at
+all, and the feature flag remains the blunt instrument for turning the rewrite
+off entirely.
 
 Besides that and the single-direction requirement above, the offset argument of
 `lag`/`lead` is an arbitrary expression evaluated per row, so the lookback

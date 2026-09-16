@@ -290,6 +290,14 @@ pub struct WindowExpr {
     /// Note that the `column` field in the `ColumnOrder`s point into the Row constructed in the
     /// lowering, and not to original input columns.
     pub order_by: Vec<HirScalarExpr>,
+    /// Width of one bucket when this window is split by a coarsening of its
+    /// primary `ORDER BY` key, in units of that key, or seconds when the key is
+    /// a timestamp. `None` leaves the choice to the optimizer.
+    ///
+    /// Set from the `WINDOW ORDER KEY RANGE` query hint. It tunes a constant
+    /// inside one expression and changes neither the plan's shape nor its
+    /// results, so an unhelpful value costs performance and nothing else.
+    pub bucket_key_range: Option<u64>,
 }
 
 impl WindowExpr {
@@ -4304,6 +4312,7 @@ impl HirScalarExpr {
                         func,
                         partition_by,
                         order_by,
+                        bucket_key_range: _,
                     },
                     _,
                 ) => {
@@ -4373,6 +4382,7 @@ impl HirScalarExpr {
                         func,
                         partition_by,
                         order_by,
+                        bucket_key_range: _,
                     },
                     _,
                 ) => {

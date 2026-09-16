@@ -655,6 +655,7 @@ pub fn fuse_window_functions(
         inner_order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
         ignore_nulls: bool,
+        bucket_key_range: Option<u64>,
     }
     #[derive(PartialEq, Eq)]
     struct AggregateWindowFuncCallOptions {
@@ -663,6 +664,7 @@ pub fn fuse_window_functions(
         inner_order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
         distinct: bool,
+        bucket_key_range: Option<u64>,
     }
 
     /// Helper function to extract the above options.
@@ -680,6 +682,7 @@ pub fn fuse_window_functions(
                         }),
                     partition_by,
                     order_by: outer_order_by,
+                    bucket_key_range,
                 },
                 _name,
             ) => WindowFuncCallOptions::Value(ValueWindowFuncCallOptions {
@@ -688,6 +691,7 @@ pub fn fuse_window_functions(
                 inner_order_by: inner_order_by.clone(),
                 window_frame: window_frame.clone(),
                 ignore_nulls: ignore_nulls.clone(),
+                bucket_key_range: *bucket_key_range,
             }),
             HirScalarExpr::Windowing(
                 WindowExpr {
@@ -704,6 +708,7 @@ pub fn fuse_window_functions(
                         }),
                     partition_by,
                     order_by: outer_order_by,
+                    bucket_key_range,
                 },
                 _name,
             ) => WindowFuncCallOptions::Agg(AggregateWindowFuncCallOptions {
@@ -712,6 +717,7 @@ pub fn fuse_window_functions(
                 inner_order_by: inner_order_by.clone(),
                 window_frame: window_frame.clone(),
                 distinct: distinct.clone(),
+                bucket_key_range: *bucket_key_range,
             }),
             _ => panic!(
                 "extract_options should only be called on value window functions or window aggregations"
@@ -752,6 +758,7 @@ pub fn fuse_window_functions(
                                         }),
                                     partition_by: _,
                                     order_by: _,
+                                    bucket_key_range: _,
                                 },
                                 _name,
                             ) = call
@@ -783,6 +790,7 @@ pub fn fuse_window_functions(
                         }),
                         partition_by: options.partition_by,
                         order_by: options.outer_order_by,
+                        bucket_key_range: options.bucket_key_range,
                     })
                 }
                 WindowFuncCallOptions::Agg(options) => {
@@ -805,6 +813,7 @@ pub fn fuse_window_functions(
                                         }),
                                     partition_by: _,
                                     order_by: _,
+                                    bucket_key_range: _,
                                 },
                                 _name,
                             ) = call
@@ -835,6 +844,7 @@ pub fn fuse_window_functions(
                         }),
                         partition_by: options.partition_by,
                         order_by: options.outer_order_by,
+                        bucket_key_range: options.bucket_key_range,
                     })
                 }
             };
@@ -1234,35 +1244,53 @@ fn marker_args(
 /// contiguous run of the sort order, which is what lets a bucket-local `lag`
 /// mean anything. Ties map to one bucket for free, since the coarsening is a
 /// function of the key.
-fn bucket_expr(key: &HirScalarExpr, key_type: &SqlScalarType) -> Option<HirScalarExpr> {
+fn bucket_expr(
+    key: &HirScalarExpr,
+    key_type: &SqlScalarType,
+    hint: Option<u64>,
+) -> Option<HirScalarExpr> {
     use mz_expr::func::{DateBinTimestamp, DateBinTimestampTz, DivInt16, DivInt32, DivInt64};
     use mz_repr::Datum;
     use mz_repr::adt::interval::Interval;
 
     // Truncating division is monotone for a positive divisor. The bucket that
     // straddles zero ends up twice as wide as the others, which costs nothing.
+    // A hint of zero would divide by zero, and a hint that does not fit the key
+    // type cannot be honoured, so both fall back rather than erroring: this is a
+    // hint, and ignoring an unusable one is better than failing the query.
+    let width = hint.filter(|w| *w > 0);
+    let int_width = i64::try_from(width.unwrap_or(0)).ok();
+    let int_width = match int_width {
+        Some(0) | None => BUCKET_WIDTH_INT,
+        Some(w) => w,
+    };
+    let stride_secs = i64::try_from(width.unwrap_or(0))
+        .ok()
+        .filter(|w| *w > 0)
+        .unwrap_or(BUCKET_STRIDE_SECONDS);
+
     match key_type {
         SqlScalarType::Int16 => Some(key.clone().call_binary(
             HirScalarExpr::literal(
-                Datum::Int16(i16::try_from(BUCKET_WIDTH_INT).ok()?),
+                Datum::Int16(i16::try_from(int_width).ok()?),
                 SqlScalarType::Int16,
             ),
             DivInt16,
         )),
         SqlScalarType::Int32 => Some(key.clone().call_binary(
             HirScalarExpr::literal(
-                Datum::Int32(i32::try_from(BUCKET_WIDTH_INT).ok()?),
+                Datum::Int32(i32::try_from(int_width).ok()?),
                 SqlScalarType::Int32,
             ),
             DivInt32,
         )),
         SqlScalarType::Int64 => Some(key.clone().call_binary(
-            HirScalarExpr::literal(Datum::Int64(BUCKET_WIDTH_INT), SqlScalarType::Int64),
+            HirScalarExpr::literal(Datum::Int64(int_width), SqlScalarType::Int64),
             DivInt64,
         )),
         SqlScalarType::Timestamp { .. } | SqlScalarType::TimestampTz { .. } => {
             let stride = HirScalarExpr::literal(
-                Datum::Interval(Interval::new(0, 0, BUCKET_STRIDE_SECONDS * 1_000_000)),
+                Datum::Interval(Interval::new(0, 0, stride_secs.saturating_mul(1_000_000))),
                 SqlScalarType::Interval,
             );
             // `date_bin` takes the stride first and bins toward the origin, so
@@ -1356,6 +1384,7 @@ fn bucket_one_window(
         func: WindowExprType::Value(value_expr),
         partition_by,
         order_by,
+        bucket_key_range,
     } = window
     else {
         return None;
@@ -1403,7 +1432,7 @@ fn bucket_one_window(
     // first key still cuts the partition into contiguous runs. Its direction
     // does not matter, since a monotone coarsening keeps runs contiguous
     // whether the sort ascends or descends.
-    let bucket = bucket_expr(order_key, &order_key_type)?;
+    let bucket = bucket_expr(order_key, &order_key_type, *bucket_key_range)?;
 
     // Treat a single call as a fused group of one, so the two are handled
     // uniformly below.
@@ -1502,6 +1531,7 @@ fn bucket_one_window(
             .chain(iter::once(bucket))
             .collect(),
         order_by: order_by.clone(),
+        bucket_key_range: *bucket_key_range,
     });
 
     // NOTE: The level 0 subtree is built twice, once per branch. `RelationCSE`
