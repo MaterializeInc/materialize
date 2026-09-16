@@ -37,8 +37,8 @@ use iceberg_catalog_rest::{
     RestCatalogBuilder, TokenProvider,
 };
 use iceberg_storage_opendal::{
-    AwsCredential, CustomAwsCredentialLoader, CustomGcsCredentialLoader, OpenDalStorageFactory,
-    ProvideCredential,
+    AwsCredential, CustomAwsCredentialLoader, CustomAzdlsCredentialLoader,
+    CustomGcsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
 };
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
@@ -1229,7 +1229,16 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         // mapping from the catalog's `adls.sas-token.<account>` prop onto
                         // `Credential::SasToken`.
                         IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls {
-                            customized_credential_load: None,
+                            customized_credential_load: endpoint.map(|endpoint| {
+                                CustomAzdlsCredentialLoader::new(
+                                    iceberg_credentials::VendedCredentialLoader::new(
+                                        client.clone(),
+                                        endpoint,
+                                        Arc::clone(&token),
+                                        headers.clone(),
+                                    ),
+                                )
+                            }),
                         },
                     },
                     // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
