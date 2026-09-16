@@ -57,6 +57,10 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
     "persist_blob_hedged_get_enabled": "true",
     "persist_blob_hedged_get_delay": "2s",
     "persist_blob_hedged_get_budget_ratio": "0.01",
+    # The unified cluster defaults off in production, so benchmarks measure the
+    # two-cluster topology we ship. Correctness coverage is unaffected: the
+    # rest of CI still gets "true" from get_minimal_system_parameters().
+    "enable_unified_cluster": "false",
 }
 
 
