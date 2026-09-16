@@ -340,6 +340,16 @@ where
         .map(|(payload, _order_datums)| payload)
 }
 
+/// One aggregate input row's ORDER BY values.
+///
+/// Inline for a single ORDER BY expression, which is the overwhelmingly common
+/// case, because these are built one per row of a window partition and the
+/// partition is re-sorted from scratch whenever any of its rows changes. The
+/// inline capacity is 1 rather than higher so that the sorted element stays the
+/// same width as a `Vec` would make it, and only the per-row allocation goes
+/// away.
+type OrderByDatums<'a> = SmallVec<[Datum<'a>; 1]>;
+
 /// Assuming datums is a List, sort them by the 2nd through Nth elements
 /// corresponding to order_by, then return the 1st element and computed order by expression.
 fn order_aggregate_datums_with_rank<'a, I>(
@@ -349,19 +359,34 @@ fn order_aggregate_datums_with_rank<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    order_aggregate_datums_with_rank_inner(datums, order_by)
-        .into_iter()
+    order_aggregate_datums_with_order_by(datums, order_by)
         .map(|(payload, order_by_datums)| (payload, Row::pack(order_by_datums)))
+}
+
+/// Like [`order_aggregate_datums_with_rank`], but yields each row's ORDER BY
+/// values rather than packing them into a `Row`.
+///
+/// Only the window functions that compare peer groups need the packed form, and
+/// a fused call needs it only when one of its constituents does, so packing is
+/// left to the caller rather than done once per row of every partition.
+fn order_aggregate_datums_with_order_by<'a, I>(
+    datums: I,
+    order_by: &[ColumnOrder],
+) -> impl Iterator<Item = (Datum<'a>, OrderByDatums<'a>)>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    order_aggregate_datums_with_rank_inner(datums, order_by).into_iter()
 }
 
 fn order_aggregate_datums_with_rank_inner<'a, I>(
     datums: I,
     order_by: &[ColumnOrder],
-) -> Vec<(Datum<'a>, Vec<Datum<'a>>)>
+) -> Vec<(Datum<'a>, OrderByDatums<'a>)>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let mut decoded: Vec<(Datum, Vec<Datum>)> = datums
+    let mut decoded: Vec<(Datum, OrderByDatums)> = datums
         .into_iter()
         .map(|d| {
             let list = d.unwrap_list();
@@ -377,7 +402,7 @@ where
             //   anyway,
             // - and anyhow various other parts of the window function code already do decoding
             //   upfront.
-            let mut order_by_datums = Vec::with_capacity(order_by.len());
+            let mut order_by_datums = OrderByDatums::with_capacity(order_by.len());
             for _ in 0..order_by.len() {
                 order_by_datums.push(
                     list_it
@@ -391,8 +416,8 @@ where
         .collect();
 
     let mut sort_by =
-        |(payload_left, left_order_by_datums): &(Datum, Vec<Datum>),
-         (payload_right, right_order_by_datums): &(Datum, Vec<Datum>)| {
+        |(payload_left, left_order_by_datums): &(Datum, OrderByDatums),
+         (payload_right, right_order_by_datums): &(Datum, OrderByDatums)| {
             compare_columns(
                 order_by,
                 left_order_by_datums,
@@ -1200,13 +1225,13 @@ where
         .iter()
         .any(|f| matches!(f, AggregateFunc::LastValue { .. }));
 
-    let input_datums_with_ranks = order_aggregate_datums_with_rank(input_datums, order_by);
+    let input_datums_with_order_by = order_aggregate_datums_with_order_by(input_datums, order_by);
 
-    let size_hint = input_datums_with_ranks.size_hint().0;
+    let size_hint = input_datums_with_order_by.size_hint().0;
     let mut encoded_argsss = vec![Vec::with_capacity(size_hint); funcs.len()];
     let mut original_rows = Vec::with_capacity(size_hint);
-    let mut order_by_rows = Vec::with_capacity(size_hint);
-    for (d, order_by_row) in input_datums_with_ranks {
+    let mut order_by_rows = Vec::with_capacity(if has_last_value { size_hint } else { 0 });
+    for (d, order_by_datums) in input_datums_with_order_by {
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
         original_rows.push(original_row);
@@ -1216,11 +1241,14 @@ where
             encoded_argsss[i].push(encoded_args);
         }
         if has_last_value {
-            order_by_rows.push(order_by_row);
+            order_by_rows.push(Row::pack(order_by_datums));
         }
     }
 
-    let mut results_per_row = vec![Vec::with_capacity(funcs.len()); original_rows.len()];
+    // Results are kept per constituent function and transposed into per-row
+    // lists only when packing the output, so this is one allocation per
+    // function rather than one per row of the partition.
+    let mut results_per_func = Vec::with_capacity(funcs.len());
     for (func, encoded_argss) in funcs.iter().zip_eq(encoded_argsss) {
         let results = match func {
             AggregateFunc::LagLead {
@@ -1255,24 +1283,23 @@ where
             }
             _ => panic!("unknown window function in FusedValueWindowFunc"),
         };
-        for (results, result) in results_per_row.iter_mut().zip_eq(results) {
-            results.push(result);
-        }
+        // The `results[i]` indexing below relies on this; it replaces the
+        // `zip_eq` that used to pair results with rows.
+        assert_eq!(results.len(), original_rows.len());
+        results_per_func.push(results);
     }
 
     callers_temp_storage.reserve(2 * original_rows.len());
-    results_per_row
-        .into_iter()
-        .enumerate()
-        .map(move |(i, results)| {
-            callers_temp_storage.make_datum(|packer| {
-                packer.push_list_with(|packer| {
-                    packer
-                        .push(callers_temp_storage.make_datum(|packer| packer.push_list(results)));
-                    packer.push(original_rows[i]);
-                });
-            })
+    (0..original_rows.len()).map(move |i| {
+        callers_temp_storage.make_datum(|packer| {
+            packer.push_list_with(|packer| {
+                packer.push(callers_temp_storage.make_datum(|packer| {
+                    packer.push_list(results_per_func.iter().map(|results| results[i]))
+                }));
+                packer.push(original_rows[i]);
+            });
         })
+    })
 }
 
 /// `input_datums` is an entire window partition.
