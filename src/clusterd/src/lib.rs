@@ -179,7 +179,7 @@ struct Args {
     /// Host storage objects on the compute Timely cluster instead of building a separate
     /// storage Timely cluster. The storage and compute controller protocols are served
     /// unchanged, from the same cluster.
-    #[clap(long, env = "CLUSTERD_UNIFIED_CLUSTER")]
+    #[clap(long, env = "UNIFIED_CLUSTER")]
     unified_cluster: bool,
 }
 
