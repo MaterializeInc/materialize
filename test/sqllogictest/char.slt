@@ -120,7 +120,7 @@ SELECT 't'::"char"::bool;
 ----
 true
 
-query error invalid input syntax for type smallint: invalid digit found in string: "a"
+query error invalid input syntax for type int2vector
 SELECT 'a'::"char"::int2vector;
 
 # "char" <-> integer is a direct cast on the byte value, as in PostgreSQL.

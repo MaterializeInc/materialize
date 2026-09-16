@@ -1556,9 +1556,10 @@ pub fn plan_cast(
     };
 
     // A cast registered directly between the two types wins. Otherwise,
-    // string-like types get special handling to match PostgreSQL, which falls
-    // back to converting through the text representation when one side is
-    // string-like and no direct cast exists.
+    // string-like types get special handling modeled on PostgreSQL, which
+    // falls back to converting through the text representation when one side
+    // is string-like. Unlike PostgreSQL, the fallback also applies when a
+    // direct cast exists but is not permitted in this cast context.
     // See: https://github.com/postgres/postgres/blob/6b04abdfc/
     //   src/backend/parser/parse_coerce.c#L3205-L3223
     let direct = get_cast(ecx, ccx, &from, to);
