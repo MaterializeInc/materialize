@@ -40,9 +40,9 @@ changes are unavoidable and no amount of restructuring helps.
   does not grow with the partition, rather than of the partition size.
 - No regression in arrangement memory. This matters because the operators that
   motivate the work are already memory-bound, so trading memory for CPU makes
-  their situation worse rather than better. Measured, the design below holds the
-  same number of records but 26% to 31% more bytes, and the excess is per-row
-  width rather than extra arrangements. See "Measured results".
+  their situation worse rather than better.
+- No regression for partitions the split cannot help, which is a separate
+  criterion from the one above and the harder one to meet. See "Eligibility".
 - No change to results, with the exception discussed under
   "Ordering must be total" below.
 - Opt-in, so that the existing path stays the default until the bucketing
@@ -192,120 +192,19 @@ are proportional to the number of buckets, which is small. Adding the bucket to
 the key multiplies the number of distinct keys, which costs key storage but not
 value storage.
 
-The union of two collections is not itself an arrangement, so if a downstream
-consumer needs an arranged form the plan pays for one more `n`-sized
-arrangement. Measured, this does not materialize: the baseline already
-maintains a separate index arrangement, so both plans hold about `3n` records.
-See "Measured results".
+The union of two collections is not itself an arrangement, so a downstream
+consumer that needs an arranged form might be expected to pay for one more
+`n`-sized arrangement. It does not: an indexed consumer already maintains an
+arrangement of the reduce's output today, so the union's output takes its place
+rather than adding to it, and the row count held across the plan is unchanged.
 
-## Measured results
-
-A local `environmentd`, 400,000 rows in two partitions of 200,000, the
-`ORDER BY` key spanning 40 bucket widths so each bucket holds about 5,000 rows.
-
-**Per-update CPU.** Single-row inserts, each read back so the dataflow must
-process it. One partition, so every update recomputes all of it. CPU is
-`mz_scheduling_elapsed` summed over the operators of the dataflow under test.
-Rows-per-bucket is held near 5,000 by growing the key span with the row count:
-
-| rows | buckets | existing | bucketed | |
-|---|---|---|---|---|
-| 200,000 | 40 | 1088 ms | 40.9 ms | 27x |
-| 800,000 | 160 | 5727 ms | 39.4 ms | 145x |
-| 3,200,000 | 640 | 27944 ms, 27439 ms | 33.9 ms, 35.1 ms | 825x, 781x |
-
-The bucketed cost is flat across a 16x range of partition sizes, at 34 to 41 ms,
-because bucket size is what it depends on and that was held constant. That is
-the point of the design stated as a measurement: per-update cost becomes a
-function of the bucket rather than of the partition, so the advantage grows
-without bound as partitions grow. At 3,200,000 rows the existing plan spends 28
-seconds of dataflow CPU to absorb one row.
-
-The bucketed figures are independently corroborated: recomputing one
-5,000-row bucket at the existing plan's own per-row rate predicts 36 to 44 ms,
-which is what was measured.
-
-NOTE: this measurement is unusually easy to get wrong, in both directions.
-`mz_scheduling_elapsed` is itself a dataflow, so it lags the work it reports:
-reading it immediately after a batch understates the delta and can return zero.
-Hydration also continues after the query that forces it returns, so reading the
-baseline counter too early charges leftover hydration to the updates, which
-inflates the bucketed side badly (its real per-update cost is tens of
-milliseconds) while barely touching a baseline that spends seconds per update.
-A live dataflow also accrues scheduling time with nothing arriving, which
-matters once the work being measured is small.
-
-Earlier attempts produced apparent speedups of 2.8x, 5.5x and 784x, and both
-1.05x and 0.39x for the same small case, for configurations whose real values
-are in the tables above. What finally worked: settle after hydration before
-reading the baseline counter, use a fixed measurement window rather than a
-convergence poll, and for small cases subtract an equal-length idle window.
-
-**Where it stops paying, and where it costs.** Holding the bucket count at 41,
-so buckets shrink as the partition shrinks, and then confining a partition to a
-single bucket width so no split is possible at all. CPU here is the difference
-between a fixed window with updates and an equal window without, because a live
-dataflow accrues scheduling time even when nothing arrives:
-
-| rows | buckets | existing | bucketed | | records |
-|---|---|---|---|---|---|
-| 100 | 41 | 3.29 ms | 3.14 ms | 1.05x | +40% |
-| 1,000 | 41 | 7.76 ms | 3.70 ms | 2.1x | +7% |
-| 10,000 | 41 | 48.3 ms | 4.31 ms | 11x | +0.6% |
-| 100,000 | 41 | 546 ms | 17.6 ms | 31x | +0.05% |
-| 10,000 | 1 | 46.8 ms | 57.5 ms | **0.81x** | +0.3% |
-| 100,000 | 1 | 530 ms | 693 ms | **0.76x** | +0.02% |
-
-Break-even is around a hundred rows per partition. Below that there is nothing
-to win, and the boundary level's arrangements, whose size follows the bucket
-count rather than the row count, are a large relative overhead: 40% more records
-at 100 rows.
-
-**A partition confined to one bucket is 19% to 24% slower.** This is the result
-that should shape the eligibility rule. The rewrite pays for marker
-constituents, a second reduce and a union while no split is possible, and it is
-reachable in practice: with an hourly stride, any partition spanning less than
-an hour lands here. A row-count threshold will not express the condition,
-because what matters is how many buckets the partition's key span actually
-covers, which is a property of the data rather than of the plan. Absent a way to
-know that, the conservative reading is that this optimization wants an explicit
-opt-in per object rather than a global default.
-
-**Arrangement cost.** Per-operator `mz_arrangement_sizes`, ten samples three
-seconds apart, identical across every sample and both repetitions:
-
-| | records | bytes |
-|---|---|---|
-| existing plan | 1,200,095 | 29.6 MiB |
-| bucketed, `IGNORE NULLS` (one marker) | 1,200,375 | 37.3 MiB |
-| bucketed, `RESPECT NULLS` (two markers) | 1,200,335 | 39.1 MiB |
-
-**The record count is unchanged, so the union costs no extra arrangement.** Both
-plans hold about `3n` records, because the baseline already maintains a separate
-index arrangement alongside the reduce's input and output. The caveat above
-about an indexed consumer paying for one more `n`-sized arrangement does not
-materialize.
-
-What costs 26% to 31% is row *width*, and it scales with the number of marker
-constituents rather than with anything structural: one marker costs 7.7 MiB,
-two cost 9.3 MiB. Each marker widens the value in level 0's input arrangement by
-an args record and widens the result record in its output arrangement by a
-field. That points the fix at the per-row encoding rather than at the two-level
-shape, which is where MaterializeInc/materialize#38851 and
-MaterializeInc/materialize#38852 already go: hoisting a constant offset and
-default into the function, and sourcing the value argument from the original
-row, would leave a marker costing close to nothing.
-
-A narrower level 0 is also available in principle, since the markers' results
-are read by the branch filters and then discarded, but the two branches want
-different projections of the same arrangement, so one narrow arrangement cannot
-serve both.
-
-Two traps worth recording. `mz_internal.mz_object_arrangement_sizes.size` is
-rounded to the nearest 10 MiB, which is the same size as this effect, so it
-cannot measure it; the first attempt with it produced a meaningless 30-vs-40
-reading. And timing client round trips finds nothing at all, because ~30ms of
-per-round-trip cost buries even a 2-second operator recomputation.
+What the split does cost is row width. Each marker constituent widens the value
+in level 0's input arrangement by an args record and its result record by a
+field, so the same rows are stored slightly larger. That places the cost in the
+per-row encoding, which is where
+MaterializeInc/materialize#38851 and MaterializeInc/materialize#38852 already
+go: with a constant offset and default hoisted into the function, and the value
+argument sourced from the original row, a marker costs close to nothing.
 
 ## Alternatives
 
@@ -343,64 +242,67 @@ question, and it is exactly why the existing hierarchical path uses hashes: a
 monotone bucket function needs some knowledge of the key distribution, whereas
 a hash needs none.
 
-Measurements over a simulated 8000-row partition put the peak near `sqrt(n)`
-rows per bucket, as expected, but more usefully show a wide tolerant band. At
-200 to 400 rows per bucket, every combination of one or four fused constituents
-and null densities of 0, 30 and 70% reduces modelled per-update work by at
-least 21x, with a peak of 54x for a single constituent over dense data. Smaller
-buckets are where the choice starts to matter: at 90 rows per bucket the same
-sweep ranges from 12x to 54x, and at 50 rows from 6.7x to 35x, because level 1
-grows as buckets shrink and eventually dominates.
-
-The practical reading is that the width only has to be large enough, not
-correct, and that erring high is much safer than erring low. A fixed width
-applied to the high bits of an integer, date, or timestamp key is a plausible
-default. Note that the existing hierarchical path already builds its bucket
-ladder in powers of 16 from a fan-in of 16, so a comparable fixed choice here
-would not be a new kind of magic constant.
+The choice is more forgiving than it looks, because the cost is not symmetric
+around an optimum. Too wide merely dilutes the benefit, since per-update cost
+follows bucket size. Too narrow is worse: the boundary level grows as buckets
+shrink and eventually dominates, and its arrangements are sized by bucket count
+rather than row count, so they become a real overhead on small partitions. The
+width therefore only has to be large enough, and erring high is much safer than
+erring low. A fixed width applied to the high bits of an integer, date, or
+timestamp key is a plausible default, and the existing hierarchical path already
+builds its bucket ladder in powers of 16 from a fan-in of 16, so a comparable
+fixed choice here would not be a new kind of magic constant.
 
 Options, roughly in increasing ambition: a `dyncfg`-supplied constant; a
 per-object hint in the spirit of `EXPECTED GROUP SIZE` (which today reaches only
 `bucketing_of_expected_group_size` and so does nothing at all for window
 functions); or statistics-driven selection.
 
-**Eligibility.** Besides the single-direction requirement above, the offset
-argument of `lag`/`lead` is an arbitrary expression evaluated per row, so the
-lookback distance is not statically known in general. Hoisting constant offsets into the function
-(MaterializeInc/materialize#38851) makes the common case statically visible,
-and the optimization should require it. The `ORDER BY` also needs a leading
-column of a type with a natural monotone coarsening.
+**Eligibility, and the case that argues for opt-in.** A partition whose key
+span falls inside a single bucket width cannot be split at all, so the rewrite
+buys nothing and still pays for its marker constituents, its second reduce and
+its union. Such a partition is materially slower than it is today, which means
+the rewrite cannot be applied to everything that is merely expressible.
+
+The awkward part is that the condition is not a property of the plan. What
+decides it is how many buckets the partition's key span actually covers, which
+depends on the data, so a row-count threshold cannot express it and neither can
+anything else available at planning time. Absent a source for that estimate, the
+conservative reading is that this wants an explicit opt-in per object rather
+than a global default, and that is the main question to settle before it is
+enabled anywhere by default.
+
+Besides that and the single-direction requirement above, the offset argument of
+`lag`/`lead` is an arbitrary expression evaluated per row, so the lookback
+distance is not statically known in general. Hoisting constant offsets into the
+function (MaterializeInc/materialize#38851) makes the common case statically
+visible, and the optimization should require it. The `ORDER BY` also needs a
+leading column of a type with a natural monotone coarsening.
 
 **`IGNORE NULLS` worst case.** With `IGNORE NULLS` the lookback is unbounded,
 so a bucket consisting entirely of nulls contributes all of its rows to level 1
-and the scheme degrades toward the current behaviour. With four constituents at
-200 rows per bucket, level 1 measured 1.9% of the partition at 30% nulls and
-4.5% at 70%, so the degradation is graceful, but it is data-dependent rather
-than bounded.
+and the scheme degrades toward the current behaviour. The degradation is
+graceful rather than sudden, since the boundary level grows with null density
+rather than jumping, but it is data-dependent rather than bounded.
 
 ## Validation
 
-The characterization above was checked two ways before any engine code was
-written.
+The characterization above is checked two ways, both independent of the
+implementation.
 
-A model implementation was compared against a naive `lag` over randomized
-partitions: 6000 trials varying partition size, offset, bucket width, null
-density, and the number of fused constituents, in both null modes, with and
-without heavy `ORDER BY` ties. All agree once the order is total, and the
-earlier version that tested resolution by value rather than by position in
-`RESPECT NULLS` mode is exactly what the tie and null-mode trials caught.
-
-Worth recording how the mixed-direction restriction was found, because it says
-something about where the risk in this design lives. The model covered several
-fused constituents but gave them all the same direction, so it agreed with the
-reference and the scheme looked sound. The repository's existing
-`window_funcs.slt` then produced a wrong answer for a query selecting both
-`lag(a)` and `lead(a)` over one window. Every boundary condition in this design
-is directional, and a validation harness that varies everything except
-direction will report success.
+A model implementation is compared against a naive `lag` over randomized
+partitions, varying partition size, offset, bucket width, null density, the
+number of fused constituents and their directions, in both null modes, with and
+without heavy `ORDER BY` ties. Single-direction windows agree exactly;
+mixed-direction windows disagree in the majority of trials, which is the
+evidence behind the restriction above.
 
 The scheme is also expressed directly in SQL, as two levels of views over a
 table with ties and nulls, asserting that the union of the two levels matches a
 plain `lag` row for row in both directions. That form is what an implementation
 should be checked against, and it doubles as a workaround available to users
 today, subject to the explicit-tiebreaker caveat above.
+
+Both are worth keeping in mind when extending this: every boundary condition
+here is directional, so a harness that varies everything except direction will
+report success on a design that is wrong.
