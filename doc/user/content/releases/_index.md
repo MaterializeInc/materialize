@@ -21,19 +21,63 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.42.0
-*Released to Materialize Cloud: 2026-09-17* <br>
 *Released to Materialize Self-Managed: 2026-09-18* <br>
 
-### Constraint Exclusion for Postgres Source Tables {#v26.42-constraint-exclusion-for-postgres-source-tables}
-`CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE CONSTRAINTS ('constraint_name', ...)` and `EXCLUDE ALL CONSTRAINTS`, which drop the named upstream constraints at purification so the table never records them. Dropping a `UNIQUE` or `PRIMARY KEY` constraint upstream previously stalled the corresponding table permanently, and a table created with the constraint excluded keeps ingesting through that change. When a table does stall on an incompatible schema change, the error now names the specific constraint or column that changed and includes a hint showing how to recreate the table without it.
+### Safely drop upstream constraints in your Postgres sources {#v26.42-constraint-exclusion-for-postgres-sources}
+Materialize now allows you to `EXCLUDE CONSTRAINTS` when creating a table from a Postgres source. You can use this workflow to safely drop an upstream constraint, without causing your source to stall. Today, the Postgres source incorporates `PRIMARY KEY`, `UNIQUE` and `NOT NULL` constraints.
+
+```mzsql
+CREATE TABLE orders
+  FROM SOURCE pg_source (REFERENCE public.orders)
+  WITH (EXCLUDE CONSTRAINTS ('orders_customer_email_key'));
+```
+
+If you want to exclude all constraints, you can do that too:
+
+```mzsql
+CREATE TABLE orders
+  FROM SOURCE pg_source (REFERENCE public.orders)
+  WITH (EXCLUDE ALL CONSTRAINTS);
+```
+
+For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/postgres/) for PostgreSQL and the guide on [handling upstream schema changes](/ingest-data/postgres/source-versioning/).
+
+### Size clusters using hydration history {#v26.42-hydration-history}
+It is hard to know ahead of time how long a cluster will take to hydrate, or how much memory it will need to get there. The best proxy is what happened the last time. Materialize now records every completed hydration in two new introspection tables:
+
+- [`mz_internal.mz_replica_hydration_history`](/sql/system-catalog/mz_internal/#mz_replica_hydration_history) to track hydration metrics per replica
+- [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history) to track hydration metrics per object
+
+Use them to answer *how long did hydration take last time, and what resources did it require?*
+
+```mzsql
+SELECT
+    rh.replica_name AS replica,
+    rh.size,
+    h.started_at,
+    h.finished_at - h.started_at AS hydration_time,
+    h.object_count,
+    pg_size_pretty(h.peak_memory_bytes) AS peak_memory,
+    pg_size_pretty(h.peak_disk_bytes) AS peak_disk
+FROM mz_internal.mz_replica_hydration_history AS h
+JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
+WHERE rh.cluster_name = 'analytics'
+ORDER BY h.started_at DESC;
+```
+
+```none
+ replica | size  |          started_at           | hydration_time | object_count | peak_memory | peak_disk
+---------+-------+-------------------------------+----------------+--------------+-------------+-----------
+ r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 11 GB       | 2438 MB
+(1 row)
+```
+
+Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) to find the size that fits your workload. This lets you create a cluster at a generous size, hydrate once, and then size down with confidence. The new [cluster sizing guide](/clusters/sizing/) walks through that workflow, and [Optimize hydration requirements](/clusters/optimize-hydration-requirements/) covers what to do when a single object accounts for most of the peak.
 
 ### Improvements {#v26.42-improvements}
-- **Connection limit in balancerd**: balancerd now caps the client connections it proxies at once across its pgwire and HTTPS listeners, at a default of 5,000 and configurable through `balancerd_max_connections`, rejecting connections over the limit with an error rather than accepting load until it is out-of-memory killed and every established session drops with it.
-- **Tighter limits on pre-authentication messages**: pgwire startup messages larger than 10,000 bytes are now rejected, matching PostgreSQL's limit, and other messages sent before authentication are held to 16 KiB, while the existing 64 MiB frame ceiling continues to apply once a session is authenticated.
 - **Vended credentials for GCS-backed Iceberg catalogs**: `CREATE CONNECTION ... TO ICEBERG CATALOG` now accepts a storage provider option, and `ACCESS DELEGATION` is allowed on GCP BigLake catalog connections, so an Iceberg catalog backed by Google Cloud Storage can authenticate with credentials the catalog vends.
 - **IANA time zone data updated to 2026c**: Time zone rules now follow IANA tzdata 2026c, covering Morocco's move to permanent +00 on 2026-09-20, Alberta's permanent -06, British Columbia's permanent -07, and Moldova's EU transition instants since 2022.
 - **Pod priority classes in Self-Managed deployments**: Operators can set `environmentd.priorityClassName` and `clusterd.priorityClassName` in the Helm chart, so a higher-priority pod scheduled onto a full node no longer evicts Materialize ahead of other workloads.
-- **`WAIT` options on `ALTER CLUSTER` are no longer in private preview**: `ALTER CLUSTER ... WITH (WAIT FOR ...)` and `WITH (WAIT UNTIL READY ...)` are accepted without enabling a feature flag.
 - **Composite types in `mz-deploy` projects**: `mz-deploy` records the full catalog type for composite types such as records in `types.lock`, so views that read a dependency's record-typed column type check offline instead of resolving to a pseudo type.
 
 ### Bug Fixes {#v26.42-bug-fixes}
