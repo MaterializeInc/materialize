@@ -256,7 +256,7 @@ FROM outer_t ORDER BY y
 3  30
 
 # ---------------------------------------------------------------------------
-# The `WINDOW ORDER KEY RANGE` hint sets the bucket width. It tunes a constant
+# The `WINDOW BUCKET WIDTH` hint sets the bucket width. It tunes a constant
 # inside the bucket expression, so it must not change results whatever value it
 # takes, including values that leave the partition in a single bucket or give it
 # a bucket per row.
@@ -265,28 +265,37 @@ statement ok
 CREATE MATERIALIZED VIEW opt_hint_narrow AS
 SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
 FROM src
-OPTIONS (WINDOW ORDER KEY RANGE = 16)
+OPTIONS (WINDOW BUCKET WIDTH = 16)
 
 statement ok
 CREATE MATERIALIZED VIEW opt_hint_wide AS
 SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
 FROM src
-OPTIONS (WINDOW ORDER KEY RANGE = 100000000)
+OPTIONS (WINDOW BUCKET WIDTH = 100000000)
+
+# A width whose form does not match the key is ignored rather than raising: a
+# duration means nothing to an integer key, and a bare number nothing in
+# particular to a timestamp.
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_mismatched AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
+FROM src
+OPTIONS (WINDOW BUCKET WIDTH = '1 day')
 
 # A zero width cannot be honoured, so it falls back rather than dividing by zero.
 statement ok
 CREATE MATERIALIZED VIEW opt_hint_zero AS
 SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
 FROM src
-OPTIONS (WINDOW ORDER KEY RANGE = 0)
+OPTIONS (WINDOW BUCKET WIDTH = 0)
 
 statement ok
 CREATE MATERIALIZED VIEW opt_hint_ts AS
 SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY ts, rid) AS r
 FROM src
-OPTIONS (WINDOW ORDER KEY RANGE = 86400)
+OPTIONS (WINDOW BUCKET WIDTH = '1 day')
 
-query IIIIIIII
+query IIIIIIIIII
 SELECT
   (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_narrow)),
   (SELECT count(*) FROM (SELECT * FROM opt_hint_narrow EXCEPT ALL SELECT * FROM ref_ignore)),
@@ -295,6 +304,8 @@ SELECT
   (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_zero)),
   (SELECT count(*) FROM (SELECT * FROM opt_hint_zero EXCEPT ALL SELECT * FROM ref_ignore)),
   (SELECT count(*) FROM (SELECT * FROM ref_ts EXCEPT ALL SELECT * FROM opt_hint_ts)),
-  (SELECT count(*) FROM (SELECT * FROM opt_hint_ts EXCEPT ALL SELECT * FROM ref_ts))
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_ts EXCEPT ALL SELECT * FROM ref_ts)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_mismatched)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_mismatched EXCEPT ALL SELECT * FROM ref_ignore))
 ----
-0  0  0  0  0  0  0  0
+0  0  0  0  0  0  0  0  0  0

@@ -205,7 +205,7 @@ pub enum SelectOptionName {
     AggregateInputGroupSize,
     DistinctOnInputGroupSize,
     LimitInputGroupSize,
-    WindowOrderKeyRange,
+    WindowBucketWidth,
 }
 
 impl AstDisplay for SelectOptionName {
@@ -215,7 +215,7 @@ impl AstDisplay for SelectOptionName {
             SelectOptionName::AggregateInputGroupSize => "AGGREGATE INPUT GROUP SIZE",
             SelectOptionName::DistinctOnInputGroupSize => "DISTINCT ON INPUT GROUP SIZE",
             SelectOptionName::LimitInputGroupSize => "LIMIT INPUT GROUP SIZE",
-            SelectOptionName::WindowOrderKeyRange => "WINDOW ORDER KEY RANGE",
+            SelectOptionName::WindowBucketWidth => "WINDOW BUCKET WIDTH",
         })
     }
 }
@@ -233,7 +233,7 @@ impl WithOptionName for SelectOptionName {
             | SelectOptionName::AggregateInputGroupSize
             | SelectOptionName::DistinctOnInputGroupSize
             | SelectOptionName::LimitInputGroupSize
-            | SelectOptionName::WindowOrderKeyRange => false,
+            | SelectOptionName::WindowBucketWidth => false,
         }
     }
 }

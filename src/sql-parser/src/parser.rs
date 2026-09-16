@@ -8198,8 +8198,8 @@ impl<'a> Parser<'a> {
                     SelectOptionName::LimitInputGroupSize
                 }
                 WINDOW => {
-                    self.expect_keywords(&[ORDER, KEY, RANGE])?;
-                    SelectOptionName::WindowOrderKeyRange
+                    self.expect_keywords(&[BUCKET, WIDTH])?;
+                    SelectOptionName::WindowBucketWidth
                 }
                 _ => unreachable!(),
             };

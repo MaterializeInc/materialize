@@ -237,9 +237,13 @@ relation is the hard part and both framings assume it.
 
 ## Open Questions
 
-**How is the bucket width chosen?** A `WINDOW ORDER KEY RANGE` query hint, in
-units of the `ORDER BY` key, or seconds when the key is a timestamp. Absent the
-hint the width falls back to a constant per key type.
+**How is the bucket width chosen?** A `WINDOW BUCKET WIDTH` query hint, taking
+a duration for a temporal key and a count of the key's own units for an integer
+one, because the two share no unit: `'1 day'` means nothing to a version
+counter, and `4096` means nothing in particular to a timestamp. A hint whose
+form does not match the key is ignored rather than raising, since falling back
+beats failing a query over a hint. Absent the hint the width falls back to a
+constant per key type.
 
 The hint is deliberately the weakest instrument that solves the problem. It sets
 a divisor inside one expression, so the plan's shape, its operator count and its
@@ -253,7 +257,9 @@ what this is.
 Naming follows the three hints that replaced `EXPECTED GROUP SIZE`, which were
 introduced because a generic name did not say which operation it tuned.
 
-The width has to be matched to the key's density, and the failure is two-sided.
+The name says what the value is: the width of one bucket, not the extent of the
+data. The width has to be matched to the key's density, and the failure is
+two-sided.
 Too wide and the partition falls into one bucket, where the split cannot help
 and its overhead is pure loss. Too narrow and the boundary level approaches the
 whole partition, so the work is done twice. Neither is expressible as a fixed
