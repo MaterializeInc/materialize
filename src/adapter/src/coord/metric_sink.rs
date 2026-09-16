@@ -78,11 +78,11 @@ pub(super) struct CuratedMetricSink {
 
 /// The curated metric sinks, installed on every replica.
 ///
-/// Sources take their measurements from the raw `..._raw` logging relations, never from a derived
-/// view that re-aggregates them, like `mz_dataflow_arrangement_sizes`: those churn even on static
-/// data, and a per-dataflow size metric off the derived view measured ~30x the raw form. Cheap
-/// mapping views over the same logs, `mz_dataflow_operator_dataflows` and `mz_compute_exports`,
-/// carry no aggregation and are read freely.
+/// Sources read the raw `..._raw` logging relations, not a derived view that re-aggregates them
+/// (`mz_dataflow_arrangement_sizes`) or a join view over the logs (`mz_dataflow_operator_dataflows`),
+/// for performance: those churn even on static data and their cost scales with the replica's
+/// dataflow-creation rate. A single-relation filter like `mz_compute_exports` carries no aggregation
+/// and is read freely.
 ///
 /// Every family sums across workers, so a series carries no `worker_id`, and a multi-process replica
 /// reports one number per grouping key rather than one per process. The size families emit one series
@@ -96,44 +96,64 @@ const CURATED: &[CuratedMetricSink] = &[
         // global-id label names a `t<N>` that maps to no catalog object and churns on every
         // re-render.
         //
-        // Logs are per operator, so map operator -> dataflow -> export id. `min(export_id)`
-        // collapses a multi-export dataflow to one series (lexicographic, so `min('u10', 'u2')` is
-        // `'u10'`: arbitrary but stable). The group-size hint stops that `min` from rendering the
-        // 8-level hierarchy, which would otherwise show up as tuning advice for the sink's own
-        // dataflow in `mz_expected_group_size_advice`.
+        // Logs are per operator, so map operator -> dataflow -> export id. Take the operator ->
+        // dataflow step off `mz_dataflow_addresses_per_worker` (`address[1]` is the dataflow id),
+        // and fold each family to one row per dataflow before the export join, so only live
+        // dataflows reach it.
         //
-        // Transient exports (subscribes, peeks, metric sinks) and operators with no worker-0
-        // mapping fall through to an `unattributable` sentinel, so their bytes still count without a
-        // churning `t<N>` label growing series without bound.
+        // `min(export_id)` collapses a multi-export dataflow to one series (lexicographic, so
+        // `min('u10', 'u2')` is `'u10'`: arbitrary but stable). The group-size hint stops that `min`
+        // from rendering the 8-level hierarchy, which would otherwise show up as tuning advice for
+        // the sink's own dataflow in `mz_expected_group_size_advice`.
+        //
+        // Transient exports (subscribes, peeks, metric sinks) and operators with no address row on
+        // their own worker fall through to an `unattributable` sentinel, so their bytes still count
+        // without a churning `t<N>` label growing series without bound.
         source_sql: "
 WITH ex AS (
     SELECT dataflow_id, min(export_id) AS export_id
     FROM mz_introspection.mz_compute_exports
     WHERE export_id NOT LIKE 't%'
     GROUP BY dataflow_id OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
+),
+od AS (
+    SELECT id, worker_id, address[1] AS dataflow_id
+    FROM mz_introspection.mz_dataflow_addresses_per_worker
+),
+size_bytes AS (
+    SELECT od.dataflow_id, count(*) AS value
+    FROM mz_introspection.mz_arrangement_heap_size_raw r
+    LEFT JOIN od ON r.operator_id = od.id AND r.worker_id = od.worker_id
+    GROUP BY od.dataflow_id
+),
+records AS (
+    SELECT od.dataflow_id, count(*) AS value
+    FROM mz_introspection.mz_arrangement_records_raw r
+    LEFT JOIN od ON r.operator_id = od.id AND r.worker_id = od.worker_id
+    GROUP BY od.dataflow_id
+),
+batches AS (
+    SELECT od.dataflow_id, count(*) AS value
+    FROM mz_introspection.mz_arrangement_batches_raw r
+    LEFT JOIN od ON r.operator_id = od.id AND r.worker_id = od.worker_id
+    GROUP BY od.dataflow_id
 )
 SELECT 'arrangement_size_bytes'::text AS metric_name, 'gauge'::text AS metric_type,
        map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       count(*)::double precision AS value, 'arrangement heap size in bytes'::text AS help
-FROM mz_introspection.mz_arrangement_heap_size_raw r
-LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-LEFT JOIN ex ON ex.dataflow_id = dod.dataflow_id
+       sum(f.value)::double precision AS value, 'arrangement heap size in bytes'::text AS help
+FROM size_bytes f LEFT JOIN ex ON ex.dataflow_id = f.dataflow_id
 GROUP BY COALESCE(ex.export_id, 'unattributable')
 UNION ALL
 SELECT 'arrangement_records'::text AS metric_name, 'gauge'::text AS metric_type,
        map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       count(*)::double precision AS value, 'number of records in arrangement heaps'::text AS help
-FROM mz_introspection.mz_arrangement_records_raw r
-LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-LEFT JOIN ex ON ex.dataflow_id = dod.dataflow_id
+       sum(f.value)::double precision AS value, 'number of records in arrangement heaps'::text AS help
+FROM records f LEFT JOIN ex ON ex.dataflow_id = f.dataflow_id
 GROUP BY COALESCE(ex.export_id, 'unattributable')
 UNION ALL
 SELECT 'arrangement_batches'::text AS metric_name, 'gauge'::text AS metric_type,
        map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       count(*)::double precision AS value, 'number of batches in arrangements'::text AS help
-FROM mz_introspection.mz_arrangement_batches_raw r
-LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-LEFT JOIN ex ON ex.dataflow_id = dod.dataflow_id
+       sum(f.value)::double precision AS value, 'number of batches in arrangements'::text AS help
+FROM batches f LEFT JOIN ex ON ex.dataflow_id = f.dataflow_id
 GROUP BY COALESCE(ex.export_id, 'unattributable')",
     },
     CuratedMetricSink {
