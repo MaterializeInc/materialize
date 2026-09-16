@@ -51,6 +51,9 @@ use timely::scheduling::{Activator, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use uuid::Uuid;
 
+#[cfg(test)]
+mod tests;
+
 /// A command in the unified command lane.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum UnifiedCommand {
@@ -104,8 +107,8 @@ impl Receiver {
 
 /// Per-worker storage-side inputs to the command channel.
 ///
-/// Created by the host before rendering the channel; the sending halves
-/// back the guest's `InternalCommandSender`.
+/// Created by the host before rendering the channel. The sending half of `rx` and the filled
+/// `activator_slot` together back the guest's `InternalCommandSender`.
 pub struct StorageLaneInput {
     /// Receiver for storage-internal commands injected on this worker.
     pub rx: mpsc::Receiver<InternalStorageCommand>,
@@ -145,7 +148,7 @@ pub fn render(
 
                 let worker_id = scope.index();
                 let mut cmd_index = 0_u64;
-                let capability = Some(cap);
+                let mut capability = Some(cap);
 
                 move |output| {
                     let Some(cap) = &capability else {
@@ -154,26 +157,59 @@ pub fn render(
 
                     let mut session = output.session(cap);
 
-                    while let Ok((cmd, nonce)) = input_rx.try_recv() {
-                        if worker_id == 0 {
-                            session.give((
-                                worker_id,
-                                cmd_index,
-                                UnifiedCommand::Compute(cmd, nonce),
-                            ));
-                            cmd_index += 1;
-                        } else {
-                            // Non-leader workers only receive `UpdateConfiguration` commands
-                            // from the controller and must drop them to not sequence duplicates.
-                            assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                    let mut compute_disconnected = false;
+                    loop {
+                        match input_rx.try_recv() {
+                            Ok((cmd, nonce)) if worker_id == 0 => {
+                                session.give((
+                                    worker_id,
+                                    cmd_index,
+                                    UnifiedCommand::Compute(cmd, nonce),
+                                ));
+                                cmd_index += 1;
+                            }
+                            Ok((cmd, _nonce)) => {
+                                // Non-leader workers only receive `UpdateConfiguration` commands
+                                // from the controller and must drop them to not sequence
+                                // duplicates.
+                                assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                            }
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Disconnected) => {
+                                compute_disconnected = true;
+                                break;
+                            }
                         }
                     }
 
+                    let mut storage_disconnected = true;
                     if let Some(input) = &storage_input {
-                        while let Ok(cmd) = input.rx.try_recv() {
-                            session.give((worker_id, cmd_index, UnifiedCommand::Storage(cmd)));
-                            cmd_index += 1;
+                        storage_disconnected = false;
+                        loop {
+                            match input.rx.try_recv() {
+                                Ok(cmd) => {
+                                    session.give((
+                                        worker_id,
+                                        cmd_index,
+                                        UnifiedCommand::Storage(cmd),
+                                    ));
+                                    cmd_index += 1;
+                                }
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => {
+                                    storage_disconnected = true;
+                                    break;
+                                }
+                            }
                         }
+                    }
+
+                    drop(session);
+
+                    // Once every sender is gone no further commands can arrive, so release the
+                    // capability to let the dataflow shut down.
+                    if compute_disconnected && storage_disconnected {
+                        capability = None;
                     }
                 }
             });

@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::thread::Thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
@@ -31,9 +32,7 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_rocksdb::config::SharedWriteBufferManager;
-use mz_storage::internal_control::{
-    InternalCommandReceiver, InternalCommandSender, InternalStorageCommand,
-};
+use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use mz_storage::metrics::StorageMetrics;
 use mz_storage::storage_state::{StorageInstanceContext, StorageState, Worker as StorageWorker};
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
@@ -296,13 +295,7 @@ pub async fn serve_unified(
 async fn serve_inner(
     config: Config,
     timely_config: TimelyConfig,
-) -> Result<
-    (
-        Vec<std::thread::Thread>,
-        impl Fn() -> Box<dyn ComputeClient> + use<>,
-    ),
-    Error,
-> {
+) -> Result<(Vec<Thread>, impl Fn() -> Box<dyn ComputeClient> + use<>), Error> {
     mz_timely_util::column_pager::metrics::register(
         &config.metrics_registry,
         mz_timely_util::column_pager::tiered_policy(),
@@ -483,8 +476,6 @@ struct StorageGuest {
     conn: Option<StorageConn>,
     /// The hosted storage worker state.
     storage_state: StorageState,
-    /// Keeps the guest's (unused) internal command receiver connected.
-    _internal_cmd_dummy_tx: std::sync::mpsc::Sender<InternalStorageCommand>,
     /// The last time storage maintenance ran.
     last_maintenance: Instant,
     /// The last time storage statistics were reported.
@@ -497,7 +488,7 @@ impl StorageGuest {
     ///
     /// Mirrors the parking of storage's own server loop: the maintenance and statistics intervals
     /// bound the park. A maintenance deadline in the past does not bound it, because maintenance
-    /// runs on the next wakeup anyway; the initial zero maintenance interval would otherwise turn
+    /// runs on the next wakeup anyway. The initial zero maintenance interval would otherwise turn
     /// every park into a spin.
     fn park_cap(&self) -> Option<Duration> {
         // Periodic duties run only on a reconciled connection. Without one there is no deadline
@@ -567,28 +558,20 @@ impl ClusterSpec for Config {
 
         // Prepare the storage guest's inputs to the command channel, so
         // storage-internal commands are sequenced through the same lane as compute commands.
+        let mut storage_lane_input = None;
         let guest_setup = self.storage_guest.as_ref().map(|cfg| {
             let storage_client_rx = cfg.client_rxs.lock().expect("poisoned")[local_index]
                 .take()
-                .expect("storage client_rx taken twice");
+                .expect("each worker takes its storage client_rx exactly once");
             let (internal_tx, internal_rx) = std::sync::mpsc::channel();
             let activator_slot = Rc::new(RefCell::new(None));
-            let lane_input = StorageLaneInput {
+            storage_lane_input = Some(StorageLaneInput {
                 rx: internal_rx,
                 activator_slot: Rc::clone(&activator_slot),
-            };
-            (
-                Arc::clone(cfg),
-                storage_client_rx,
-                internal_tx,
-                activator_slot,
-                lane_input,
-            )
+            });
+            let internal_cmd_tx = InternalCommandSender::from_parts(internal_tx, activator_slot);
+            (Arc::clone(cfg), storage_client_rx, internal_cmd_tx)
         });
-        let (guest_setup, storage_lane_input) = match guest_setup {
-            Some((cfg, rx, tx, slot, lane)) => (Some((cfg, rx, tx, slot)), Some(lane)),
-            None => (None, None),
-        };
 
         // Create the command channel that broadcasts commands from worker 0 to other workers. We
         // reuse this channel between client connections, to avoid bugs where different workers end
@@ -600,19 +583,14 @@ impl ClusterSpec for Config {
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
 
         // Create the storage guest state.
-        let storage = guest_setup.map(|(cfg, storage_client_rx, internal_tx, activator_slot)| {
-            let internal_cmd_tx = InternalCommandSender::from_parts(internal_tx, activator_slot);
-            // The guest's internal command receiver is unused: the host dispatches internal
-            // commands from the unified command channel instead. Keep a dangling sender so the
-            // receiver reports "empty" rather than "disconnected".
-            let (dummy_tx, dummy_rx) = std::sync::mpsc::channel();
-            let internal_cmd_rx = InternalCommandReceiver::from_parts(dummy_rx);
-
+        let storage = guest_setup.map(|(cfg, storage_client_rx, internal_cmd_tx)| {
             let storage_state = StorageState::new_guest(
                 timely_worker.index(),
                 timely_worker.peers(),
                 internal_cmd_tx,
-                internal_cmd_rx,
+                // The host dispatches internal commands from the unified command channel, so
+                // the guest reads no receiver of its own.
+                None,
                 cfg.metrics.clone(),
                 cfg.now.clone(),
                 cfg.connection_context.clone(),
@@ -627,7 +605,6 @@ impl ClusterSpec for Config {
                 client_rx: storage_client_rx,
                 conn: None,
                 storage_state,
-                _internal_cmd_dummy_tx: dummy_tx,
                 last_maintenance: Instant::now(),
                 last_stats_time: Instant::now(),
             }
@@ -817,9 +794,10 @@ impl<'w> Worker<'w> {
     /// Dispatch a storage-internal command from the command channel to
     /// the storage guest. This is where all storage dataflow rendering happens.
     fn handle_storage_internal_command(&mut self, cmd: InternalStorageCommand) {
-        let Some(mut guest) = self.storage.take() else {
-            panic!("received a storage-internal command without a storage guest");
-        };
+        let mut guest = self
+            .storage
+            .take()
+            .expect("the command channel carries storage commands only when a guest is hosted");
 
         let mut worker = StorageWorker {
             timely_worker: &mut *self.timely_worker,
