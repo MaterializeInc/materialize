@@ -3181,7 +3181,7 @@
       "monotonic": "BOOL",
       "operators": {
         "OPTION": {
-          "TYPENAME": "MapFilterProject"
+          "TYPENAME": "MfpPlan"
         }
       },
       "typ": {
