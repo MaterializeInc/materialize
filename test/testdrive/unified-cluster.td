@@ -33,7 +33,8 @@ running
 # visible in compute introspection, without a storage log bridge.
 > SET cluster = uc
 
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflows WHERE name LIKE '%uc_auction%'
+# Storage names ingestion dataflows by id, "Source dataflow: <id>".
+> SELECT count(*) > 0 FROM mz_introspection.mz_dataflows WHERE name LIKE 'Source dataflow:%'
 true
 
 > SELECT count(*) FROM mz_introspection.mz_dataflow_operators WHERE name = 'Replay storage timely logs'
