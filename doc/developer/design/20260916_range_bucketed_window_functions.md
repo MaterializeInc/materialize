@@ -40,7 +40,9 @@ changes are unavoidable and no amount of restructuring helps.
   does not grow with the partition, rather than of the partition size.
 - No regression in arrangement memory. This matters because the operators that
   motivate the work are already memory-bound, so trading memory for CPU makes
-  their situation worse rather than better.
+  their situation worse rather than better. Measured, the design below holds the
+  same number of records but 26% to 31% more bytes, and the excess is per-row
+  width rather than extra arrangements. See "Measured results".
 - No change to results, with the exception discussed under
   "Ordering must be total" below.
 - Opt-in, so that the existing path stays the default until the bucketing
@@ -192,8 +194,66 @@ value storage.
 
 The union of two collections is not itself an arrangement, so if a downstream
 consumer needs an arranged form the plan pays for one more `n`-sized
-arrangement. Whether that is acceptable, or whether the carry-injection variant
-below should be preferred, is an open question.
+arrangement. Measured, this does not materialize: the baseline already
+maintains a separate index arrangement, so both plans hold about `3n` records.
+See "Measured results".
+
+## Measured results
+
+A local `environmentd`, 400,000 rows in two partitions of 200,000, the
+`ORDER BY` key spanning 40 bucket widths so each bucket holds about 5,000 rows.
+
+**Per-update CPU.** Single-row inserts, each read back so the dataflow must
+process it, with CPU taken from `mz_scheduling_elapsed` summed over the
+operators of the dataflow under test. Two repetitions:
+
+| | existing plan | bucketed plan |
+|---|---|---|
+| dataflow CPU per update | 2217 ms, 2242 ms | 52 ms, 63 ms |
+
+Roughly 38x, tracking the predicted ratio of partition size to bucket size.
+
+Note how much larger this is than the evaluation path alone can explain: a
+200,000-row sort is tens of milliseconds, so most of the 2.2 seconds is packing
+`n` output rows and letting differential consolidate `2n` owned `Row`s to
+recover a delta of one or two. Bucketing shrinks that half as well, which no
+amount of tuning inside the aggregate function would achieve.
+
+**Arrangement cost.** Per-operator `mz_arrangement_sizes`, ten samples three
+seconds apart, identical across every sample and both repetitions:
+
+| | records | bytes |
+|---|---|---|
+| existing plan | 1,200,095 | 29.6 MiB |
+| bucketed, `IGNORE NULLS` (one marker) | 1,200,375 | 37.3 MiB |
+| bucketed, `RESPECT NULLS` (two markers) | 1,200,335 | 39.1 MiB |
+
+**The record count is unchanged, so the union costs no extra arrangement.** Both
+plans hold about `3n` records, because the baseline already maintains a separate
+index arrangement alongside the reduce's input and output. The caveat above
+about an indexed consumer paying for one more `n`-sized arrangement does not
+materialize.
+
+What costs 26% to 31% is row *width*, and it scales with the number of marker
+constituents rather than with anything structural: one marker costs 7.7 MiB,
+two cost 9.3 MiB. Each marker widens the value in level 0's input arrangement by
+an args record and widens the result record in its output arrangement by a
+field. That points the fix at the per-row encoding rather than at the two-level
+shape, which is where MaterializeInc/materialize#38851 and
+MaterializeInc/materialize#38852 already go: hoisting a constant offset and
+default into the function, and sourcing the value argument from the original
+row, would leave a marker costing close to nothing.
+
+A narrower level 0 is also available in principle, since the markers' results
+are read by the branch filters and then discarded, but the two branches want
+different projections of the same arrangement, so one narrow arrangement cannot
+serve both.
+
+Two traps worth recording. `mz_internal.mz_object_arrangement_sizes.size` is
+rounded to the nearest 10 MiB, which is the same size as this effect, so it
+cannot measure it; the first attempt with it produced a meaningless 30-vs-40
+reading. And timing client round trips finds nothing at all, because ~30ms of
+per-round-trip cost buries even a 2-second operator recomputation.
 
 ## Alternatives
 
