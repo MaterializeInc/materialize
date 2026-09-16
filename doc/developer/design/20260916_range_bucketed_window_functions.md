@@ -102,24 +102,33 @@ row, so:
   are the rows where the value is non-null and the local
   `lead(value, k) IGNORE NULLS` is NULL.
 
-A user-supplied non-NULL `DEFAULT` is applied after the union, so that level 0
-can use NULL as its "unresolved" marker without ambiguity.
+A user-supplied non-NULL `DEFAULT` breaks that test, since the default would
+then be indistinguishable from a real value. Rather than strip the default and
+reapply it after the union, level 0 gains one more constituent for such a call:
+the same `lag` over the same value and offset but with a NULL default, used
+only as the marker. The common case, a NULL default, needs no extra constituent
+at all and reuses the call's own result.
 
 **`RESPECT NULLS`.** Here a legitimate result can itself be NULL, so
 resolution cannot be read off the value and is instead positional. Level 0
-additionally computes `row_number()` and `lead(1, k)` over the same window:
+additionally computes `lag(1, k)` and `lead(1, k)` over the same window, both
+with a NULL default:
 
-- *resolved*: `row_number > k`.
-- *target*: `row_number <= k`.
-- *summary*: `lead(1, k)` IS NULL, which holds exactly for the last `k` rows of
-  the bucket, since the constant is non-NULL for every row that has a `k`th
-  successor and falls back to the NULL default otherwise.
+- *resolved*: `lag(1, k)` IS NOT NULL. The constant is non-NULL for every row
+  that has a `k`th predecessor and falls back to the NULL default otherwise, so
+  this is a positional test wearing a value's clothing.
+- *target*: `lag(1, k)` IS NULL.
+- *summary*: `lead(1, k)` IS NULL, which holds exactly for the last `k` rows.
 
-`lead(1, k)` is used in preference to `row_number > count(*) - k` because
-`count(*)` is an aggregate window function, and `fuse_window_functions` keys on
-the distinction between value and aggregate calls, so it would land in a
-separate operator. The three value calls above share a window and an
-`ignore_nulls` setting, which is exactly the fusion key, so they land in one.
+Two constants are used in preference to the more obvious `row_number() > k` and
+`row_number() > count(*) - k` because neither of those would land in the same
+operator. `row_number` is a *scalar* window function and `fuse_window_functions`
+does not fuse those at all, and `count(*)` is an *aggregate* window function,
+which fuses only with other aggregates. `lag` and `lead` are value window
+functions, so with the same window, frame and `ignore_nulls` setting, which is
+exactly the fusion key, all three calls fuse into one. Keeping the markers in
+the same operator as the call they describe is the difference between adding
+constituents to an existing reduce and adding whole reduces.
 
 **Why level 1 has enough context.** For a target `t`, level 1 must contain
 every row in `t`'s lookback window. Targets form a *prefix* of their bucket
@@ -140,6 +149,21 @@ computes every constituent for the rows it emits. Level 1's input is the union
 of the per-constituent summaries. The prefix property above is what makes this
 sound: the union of per-constituent prefixes is itself a prefix, so no row that
 some constituent needs is missing.
+
+**Every constituent must run the same way along the order**, and a window
+mixing `lag` with `lead` therefore has to be left alone. The prefix property is
+directional: for `lag` the unresolved rows are a bucket's prefix and the rows it
+owes its neighbours are its suffix, and for `lead` it is the other way round.
+Mixing them breaks the argument rather than just weakening it. A row can be a
+target because a `lag` constituent ran off the front of its bucket, and level 1
+then has to produce that row's `lead` as well, whose context is the rows
+immediately after it. Those rows are neither targets nor summaries, so level 1
+does not have them and reads past them into the next bucket, returning a value
+from far too far away. This is not a subtle degradation: over randomized
+partitions, mixed-direction windows produce a wrong answer in well over half of
+trials, while single-direction windows are exact. Covering the mixed case would
+mean giving every target a context window on both sides, which is a larger
+change than it sounds and is not attempted here.
 
 ### Ordering must be total
 
@@ -228,9 +252,9 @@ per-object hint in the spirit of `EXPECTED GROUP SIZE` (which today reaches only
 `bucketing_of_expected_group_size` and so does nothing at all for window
 functions); or statistics-driven selection.
 
-**Eligibility.** The offset argument of `lag`/`lead` is an arbitrary
-expression evaluated per row, so the lookback distance is not statically known
-in general. Hoisting constant offsets into the function
+**Eligibility.** Besides the single-direction requirement above, the offset
+argument of `lag`/`lead` is an arbitrary expression evaluated per row, so the
+lookback distance is not statically known in general. Hoisting constant offsets into the function
 (MaterializeInc/materialize#38851) makes the common case statically visible,
 and the optimization should require it. The `ORDER BY` also needs a leading
 column of a type with a natural monotone coarsening.
@@ -253,6 +277,15 @@ density, and the number of fused constituents, in both null modes, with and
 without heavy `ORDER BY` ties. All agree once the order is total, and the
 earlier version that tested resolution by value rather than by position in
 `RESPECT NULLS` mode is exactly what the tie and null-mode trials caught.
+
+Worth recording how the mixed-direction restriction was found, because it says
+something about where the risk in this design lives. The model covered several
+fused constituents but gave them all the same direction, so it agreed with the
+reference and the scheme looked sound. The repository's existing
+`window_funcs.slt` then produced a wrong answer for a query selecting both
+`lag(a)` and `lead(a)` over one window. Every boundary condition in this design
+is directional, and a validation harness that varies everything except
+direction will report success.
 
 The scheme is also expressed directly in SQL, as two levels of views over a
 table with ties and nulls, asserting that the union of the two levels matches a
