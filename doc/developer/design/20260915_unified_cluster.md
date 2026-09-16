@@ -1,6 +1,6 @@
 # Unified cluster: host storage objects on the compute Timely cluster
 
-- Associated: [MaterializeInc/materialize#38579](https://github.com/MaterializeInc/materialize/pull/38579)
+* Associated: [MaterializeInc/materialize#38579](https://github.com/MaterializeInc/materialize/pull/38579)
 
 ## The Problem
 
@@ -121,6 +121,13 @@ compute work grows from "compute on this replica" to "this replica". A
 liveness-aware scheduling or placement mechanism is tracked as follow-up
 work and is a prerequisite for retiring the two-cluster topology, not for
 shipping the flag.
+
+A smaller semantics change concerns storage introspection. On a unified
+replica, storage dataflows run on the compute Timely cluster and therefore
+appear in its logging unconditionally. The `enable_storage_introspection_logs`
+parameter, which gates the log bridge of the two-cluster topology, has no
+effect there: storage operators are visible in `mz_dataflow_*` relations even
+with the parameter off.
 
 ## Minimal Viable Prototype
 
