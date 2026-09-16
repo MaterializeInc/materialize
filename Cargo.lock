@@ -3315,21 +3315,6 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 [[package]]
 name = "differential-dataflow"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2677690d1dfbf4d8427eef2fdcf350ab0b258d3be20d01dd37dca07ca6f50bcc"
-dependencies = [
- "columnar",
- "columnation",
- "fnv",
- "paste",
- "serde",
- "smallvec",
- "timely 0.31.0 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "differential-dataflow"
-version = "0.25.1"
 source = "git+https://github.com/DAlperin/differential-dataflow?rev=3659671246e0b5635a8128cc27d65f12ecf7dda5#3659671246e0b5635a8128cc27d65f12ecf7dda5"
 dependencies = [
  "columnar",
@@ -3342,12 +3327,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "differential-dataflow"
+version = "0.25.1"
+source = "git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125#70406df37670b1141904ce4395be0923c3e43125"
+dependencies = [
+ "columnar",
+ "columnation",
+ "fnv",
+ "paste",
+ "serde",
+ "smallvec",
+ "timely 0.31.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "differential-dogs3"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c9eee4acc936da45f096424617c91df981c619a92f3f8b4b2a324db7969b34"
 dependencies = [
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "serde",
  "timely 0.31.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -6340,7 +6339,7 @@ dependencies = [
  "datadriven",
  "dec",
  "derivative",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "enum-kinds",
  "fail",
  "futures",
@@ -6682,7 +6681,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "derivative",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "insta",
  "ipnet",
@@ -6858,7 +6857,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "lgalloc",
  "mz-cluster-client",
@@ -6981,7 +6980,7 @@ dependencies = [
  "core_affinity",
  "criterion",
  "dec",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "differential-dogs3",
  "fail",
  "futures",
@@ -7032,7 +7031,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "derivative",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "mz-build-info",
  "mz-cluster-client",
@@ -7066,7 +7065,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "columnar",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "fail",
  "itertools 0.14.0",
  "mz-dyncfg",
@@ -7214,7 +7213,7 @@ dependencies = [
 name = "mz-durable-cache"
 version = "0.0.0"
 dependencies = [
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -7602,7 +7601,7 @@ dependencies = [
  "chrono",
  "clap",
  "criterion",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "itertools 0.14.0",
  "maplit",
  "mz-avro",
@@ -7950,7 +7949,7 @@ dependencies = [
  "criterion",
  "ctor",
  "derivative",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "either",
  "futures",
  "hibitset",
@@ -8037,7 +8036,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "deadpool-postgres",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "fail",
  "futures-util",
  "itertools 0.14.0",
@@ -8086,7 +8085,7 @@ dependencies = [
  "clap",
  "criterion",
  "datadriven",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "futures-task",
  "futures-util",
@@ -8423,7 +8422,7 @@ dependencies = [
  "compact_bytes",
  "criterion",
  "dec",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "enum-kinds",
  "hex",
  "insta",
@@ -8501,7 +8500,7 @@ dependencies = [
  "ahash 0.8.12",
  "columnar",
  "columnation",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "mz-ore",
  "mz-repr",
  "mz-timely-util",
@@ -8866,7 +8865,7 @@ dependencies = [
  "columnation",
  "crossbeam-channel",
  "dec",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "fail",
  "futures",
  "humantime",
@@ -8942,7 +8941,7 @@ dependencies = [
  "aws-sdk-glue",
  "aws-smithy-mocks",
  "chrono",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "itertools 0.14.0",
  "mz-aws-glue-schema-registry",
@@ -8980,7 +8979,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "derivative",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "itertools 0.14.0",
  "mz-build-info",
@@ -9023,7 +9022,7 @@ dependencies = [
  "columnation",
  "csv-async",
  "derivative",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "glob",
  "http 1.4.2",
@@ -9076,7 +9075,7 @@ dependencies = [
  "csv-core",
  "dec",
  "derivative",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "gcp_auth",
  "hex",
  "http 1.4.2",
@@ -9238,8 +9237,8 @@ dependencies = [
  "columnar",
  "columnation",
  "criterion",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=3659671246e0b5635a8128cc27d65f12ecf7dda5)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures-util",
  "itertools 0.14.0",
  "lz4_flex 0.12.1",
@@ -9306,7 +9305,7 @@ name = "mz-transform"
 version = "0.0.0"
 dependencies = [
  "datadriven",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "enum-kinds",
  "fail",
  "itertools 0.14.0",
@@ -9331,7 +9330,7 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "crossbeam-channel",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "itertools 0.14.0",
  "mz-build-tools",
@@ -10398,7 +10397,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
- "differential-dataflow 0.25.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "differential-dataflow 0.25.1 (git+https://github.com/DAlperin/differential-dataflow?rev=70406df37670b1141904ce4395be0923c3e43125)",
  "futures",
  "humantime",
  "mz-dyncfg",

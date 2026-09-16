@@ -641,6 +641,9 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+# Synchronous spine exertion bounded by inserted updates and frontier advances.
+# Branch upsert-funded-exertion-0.25.1 on top of the 0.25.1 release.
+differential-dataflow = { git = "https://github.com/DAlperin/differential-dataflow", rev = "70406df37670b1141904ce4395be0923c3e43125" }
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

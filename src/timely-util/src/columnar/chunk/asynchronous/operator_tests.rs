@@ -344,12 +344,10 @@ fn run(config: Config) -> Measurement {
                 }
                 let hydrated = start.elapsed();
                 let ingestion_grants = grants.load(Ordering::Relaxed);
-                // A closed input lifts the async operator's input-funded bound on
-                // consolidation for the final drain. The synchronous operator is
-                // torn down when its input closes and drains by self-activation.
-                if config.asynchronous {
-                    drop(inputs);
-                }
+                // Optional consolidation is funded by input frontier advances, so
+                // the drain keeps ticking the inputs the way a live source does.
+                // Closing them instead would tear the synchronous operator down.
+                let mut tick = config.rounds + 1;
                 // Normalize the terminal trace shape without changing the ingestion policy.
                 if hydrated_workers.fetch_add(1, Ordering::Relaxed) + 1 == workers {
                     draining.store(true, Ordering::Relaxed);
@@ -358,6 +356,10 @@ fn run(config: Config) -> Measurement {
                 let mut previous = pool.stats();
                 let mut stable_since = Instant::now();
                 loop {
+                    for input in &mut inputs {
+                        input.advance_to(tick);
+                    }
+                    tick += 1;
                     if !woke_drain && draining.load(Ordering::Relaxed) {
                         for wake in &observed.borrow().wake_traces {
                             wake();
