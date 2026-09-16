@@ -178,6 +178,11 @@ The light view and index hydrate in microseconds, while the larger `bids_load`
 view takes about 5.6 seconds. A larger object with more state to reconstruct
 shows a longer, more visible hydration window.
 
+Both relations report only the current state, so they are wiped when a replica
+or Materialize restarts. To compare this hydration against earlier ones, and to
+see the memory and disk it needed, read the durable hydration history described
+in [Optimize cluster size](/clusters/sizing/).
+
 ### Catching up
 
 Once hydrated, the cluster processes the backlog of input updates that
@@ -265,6 +270,10 @@ resize triggers [hydration](#hydration-considerations). During hydration, the
 cluster keeps serving since Materialize provisions new replicas at the
 target size and hydrates them before retiring the old ones.
 
+Because peak resource usage normally happens during hydration, size a cluster
+for the resources hydration needs. For how to measure those, see [Optimize
+cluster size](/clusters/sizing/).
+
 ## Hydration considerations
 
 {{% include-from-yaml data="hydration-details" name="definition" %}}
@@ -282,8 +291,10 @@ that provisions an extra burst replica at a larger size while the cluster has
 un-hydrated objects.
 {{< /tip >}}
 
-For more information, including hydration strategies and the memory usage of
-hydrating objects, see [Hydration](/fundamentals/concepts/hydration/).
+For more information, including the memory usage of hydrating objects, see
+[Hydration](/fundamentals/concepts/hydration/). For strategies to reduce
+hydration memory, see [Optimize hydration
+requirements](/clusters/optimize-hydration-requirements/).
 
 ## Best practices
 
@@ -315,6 +326,7 @@ production cluster(s) to run development workloads or non-production tasks.
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`ALTER CLUSTER`](/sql/alter-cluster)
 - [Hydration](/fundamentals/concepts/hydration/)
+- [Optimize hydration requirements](/clusters/optimize-hydration-requirements/)
 - [System clusters](/sql/system-clusters)
 - [Usage & billing](/materialize-cloud/billing/)
 - [Operational guidelines](/clusters/operational-guidelines/)

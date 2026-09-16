@@ -260,7 +260,7 @@ pause is the write freeze at cutover.
 
 - [Ingest data from Amazon RDS](/ingest-data/postgres/amazon-rds/)
 - [Guide: Ingest from a dedicated PostgreSQL replica](/ingest-data/postgres/logical-replica/)
-- [Guide: Handle upstream schema changes with zero downtime](/ingest-data/postgres/source-versioning/)
+- [Handle upstream schema changes](/ingest-data/postgres/source-versioning/)
 - [Blue/green deployments with dbt](/manage/dbt/blue-green-deployments/)
 - [`ALTER SCHEMA`](/sql/alter-schema/)
 - [`ALTER CLUSTER`](/sql/alter-cluster/)

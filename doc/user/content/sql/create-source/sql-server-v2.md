@@ -50,7 +50,7 @@ The use of the `CREATE SOURCE` with the new [`CREATE TABLE FROM
 SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
 changes without downtime.
 
-See [Guide: Handle upstream schema changes with zero downtime](/ingest-data/sql-server/source-versioning/) for details.
+See [Handle upstream schema changes](/ingest-data/sql-server/source-versioning/) for details.
 
 See also [Handling upstream operations](#handling-upstream-operations) for
 additional upstream operation considerations.
