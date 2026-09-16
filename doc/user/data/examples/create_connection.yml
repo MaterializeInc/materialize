@@ -914,3 +914,24 @@
         ACCESS DELEGATION = 'vended-credentials'
     );
   testable: false
+
+- name: "example-iceberg-catalog-databricks-azure-connection"
+  description: |
+    The following example creates an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for Databricks Unity Catalog on Azure:
+  code: |
+    -- Store the service principal's OAuth credentials as `<client_id>:<client_secret>`.
+    CREATE SECRET databricks_oauth
+      AS '<client_id>:<client_secret>';
+
+    -- Create the Iceberg catalog connection pointing to Unity Catalog.
+    CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = 'https://adb-<workspace_id>.<region_id>.azuredatabricks.net/api/2.1/unity-catalog/iceberg-rest',
+        WAREHOUSE = '<catalog_name>',
+        CREDENTIAL = SECRET databricks_oauth,
+        OAUTH2 SERVER URL = 'https://adb-<workspace_id>.<region_id>.azuredatabricks.net/oidc/v1/token',
+        SCOPE = 'all-apis',
+        ACCESS DELEGATION = 'vended-credentials',
+        STORAGE PROVIDER = 'adls'
+    );
+  testable: false
