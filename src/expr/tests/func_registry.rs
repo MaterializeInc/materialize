@@ -189,12 +189,11 @@ fn func_registry_snapshot() {
 #[mz_ore::test]
 fn func_registry_records_sqlfunc_sources() {
     let registry = FuncRegistry::build();
+    // The exact rendering is pinned by the unit tests in mz-expr-derive-impl.
     let abs = &registry.unary["abs_int16"];
-    assert_eq!(
-        abs.source.sqlfunc_decl,
-        Some("#[sqlfunc(sqlname = \"abs\")] fn abs_int16(a: i16) -> Result<i16, EvalError>"),
-        "declaration text of abs_int16 (this also pins the compact rendering format)"
-    );
+    let decl = abs.source.sqlfunc_decl.expect("abs_int16 is a #[sqlfunc]");
+    assert!(decl.starts_with("#[sqlfunc("), "{decl}");
+    assert!(decl.contains(" fn abs_int16("), "{decl}");
     assert!(abs.source.body_fingerprint.is_some());
 
     // Hand-written functions have no source to record.

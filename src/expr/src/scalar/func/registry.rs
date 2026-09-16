@@ -187,16 +187,17 @@ impl FuncRegistry {
     }
 }
 
-/// Records the properties of every variant of one function enum.
+/// Records the properties of every variant of one function enum, keyed as
+/// described on [`Sample`].
 ///
-/// Each name in `names` gets a primary record under that name: the unlabeled
-/// hand-written sample from `samples` if there is one, otherwise a
-/// payload-free instance from `construct` (see `from_variant_name` on the
-/// enums). Hand-written primaries take precedence so a constructible variant
-/// can still be probed at chosen input types. Labeled samples add records
-/// under `name[label]` next to the primary.
+/// A variant's primary record comes from its unlabeled hand-written sample if
+/// there is one, otherwise from a payload-free instance built by `construct`
+/// (see `from_variant_name` on the enums). Hand-written primaries take
+/// precedence so a constructible variant can still be probed at chosen input
+/// types.
 ///
-/// Panics if a name has no primary, or if two samples share a name and label.
+/// Panics if a variant has no primary, if two samples share a name and label,
+/// or if probing a sample panics, in which case the panic names the sample.
 fn collect<F, P>(
     enum_name: &str,
     names: impl Iterator<Item = &'static str>,
@@ -233,16 +234,39 @@ fn collect<F, P>(
                 enum_name.trim_end_matches("Func").to_lowercase()
             )
         });
-        records.insert(name.to_string(), properties(&primary));
+        records.insert(
+            name.to_string(),
+            probe(enum_name, name, &primary, properties),
+        );
     }
     for ((name, label), sample) in by_name {
         assert!(
             records.contains_key(name),
             "{enum_name} sample `{name}[{label}]` names an unknown variant"
         );
-        records.insert(format!("{name}[{label}]"), properties(&sample));
+        records.insert(
+            format!("{name}[{label}]"),
+            probe(enum_name, &format!("{name}[{label}]"), &sample, properties),
+        );
     }
     records
+}
+
+/// Runs `properties` on a sample, attributing any panic (typically an
+/// `output_sql_type` impl rejecting the sample's input types) to the sample.
+fn probe<F, P>(
+    enum_name: &str,
+    key: &str,
+    sample: &Sample<F>,
+    properties: fn(&Sample<F>) -> P,
+) -> P {
+    mz_ore::panic::catch_unwind_str(std::panic::AssertUnwindSafe(|| properties(sample)))
+        .unwrap_or_else(|message| {
+            panic!(
+                "probing {enum_name} sample `{key}` panicked: {message}\n\
+                 Check the sample's input types in src/expr/src/scalar/func/registry.rs."
+            )
+        })
 }
 
 /// The serde variant name, which is what the stable LIR format stores.
