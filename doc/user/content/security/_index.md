@@ -24,12 +24,6 @@ menu:
 | [Authentication](/security/self-managed/authentication/) | Enable authentication |
 | [Access control](/security/self-managed/access-control/) | Reference for role-based access management (RBAC) |
 
-## Patterns
-
-| Guide | Description |
-|-------|-------------|
-| [Row-level security](/security/row-level-security/) | Restrict the rows and columns each role can read |
-
 ## Appendix
 
 See also:

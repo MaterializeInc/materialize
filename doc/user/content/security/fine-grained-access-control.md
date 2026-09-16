@@ -1,12 +1,10 @@
 ---
-title: "Row-level security"
+title: "Fine-grained access control"
 description: "Restrict which rows and columns each role can read by combining RBAC, entitlement tables, and security views."
-menu:
-  main:
-    parent: "security"
-    name: "Row-level security"
-    identifier: "row-level-security"
-    weight: 50
+robots: "noindex, nofollow"
+build:
+  render: always
+  list: never
 ---
 
 Materialize enforces row-level and column-level access with three pieces it
@@ -331,21 +329,7 @@ SELECT * FROM secure.orders ORDER BY id;
 ```
 
 Each reader gets their own rows, and `billing_email` carries a value only for
-the reader entitled to it. Everything else stays behind its own privileges:
-
-```mzsql
-SELECT * FROM internal.enriched_orders;
-SELECT * FROM security.entitled_orders;
-SELECT * FROM security.column_entitlements;
-```
-```nofmt
-ERROR:  permission denied for SCHEMA "materialize.internal"
-DETAIL:  The 'alice@acme.example' role needs USAGE privileges on SCHEMA "materialize.internal"
-ERROR:  permission denied for SCHEMA "materialize.security"
-DETAIL:  The 'alice@acme.example' role needs USAGE privileges on SCHEMA "materialize.security"
-ERROR:  permission denied for SCHEMA "materialize.security"
-DETAIL:  The 'alice@acme.example' role needs USAGE privileges on SCHEMA "materialize.security"
-```
+the reader entitled to it.
 
 ## Keep the filter fast
 
@@ -359,33 +343,6 @@ shared state. Keep the maintained work below the filter:
 * Build the indexes on the cluster that serves tenant queries, and grant that
   cluster's `USAGE` to the reader role.
 
-{{< note >}}
-Indexes and materialized views maintain one result for all readers, so the
-per-session filter stays out of them:
-
-```mzsql
-CREATE INDEX secure_orders_idx ON secure.orders (customer_id);
-```
-```nofmt
-ERROR:  cannot materialize call to current_user
-```
-
-Index the inputs instead, and the filter stays a per-session lookup over
-them.
-{{</ note >}}
-
-[`EXPLAIN`](/sql/explain-plan/) confirms the indexes are doing the work:
-
-```mzsql
-EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM secure.orders WHERE customer_id = 'acme';
-```
-```nofmt
- Used Indexes:
-   - materialize.internal.enriched_orders_by_customer (differential join)
-   - materialize.security.row_entitlements_by_role (differential join)
-   - materialize.security.column_entitlements_by_role (differential join)
-```
-
 ## Considerations
 
 ### Role names share one namespace
@@ -397,57 +354,12 @@ how you leak one tenant to everyone, so decide which you mean. Keep tenant
 roles, column profiles, and the reader role distinct, and restrict `INSERT` on
 both entitlement tables to a controlled process.
 
-### The view owner's privileges are the ones that matter
-
-The owner of a security view runs its definition for every reader, so the owner
-must hold `SELECT` and `USAGE` on everything it touches. Transfer ownership
-elsewhere and the error names the owner rather than the caller:
-
-```nofmt
-ERROR:  permission denied for SCHEMA "materialize.internal"
-DETAIL:  The 'weak_owner' role needs USAGE privileges on SCHEMA "materialize.internal"
-```
-
-### Superusers read through the boundary
-
-Superusers are exempt from privilege checks on user objects, so the pattern
-governs tenants and leaves administrators unrestricted.
-
-{{< tabs >}}
-{{< tab "Cloud" >}}
-
-[Organization admins](/security/cloud/users-service-accounts/#organization-roles)
-are superusers and read through every security view. Reserve that role for
-people already trusted with all of the data.
-
-{{</ tab >}}
-{{< tab "Self-managed" >}}
-
-`mz_system` is a superuser, and `enable_rbac_checks` decides whether everyone
-else is one too. Treat that parameter as part of the boundary and verify it
-after any change to system configuration:
-
-```mzsql
-SHOW enable_rbac_checks;
-```
-
-{{</ tab >}}
-{{</ tabs >}}
-
 ### A masked column reads as null
 
 A guarded column returns `NULL` when the reader has no entitlement, and the
 column name stays in the result either way. Where that ambiguity matters,
 publish a companion boolean built from the same array, or give that audience a
 separate view that omits the column.
-
-### Catalog metadata stays visible
-
-The boundary governs data. A tenant role can still query
-`mz_catalog.mz_roles` and `mz_catalog.mz_objects` to list other tenants' role
-names and your object names, and can run [`SHOW
-CREATE VIEW`](/sql/show-create-view/) on views it selects from. Choose names
-that are safe to share.
 
 ## See also
 
