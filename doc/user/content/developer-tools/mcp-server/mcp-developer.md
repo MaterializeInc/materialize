@@ -1,11 +1,11 @@
 ---
-title: MCP Server for Developers
+title: MCP Server for Developers and Operators
 description: "Query Materialize system catalog tables for troubleshooting and observability via the built-in materialize-developer MCP server."
 make_table_row_headers_searchable: true
 menu:
   main:
     parent: "mcp-server"
-    name: "MCP server for developers"
+    name: "MCP server for developers and operators"
     weight: 25
     identifier: "mcp-server-developer"
 aliases:
