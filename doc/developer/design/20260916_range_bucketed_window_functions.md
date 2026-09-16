@@ -204,72 +204,72 @@ A local `environmentd`, 400,000 rows in two partitions of 200,000, the
 `ORDER BY` key spanning 40 bucket widths so each bucket holds about 5,000 rows.
 
 **Per-update CPU.** Single-row inserts, each read back so the dataflow must
-process it, with CPU taken from `mz_scheduling_elapsed` summed over the
-operators of the dataflow under test. Two repetitions:
-
-| | existing plan | bucketed plan |
-|---|---|---|
-| dataflow CPU per update | 1316 ms, 1315 ms | 243 ms, 235 ms |
-
-Roughly 5.5x, reproducible across two different read styles.
-
-NOTE: `mz_scheduling_elapsed` is itself a dataflow and lags behind the work it
-reports. Reading it immediately after a batch of updates understates the delta,
-badly and unevenly, and can return a zero delta outright. An earlier version of
-this measurement did that and produced a much larger apparent speedup, which did
-not reproduce. Let it settle for several seconds first.
-
-Note also how much larger the baseline is than the evaluation path alone can
-explain: a 200,000-row sort is tens of milliseconds, so most of the 1.3 seconds
-is packing `n` output rows and letting differential consolidate `2n` owned
-`Row`s to recover a delta of one or two. Bucketing shrinks that half as well,
-which no amount of tuning inside the aggregate function would achieve.
-
-**How it scales.** One partition, so every update recomputes all of it. Holding
-rows-per-bucket at about 5,000 while the key span grows with the row count:
+process it. One partition, so every update recomputes all of it. CPU is
+`mz_scheduling_elapsed` summed over the operators of the dataflow under test.
+Rows-per-bucket is held near 5,000 by growing the key span with the row count:
 
 | rows | buckets | existing | bucketed | |
 |---|---|---|---|---|
-| 200,000 | 40 | 1424 ms | 240 ms | 5.9x |
-| 800,000 | 160 | 7192 ms | 768 ms | 9.4x |
+| 200,000 | 40 | 1088 ms | 40.9 ms | 27x |
+| 800,000 | 160 | 5727 ms | 39.4 ms | 145x |
+| 3,200,000 | 640 | 27944 ms, 27439 ms | 33.9 ms, 35.1 ms | 825x, 781x |
 
-**Where it stops paying, and where it costs.** Holding the bucket count at 41 so
-buckets shrink with the partition, and then confining a partition to a single
-bucket so no split is possible:
+The bucketed cost is flat across a 16x range of partition sizes, at 34 to 41 ms,
+because bucket size is what it depends on and that was held constant. That is
+the point of the design stated as a measurement: per-update cost becomes a
+function of the bucket rather than of the partition, so the advantage grows
+without bound as partitions grow. At 3,200,000 rows the existing plan spends 28
+seconds of dataflow CPU to absorb one row.
+
+The bucketed figures are independently corroborated: recomputing one
+5,000-row bucket at the existing plan's own per-row rate predicts 36 to 44 ms,
+which is what was measured.
+
+NOTE: this measurement is unusually easy to get wrong, in both directions.
+`mz_scheduling_elapsed` is itself a dataflow, so it lags the work it reports:
+reading it immediately after a batch understates the delta and can return zero.
+Hydration also continues after the query that forces it returns, so reading the
+baseline counter too early charges leftover hydration to the updates, which
+inflates the bucketed side badly (its real per-update cost is tens of
+milliseconds) while barely touching a baseline that spends seconds per update.
+A live dataflow also accrues scheduling time with nothing arriving, which
+matters once the work being measured is small.
+
+Earlier attempts produced apparent speedups of 2.8x, 5.5x and 784x, and both
+1.05x and 0.39x for the same small case, for configurations whose real values
+are in the tables above. What finally worked: settle after hydration before
+reading the baseline counter, use a fixed measurement window rather than a
+convergence poll, and for small cases subtract an equal-length idle window.
+
+**Where it stops paying, and where it costs.** Holding the bucket count at 41,
+so buckets shrink as the partition shrinks, and then confining a partition to a
+single bucket width so no split is possible at all. CPU here is the difference
+between a fixed window with updates and an equal window without, because a live
+dataflow accrues scheduling time even when nothing arrives:
 
 | rows | buckets | existing | bucketed | | records |
 |---|---|---|---|---|---|
-| 100 | 41 | 3.72 ms | 3.71 ms | 1.00x | +39% |
-| 1,000 | 41 | 7.90 ms | 4.32 ms | 1.83x | +7% |
-| 10,000 | 41 | 49.5 ms | 11.5 ms | 4.31x | +0.6% |
-| 100,000 | 41 | 569 ms | 139 ms | 4.08x | +0.05% |
-| 10,000 | 1 | 50.7 ms | 62.3 ms | **0.81x** | +0.3% |
-| 100,000 | 1 | 591 ms | 755 ms | **0.78x** | +0.02% |
+| 100 | 41 | 3.29 ms | 3.14 ms | 1.05x | +40% |
+| 1,000 | 41 | 7.76 ms | 3.70 ms | 2.1x | +7% |
+| 10,000 | 41 | 48.3 ms | 4.31 ms | 11x | +0.6% |
+| 100,000 | 41 | 546 ms | 17.6 ms | 31x | +0.05% |
+| 10,000 | 1 | 46.8 ms | 57.5 ms | **0.81x** | +0.3% |
+| 100,000 | 1 | 530 ms | 693 ms | **0.76x** | +0.02% |
 
-Three things follow, and two of them argue for gating the rewrite rather than
-applying it to everything eligible.
+Break-even is around a hundred rows per partition. Below that there is nothing
+to win, and the boundary level's arrangements, whose size follows the bucket
+count rather than the row count, are a large relative overhead: 40% more records
+at 100 rows.
 
-Break-even is around a thousand rows per partition. Below that there is nothing
-to win, and the boundary level's arrangements, whose size is set by the bucket
-count rather than by the row count, are a large relative overhead: 39% more
-records at 100 rows.
-
-**A partition confined to one bucket is 22% to 28% slower**, consistently at both
-sizes tested. That is the rewrite paying for marker constituents, a second
-reduce and a union while no split is possible, and it is reachable in practice:
-with an hourly stride, any partition spanning less than an hour lands here. An
-eligibility condition is needed, and a plain row-count threshold will not
-express it, because what matters is how many buckets the partition's key span
-actually covers.
-
-At a fixed bucket count the speedup plateaus near 4x rather than approaching the
-41x the bucket count would suggest. Bucket size grows with the partition, but
-more importantly a per-update cost proportional to `n` survives bucketing
-entirely: the bucketed cost still grew 3.2x between the 200,000 and 800,000 row
-cases above even though bucket size was held constant. Whatever that residual is
-(arrangement maintenance over an `n`-record trace is the obvious candidate) it
-caps what this approach can deliver, and finding it is probably worth more than
-tuning the bucket width.
+**A partition confined to one bucket is 19% to 24% slower.** This is the result
+that should shape the eligibility rule. The rewrite pays for marker
+constituents, a second reduce and a union while no split is possible, and it is
+reachable in practice: with an hourly stride, any partition spanning less than
+an hour lands here. A row-count threshold will not express the condition,
+because what matters is how many buckets the partition's key span actually
+covers, which is a property of the data rather than of the plan. Absent a way to
+know that, the conservative reading is that this optimization wants an explicit
+opt-in per object rather than a global default.
 
 **Arrangement cost.** Per-operator `mz_arrangement_sizes`, ten samples three
 seconds apart, identical across every sample and both repetitions:
