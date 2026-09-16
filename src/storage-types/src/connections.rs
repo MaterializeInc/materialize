@@ -37,8 +37,8 @@ use iceberg_catalog_rest::{
     RestCatalogBuilder, TokenProvider,
 };
 use iceberg_storage_opendal::{
-    AwsCredential, CustomAwsCredentialLoader, CustomGcsCredentialLoader, OpenDalStorageFactory,
-    ProvideCredential,
+    AwsCredential, CustomAwsCredentialLoader, CustomAzdlsCredentialLoader,
+    CustomGcsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
 };
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
@@ -1224,13 +1224,18 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         IcebergStorageProvider::Gcs => {
                             Self::gcs_storage_factory(endpoint, &client, &token, &headers)
                         }
-                        // ADLS takes its credentials from the catalog's config, which
-                        // `iceberg-rust` forwards to `opendal` the same way. OpenDAL's Azure
-                        // service does not go through reqsign's credential provider
-                        // abstraction, so there is no hook to wrap: vended credentials for
-                        // ADLS work only through those static props, and stop working when
-                        // they expire.
-                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls,
+                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls {
+                            customized_credential_load: endpoint.map(|endpoint| {
+                                CustomAzdlsCredentialLoader::new(
+                                    iceberg_credentials::VendedCredentialLoader::new(
+                                        client.clone(),
+                                        endpoint,
+                                        Arc::clone(&token),
+                                        headers.clone(),
+                                    ),
+                                )
+                            }),
+                        },
                     },
                     // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
                     // This means we ignore auth overrides from `/v1/config` (e.g. `oauth2-server-uri`).
