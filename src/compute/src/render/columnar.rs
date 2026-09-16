@@ -283,14 +283,16 @@ where
 {
     collection
         .inner
-        .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
+        .unary::<NoopBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
             "ColumnarNegate",
             |_cap, _info| {
                 move |input, output| {
                     input.for_each(|time, data| {
                         let mut negated = negate_column(std::mem::take(data));
-                        output.session(&time).give_container(&mut negated);
+                        output
+                            .session_with_builder(&time)
+                            .give_container(&mut negated);
                     });
                 }
             },
@@ -334,13 +336,13 @@ where
     // hazard on large consolidations. `consolidate_named`'s unpack does the same, so a
     // fuel fix has to cover both.
     consolidated
-        .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
+        .unary::<NoopBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
             &format!("Flatten {name}"),
             |_cap, _info| {
                 move |input, output| {
                     input.for_each(|time, data| {
-                        let mut session = output.session(&time);
+                        let mut session = output.session_with_builder(&time);
                         for mut chunk in data.drain(..).flatten() {
                             session.give_container(&mut chunk);
                         }
