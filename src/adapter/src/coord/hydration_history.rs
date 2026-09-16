@@ -68,8 +68,8 @@ const SCHEDULE_RECHECK_CAP: Duration = Duration::from_secs(5);
 
 /// How often a disabled collector rechecks whether it was enabled.
 ///
-/// This is the cadence of every environment in the default configuration, so it
-/// is much coarser than the enabled one: nothing is waiting on it.
+/// A disabled collector has no pending collection work, so this can be much
+/// coarser than the enabled scheduler's recheck cadence.
 const DISABLED_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Bound on one replica-targeted mutation.
@@ -187,10 +187,8 @@ impl Coordinator {
         };
         // Builtin tables are not writable in read-only mode, and a disabled
         // collector must do no background work at all. Retention is part of the
-        // sweep, so disabling collection also suspends it. That is deliberate:
-        // the table can only be non-empty if collection ran at some point, and
-        // the alternative is an always-on subscribe in the default (disabled)
-        // production configuration.
+        // sweep, so disabling collection also suspends it once any in-flight
+        // sweep finishes. This makes zero a break-glass setting for the subsystem.
         if collection_interval.is_zero() || self.controller.read_only() {
             self.schedule_hydration_history_collection();
             return;
