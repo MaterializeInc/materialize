@@ -3592,6 +3592,28 @@ impl SqlScalarType {
         }
     }
 
+    /// Reports whether `predicate` holds for this type or for any type nested
+    /// within it: the element type of a list, array, map, or range, or a field
+    /// type of a record, at any depth.
+    pub fn contains(&self, predicate: &impl Fn(&SqlScalarType) -> bool) -> bool {
+        if predicate(self) {
+            return true;
+        }
+        match self {
+            SqlScalarType::List { element_type, .. }
+            | SqlScalarType::Array(element_type)
+            | SqlScalarType::Map {
+                value_type: element_type,
+                ..
+            }
+            | SqlScalarType::Range { element_type } => element_type.contains(predicate),
+            SqlScalarType::Record { fields, .. } => fields
+                .iter()
+                .any(|(_, field)| field.scalar_type.contains(predicate)),
+            _ => false,
+        }
+    }
+
     /// Returns the [`SqlScalarType`] of elements in a [`SqlScalarType::Array`],
     /// [`SqlScalarType::Int2Vector`], or [`SqlScalarType::List`].
     ///
@@ -6203,5 +6225,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[mz_ore::test]
+    fn scalar_type_contains_walks_nested_types() {
+        let is_legacy_char = |ty: &SqlScalarType| *ty == SqlScalarType::PgLegacyChar;
+        let nested = SqlScalarType::Record {
+            fields: [
+                ("a".into(), SqlScalarType::Int32.nullable(true)),
+                (
+                    "b".into(),
+                    SqlScalarType::List {
+                        element_type: Box::new(SqlScalarType::Map {
+                            value_type: Box::new(SqlScalarType::PgLegacyChar),
+                            custom_id: None,
+                        }),
+                        custom_id: None,
+                    }
+                    .nullable(true),
+                ),
+            ]
+            .into(),
+            custom_id: None,
+        };
+        assert!(nested.contains(&is_legacy_char));
+        assert!(SqlScalarType::PgLegacyChar.contains(&is_legacy_char));
+        assert!(!SqlScalarType::Array(Box::new(SqlScalarType::String)).contains(&is_legacy_char));
+        assert!(!SqlScalarType::Int32.contains(&is_legacy_char));
     }
 }
