@@ -3882,6 +3882,160 @@ mod tests {
         .await;
     }
 
+    /// For every type pair `TRY_CAST` supports and many values of the source
+    /// type, `TRY_CAST` agrees with `CAST` where `CAST` succeeds and is NULL
+    /// where `CAST` errors. It never errors itself.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn proptest_try_cast_agrees_with_cast() {
+        use std::cell::Cell;
+
+        use mz_expr::CastFailureMode;
+        use mz_repr::{ColumnName, arb_datum_for_scalar};
+        use mz_sql::plan::{CastContext, plan_hypothetical_cast_with_failure_mode};
+        use proptest::test_runner::{Config, TestRunner};
+
+        fn record(fields: &[(&str, SqlScalarType)]) -> SqlScalarType {
+            SqlScalarType::Record {
+                fields: fields
+                    .iter()
+                    .map(|(name, ty)| (ColumnName::from(*name), ty.clone().nullable(true)))
+                    .collect(),
+                custom_id: None,
+            }
+        }
+
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+            let pcx = PlanContext::zero();
+            let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
+            let ecx = ExprContext {
+                qcx: &qcx,
+                name: "proptest_try_cast",
+                scope: &Scope::empty(),
+                relation_type: &SqlRelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: true,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            let plan = |mode, from: &SqlScalarType, to: &SqlScalarType| {
+                let ccx = CastContext::Explicit;
+                plan_hypothetical_cast_with_failure_mode(&ecx, ccx, mode, from, to)
+            };
+
+            // `SqlScalarType::enumerate` has no instance of the parameterized
+            // type families, nor of `name` and `aclitem`. Two widths of each
+            // container so that the element casts are exercised.
+            let mut types = SqlScalarType::enumerate().to_vec();
+            types.extend([
+                SqlScalarType::PgLegacyName,
+                SqlScalarType::AclItem,
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Int32),
+                    custom_id: None,
+                },
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Int64),
+                    custom_id: None,
+                },
+                SqlScalarType::Array(Box::new(SqlScalarType::Int32)),
+                SqlScalarType::Array(Box::new(SqlScalarType::Int64)),
+                SqlScalarType::Map {
+                    value_type: Box::new(SqlScalarType::Int32),
+                    custom_id: None,
+                },
+                SqlScalarType::Range {
+                    element_type: Box::new(SqlScalarType::Int32),
+                },
+                record(&[("a", SqlScalarType::Int32), ("b", SqlScalarType::String)]),
+                record(&[("a", SqlScalarType::Int64), ("b", SqlScalarType::String)]),
+            ]);
+
+            let mut pairs = 0usize;
+            // Counted from inside `check`, which the proptest runner requires
+            // to be `Fn`, hence the `Cell`.
+            let values = Cell::new(0usize);
+            for from in &types {
+                // NOTE: `"char"` is in the string type category, so `plan_cast`
+                // routes it into the text-source templates, but its datums are
+                // `UInt8`, so those casts panic in `CAST` and `TRY_CAST` alike,
+                // including as the element cast of a container. That is a
+                // `CAST` bug, not an oracle violation, so it is kept out of
+                // this test.
+                if from.contains(&|ty| *ty == SqlScalarType::PgLegacyChar) {
+                    continue;
+                }
+                for to in &types {
+                    let Some(strict) = plan(CastFailureMode::Error, from, to) else {
+                        continue;
+                    };
+                    let Some(lenient) = plan(CastFailureMode::NullFallback, from, to) else {
+                        // The SQL-implemented casts, refused by the planner.
+                        continue;
+                    };
+                    pairs += 1;
+                    let arena = RowArena::new();
+                    let check = |datum: Datum| {
+                        values.set(values.get() + 1);
+                        let row = [datum];
+                        let strict_result = strict.eval(&row, &arena);
+                        let lenient_result = lenient.eval(&row, &arena);
+                        match (&strict_result, &lenient_result) {
+                            (Ok(s), Ok(l)) => assert_eq!(
+                                s, l,
+                                "{from:?} to {to:?} on {datum}: TRY_CAST differs from CAST"
+                            ),
+                            (Err(_), Ok(Datum::Null)) => {}
+                            (Err(err), Ok(l)) => panic!(
+                                "{from:?} to {to:?} on {datum}: CAST errors ({err}) but TRY_CAST gives {l}"
+                            ),
+                            (_, Err(err)) => {
+                                panic!("{from:?} to {to:?} on {datum}: TRY_CAST errored: {err}")
+                            }
+                        }
+                    };
+
+                    // Edge values, then NULL, then random values of the source
+                    // type.
+                    for datum in from.interesting_datums() {
+                        check(datum);
+                    }
+                    check(Datum::Null);
+                    let mut runner = TestRunner::new(Config {
+                        cases: 64,
+                        ..Config::default()
+                    });
+                    runner
+                        .run(&arb_datum_for_scalar(from.clone()), |pd| {
+                            check(Datum::from(&pd));
+                            Ok(())
+                        })
+                        .expect("oracle holds");
+
+                    // A random string almost never parses as the target type,
+                    // so for string sources also feed the rendering of random
+                    // target values, which exercises the success branch.
+                    let render = plan(CastFailureMode::Error, to, &SqlScalarType::String);
+                    if from.base_eq(&SqlScalarType::String) && let Some(render) = render {
+                        runner
+                            .run(&arb_datum_for_scalar(to.clone()), |pd| {
+                                if let Ok(s) = render.eval(&[Datum::from(&pd)], &arena) {
+                                    check(s);
+                                }
+                                Ok(())
+                            })
+                            .expect("oracle holds");
+                    }
+                }
+            }
+            assert!(pairs > 200, "only {pairs} pairs exercised");
+            assert!(values.get() > 10_000, "only {} values checked", values.get());
+        })
+        .await;
+    }
+
     fn smoketest_fn(
         name: &&str,
         call_name: String,
