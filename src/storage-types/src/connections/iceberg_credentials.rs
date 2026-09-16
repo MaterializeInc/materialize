@@ -131,14 +131,11 @@ impl VendedCredential for AzdlsCredential {
         let mut expires_at = None;
         for (prop, val) in vended.config.iter() {
             if prop.starts_with("adls.sas-token.") {
-                if sas_token.is_some() {
-                    return Err(reqsign_core::Error::credential_invalid(format!(
-                        "vended Iceberg storage credential for prefix {} has multiple \
-                         {prop} properties",
-                        vended.prefix
-                    )));
+                // Some iceberg catalogs send multiple `adls.sas-token.<account>` properties, with
+                // different suffixes. We just take the first one, and ignore the rest.
+                if sas_token.is_none() {
+                    sas_token = Some(val.clone());
                 }
-                sas_token = Some(val.clone());
             }
             if prop.starts_with("adls.sas-token-expires-at-ms.") {
                 if expires_at.is_some() {
@@ -155,7 +152,14 @@ impl VendedCredential for AzdlsCredential {
             (Some(sas_token), Some(expires_at)) => Ok(AzdlsCredential::with_sas_token_expires_at(
                 &sas_token, expires_at,
             )),
-            (Some(sas_token), None) => Ok(AzdlsCredential::with_sas_token(&sas_token)),
+            (Some(sas_token), None) => {
+                warn!(
+                    prefix = vended.prefix,
+                    "vended Iceberg storage credential has a SAS token but no expiry; \
+                     re-fetching on a short interval"
+                );
+                Ok(AzdlsCredential::with_sas_token(&sas_token))
+            }
             (None, _) => Err(reqsign_core::Error::credential_invalid(format!(
                 "vended Iceberg storage credential for prefix {} has no \
                  adls.sas-token.<account> property",
