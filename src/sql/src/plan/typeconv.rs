@@ -1626,6 +1626,17 @@ pub fn plan_hypothetical_cast(
     from: &SqlScalarType,
     to: &SqlScalarType,
 ) -> Option<mz_expr::MirScalarExpr> {
+    plan_hypothetical_cast_with_failure_mode(ecx, ccx, CastFailureMode::Error, from, to)
+}
+
+/// Similar to `plan_hypothetical_cast`, but with a `CastFailureMode` to specify behavior.
+pub fn plan_hypothetical_cast_with_failure_mode(
+    ecx: &ExprContext,
+    ccx: CastContext,
+    mode: CastFailureMode,
+    from: &SqlScalarType,
+    to: &SqlScalarType,
+) -> Option<mz_expr::MirScalarExpr> {
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
     let mut scx = ecx.qcx.scx.clone();
@@ -1654,11 +1665,12 @@ pub fn plan_hypothetical_cast(
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
     //
-    // NOTE: element casts are always strict, whatever the enclosing cast's
-    // failure mode. Under `TRY_CAST` the enclosing function is what gets
-    // wrapped, so a bad element makes the whole value NULL rather than
-    // producing a value with NULL holes in it.
-    plan_cast(&ecx, ccx, col_expr, to)
+    // NOTE: the templates plan element casts through `plan_hypothetical_cast`,
+    // which is always strict, whatever the enclosing cast's failure mode. Under
+    // `TRY_CAST` the enclosing function is what gets wrapped, so a bad element
+    // makes the whole value NULL rather than producing a value with NULL holes
+    // in it.
+    plan_cast_with_failure_mode(&ecx, ccx, mode, col_expr, to)
         .ok()?
         // TODO(jkosh44) Support casts that have correlated implementations.
         .lower_uncorrelated(ecx.catalog().system_vars())
