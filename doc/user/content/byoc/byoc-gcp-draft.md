@@ -94,6 +94,17 @@ You need an empty GCP project, rights to configure Workload Identity Federation 
 
 Admin scoped to that one project via Workload Identity Federation, with no service account keys and every action landing in your own Cloud Audit Logs. We manage the environment through that grant; telemetry and usage flow outbound-only from your account over mutual TLS, with a per-stack certificate we can revoke. Revoke the trust at any time and the environment keeps serving queries but stops being upgradeable or repairable.
 
+### Is the Materialize control plane shared or dedicated?
+
+Shared. A single Materialize-operated control plane provisions and operates BYOC environments across customers. Your data plane is dedicated: compute, storage, metadata database, and network run in your own project, and queries never leave it. What the shared control plane holds about you is environment metadata, configuration, and operational telemetry, not row-level data from your tables and views.
+A dedicated control plane is not part of the BYOC offering. If isolating the control plane is a hard requirement, see next question below.
+
+### When is self-managed the better fit?
+
+BYOC assumes you are comfortable with Materialize holding continuous administrative access to a dedicated project from a shared control plane, under SOC 2 Type II controls. It gives you data residency, a single-tenant data plane, direct infrastructure control, and cloud spend on your own bill.
+
+It does not remove Materialize as an operator of your environment. If your threat model or your auditors require that no vendor holds access to the environment, self-managed Materialize is the right choice: you run, upgrade, and operate it yourself inside your own infrastructure, with no Materialize control plane in the path.
+
 ### What data leaves my account?
 
 Logs and metrics, with sensitive data excluded at the application level. The same set is emitted to your stack and to ours. Your copy stays in your account under your retention.
