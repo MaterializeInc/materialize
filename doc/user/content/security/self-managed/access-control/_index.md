@@ -73,6 +73,13 @@ combining existing roles, enabling modular access control. However:
   are not inherited.
 - {{% include-headless "/headless/rbac-sm/revoke-roles-consideration" %}}
 
+## Row-level security
+
+To restrict the rows and columns a role can read, combine RBAC with an
+entitlement table and a set of security views. Privileges stop at the view a
+query names, which makes those views a security boundary. See [Row-level
+security](/security/row-level-security/).
+
 ## Best practices
 
 {{% yaml-sections data="rbac/recommendations-sm" heading-field="recommendation" heading-level=3 %}}
