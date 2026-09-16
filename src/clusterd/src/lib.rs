@@ -170,6 +170,9 @@ struct Args {
 
     /// Forward storage's timely logging events to compute so storage operators appear in
     /// `mz_introspection.mz_dataflow_*` tables.
+    ///
+    /// Has no effect on a unified cluster, where storage dataflows run on the compute Timely
+    /// cluster and appear in its logging unconditionally.
     #[clap(long)]
     enable_storage_introspection_logs: bool,
 
@@ -570,7 +573,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .instrument(info_span!("ctp", name = "compute")),
     );
 
-    // TODO: unify storage and compute servers to use one timely cluster.
+    // TODO: retire this two-cluster topology once the unified cluster has production mileage.
 
     // Block forever.
     future::pending().await

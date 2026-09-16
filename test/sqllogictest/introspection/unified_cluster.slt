@@ -35,27 +35,25 @@ SELECT mz_unsafe.mz_sleep(2)
 
 # On a unified cluster there is no separate storage Timely cluster, so the
 # logging dataflow has no bridge operator replaying storage's Timely log
-# events into the compute cluster.
-query I
-SELECT count(*)
-FROM mz_introspection.mz_dataflow_operators
-WHERE name = 'Replay storage timely logs';
+# events into the compute cluster, and the Timely log replay feeds the demux
+# directly. Asserting both counts in one query guards each against logging
+# simply not having populated yet.
+query II
+SELECT
+    (SELECT count(*)
+     FROM mz_introspection.mz_dataflow_operators
+     WHERE name = 'Replay storage timely logs') AS bridge_operators,
+    (SELECT count(*)
+     FROM
+         mz_introspection.mz_dataflow_channel_operators mdco
+         JOIN mz_introspection.mz_dataflow_operators mdo_from
+             ON mdco.from_operator_id = mdo_from.id
+         JOIN mz_introspection.mz_dataflow_operators mdo_to
+             ON mdco.to_operator_id = mdo_to.id
+     WHERE mdo_from.name = 'Replay timely logs'
+         AND mdo_to.name = 'Timely Logging Demux') AS direct_edges;
 ----
-0
-
-# The Timely log replay feeds the demux directly.
-query I
-SELECT count(*)
-FROM
-    mz_introspection.mz_dataflow_channel_operators mdco
-    JOIN mz_introspection.mz_dataflow_operators mdo_from
-        ON mdco.from_operator_id = mdo_from.id
-    JOIN mz_introspection.mz_dataflow_operators mdo_to
-        ON mdco.to_operator_id = mdo_to.id
-WHERE mdo_from.name = 'Replay timely logs'
-    AND mdo_to.name = 'Timely Logging Demux';
-----
-1
+0  1
 
 # A two-cluster replica needs both flags pinned: the bridge exists only on the
 # separate-cluster topology and only when storage introspection logs are on.
@@ -79,27 +77,24 @@ statement ok
 SELECT mz_unsafe.mz_sleep(2)
 
 # On a two-cluster replica the log bridge replays storage's Timely log events
-# into the compute cluster's logging dataflow.
-query I
-SELECT count(*)
-FROM mz_introspection.mz_dataflow_operators
-WHERE name = 'Replay storage timely logs';
+# into the compute cluster's logging dataflow, and the replays are
+# concatenated before the demux, so there is no direct edge.
+query II
+SELECT
+    (SELECT count(*)
+     FROM mz_introspection.mz_dataflow_operators
+     WHERE name = 'Replay storage timely logs') AS bridge_operators,
+    (SELECT count(*)
+     FROM
+         mz_introspection.mz_dataflow_channel_operators mdco
+         JOIN mz_introspection.mz_dataflow_operators mdo_from
+             ON mdco.from_operator_id = mdo_from.id
+         JOIN mz_introspection.mz_dataflow_operators mdo_to
+             ON mdco.to_operator_id = mdo_to.id
+     WHERE mdo_from.name = 'Replay timely logs'
+         AND mdo_to.name = 'Timely Logging Demux') AS direct_edges;
 ----
-1
-
-# The replays are concatenated before the demux, so there is no direct edge.
-query I
-SELECT count(*)
-FROM
-    mz_introspection.mz_dataflow_channel_operators mdco
-    JOIN mz_introspection.mz_dataflow_operators mdo_from
-        ON mdco.from_operator_id = mdo_from.id
-    JOIN mz_introspection.mz_dataflow_operators mdo_to
-        ON mdco.to_operator_id = mdo_to.id
-WHERE mdo_from.name = 'Replay timely logs'
-    AND mdo_to.name = 'Timely Logging Demux';
-----
-0
+1  0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET enable_unified_cluster;
