@@ -4320,7 +4320,7 @@ fn plan_cast(
         }
     };
     let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
-    let expr = match expr {
+    let expr = match (expr, failure_mode) {
         // Special case a direct cast of an ARRAY, LIST, or MAP expression so
         // we can pass in the target type as a type hint. This is
         // a limited form of the coercion that we do for string literals
@@ -4329,10 +4329,22 @@ fn plan_cast(
         // PostgreSQL compatibility trouble.
         //
         // See: https://github.com/postgres/postgres/blob/31f403e95/src/backend/parser/parse_expr.c#L2762-L2768
-        Expr::Array(exprs) => plan_array(ecx, exprs, Some(&to_scalar_type))?,
-        Expr::List(exprs) => plan_list(ecx, exprs, Some(&to_scalar_type))?,
-        Expr::Map(exprs) => plan_map(ecx, exprs, Some(&to_scalar_type))?,
-        _ => plan_expr(ecx, expr)?,
+        //
+        // The hint makes the element casts part of the literal, where a
+        // failure mode cannot reach them. Under `NullFallback` the literal is
+        // planned on its own instead, so the cast that gets wrapped is the
+        // whole-value one, and a bad element yields NULL for the whole value
+        // just as it does for a non-literal source.
+        (Expr::Array(exprs), mz_expr::CastFailureMode::Error) => {
+            plan_array(ecx, exprs, Some(&to_scalar_type))?
+        }
+        (Expr::List(exprs), mz_expr::CastFailureMode::Error) => {
+            plan_list(ecx, exprs, Some(&to_scalar_type))?
+        }
+        (Expr::Map(exprs), mz_expr::CastFailureMode::Error) => {
+            plan_map(ecx, exprs, Some(&to_scalar_type))?
+        }
+        (expr, _) => plan_expr(ecx, expr)?,
     };
     let ecx = &ecx.with_name(name);
     // A string literal reaches its cast through coercion, so the failure mode
