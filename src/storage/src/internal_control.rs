@@ -160,11 +160,6 @@ pub struct InternalCommandReceiver {
 }
 
 impl InternalCommandReceiver {
-    /// Creates a receiver from an externally provided channel.
-    pub fn from_parts(rx: mpsc::Receiver<InternalStorageCommand>) -> Self {
-        Self { rx }
-    }
-
     /// Returns the next available command, if any.
     ///
     /// This returns `None` when there are currently no commands but there might be commands again

@@ -172,7 +172,7 @@ impl<'w> Worker<'w> {
             timely_worker.index(),
             timely_worker.peers(),
             internal_cmd_tx,
-            internal_cmd_rx,
+            Some(internal_cmd_rx),
             metrics,
             now,
             connection_context,
@@ -201,14 +201,15 @@ impl StorageState {
     /// Creates per-worker storage state, for hosting on any Timely worker.
     ///
     /// The caller provides the internal command channel endpoints: the native storage worker wires
-    /// them to the sequencer dataflow, a foreign host wires them to its own sequencing channel.
+    /// them to the sequencer dataflow, a foreign host wires the sender to its own sequencing
+    /// channel and passes no receiver, since it dispatches internal commands itself.
     /// Must be called on the hosting worker's thread, because the async worker unparks the
     /// creating thread.
     pub fn new_guest(
         timely_worker_index: usize,
         timely_worker_peers: usize,
         internal_cmd_tx: InternalCommandSender,
-        internal_cmd_rx: InternalCommandReceiver,
+        internal_cmd_rx: Option<InternalCommandReceiver>,
         metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
@@ -364,8 +365,9 @@ pub struct StorageState {
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
     pub internal_cmd_tx: InternalCommandSender,
-    /// Receiver for cluster-internal storage commands.
-    pub internal_cmd_rx: InternalCommandReceiver,
+    /// Receiver for cluster-internal storage commands. `None` when the state is hosted outside
+    /// the storage server, whose host dispatches internal commands itself.
+    pub internal_cmd_rx: Option<InternalCommandReceiver>,
 
     /// When this replica/cluster is in read-only mode it must not affect any
     /// changes to external state. This flag can only be changed by a
@@ -557,7 +559,13 @@ impl<'w> Worker<'w> {
             }
 
             // Handle any received commands.
-            while let Some(command) = self.storage_state.internal_cmd_rx.try_recv() {
+            while let Some(command) = self
+                .storage_state
+                .internal_cmd_rx
+                .as_ref()
+                .expect("storage server always wires a receiver")
+                .try_recv()
+            {
                 self.handle_internal_storage_command(command);
             }
         }
