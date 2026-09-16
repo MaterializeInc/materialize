@@ -27,19 +27,23 @@
 //! Scalar expressions are stored as [`LirScalarExpr`] and converted back to
 //! `MirScalarExpr` on instantiation. LIR scalars are a subset of MIR scalars,
 //! so that direction is total, and `DataflowDescription` keeps its MIR-typed
-//! index keys and source operators for the optimizer's benefit.
+//! index keys and source operators for the optimizer's benefit. Source
+//! operators are stored as an [`MfpPlan`], not a `MapFilterProject`: a
+//! temporal filter pushed into a source read is an `mz_now()` predicate in
+//! MIR, which LIR cannot express, and `MfpPlan` keeps those as separate,
+//! `mz_now()`-free bounds.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use mz_expr::{MapFilterProject, MirScalarExpr, UnmaterializableFunc};
+use mz_expr::{MfpPlan, MirScalarExpr};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationDesc, ReprRelationType, SqlRelationType};
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport};
-use crate::plan::scalar::{LirScalarExpr, mfp_lir_to_mir, try_mfp_mir_to_lir};
+use crate::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use crate::plan::{LirRelationExpr, LirRelationNode};
 use crate::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection, MetricSinkConnection,
@@ -65,8 +69,9 @@ pub struct PinnedDataflow {
 /// The plan's assumptions about an imported source.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinnedSourceImport {
-    /// Operators pushed down onto the source read.
-    pub operators: Option<MapFilterProject<LirScalarExpr>>,
+    /// Operators pushed down onto the source read, with any temporal filter
+    /// held as the plan's bounds.
+    pub operators: Option<MfpPlan<LirScalarExpr>>,
     /// The relation type the plan was compiled against.
     pub typ: SqlRelationType,
     /// Whether the plan relies on the source being monotonic.
@@ -113,16 +118,13 @@ pub enum PinnedSinkKind {
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Why a `DataflowDescription` could not be pinned.
+///
+/// Lowering scalar expressions to LIR is not an error case: expression
+/// preparation resolves unmaterializable functions before lowering, and
+/// temporal extraction moves `mz_now()` into `MfpPlan` bounds, so a failure
+/// there is a lowering bug and panics like the other LIR conversions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PinError {
-    /// An import or key still contains unmaterializable functions, which
-    /// lowering should have resolved.
-    Unmaterializable {
-        /// The import the expressions belong to.
-        id: GlobalId,
-        /// The offending functions.
-        funcs: Vec<UnmaterializableFunc>,
-    },
     /// The dataflow exports a sink kind that has no catalog identity.
     UnpinnableSink(GlobalId),
 }
@@ -130,12 +132,6 @@ pub enum PinError {
 impl fmt::Display for PinError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PinError::Unmaterializable { id, funcs } => {
-                write!(
-                    f,
-                    "import {id} contains unmaterializable functions {funcs:?}"
-                )
-            }
             PinError::UnpinnableSink(id) => {
                 write!(f, "sink {id} is a one-shot sink and cannot be pinned")
             }
@@ -180,47 +176,38 @@ impl TryFrom<DataflowDescription<LirRelationExpr>> for PinnedDataflow {
                     with_snapshot,
                     upper: _,
                 } = import;
-                let operators = operators
-                    .map(try_mfp_mir_to_lir)
-                    .transpose()
-                    .map_err(|funcs| PinError::Unmaterializable { id, funcs })?;
-                Ok((
+                (
                     id,
                     PinnedSourceImport {
-                        operators,
+                        operators: operators.map(mfp_mir_to_lir_plan),
                         typ,
                         monotonic,
                         with_snapshot,
                     },
-                ))
+                )
             })
-            .collect::<Result<_, _>>()?;
+            .collect();
 
         let index_imports = index_imports
             .into_iter()
             .map(|(id, import)| {
                 let IndexImport {
-                    desc: IndexDesc { on_id, key },
+                    desc,
                     typ,
                     monotonic,
                     with_snapshot,
                 } = import;
-                let key = key
-                    .iter()
-                    .map(LirScalarExpr::try_from)
-                    .collect::<Result<_, _>>()
-                    .map_err(|funcs| PinError::Unmaterializable { id, funcs })?;
-                Ok((
+                (
                     id,
                     PinnedIndexImport {
-                        desc: IndexDesc { on_id, key },
+                        desc: desc.as_lir(),
                         typ,
                         monotonic,
                         with_snapshot,
                     },
-                ))
+                )
             })
-            .collect::<Result<_, _>>()?;
+            .collect();
 
         let index_exports = index_exports
             .into_iter()
@@ -378,7 +365,8 @@ impl PinnedDataflow {
                 let import = SourceImport {
                     desc: SourceInstanceDesc {
                         arguments: SourceInstanceArguments {
-                            operators: operators.map(mfp_lir_to_mir),
+                            operators: operators
+                                .map(|plan| mfp_plan_lir_to_mir(plan).into_map_filter_project()),
                         },
                         storage_metadata: (),
                         typ,
@@ -553,8 +541,8 @@ impl PinnedDataflow {
 
 #[cfg(test)]
 mod tests {
-    use mz_expr::{Id, MfpPlan};
-    use mz_repr::{ReprScalarType, SqlScalarType};
+    use mz_expr::{Id, MapFilterProject, UnmaterializableFunc, func};
+    use mz_repr::{Datum, ReprScalarType, SqlScalarType, Timestamp};
 
     use super::*;
     use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId};
@@ -609,11 +597,24 @@ mod tests {
     // TESTS
     ///////////////////////////////////////////////////////////////////////////
 
-    /// A dataflow reading `SOURCE` (with a pushed-down filter) and
-    /// `IMPORTED_INDEX`, building `VIEW`, with no exports.
+    /// A dataflow reading `SOURCE` (with a pushed-down filter, including a
+    /// temporal bound) and `IMPORTED_INDEX`, building `VIEW`, with no exports.
+    ///
+    /// The source MFP is in the form lowering leaves it: the `MfpPlan` folded
+    /// back into a `MapFilterProject`, so a round trip reproduces it exactly.
     fn imports_only() -> DataflowDescription<LirRelationExpr> {
-        let mut mfp = MapFilterProject::new(1);
-        mfp = mfp.filter([MirScalarExpr::column(0).call_is_null().not()]);
+        let mz_now = MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let bound = MirScalarExpr::literal_ok(
+            Datum::MzTimestamp(Timestamp::from(5u64)),
+            ReprScalarType::MzTimestamp,
+        );
+        let mfp = MapFilterProject::new(1).filter([
+            MirScalarExpr::column(0).call_is_null().not(),
+            mz_now.call_binary(bound, func::Gte),
+        ]);
+        let mfp = MfpPlan::create_from(mfp)
+            .expect("temporal bound is plannable")
+            .into_map_filter_project();
         let mut df = DataflowDescription::new("test".to_string());
         df.source_imports.insert(
             SOURCE,
@@ -720,6 +721,16 @@ mod tests {
         );
 
         let pinned = PinnedDataflow::try_from(df.clone()).unwrap();
+        let (_, lower, upper) = pinned.source_imports[&SOURCE]
+            .operators
+            .clone()
+            .expect("pushed-down operators")
+            .into_parts();
+        assert_eq!(
+            (lower.len(), upper.len()),
+            (1, 0),
+            "temporal bound is pinned as a bound"
+        );
         let ctx = Ctx {
             index: None,
             mv: Some(MaterializedViewInfo {

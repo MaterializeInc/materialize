@@ -97,12 +97,16 @@ mod tests {
     use crate::optimize::{self, LirDataflowDescription, Optimize, OptimizerConfig};
 
     /// Checks that the original dataflow rebuilds correctly in the given catalog.
-    fn assert_round_trips(catalog: &Catalog, original: LirDataflowDescription) {
+    ///
+    /// Returns the pinned form so a test can inspect what was stored.
+    fn assert_round_trips(catalog: &Catalog, original: LirDataflowDescription) -> PinnedDataflow {
         let pinned = PinnedDataflow::try_from(original.clone()).expect("pinnable");
         let rebuilt = pinned
+            .clone()
             .instantiate(catalog.state(), original.debug_name.clone())
             .expect("instantiates");
         assert_eq!(rebuilt, original);
+        pinned
     }
 
     /// TEST FIXTURE
@@ -250,6 +254,93 @@ mod tests {
             let (df_desc, _) = global_lir_plan.unapply();
 
             assert_round_trips(&catalog, df_desc);
+        })
+        .await
+    }
+
+    /// A temporal filter pushed into the source read comes back from lowering
+    /// as an `mz_now()` predicate, which the pinned form must carry as a bound.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn temporal_filter_materialized_view_round_trips() {
+        Catalog::with_debug(|mut catalog| async move {
+            let CatalogItem::MaterializedView(mv) = create_item(
+                &mut catalog,
+                1,
+                "mv",
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+                 IN CLUSTER \"quickstart\" \
+                 AS SELECT \"id\" FROM \"mz_catalog\".\"mz_tables\" WHERE mz_now() >= 1000",
+            )
+            .await
+            else {
+                panic!("expected a materialized view");
+            };
+            let catalog = Arc::new(catalog);
+
+            let (compute, config, metrics) = optimizer_parts(&catalog);
+            let mut optimizer = optimize::materialized_view::Optimizer::new(
+                Arc::<Catalog>::clone(&catalog),
+                compute,
+                mv.global_id_writes(),
+                GlobalId::Transient(1),
+                mv.desc.latest().iter_names().cloned().collect(),
+                mv.non_null_assertions.clone(),
+                mv.refresh_schedule.clone(),
+                "mv".to_string(),
+                config,
+                metrics,
+            );
+            let local_mir_plan = optimizer
+                .optimize((*mv.raw_expr).clone())
+                .expect("local MIR optimization succeeds");
+            let global_mir_plan = optimizer
+                .optimize(local_mir_plan)
+                .expect("global MIR optimization succeeds");
+            let global_lir_plan = optimizer
+                .optimize(global_mir_plan)
+                .expect("LIR optimization succeeds");
+            let (df_desc, _) = global_lir_plan.unapply();
+
+            let source = df_desc
+                .source_imports
+                .values()
+                .next()
+                .expect("reads mz_tables");
+            let operators = source
+                .desc
+                .arguments
+                .operators
+                .as_ref()
+                .expect("filter pushed into the source read");
+            assert!(
+                operators
+                    .predicates
+                    .iter()
+                    .any(|(_, predicate)| predicate.contains_temporal()),
+                "the pushed-down MFP carries the temporal filter"
+            );
+
+            let pinned = assert_round_trips(&catalog, df_desc);
+
+            // The pinned form holds the filter as a bound of the source's
+            // `MfpPlan`. `LirScalarExpr` cannot express `mz_now()`, so the
+            // type alone guarantees it appears nowhere else.
+            let pinned_source = pinned
+                .source_imports
+                .values()
+                .next()
+                .expect("pins the mz_tables read");
+            let (_, lower_bounds, upper_bounds) = pinned_source
+                .operators
+                .clone()
+                .expect("pins the pushed-down operators")
+                .into_parts();
+            assert_eq!(
+                (lower_bounds.len(), upper_bounds.len()),
+                (1, 0),
+                "mz_now() >= 1000 is pinned as one lower bound"
+            );
         })
         .await
     }
