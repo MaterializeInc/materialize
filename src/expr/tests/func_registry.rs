@@ -19,9 +19,9 @@
 //! typing, an inverse or negation, and so on) changes what a stored plan
 //! computes or what the optimizer assumed when producing it. Once a LIR
 //! version has shipped, such a change must bump `LIR_VERSION` so pinned plans
-//! of the old version are replanned. A change to a function body alone shows
-//! up as a `body_fingerprint` change and is reported separately: it needs a
-//! human decision about whether the behavior changed.
+//! of the old version are replanned. Changes confined to
+//! [`INFORMATIONAL_FIELDS`] are reported separately, because they need a
+//! human decision rather than forcing a bump.
 
 use std::collections::BTreeMap;
 
@@ -34,9 +34,15 @@ const SNAPSHOT_DIR: &str = "tests/snapshots";
 /// against the checked-in snapshot to see exactly what changed.
 const CURRENT_PATH: &str = "tests/snapshots/func_registry_current.json";
 
-/// The one record field that describes the implementation rather than a
-/// declared property, see `SourceProperties` in the registry module.
-const INFORMATIONAL_FIELD: &str = "body_fingerprint";
+/// Record fields whose change does not by itself alter what a stored plan
+/// computes or how it was optimized.
+///
+/// `body_fingerprint` tracks the implementation, whose semantics only a
+/// reader can judge. `sqlfunc_decl` is source text: the properties it
+/// declares are recorded as their own fields, so what remains in it alone is
+/// parameter names, argument order and the like. `display` only feeds
+/// EXPLAIN output, since LIR stores variant names.
+const INFORMATIONAL_FIELDS: &[&str] = &["body_fingerprint", "display", "sqlfunc_decl"];
 
 fn snapshot_path() -> String {
     format!("{SNAPSHOT_DIR}/func_registry_v{LIR_VERSION}.json")
@@ -52,8 +58,8 @@ fn registry_json(registry: &FuncRegistry) -> String {
 type Records = BTreeMap<String, BTreeMap<String, serde_json::Map<String, serde_json::Value>>>;
 
 /// Splits the differences between two registry documents into property
-/// changes, which require a version bump once shipped, and implementation
-/// changes, which are informational.
+/// changes, which require a version bump once shipped, and changes confined
+/// to [`INFORMATIONAL_FIELDS`].
 fn classify_diff(expected: &str, actual: &str) -> (Vec<String>, Vec<String>) {
     let expected: Records = serde_json::from_str(expected).expect("snapshot is a registry");
     let actual: Records = serde_json::from_str(actual).expect("registry is JSON");
@@ -89,8 +95,11 @@ fn classify_diff(expected: &str, actual: &str) -> (Vec<String>, Vec<String>) {
             if changed.is_empty() {
                 continue;
             }
-            if changed == [INFORMATIONAL_FIELD] {
-                implementations.push(format!("  {enum_name} `{name}`"));
+            if changed
+                .iter()
+                .all(|field| INFORMATIONAL_FIELDS.contains(field))
+            {
+                implementations.push(format!("  {enum_name} `{name}`: {changed:?}"));
             } else {
                 properties.push(format!("  changed {enum_name} `{name}`: {changed:?}"));
             }
@@ -140,7 +149,7 @@ fn func_registry_snapshot() {
             String::new()
         } else {
             format!(
-                "\nFunction bodies that also changed:\n{}\n",
+                "\nFunctions with informational changes only:\n{}\n",
                 implementations.join("\n")
             )
         };
@@ -159,15 +168,16 @@ fn func_registry_snapshot() {
         );
     }
     panic!(
-        "Scalar function implementations changed!\n\n\
-         The bodies of these `#[sqlfunc]` functions differ from when\n\
-         '{path}' was generated, while their declared properties are unchanged:\n\
+        "Scalar function sources changed!\n\n\
+         These functions differ from when '{path}' was generated only in\n\
+         fields that do not by themselves change stored plans (a function\n\
+         body, its declaration text, or its SQL display name):\n\
          {}\n\n\
-         Review whether the change alters the result for any input. If it does\n\
-         and LIR version {LIR_VERSION} has already shipped, bump LIR_VERSION in\n\
-         src/compute-types/src/plan.rs so stored plans are replanned. If it is\n\
-         a pure refactor, or version {LIR_VERSION} is unshipped, regenerating in\n\
-         place is fine.\n\n\
+         For a body_fingerprint change, review whether the new body alters the\n\
+         result for any input. If it does and LIR version {LIR_VERSION} has\n\
+         already shipped, bump LIR_VERSION in src/compute-types/src/plan.rs so\n\
+         stored plans are replanned. Otherwise, or if version {LIR_VERSION} is\n\
+         unshipped, regenerating in place is fine.\n\n\
          {regenerate}",
         implementations.join("\n"),
     );

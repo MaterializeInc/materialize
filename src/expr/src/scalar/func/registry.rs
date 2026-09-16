@@ -90,9 +90,9 @@ pub struct FuncRegistry {
 
 /// The `#[sqlfunc]` source of a function, in the registry's serialized form.
 ///
-/// `body_fingerprint` is the one field of a registry record that describes
-/// the implementation rather than a declared property. The snapshot test
-/// treats a change to it alone as informational.
+/// Both fields describe the source rather than a derived property. The
+/// snapshot test in `tests/func_registry.rs` classifies changes to them as
+/// informational.
 #[derive(Debug, Serialize)]
 pub struct SourceProperties {
     pub sqlfunc_decl: Option<&'static str>,
