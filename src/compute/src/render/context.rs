@@ -686,7 +686,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let (ok_stream, err_stream) = flat_map_datums::<_, DCB, _>(oks, max_demand, logic);
+            let (ok_stream, err_stream) =
+                flat_map_datums::<_, DCB, _>(oks, "CollectionFlatMap", max_demand, logic);
             let errs = errs.concat(err_stream.as_collection());
             (ok_stream, errs)
         }
