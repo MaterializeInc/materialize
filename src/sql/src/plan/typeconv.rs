@@ -1555,26 +1555,39 @@ pub fn plan_cast(
             .map_err(|e| e.into_plan_error(ecx.name.into()))
     };
 
-    // Get cast which might include parameter rewrites + generating intermediate
-    // expressions.
-    //
-    // String-like types get special handling to match PostgreSQL.
+    // A cast registered directly between the two types wins. Otherwise,
+    // string-like types get special handling to match PostgreSQL, which falls
+    // back to converting through the text representation when one side is
+    // string-like and no direct cast exists.
     // See: https://github.com/postgres/postgres/blob/6b04abdfc/
     //   src/backend/parser/parse_coerce.c#L3205-L3223
+    let direct = get_cast(ecx, ccx, &from, to);
     let from_category = TypeCategory::from_type(&from);
     let to_category = TypeCategory::from_type(to);
-    if from_category == TypeCategory::String && to_category != TypeCategory::String {
-        // Converting from stringlike to something non-stringlike. Handle as if
-        // `from` were a `SqlScalarType::String.
-        cast_inner(&SqlScalarType::String, to, expr)
-    } else if from_category != TypeCategory::String && to_category == TypeCategory::String {
-        // Converting from non-stringlike to something stringlike. Convert to a
-        // `SqlScalarType::String` and then to the desired type.
-        let expr = cast_inner(&from, &SqlScalarType::String, expr)?;
-        cast_inner(&SqlScalarType::String, to, expr)
-    } else {
-        // Standard cast.
-        cast_inner(&from, to, expr)
+    match direct {
+        Ok(cast) => Ok(cast(expr)),
+        Err(_) if from_category == TypeCategory::String && to_category != TypeCategory::String => {
+            // Converting from stringlike to something non-stringlike. Handle as
+            // if `from` were a `SqlScalarType::String`.
+            //
+            // NOTE: this relies on the source datum being a `Datum::String`,
+            // which holds for `Char`, `VarChar`, and `PgLegacyName` but not for
+            // `PgLegacyChar` (stored as `Datum::UInt8`). That type needs an
+            // explicit conversion to `String` first, or the string-source cast
+            // function panics at evaluation time.
+            let expr = match from {
+                SqlScalarType::PgLegacyChar => cast_inner(&from, &SqlScalarType::String, expr)?,
+                _ => expr,
+            };
+            cast_inner(&SqlScalarType::String, to, expr)
+        }
+        Err(_) if from_category != TypeCategory::String && to_category == TypeCategory::String => {
+            // Converting from non-stringlike to something stringlike. Convert to
+            // a `SqlScalarType::String` and then to the desired type.
+            let expr = cast_inner(&from, &SqlScalarType::String, expr)?;
+            cast_inner(&SqlScalarType::String, to, expr)
+        }
+        Err(e) => Err(e.into_plan_error(ecx.name.into())),
     }
 }
 
