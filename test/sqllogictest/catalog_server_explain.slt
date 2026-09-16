@@ -5127,7 +5127,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (44 rows)
+        →Constant (45 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5472,7 +5472,7 @@ mz_catalog.mz_tables:
           Project: #3, #0, #4, #1, #5, #2, #6, #6, #6
           Map: "s1", null
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (30 rows)
+        →Constant (29 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5889,7 +5889,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1024 rows)
+            →Constant (1027 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -5920,6 +5920,44 @@ mz_internal.mz_object_dependencies:
 Source mz_internal.mz_catalog_raw
   project=(#0, #1)
   map=((#0{data} -> "key"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_object_global_ids";
+----
+mz_internal.mz_object_global_ids:
+  →Union
+    →Fused with Child Map/Filter/Project
+      Project: #3, #4
+      Filter: ("Item" = #2)
+      Map: parse_catalog_id(((#0{data} -> "key") -> "gid")), parse_catalog_id((#1 -> "global_id"))
+        →Read mz_internal.mz_catalog_raw
+    →Fused with Child Map/Filter/Project
+      Project: #0, #3
+      Map: parse_catalog_id((#2{version} -> "global_id"))
+        →Table Function jsonb_array_elements(#1{extra_versions})
+          →Fused with Child Map/Filter/Project
+            Project: #3, #4
+            Filter: ("Item" = #2)
+            Map: parse_catalog_id(((#0{data} -> "key") -> "gid")), (#1 -> "extra_versions")
+              →Read mz_internal.mz_catalog_raw
+    →Fused with Child Map/Filter/Project
+      Project: #3, #4
+      Filter: ("<RUNTIME-ALTERABLE>" != (#1 ->> "fingerprint")) AND ("GidMapping" = #2)
+      Map: ("s" || (#1 ->> "catalog_id")), ("s" || (#1 ->> "global_id"))
+        →Read mz_internal.mz_catalog_raw
+    →Fused with Child Map/Filter/Project
+      Project: #3, #4
+      Filter: ("ClusterIntrospectionSourceIndex" = #2)
+      Map: ("si" || (#1 ->> "catalog_id")), ("si" || (#1 ->> "global_id"))
+        →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#0..=#2)
+  map=((#0{data} -> "value"), (#0{data} ->> "kind"))
 
 Target cluster: mz_catalog_server
 
@@ -8336,7 +8374,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (44 rows)
+  →Constant (45 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8356,7 +8394,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_tables";
 ----
 Explained Query (fast path):
-  →Constant (30 rows)
+  →Constant (29 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10284,7 +10322,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1024 rows)
+            →Constant (1027 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
