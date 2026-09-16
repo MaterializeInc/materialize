@@ -25,8 +25,9 @@
 //!
 //! Variants whose payload cannot be constructed without data need a
 //! representative [`Sample`] in this module. Building the registry panics
-//! and names the variant otherwise. A sample may also be given for a
-//! constructible variant, to probe its output type at chosen input types.
+//! and names the variant otherwise. Samples may also be given for a
+//! constructible variant, to probe its output type at chosen input types or
+//! to record payloads whose properties differ, see [`Sample`].
 
 use std::collections::BTreeMap;
 
@@ -41,8 +42,8 @@ use serde::Serialize;
 
 use crate::func::format::DateTimeFormat;
 use crate::func::variadic::{
-    ArrayCreate, ArrayFill, ArrayIndex, ArrayToString, ListCreate, MapBuild, RangeCreate,
-    RecordCreate,
+    And, ArrayCreate, ArrayFill, ArrayIndex, ArrayToString, Coalesce, ErrorIfNull, Greatest, Least,
+    ListCreate, MapBuild, Or, RangeCreate, RecordCreate,
 };
 use crate::func::*;
 use crate::{BinaryFunc, MirScalarExpr, UnaryFunc, VariadicFunc, like_pattern};
@@ -52,10 +53,26 @@ use crate::{BinaryFunc, MirScalarExpr, UnaryFunc, VariadicFunc, like_pattern};
 /// `input_types` are the column types the output type is probed at. Leave
 /// them empty to skip the probe, for functions whose output typing does not
 /// depend on a specific input shape.
+///
+/// A variant's properties can depend on its payload, for example a numeric
+/// cast errors only when it has a scale. One sample sees one point of each
+/// such property function, so a variant may have several samples, told apart
+/// by `label`. The unlabeled sample is the variant's primary record, keyed by
+/// its canonical name. Labeled samples are keyed `name[label]`.
 #[derive(Debug)]
 pub struct Sample<F> {
     pub func: F,
     pub input_types: Vec<SqlColumnType>,
+    pub label: &'static str,
+}
+
+impl<F> Sample<F> {
+    /// Marks this as an additional sample of its variant, recorded alongside
+    /// the primary one under `name[label]`.
+    pub fn labeled(self, label: &'static str) -> Self {
+        assert!(!label.is_empty(), "sample labels must be non-empty");
+        Sample { label, ..self }
+    }
 }
 
 /// The declared properties of every variant of the three scalar function
@@ -170,18 +187,16 @@ impl FuncRegistry {
     }
 }
 
-/// Records the properties of every variant of one function enum, keyed by
-/// canonical name.
+/// Records the properties of every variant of one function enum.
 ///
-/// Each name in `names` resolves to a [`Sample`]: the hand-written one from
-/// `samples` if present, otherwise a payload-free instance from `construct`
-/// (see `from_variant_name` on the enums). Hand-written samples take
-/// precedence so a constructible variant can still be probed at chosen input
-/// types.
+/// Each name in `names` gets a primary record under that name: the unlabeled
+/// hand-written sample from `samples` if there is one, otherwise a
+/// payload-free instance from `construct` (see `from_variant_name` on the
+/// enums). Hand-written primaries take precedence so a constructible variant
+/// can still be probed at chosen input types. Labeled samples add records
+/// under `name[label]` next to the primary.
 ///
-/// Panics if a name has neither, or if two samples name the same variant. A
-/// sample for a name outside `names` is unreachable in practice because it
-/// is keyed by `variant_name`, and it is silently dropped.
+/// Panics if a name has no primary, or if two samples share a name and label.
 fn collect<F, P>(
     enum_name: &str,
     names: impl Iterator<Item = &'static str>,
@@ -190,32 +205,44 @@ fn collect<F, P>(
     variant_name: fn(&F) -> &'static str,
     properties: fn(&Sample<F>) -> P,
 ) -> BTreeMap<String, P> {
-    let mut by_name: BTreeMap<&'static str, Sample<F>> = BTreeMap::new();
+    let mut by_name: BTreeMap<(&'static str, &'static str), Sample<F>> = BTreeMap::new();
     for sample in samples {
         let name = variant_name(&sample.func);
-        let duplicate = by_name.insert(name, sample).is_some();
-        assert!(!duplicate, "duplicate {enum_name} sample for `{name}`");
+        let label = sample.label;
+        let duplicate = by_name.insert((name, label), sample).is_some();
+        assert!(
+            !duplicate,
+            "duplicate {enum_name} sample for `{name}` with label `{label}`"
+        );
     }
 
-    names
-        .map(|name| {
-            let sample = by_name.remove(name).or_else(|| {
-                construct(name).map(|func| Sample {
-                    func,
-                    input_types: vec![],
-                })
-            });
-            let sample = sample.unwrap_or_else(|| {
-                panic!(
-                    "{enum_name} variant `{name}` cannot be constructed from its name because \
-                     its payload needs data. Add a representative Sample for it to \
-                     {}_samples() in src/expr/src/scalar/func/registry.rs.",
-                    enum_name.trim_end_matches("Func").to_lowercase()
-                )
-            });
-            (name.to_string(), properties(&sample))
-        })
-        .collect()
+    let mut records = BTreeMap::new();
+    for name in names {
+        let primary = by_name.remove(&(name, "")).or_else(|| {
+            construct(name).map(|func| Sample {
+                func,
+                input_types: vec![],
+                label: "",
+            })
+        });
+        let primary = primary.unwrap_or_else(|| {
+            panic!(
+                "{enum_name} variant `{name}` cannot be constructed from its name because \
+                 its payload needs data. Add a representative Sample for it to \
+                 {}_samples() in src/expr/src/scalar/func/registry.rs.",
+                enum_name.trim_end_matches("Func").to_lowercase()
+            )
+        });
+        records.insert(name.to_string(), properties(&primary));
+    }
+    for ((name, label), sample) in by_name {
+        assert!(
+            records.contains_key(name),
+            "{enum_name} sample `{name}[{label}]` names an unknown variant"
+        );
+        records.insert(format!("{name}[{label}]"), properties(&sample));
+    }
+    records
 }
 
 /// The serde variant name, which is what the stable LIR format stores.
@@ -361,6 +388,7 @@ fn unary<F: Into<UnaryFunc>>(func: F, input: SqlScalarType) -> Sample<UnaryFunc>
     Sample {
         func: func.into(),
         input_types: vec![input.nullable(false)],
+        label: "",
     }
 }
 
@@ -592,7 +620,155 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
             },
             SqlScalarType::TimestampTz { precision: None },
         ),
+        // Payload-free hand-written casts, probed at their natural input.
+        unary(CastStringToInt2Vector, SqlScalarType::String),
+        unary(CastDateToTimestamp(None), SqlScalarType::Date),
+        unary(CastDateToTimestampTz(None), SqlScalarType::Date),
+        unary(CastStringToTimestamp(None), SqlScalarType::String),
+        unary(CastStringToTimestampTz(None), SqlScalarType::String),
+        unary(
+            CastDateToTimestamp(timestamp_precision),
+            SqlScalarType::Date,
+        )
+        .labeled("precision"),
+        unary(
+            CastDateToTimestampTz(timestamp_precision),
+            SqlScalarType::Date,
+        )
+        .labeled("precision"),
+        unary(
+            CastStringToTimestamp(timestamp_precision),
+            SqlScalarType::String,
+        )
+        .labeled("precision"),
+        unary(
+            CastStringToTimestampTz(timestamp_precision),
+            SqlScalarType::String,
+        )
+        .labeled("precision"),
+        // Without a length to enforce, these casts cannot error.
+        unary(
+            CastStringToChar {
+                length: None,
+                fail_on_len: false,
+            },
+            SqlScalarType::String,
+        )
+        .labeled("unbounded"),
+        unary(PadChar { length: None }, SqlScalarType::String).labeled("unbounded"),
+        unary(
+            CastStringToVarChar {
+                length: None,
+                fail_on_len: false,
+            },
+            SqlScalarType::String,
+        )
+        .labeled("unbounded"),
+        // Widening a precision preserves uniqueness, narrowing does not.
+        unary(
+            CastTimestampToTimestampTz {
+                from: timestamp_precision,
+                to: None,
+            },
+            SqlScalarType::Timestamp {
+                precision: timestamp_precision,
+            },
+        )
+        .labeled("widening"),
+        unary(
+            CastTimestampTzToTimestamp {
+                from: timestamp_precision,
+                to: None,
+            },
+            SqlScalarType::TimestampTz {
+                precision: timestamp_precision,
+            },
+        )
+        .labeled("widening"),
+        unary(
+            AdjustTimestampPrecision {
+                from: timestamp_precision,
+                to: None,
+            },
+            SqlScalarType::Timestamp {
+                precision: timestamp_precision,
+            },
+        )
+        .labeled("widening"),
+        unary(
+            AdjustTimestampTzPrecision {
+                from: timestamp_precision,
+                to: None,
+            },
+            SqlScalarType::TimestampTz {
+                precision: timestamp_precision,
+            },
+        )
+        .labeled("widening"),
+        // Units below the most significant ones are not monotone.
+        unary(
+            ExtractInterval(DateTimeUnits::Month),
+            SqlScalarType::Interval,
+        )
+        .labeled("month"),
+        unary(ExtractTime(DateTimeUnits::Minute), SqlScalarType::Time).labeled("minute"),
+        unary(
+            ExtractTimestamp(DateTimeUnits::Month),
+            SqlScalarType::Timestamp { precision: None },
+        )
+        .labeled("month"),
+        unary(
+            ExtractTimestampTz(DateTimeUnits::Month),
+            SqlScalarType::TimestampTz { precision: None },
+        )
+        .labeled("month"),
+        unary(ExtractDate(DateTimeUnits::Month), SqlScalarType::Date).labeled("month"),
+        unary(
+            DatePartInterval(DateTimeUnits::Month),
+            SqlScalarType::Interval,
+        )
+        .labeled("month"),
+        unary(DatePartTime(DateTimeUnits::Minute), SqlScalarType::Time).labeled("minute"),
+        unary(
+            DatePartTimestamp(DateTimeUnits::Month),
+            SqlScalarType::Timestamp { precision: None },
+        )
+        .labeled("month"),
+        unary(
+            DatePartTimestampTz(DateTimeUnits::Month),
+            SqlScalarType::TimestampTz { precision: None },
+        )
+        .labeled("month"),
     ]
+    .into_iter()
+    .chain(numeric_cast_samples(numeric_scale))
+    .collect()
+}
+
+/// The numeric casts, each without a scale (the primary record) and with
+/// one. Only the scaled cast can error, because it rounds.
+fn numeric_cast_samples(scale: NumericMaxScale) -> Vec<Sample<UnaryFunc>> {
+    let casts: [(fn(Option<NumericMaxScale>) -> UnaryFunc, SqlScalarType); 10] = [
+        (|s| CastInt16ToNumeric(s).into(), SqlScalarType::Int16),
+        (|s| CastInt32ToNumeric(s).into(), SqlScalarType::Int32),
+        (|s| CastInt64ToNumeric(s).into(), SqlScalarType::Int64),
+        (|s| CastUint16ToNumeric(s).into(), SqlScalarType::UInt16),
+        (|s| CastUint32ToNumeric(s).into(), SqlScalarType::UInt32),
+        (|s| CastUint64ToNumeric(s).into(), SqlScalarType::UInt64),
+        (|s| CastFloat32ToNumeric(s).into(), SqlScalarType::Float32),
+        (|s| CastFloat64ToNumeric(s).into(), SqlScalarType::Float64),
+        (|s| CastStringToNumeric(s).into(), SqlScalarType::String),
+        (|s| CastJsonbToNumeric(s).into(), SqlScalarType::Jsonb),
+    ];
+    casts
+        .into_iter()
+        .flat_map(|(cast, input)| {
+            [
+                unary(cast(None), input.clone()),
+                unary(cast(Some(scale)), input).labeled("scale"),
+            ]
+        })
+        .collect()
 }
 
 fn binary<F: Into<BinaryFunc>>(
@@ -603,6 +779,7 @@ fn binary<F: Into<BinaryFunc>>(
     Sample {
         func: func.into(),
         input_types: vec![left.nullable(false), right.nullable(false)],
+        label: "",
     }
 }
 
@@ -628,6 +805,7 @@ fn variadic<F: Into<VariadicFunc>>(func: F, inputs: Vec<SqlScalarType>) -> Sampl
     Sample {
         func: func.into(),
         input_types: inputs.into_iter().map(|ty| ty.nullable(false)).collect(),
+        label: "",
     }
 }
 
@@ -691,6 +869,16 @@ fn variadic_samples() -> Vec<Sample<VariadicFunc>> {
                 }],
                 return_type: SqlScalarType::String.nullable(true),
             },
+            vec![SqlScalarType::Int32, SqlScalarType::String],
+        ),
+        // Payload-free hand-written functions, probed at their natural inputs.
+        variadic(And, vec![SqlScalarType::Bool, SqlScalarType::Bool]),
+        variadic(Or, vec![SqlScalarType::Bool, SqlScalarType::Bool]),
+        variadic(Coalesce, vec![SqlScalarType::Int32, SqlScalarType::Int32]),
+        variadic(Greatest, vec![SqlScalarType::Int32, SqlScalarType::Int32]),
+        variadic(Least, vec![SqlScalarType::Int32, SqlScalarType::Int32]),
+        variadic(
+            ErrorIfNull,
             vec![SqlScalarType::Int32, SqlScalarType::String],
         ),
     ]

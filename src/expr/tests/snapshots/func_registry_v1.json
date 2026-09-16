@@ -199,6 +199,23 @@
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
+    "adjust_timestamp_precision[widening]": {
+      "variant": "AdjustTimestampPrecision",
+      "display": "adjust_timestamp_precision",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": true,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Timestamp { precision: Some(TimestampPrecision(3)) }:NotNull"
+      ],
+      "output_type": "Timestamp { precision: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
     "adjust_timestamp_tz_precision": {
       "variant": "AdjustTimestampTzPrecision",
       "display": "adjust_timestamp_with_time_zone_precision",
@@ -213,6 +230,23 @@
         "TimestampTz { precision: None }:NotNull"
       ],
       "output_type": "TimestampTz { precision: Some(TimestampPrecision(3)) }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "adjust_timestamp_tz_precision[widening]": {
+      "variant": "AdjustTimestampTzPrecision",
+      "display": "adjust_timestamp_with_time_zone_precision",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": true,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "TimestampTz { precision: Some(TimestampPrecision(3)) }:NotNull"
+      ],
+      "output_type": "TimestampTz { precision: None }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -652,8 +686,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_timestamp_to_date",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Date:NotNull"
+      ],
+      "output_type": "Timestamp { precision: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_date_to_timestamp[precision]": {
+      "variant": "CastDateToTimestamp",
+      "display": "date_to_timestamp",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": true,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_timestamp_to_date",
+      "input_types": [
+        "Date:NotNull"
+      ],
+      "output_type": "Timestamp { precision: Some(TimestampPrecision(3)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -667,8 +720,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_timestamp_tz_to_date",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Date:NotNull"
+      ],
+      "output_type": "TimestampTz { precision: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_date_to_timestamp_tz[precision]": {
+      "variant": "CastDateToTimestampTz",
+      "display": "date_to_timestamp_with_timezone",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": true,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_timestamp_tz_to_date",
+      "input_types": [
+        "Date:NotNull"
+      ],
+      "output_type": "TimestampTz { precision: Some(TimestampPrecision(3)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -742,8 +814,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_float32",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Float32:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_float32_to_numeric[scale]": {
+      "variant": "CastFloat32ToNumeric",
+      "display": "real_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_float32",
+      "input_types": [
+        "Float32:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -877,8 +968,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_float64",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Float64:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_float64_to_numeric[scale]": {
+      "variant": "CastFloat64ToNumeric",
+      "display": "double_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_float64",
+      "input_types": [
+        "Float64:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -1012,8 +1122,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_int16",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Int16:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_int16_to_numeric[scale]": {
+      "variant": "CastInt16ToNumeric",
+      "display": "smallint_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_int16",
+      "input_types": [
+        "Int16:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -1207,8 +1336,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_int32",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Int32:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_int32_to_numeric[scale]": {
+      "variant": "CastInt32ToNumeric",
+      "display": "integer_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_int32",
+      "input_types": [
+        "Int32:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -1402,8 +1550,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_int64",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Int64:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_int64_to_numeric[scale]": {
+      "variant": "CastInt64ToNumeric",
+      "display": "bigint_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_int64",
+      "input_types": [
+        "Int64:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -1612,8 +1779,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": null,
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Jsonb:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_jsonb_to_numeric[scale]": {
+      "variant": "CastJsonbToNumeric",
+      "display": "jsonb_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Jsonb:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -2220,6 +2406,23 @@
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
+    "cast_string_to_char[unbounded]": {
+      "variant": "CastStringToChar",
+      "display": "text_to_char[len=unbounded]",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": false,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": "cast_char_to_string",
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "Char { length: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
     "cast_string_to_date": {
       "variant": "CastStringToDate",
       "display": "text_to_date",
@@ -2290,8 +2493,10 @@
       "is_monotone": false,
       "is_eliminable_cast": false,
       "inverse": "cast_int2_vector_to_string",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "Int2Vector:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -2414,8 +2619,27 @@
       "is_monotone": false,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_string",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_string_to_numeric[scale]": {
+      "variant": "CastStringToNumeric",
+      "display": "text_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_string",
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -2506,8 +2730,27 @@
       "is_monotone": false,
       "is_eliminable_cast": false,
       "inverse": "cast_timestamp_to_string",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "Timestamp { precision: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_string_to_timestamp[precision]": {
+      "variant": "CastStringToTimestamp",
+      "display": "text_to_timestamp",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": "cast_timestamp_to_string",
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "Timestamp { precision: Some(TimestampPrecision(3)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -2521,8 +2764,27 @@
       "is_monotone": false,
       "is_eliminable_cast": false,
       "inverse": "cast_timestamp_tz_to_string",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "TimestampTz { precision: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_string_to_timestamp_tz[precision]": {
+      "variant": "CastStringToTimestampTz",
+      "display": "text_to_timestamp_with_time_zone",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": "cast_timestamp_tz_to_string",
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "TimestampTz { precision: Some(TimestampPrecision(3)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -2600,6 +2862,23 @@
         "String:NotNull"
       ],
       "output_type": "VarChar { max_length: Some(VarCharMaxLength(5)) }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_string_to_var_char[unbounded]": {
+      "variant": "CastStringToVarChar",
+      "display": "text_to_varchar[len=unbounded]",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": false,
+      "preserves_uniqueness": true,
+      "is_monotone": false,
+      "is_eliminable_cast": true,
+      "inverse": "cast_var_char_to_string",
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "VarChar { max_length: None }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -2710,6 +2989,23 @@
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
+    "cast_timestamp_to_timestamp_tz[widening]": {
+      "variant": "CastTimestampToTimestampTz",
+      "display": "timestamp_to_timestamp_with_time_zone",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": true,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_timestamp_tz_to_timestamp",
+      "input_types": [
+        "Timestamp { precision: Some(TimestampPrecision(3)) }:NotNull"
+      ],
+      "output_type": "TimestampTz { precision: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
     "cast_timestamp_tz_to_date": {
       "variant": "CastTimestampTzToDate",
       "display": "timestamp_with_time_zone_to_date",
@@ -2784,6 +3080,23 @@
         "TimestampTz { precision: None }:NotNull"
       ],
       "output_type": "Timestamp { precision: Some(TimestampPrecision(3)) }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_timestamp_tz_to_timestamp[widening]": {
+      "variant": "CastTimestampTzToTimestamp",
+      "display": "timestamp_with_time_zone_to_timestamp",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": true,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_timestamp_to_timestamp_tz",
+      "input_types": [
+        "TimestampTz { precision: Some(TimestampPrecision(3)) }:NotNull"
+      ],
+      "output_type": "Timestamp { precision: None }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -2872,8 +3185,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_uint16",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "UInt16:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_uint16_to_numeric[scale]": {
+      "variant": "CastUint16ToNumeric",
+      "display": "uint2_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_uint16",
+      "input_types": [
+        "UInt16:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -3022,8 +3354,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_uint32",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "UInt32:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_uint32_to_numeric[scale]": {
+      "variant": "CastUint32ToNumeric",
+      "display": "uint4_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_uint32",
+      "input_types": [
+        "UInt32:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -3172,8 +3523,27 @@
       "is_monotone": true,
       "is_eliminable_cast": false,
       "inverse": "cast_numeric_to_uint64",
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "UInt64:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "cast_uint64_to_numeric[scale]": {
+      "variant": "CastUint64ToNumeric",
+      "display": "uint8_to_numeric",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": "cast_numeric_to_uint64",
+      "input_types": [
+        "UInt64:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: Some(NumericMaxScale(2)) }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -3434,9 +3804,43 @@
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
+    "date_part_interval[month]": {
+      "variant": "DatePartInterval",
+      "display": "date_part_month_iv",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Interval:NotNull"
+      ],
+      "output_type": "Float64:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
     "date_part_time": {
       "variant": "DatePartTime",
       "display": "date_part_epoch_t",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Time:NotNull"
+      ],
+      "output_type": "Float64:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "date_part_time[minute]": {
+      "variant": "DatePartTime",
+      "display": "date_part_minute_t",
       "propagates_nulls": true,
       "introduces_nulls": false,
       "could_error": true,
@@ -3468,9 +3872,43 @@
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
+    "date_part_timestamp[month]": {
+      "variant": "DatePartTimestamp",
+      "display": "date_part_month_ts",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Timestamp { precision: None }:NotNull"
+      ],
+      "output_type": "Float64:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
     "date_part_timestamp_tz": {
       "variant": "DatePartTimestampTz",
       "display": "date_part_epoch_tstz",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "TimestampTz { precision: None }:NotNull"
+      ],
+      "output_type": "Float64:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "date_part_timestamp_tz[month]": {
+      "variant": "DatePartTimestampTz",
+      "display": "date_part_month_tstz",
       "propagates_nulls": true,
       "introduces_nulls": false,
       "could_error": true,
@@ -3581,9 +4019,43 @@
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
+    "extract_date[month]": {
+      "variant": "ExtractDate",
+      "display": "extract_month_d",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Date:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
     "extract_interval": {
       "variant": "ExtractInterval",
       "display": "extract_epoch_iv",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Interval:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "extract_interval[month]": {
+      "variant": "ExtractInterval",
+      "display": "extract_month_iv",
       "propagates_nulls": true,
       "introduces_nulls": false,
       "could_error": true,
@@ -3615,6 +4087,23 @@
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
+    "extract_time[minute]": {
+      "variant": "ExtractTime",
+      "display": "extract_minute_t",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Time:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
     "extract_timestamp": {
       "variant": "ExtractTimestamp",
       "display": "extract_epoch_ts",
@@ -3632,6 +4121,23 @@
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
+    "extract_timestamp[month]": {
+      "variant": "ExtractTimestamp",
+      "display": "extract_month_ts",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "Timestamp { precision: None }:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
     "extract_timestamp_tz": {
       "variant": "ExtractTimestampTz",
       "display": "extract_epoch_tstz",
@@ -3640,6 +4146,23 @@
       "could_error": true,
       "preserves_uniqueness": false,
       "is_monotone": true,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "TimestampTz { precision: None }:NotNull"
+      ],
+      "output_type": "Numeric { max_scale: None }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "extract_timestamp_tz[month]": {
+      "variant": "ExtractTimestampTz",
+      "display": "extract_month_tstz",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": true,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
       "is_eliminable_cast": false,
       "inverse": null,
       "input_types": [
@@ -4299,6 +4822,23 @@
         "String:NotNull"
       ],
       "output_type": "Char { length: Some(CharLength(5)) }:NotNull",
+      "sqlfunc_decl": null,
+      "body_fingerprint": null
+    },
+    "pad_char[unbounded]": {
+      "variant": "PadChar",
+      "display": "padchar",
+      "propagates_nulls": true,
+      "introduces_nulls": false,
+      "could_error": false,
+      "preserves_uniqueness": false,
+      "is_monotone": false,
+      "is_eliminable_cast": false,
+      "inverse": null,
+      "input_types": [
+        "String:NotNull"
+      ],
+      "output_type": "Char { length: None }:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -8963,8 +9503,11 @@
       "is_monotone": true,
       "is_associative": true,
       "is_infix_op": true,
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Bool:NotNull",
+        "Bool:NotNull"
+      ],
+      "output_type": "Bool:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -9076,8 +9619,11 @@
       "is_monotone": true,
       "is_associative": true,
       "is_infix_op": false,
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Int32:NotNull",
+        "Int32:NotNull"
+      ],
+      "output_type": "Int32:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -9202,8 +9748,11 @@
       "is_monotone": false,
       "is_associative": false,
       "is_infix_op": false,
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Int32:NotNull",
+        "String:NotNull"
+      ],
+      "output_type": "Int32:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -9216,8 +9765,11 @@
       "is_monotone": true,
       "is_associative": true,
       "is_infix_op": false,
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Int32:NotNull",
+        "Int32:NotNull"
+      ],
+      "output_type": "Int32:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -9286,8 +9838,11 @@
       "is_monotone": true,
       "is_associative": true,
       "is_infix_op": false,
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Int32:NotNull",
+        "Int32:NotNull"
+      ],
+      "output_type": "Int32:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
@@ -9404,8 +9959,11 @@
       "is_monotone": true,
       "is_associative": true,
       "is_infix_op": true,
-      "input_types": [],
-      "output_type": null,
+      "input_types": [
+        "Bool:NotNull",
+        "Bool:NotNull"
+      ],
+      "output_type": "Bool:NotNull",
       "sqlfunc_decl": null,
       "body_fingerprint": null
     },
