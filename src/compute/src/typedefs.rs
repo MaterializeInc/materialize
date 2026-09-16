@@ -138,14 +138,16 @@ where
 /// columnation.
 pub trait MzData:
     columnation::Columnation
-    + for<'a> columnar::Columnar<Container: Container<Ref<'a>: Copy + Ord> + Clone + Send>
+    + for<'a> columnar::Columnar<
+        Container: Container<Ref<'a>: Copy + Ord> + Clone + Send + columnar::Push<Self>,
+    >
 {
 }
 
 impl<T> MzData for T
 where
     T: columnation::Columnation,
-    T: columnar::Columnar<Container: Clone + Send>,
+    T: columnar::Columnar<Container: Clone + Send + columnar::Push<T>>,
     for<'a> Ref<'a, T>: Copy + Ord,
 {
 }
