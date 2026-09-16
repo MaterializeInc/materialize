@@ -375,7 +375,7 @@ Explained Query:
   Project (#3, #5, #4)
     Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1))
       FlatMap unnest_list(#0{dense_rank})
-        Reduce aggregates=[dense_rank[order_by=[#0{a} asc nulls_last]](row(list[row(#0{a}, #1{array_agg})], #0{a}))]
+        Reduce aggregates=[dense_rank[order_by=[#0{a} asc nulls_last] from=orig_row[0]](row(list[row(#0{a}, #1{array_agg})]))]
           Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
             Project (#0{a}, #1{b})
               ReadStorage materialize.public.t
