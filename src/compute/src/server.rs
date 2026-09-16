@@ -841,15 +841,31 @@ impl<'w> Worker<'w> {
             }
         }
 
-        let Some(mut conn) = guest.conn.take() else {
-            self.storage = Some(guest);
-            return;
-        };
-
         let mut worker = StorageWorker {
             timely_worker: &mut *self.timely_worker,
             client_rx: guest.client_rx,
             storage_state: guest.storage_state,
+        };
+
+        // Handle responses from the async worker. Only worker 0 does async processing, so only
+        // worker 0 ever receives any. This must run with or without a client connection:
+        // storage-internal commands keep flowing through the command channel while the
+        // controller is away and can issue async work, and an undrained response queue keeps
+        // `storage_guest_busy` true, turning every park into a spin.
+        while let Ok(response) = worker.storage_state.async_worker.try_recv() {
+            worker.handle_async_worker_response(response);
+        }
+
+        let Some(mut conn) = guest.conn.take() else {
+            let StorageWorker {
+                timely_worker: _,
+                client_rx,
+                storage_state,
+            } = worker;
+            guest.client_rx = client_rx;
+            guest.storage_state = storage_state;
+            self.storage = Some(guest);
+            return;
         };
 
         // Drain external storage commands.
@@ -871,12 +887,6 @@ impl<'w> Worker<'w> {
                     break;
                 }
             }
-        }
-
-        // Handle responses from the async worker. Only worker 0 does async processing, so only
-        // worker 0 ever receives any.
-        while let Ok(response) = worker.storage_state.async_worker.try_recv() {
-            worker.handle_async_worker_response(response);
         }
 
         // Response-producing duties run only on a reconciled connection.
