@@ -302,6 +302,47 @@ def loaded_image_digest(executable: Path, scratch: Path) -> str | None:
         stripped.unlink(missing_ok=True)
 
 
+def run_pair(
+    ancestor_bin: BuiltBench,
+    head_bin: BuiltBench,
+    env: dict[str, str],
+    home: Path,
+    filter_args: list[str],
+    label_suffix: str,
+    header_suffix: str,
+) -> tuple[int | None, int | None]:
+    """Run ancestor then current into `home`, returning each side's exit code on failure, else `None`.
+
+    The current side runs even when the ancestor failed, so a failure on
+    the ancestor still yields current numbers, which then show as new.
+    """
+    ancestor_rc = run_bench(
+        ancestor_bin,
+        [*filter_args, "--save-baseline", BASELINE],
+        env,
+        home,
+        "ancestor" + label_suffix,
+    )
+    # Criterion's --save-baseline leaves a `new/` copy of the ancestor run
+    # behind in addition to the baseline it saves. An id absent at HEAD would
+    # otherwise keep that copy and get reported as a HEAD result carrying the
+    # ancestor's numbers. Criterion recreates `new/` on the HEAD run and only
+    # reads `ancestor/estimates.json` and `ancestor/sample.json` for
+    # comparison, so removing it here is safe.
+    for d in home.rglob("new"):
+        if d.is_dir():
+            shutil.rmtree(d)
+    head_rc = run_bench(
+        head_bin,
+        [*filter_args, "--baseline-lenient", BASELINE],
+        env,
+        home,
+        "current" + label_suffix,
+        header_suffix,
+    )
+    return ancestor_rc, head_rc
+
+
 def run_benches(
     head_built: list[BuiltBench],
     ancestor_built: list[BuiltBench],
@@ -310,7 +351,9 @@ def run_benches(
     env: dict[str, str],
     results_root: Path,
     threshold: float,
-) -> tuple[list[TargetFailure], list[TargetFailure], list[BuiltBench]]:
+) -> tuple[
+    list[TargetFailure], list[TargetFailure], list[TargetFailure], list[BuiltBench]
+]:
     """Run every HEAD bench binary, its ancestor counterpart first when one was built for the same target.
 
     Interleaving ancestor and HEAD per target, rather than running every
@@ -327,6 +370,10 @@ def run_benches(
     swing that does not reproduce on the spot is not a regression. The rerun
     costs time proportional to the number of flagged rows, nothing when there
     are none.
+
+    Returns the ancestor, current, and rerun failures, then the targets
+    skipped for identical binaries. A rerun failure is not a failure of the
+    commit under test: the flagged rows keep their first-pass verdict.
     """
     ancestor_by_key = {(b.package, b.name): b for b in ancestor_built}
     ancestor_target_by_key = {(t.package, t.name): t for t in ancestor_targets}
@@ -338,6 +385,7 @@ def run_benches(
 
     ancestor_failures: list[TargetFailure] = []
     current_failures: list[TargetFailure] = []
+    rerun_failures: list[TargetFailure] = []
     identical: list[BuiltBench] = []
     for head_bin in sorted(head_built, key=lambda b: (b.package, b.name)):
         key = (head_bin.package, head_bin.name)
@@ -378,61 +426,41 @@ def run_benches(
         head_label = head_digest[:12] if head_digest else "unknown"
         header_suffix = f" ancestor={ancestor_label} current={head_label}"
 
-        def run_pair(home: Path, filter_args: list[str], suffix: str) -> bool:
-            """Run ancestor then current into `home`, returning whether both succeeded."""
-            assert ancestor_bin is not None
-            ok = True
-            rc = run_bench(
-                ancestor_bin,
-                [*filter_args, "--save-baseline", BASELINE],
-                env,
-                home,
-                "ancestor" + suffix,
+        ancestor_rc, head_rc = run_pair(
+            ancestor_bin, head_bin, env, target_home, [], "", header_suffix
+        )
+        if ancestor_rc is not None:
+            ancestor_failures.append(
+                TargetFailure(ancestor_target_by_key[key], ancestor_rc)
             )
-            if rc is not None:
-                ancestor_failures.append(TargetFailure(ancestor_target_by_key[key], rc))
-                ok = False
-            # Criterion's --save-baseline leaves a `new/` copy of the
-            # ancestor run behind in addition to the baseline it saves. An id
-            # absent at HEAD would otherwise keep that copy and get reported
-            # as a HEAD result carrying the ancestor's numbers. Criterion
-            # recreates `new/` on the HEAD run and only reads
-            # `ancestor/estimates.json` and `ancestor/sample.json` for
-            # comparison, so removing it here is safe.
-            for d in home.rglob("new"):
-                if d.is_dir():
-                    shutil.rmtree(d)
-            rc = run_bench(
-                head_bin,
-                [*filter_args, "--baseline-lenient", BASELINE],
-                env,
-                home,
-                "current" + suffix,
-                header_suffix,
-            )
-            if rc is not None:
-                current_failures.append(TargetFailure(head_target_by_key[key], rc))
-                ok = False
-            return ok
-
-        if not run_pair(target_home, [], ""):
+        if head_rc is not None:
+            current_failures.append(TargetFailure(head_target_by_key[key], head_rc))
+        if ancestor_rc is not None or head_rc is not None:
             continue
         regressed = [
             r.id
             for r in compare(target_home, threshold).results
             if r.verdict == Verdict.REGRESSION
         ]
-        if regressed:
-            # Criterion's positional filter is a regex over the full
-            # benchmark id, so an anchored alternation reruns exactly the
-            # flagged ids and nothing else.
-            pattern = "^(?:" + "|".join(re.escape(id) for id in regressed) + ")$"
-            run_pair(
-                results_root / RERUN / head_bin.package / head_bin.name,
-                [pattern],
-                f", confirming {len(regressed)} regression(s)",
-            )
-    return ancestor_failures, current_failures, identical
+        if not regressed:
+            continue
+        # Criterion's positional filter is a regex over the full benchmark
+        # id, so an anchored alternation reruns exactly the flagged ids and
+        # nothing else.
+        pattern = "^(?:" + "|".join(re.escape(id) for id in regressed) + ")$"
+        ancestor_rc, head_rc = run_pair(
+            ancestor_bin,
+            head_bin,
+            env,
+            results_root / RERUN / head_bin.package / head_bin.name,
+            [pattern],
+            f", confirming {len(regressed)} regression(s)",
+            header_suffix,
+        )
+        for rc in (ancestor_rc, head_rc):
+            if rc is not None:
+                rerun_failures.append(TargetFailure(head_target_by_key[key], rc))
+    return ancestor_failures, current_failures, rerun_failures, identical
 
 
 def render_report(
@@ -441,6 +469,7 @@ def render_report(
     report: CompareReport,
     ancestor_failures: list[TargetFailure],
     current_failures: list[TargetFailure],
+    rerun_failures: list[TargetFailure],
     identical: list[BuiltBench],
     unchanged: list[str],
     unchanged_built: bool,
@@ -467,6 +496,14 @@ def render_report(
             + "\n".join(
                 f"* `{f.target.package}/{f.target.name}` exited with {f.returncode}"
                 for f in ancestor_failures
+            )
+        )
+    if rerun_failures:
+        sections.append(
+            "Confirmation reruns that failed (their first-pass regressions stand):\n"
+            + "\n".join(
+                f"* `{f.target.package}/{f.target.name}` exited with {f.returncode}"
+                for f in rerun_failures
             )
         )
     if report.warnings:
@@ -634,6 +671,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ancestor_build_failures: list[TargetFailure] = []
     ancestor_failures: list[TargetFailure] = []
     current_failures: list[TargetFailure] = []
+    rerun_failures: list[TargetFailure] = []
     identical: list[BuiltBench] = []
     current_targets: list[BenchTarget] = []
     # Tracks which parked target dir currently owns `target`, so the
@@ -708,7 +746,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 for b in head_built_raw
             ]
 
-            ancestor_run_failures, current_run_failures, identical = run_benches(
+            (
+                ancestor_run_failures,
+                current_run_failures,
+                rerun_failures,
+                identical,
+            ) = run_benches(
                 head_built,
                 ancestor_built,
                 current_targets,
@@ -748,6 +791,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         report,
         ancestor_failures,
         current_failures,
+        rerun_failures,
         identical,
         unchanged,
         verify_closure,

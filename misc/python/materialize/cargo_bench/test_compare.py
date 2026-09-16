@@ -205,7 +205,6 @@ def test_confirm_downgrades_regression_the_rerun_does_not_reproduce(
     ]
     assert report.results[0].rerun_change == 0.01
     assert not report.has_regressions
-    assert "unconfirmed" in render_markdown(report).splitlines()[2]
     assert "| +1.0% | unconfirmed |" in render_markdown(report).splitlines()[2]
 
 
@@ -215,7 +214,37 @@ def test_confirm_warns_when_rerun_lacks_the_benchmark(tmp_path: Path) -> None:
 
     report = confirm(compare(tmp_path / "a", 0.10), compare(tmp_path / "b", 0.10))
 
-    assert report.results[0].verdict == Verdict.UNCONFIRMED
+    assert report.results[0].verdict == Verdict.REGRESSION
     assert report.results[0].rerun_change is None
-    assert not report.has_regressions
-    assert report.warnings == ["g/slow: regression was not measured again on the rerun"]
+    assert report.has_regressions
+    assert report.warnings == [
+        "g/slow: the rerun produced no comparison, keeping the regression"
+    ]
+
+
+def test_confirm_keeps_regression_when_the_rerun_has_no_comparison(
+    tmp_path: Path,
+) -> None:
+    _bench(tmp_path / "a", "g/slow", "g/slow", 120.0, 100.0, (0.20, 0.15, 0.25))
+    # The rerun's ancestor run failed, so only the current side landed and
+    # criterion wrote no change estimate.
+    _bench(tmp_path / "b", "g/slow", "g/slow", 120.0)
+
+    report = confirm(compare(tmp_path / "a", 0.10), compare(tmp_path / "b", 0.10))
+
+    assert report.results[0].verdict == Verdict.REGRESSION
+    assert report.has_regressions
+    assert report.warnings == [
+        "g/slow: the rerun produced no comparison, keeping the regression"
+    ]
+
+
+def test_confirm_with_no_rerun_directory(tmp_path: Path) -> None:
+    _bench(tmp_path / "a", "g/same", "g/same", 100.0, 100.0, (0.0, -0.01, 0.01))
+
+    report = confirm(compare(tmp_path / "a", 0.10), compare(tmp_path / "gone", 0.10))
+
+    assert [(r.id, r.verdict) for r in report.results] == [
+        ("g/same", Verdict.UNCHANGED)
+    ]
+    assert report.warnings == []

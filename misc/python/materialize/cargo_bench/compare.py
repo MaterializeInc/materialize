@@ -153,12 +153,12 @@ def compare(criterion_dir: Path, threshold: float) -> CompareReport:
 def confirm(first: CompareReport, rerun: CompareReport) -> CompareReport:
     """Keep a regression from `first` only if `rerun` measured the same benchmark as a regression too.
 
-    A regression that the rerun does not reproduce becomes `UNCONFIRMED`,
-    which never fails the step. Rows that never regressed pass through
-    untouched. `rerun` is expected to contain only the benchmarks that
-    regressed in `first`, so a benchmark missing from it is a rerun that
-    did not happen or did not produce a result, and is reported with a
-    warning rather than trusted.
+    A regression that the rerun measured and did not reproduce becomes
+    `UNCONFIRMED`, which never fails the step. A regression the rerun did not
+    compare at all, because it is missing from `rerun` or because criterion
+    wrote no change estimate for it, keeps its verdict and is reported with a
+    warning: the confirmation did not happen, so there is nothing to downgrade
+    on. Rows that never regressed pass through untouched.
     """
     by_id = {r.id: r for r in rerun.results}
     results = []
@@ -168,9 +168,13 @@ def confirm(first: CompareReport, rerun: CompareReport) -> CompareReport:
             results.append(r)
             continue
         again = by_id.get(r.id)
-        if again is None:
-            warnings.append(f"{r.id}: regression was not measured again on the rerun")
-            results.append(replace(r, verdict=Verdict.UNCONFIRMED))
+        # `change_mean is None` is exactly "no comparison was computed": the
+        # rerun's ancestor side failed and only the current side landed.
+        if again is None or again.change_mean is None:
+            warnings.append(
+                f"{r.id}: the rerun produced no comparison, keeping the regression"
+            )
+            results.append(r)
             continue
         verdict = (
             Verdict.REGRESSION
