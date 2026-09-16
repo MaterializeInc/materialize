@@ -1224,10 +1224,6 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         IcebergStorageProvider::Gcs => {
                             Self::gcs_storage_factory(endpoint, &client, &token, &headers)
                         }
-                        // TODO(SS-449): ADLS can now take a loader too, so vended credentials
-                        // here still expire without one. Wiring it needs a `VendedCredential`
-                        // mapping from the catalog's `adls.sas-token.<account>` prop onto
-                        // `Credential::SasToken`.
                         IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls {
                             customized_credential_load: endpoint.map(|endpoint| {
                                 CustomAzdlsCredentialLoader::new(
