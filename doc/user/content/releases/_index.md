@@ -43,12 +43,11 @@ CREATE TABLE orders
 For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/postgres/) for PostgreSQL and the guide on [handling upstream schema changes](/ingest-data/postgres/source-versioning/).
 
 ### Size clusters using hydration history {#v26.42-hydration-history}
-It is hard to know ahead of time how long a cluster will take to hydrate, or how much memory it will need to get there. The best proxy is what happened the last time. Materialize now records every completed hydration in two new introspection tables:
-
+You can now track how long a cluster took to hydrate, and what resources it needed. Every completed hydration is now recorded in two new introspection tables:
 - [`mz_internal.mz_replica_hydration_history`](/sql/system-catalog/mz_internal/#mz_replica_hydration_history) to track hydration metrics per replica
 - [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history) to track hydration metrics per object
 
-Use them to answer *how long did hydration take last time, and what resources did it require?*
+Use these tables to determine your hydration requirements, and right-size your clusters accordingly.
 
 ```mzsql
 SELECT
