@@ -105,7 +105,7 @@ use iceberg::spec::{
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
-use iceberg::transaction::{ApplyTransactionAction, Transaction};
+use iceberg::transaction::{RowDeltaAction, TransactionAction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::base_writer::equality_delete_writer::{
     EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
@@ -120,7 +120,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
+use iceberg::{Catalog, NamespaceIdent, TableCommit, TableCreation, TableIdent};
 use itertools::Itertools;
 use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
 use mz_interchange::avro::DiffPair;
@@ -155,7 +155,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::progress::{Antichain, Timestamp as _};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
@@ -743,7 +743,7 @@ async fn reload_table(
     catalog: &dyn Catalog,
     namespace: String,
     table_name: String,
-    current_table: Table,
+    current_table: &Table,
 ) -> anyhow::Result<Table> {
     let namespace_ident = NamespaceIdent::new(namespace.clone());
     let table_ident = TableIdent::new(namespace_ident, table_name.clone());
@@ -778,26 +778,34 @@ async fn reload_table(
     }
 }
 
-/// Attempt a single commit of a batch of data files to an Iceberg table.
-/// On conflict or failure, reloads the table and returns a retryable error.
-/// On success, returns the updated table state.
-async fn try_commit_batch(
-    mut table: Table,
+/// A failed commit attempt, split by whether the commit request reached the catalog.
+enum CommitError {
+    /// Failed while building the commit locally. Nothing was sent to the catalog,
+    /// so the commit definitely didn't happen.
+    Local(iceberg::Error),
+    /// The update request failed. Depending on the error kind,
+    /// it's still possible the catalog applied the commit.
+    Request(iceberg::Error),
+}
+
+/// Build a row delta commit against the given table and send it to the catalog.
+///
+/// We can't use iceberg-rust's `Transaction::commit` (a retry wrapper for `Transaction::do_commit`)
+/// because it automatically rebases the transaction onto the latest state of the table.
+///
+/// That behavior leads to duplicate writes because there's no way to check:
+/// 1. Have we already committed this data?
+/// 2. Has another (newer) writer taken over?
+///
+/// So this implementation doesn't do that (details inline).
+async fn do_commit(
+    table: &Table,
+    catalog: &dyn Catalog,
     snapshot_properties: Vec<(String, String)>,
     data_files: Vec<DataFile>,
     delete_files: Vec<DataFile>,
-    catalog: &dyn Catalog,
-    conn_namespace: &str,
-    conn_table: &str,
-    sink_version: u64,
-    frontier: &Antichain<Timestamp>,
-    batch_lower: &Antichain<Timestamp>,
-    batch_upper: &Antichain<Timestamp>,
-    metrics: &IcebergSinkMetrics,
-) -> (Table, RetryResult<(), anyhow::Error>) {
-    let tx = Transaction::new(&table);
-    let mut action = tx
-        .row_delta()
+) -> Result<Table, CommitError> {
+    let mut action = RowDeltaAction::new()
         .set_snapshot_properties(snapshot_properties.into_iter().collect())
         .with_check_duplicate(false);
 
@@ -807,108 +815,156 @@ async fn try_commit_batch(
             .add_delete_files(delete_files);
     }
 
-    let tx = match action
-        .apply(tx)
-        .context("Failed to apply data file addition to iceberg table transaction")
+    // Divergence: `Transaction::do_commit` reloads the table and rebases the transaction onto it.
+    // We do not reload the table and rebase the transaction.
+    // The caller must check the transaction against the table before committing because
+    // the Iceberg Catalog's conflict check is not sufficient to prevent duplicate commits.
+
+    let mut action_commit = Arc::new(action)
+        .commit(table)
+        .await
+        .map_err(CommitError::Local)?;
+
+    // Divergence: `Transaction::do_commit` also checks each action's requirements
+    // against the local metadata and applies its updates to a local copy of the table,
+    // so the next action in the transaction can build on the result.
+    // We only commit a single action, so we skip that step.
+
+    let table_commit = TableCommit::builder()
+        .ident(table.identifier().clone())
+        .updates(action_commit.take_updates())
+        .requirements(action_commit.take_requirements())
+        .build();
+
+    catalog
+        .update_table(table_commit)
+        .await
+        .map_err(CommitError::Request)
+}
+
+/// Attempt a single commit of a batch of data files to an Iceberg table.
+async fn try_commit_batch(
+    table: Table,
+    snapshot_properties: Vec<(String, String)>,
+    data_files: Vec<DataFile>,
+    delete_files: Vec<DataFile>,
+    catalog: &dyn Catalog,
+    conn_namespace: &str,
+    conn_table: &str,
+    sink_id: GlobalId,
+    sink_version: u64,
+    batch_lower: &Antichain<Timestamp>,
+    batch_upper: &Antichain<Timestamp>,
+    metrics: &IcebergSinkMetrics,
+) -> (Table, RetryResult<(), anyhow::Error>) {
+    // We begin the attempt by evaluating our current state.
+    // 1. Load the table from the catalog.
+    // 2. Check if the table metadata says it's safe to write to.
+    let table = match reload_table(
+        catalog,
+        conn_namespace.to_string(),
+        conn_table.to_string(),
+        &table,
+    )
+    .await
     {
-        Ok(tx) => tx,
+        Ok(table) => table,
         Err(e) => {
-            match reload_table(
-                catalog,
-                conn_namespace.to_string(),
-                conn_table.to_string(),
-                table.clone(),
-            )
-            .await
-            {
-                Ok(reloaded) => table = reloaded,
-                Err(reload_err) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(reload_err)));
-                }
-            }
-            return (
-                table,
-                RetryResult::RetryableErr(anyhow!(
-                    "Failed to apply data file addition to iceberg table transaction: {}",
-                    e
-                )),
-            );
+            // We can't proceed without a fresh view of the table, so we must retry.
+            return (table, RetryResult::RetryableErr(anyhow!(e)));
         }
     };
 
-    let new_table = tx.commit(catalog).await;
-    match new_table {
-        Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
-            metrics.commit_conflicts.inc();
-            match reload_table(
-                catalog,
-                conn_namespace.to_string(),
-                conn_table.to_string(),
-                table.clone(),
-            )
-            .await
-            {
-                Ok(reloaded) => table = reloaded,
-                Err(e) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(e)));
-                }
-            };
+    let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
+    let last = match retrieve_upper_from_snapshots(&mut snapshots) {
+        Ok(last) => last,
+        Err(e) => return (table, RetryResult::RetryableErr(anyhow!(e))),
+    };
+    if let Some((last_frontier, last_id, last_version)) = last {
+        // Just in case the sink was recreated, check both sink ID and version to see if it was us.
+        if last_id == sink_id && last_version == sink_version && last_frontier == *batch_upper {
+            // Our own commit for this batch is already on the table.
+            // We must've missed the response.
+            info!(
+                namespace = %conn_namespace,
+                table = %conn_table,
+                lower = %batch_lower.pretty(),
+                upper = %batch_upper.pretty(),
+                "found iceberg commit from previous attempt, treating as success"
+            );
+            return (table, RetryResult::Ok(()));
+        }
 
-            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
-            let last = retrieve_upper_from_snapshots(&mut snapshots);
-            let last = match last {
-                Ok(val) => val,
-                Err(e) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(e)));
-                }
-            };
+        if last_version > sink_version {
+            // We've been superseded by a new version of the sink.
+            return (
+                table,
+                RetryResult::FatalErr(anyhow!(
+                    "Iceberg table '{}' has been modified by another writer \
+                    with version {}. Current sink version: {}. \
+                    Frontiers may be out of sync, aborting to avoid data loss.",
+                    conn_table,
+                    last_version,
+                    sink_version,
+                )),
+            );
+        }
 
-            // Check if another writer has advanced the frontier beyond ours (fencing check)
-            if let Some((last_frontier, last_version)) = last {
-                if last_version > sink_version {
-                    return (
-                        table,
-                        RetryResult::FatalErr(anyhow!(
-                            "Iceberg table '{}' has been modified by another writer \
-                             with version {}. Current sink version: {}. \
-                             Frontiers may be out of sync, aborting to avoid data loss.",
-                            conn_table,
-                            last_version,
-                            sink_version,
-                        )),
-                    );
-                }
-                if PartialOrder::less_equal(frontier, &last_frontier) {
-                    return (
-                        table,
-                        RetryResult::FatalErr(anyhow!(
-                            "Iceberg table '{}' has been modified by another writer. \
-                             Current frontier: {:?}, last frontier: {:?}.",
-                            conn_table,
-                            frontier,
-                            last_frontier,
-                        )),
-                    );
-                }
-            }
+        if PartialOrder::less_equal(batch_upper, &last_frontier)
+            || PartialOrder::less_than(batch_lower, &last_frontier)
+        {
+            // This batch contains records someone else has already written.
+            return (
+                table,
+                RetryResult::FatalErr(anyhow!(
+                    "Iceberg table '{}' has been modified by another writer. \
+                    Current frontier: {:?}, last frontier: {:?}.",
+                    conn_table,
+                    batch_upper,
+                    last_frontier,
+                )),
+            );
+        }
+    }
 
+    match do_commit(
+        &table,
+        catalog,
+        snapshot_properties,
+        data_files,
+        delete_files,
+    )
+    .await
+    {
+        Ok(new_table) => (new_table, RetryResult::Ok(())),
+        Err(CommitError::Local(e)) => {
+            // Nothing was sent to the catalog, so this commit definitely didn't happen.
+            // Next attempt should reload the table and try again from scratch.
+            metrics.commit_failures.inc();
             (
                 table,
-                RetryResult::RetryableErr(anyhow!(
-                    "Commit conflict detected when committing batch [{}, {}) \
-                     to Iceberg table '{}.{}'. Retrying...",
-                    batch_lower.pretty(),
-                    batch_upper.pretty(),
-                    conn_namespace,
-                    conn_table
-                )),
+                RetryResult::RetryableErr(anyhow!("Failed to build iceberg table commit: {}", e)),
             )
         }
-        Err(e) => {
-            metrics.commit_failures.inc();
-            (table, RetryResult::RetryableErr(anyhow!(e)))
-        }
-        Ok(new_table) => (new_table, RetryResult::Ok(())),
+        Err(CommitError::Request(e)) => match e.kind() {
+            ErrorKind::CatalogCommitConflicts => {
+                // Our view of the table was outdated.
+                // Next attempt should reload the table and try again from scratch.
+                metrics.commit_conflicts.inc();
+                (table, RetryResult::RetryableErr(anyhow!(e)))
+            }
+            ErrorKind::Unexpected => {
+                // The catalog may have applied this commit before the success response was lost.
+                // Next attempt should reload the table and see if the commit landed.
+                metrics.commit_failures.inc();
+                (table, RetryResult::RetryableErr(anyhow!(e)))
+            }
+            _ => {
+                // All other errors are definite: retrying will not change the outcome.
+                metrics.commit_failures.inc();
+                (table, RetryResult::FatalErr(anyhow!(e)))
+            }
+        },
     }
 }
 
@@ -978,28 +1034,36 @@ async fn load_or_create_table(
 }
 
 /// Find the most recent Materialize frontier from Iceberg snapshots.
+/// Returns: (frontier, sink id, sink version)
+///
 /// We store the frontier in snapshot metadata to track where we left off after restarts.
 /// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
 /// The input slice will be sorted by sequence number in descending order.
 fn retrieve_upper_from_snapshots(
     snapshots: &mut [Arc<Snapshot>],
-) -> anyhow::Result<Option<(Antichain<Timestamp>, u64)>> {
+) -> anyhow::Result<Option<(Antichain<Timestamp>, GlobalId, u64)>> {
     snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
     for snapshot in snapshots {
         let props = &snapshot.summary().additional_properties;
-        if let (Some(frontier_json), Some(sink_version_str)) =
-            (props.get("mz-frontier"), props.get("mz-sink-version"))
-        {
+        if let (Some(frontier_json), Some(sink_id_str), Some(sink_version_str)) = (
+            props.get("mz-frontier"),
+            props.get("mz-sink-id"),
+            props.get("mz-sink-version"),
+        ) {
             let frontier: Vec<Timestamp> = serde_json::from_str(frontier_json)
                 .context("Failed to deserialize frontier from snapshot properties")?;
             let frontier = Antichain::from_iter(frontier);
+
+            let sink_id = sink_id_str
+                .parse::<GlobalId>()
+                .context("Failed to parse mz-sink-id from snapshot properties")?;
 
             let sink_version = sink_version_str
                 .parse::<u64>()
                 .context("Failed to parse mz-sink-version from snapshot properties")?;
 
-            return Ok(Some((frontier, sink_version)));
+            return Ok(Some((frontier, sink_id, sink_version)));
         }
         if snapshot.summary().operation.as_str() != "replace" {
             // This is a bad heuristic, but we have no real other way to identify compactions
@@ -1184,7 +1248,7 @@ fn mint_batch_descriptions<'scope>(
             let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
             let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
             let (resume_upper, resume_version) = match resume {
-                Some((f, v)) => (f, v),
+                Some((f, _, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),
             };
             debug!(
@@ -2681,7 +2745,6 @@ fn commit_to_iceberg<'scope>(
                             let catalog = Arc::clone(&catalog);
                             let conn_namespace = connection.namespace.clone();
                             let conn_table = connection.table.clone();
-                            let frontier = frontier.clone();
                             let batch_lower = batch.0.clone();
                             let batch_upper = batch.1.clone();
                             async move {
@@ -2693,8 +2756,8 @@ fn commit_to_iceberg<'scope>(
                                     catalog.as_ref(),
                                     &conn_namespace,
                                     &conn_table,
+                                    sink_id,
                                     sink_version,
-                                    &frontier,
                                     &batch_lower,
                                     &batch_upper,
                                     &metrics,

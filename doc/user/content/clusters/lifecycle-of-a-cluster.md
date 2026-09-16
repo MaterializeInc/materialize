@@ -198,6 +198,11 @@ GROUP BY r.name;
 
 A cluster with no replicas returns no rows here, not `false`.
 
+Both relations report only the current state, so they are wiped when a replica
+or Materialize restarts. To compare this hydration against earlier ones, and to
+see the memory and disk it needed, read the durable hydration history described
+in [Optimize cluster size](/clusters/sizing/).
+
 Hydration is per replica, so adding a replica or resizing a cluster hydrates
 only the new replicas while the existing ones keep serving. It is also the
 memory peak of a cluster's life, and that peak is higher than steady-state
