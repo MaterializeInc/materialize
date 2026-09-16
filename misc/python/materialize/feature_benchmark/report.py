@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from statistics import mean, variance
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 from materialize.feature_benchmark.benchmark_result import BenchmarkScenarioResult
 from materialize.feature_benchmark.benchmark_result_evaluator import (
@@ -23,7 +23,7 @@ from materialize.feature_benchmark.scenario_version import ScenarioVersion
 T = TypeVar("T", bound=int | float)
 
 
-class ReportMeasurement[T: int | float]:
+class ReportMeasurement(Generic[T]):
     result: T | None
     min: T | None
     max: T | None

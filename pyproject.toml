@@ -29,6 +29,14 @@ select = [
     "E711", # comparisons to none
     "RUF100", # `noqa` that suppresses nothing, including for unselected rules
 ]
+ignore = [
+    # PEP 695 type parameters are scoped to the signature that declares them, so
+    # they are absent from module globals. `bin/pydoc` resolves annotations by
+    # name against those globals and runs under `-Werror`, so adopting the
+    # syntax fails the Doctests job on every generic it rewrites.
+    "UP046", # non-pep695-generic-class
+    "UP047", # non-pep695-generic-function
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["materialize"]

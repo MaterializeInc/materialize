@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from typing import Generic, TypeVar
+
 from materialize.feature_benchmark.benchmark_result import BenchmarkScenarioMetric
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.scenario import Scenario
@@ -18,8 +20,10 @@ from materialize.terminal import (
     with_conditional_formatting,
 )
 
+T = TypeVar("T")
 
-class BenchmarkResultEvaluator[T]:
+
+class BenchmarkResultEvaluator(Generic[T]):
 
     def ratio(self, metric: BenchmarkScenarioMetric) -> float | None:
         raise RuntimeError
