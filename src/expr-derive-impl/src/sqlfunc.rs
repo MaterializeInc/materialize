@@ -1753,7 +1753,7 @@ fn variadic_func(
 mod render_tests {
     use super::render_tokens;
 
-    #[test]
+    #[mz_ore::test]
     fn signature_reads_like_formatted_code() {
         let sig: proc_macro2::TokenStream = syn::parse_quote! {
             fn f<'a>(mut a: &'a str, b: Option<i32>) -> Result<Cow<'a, str>, E>
@@ -1771,7 +1771,7 @@ mod render_tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn literal_contents_are_verbatim() {
         let a: proc_macro2::TokenStream = syn::parse_quote! { format!("({x})") };
         let b: proc_macro2::TokenStream = syn::parse_quote! { format!("( {x})") };
@@ -1779,7 +1779,7 @@ mod render_tests {
         assert_eq!(render_tokens(&a), "format!(\"({x})\")");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn formatting_is_invisible() {
         let a: proc_macro2::TokenStream = "fn f ( a : i32 ) -> i32 { a + 1 }".parse().unwrap();
         let b: proc_macro2::TokenStream = "fn f(a:i32)->i32{a+1}".parse().unwrap();
