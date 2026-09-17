@@ -7,190 +7,299 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Snapshot of the scalar function property registry per LIR version.
+//! Snapshot of the scalar function property registry.
 //!
-//! [`FuncRegistry::build`] records the declared properties of every
-//! `UnaryFunc`, `BinaryFunc` and `VariadicFunc` variant, and this test
-//! compares them against `tests/snapshots/func_registry_v{LIR_VERSION}.json`.
-//! It complements the LIR schema snapshot in `lir_schema.rs`, which pins the
-//! serialized shape of these enums but not what the variants mean. The
-//! registry lives in `mz-expr` behind its `func-registry` feature, which this
-//! crate's dev-dependency enables.
+//! [`FuncRegistry::build`] records every `UnaryFunc`, `BinaryFunc` and
+//! `VariadicFunc` variant as a properties half and a source half, see
+//! `Record` in the registry module. It complements the LIR schema snapshot in
+//! `lir_schema.rs`, which pins the serialized shape of these enums but not
+//! what the variants mean. The registry lives in `mz-expr` behind its
+//! `func-registry` feature, which this crate's dev-dependency enables.
 //!
-//! A property change (null propagation, error behavior, monotonicity, output
-//! typing, an inverse or negation, and so on) changes what a stored plan
-//! computes or what the optimizer assumed when producing it. Once a LIR
-//! version has shipped, such a change must bump `LIR_VERSION` so pinned plans
-//! of the old version are replanned. Changes confined to
-//! [`INFORMATIONAL_FIELDS`] are reported separately, because they require
-//! judgment---they may or may not be breaking.
+//! Three files in `tests/snapshots` hold the state, each with one compact
+//! JSON object per record so a changed function is a one-line diff:
+//!
+//! * `func_registry.json`, the properties. A change here to a shipped LIR
+//!   version alters what a stored plan computes or what the optimizer assumed
+//!   when producing it, and must bump `LIR_VERSION` so pinned plans of the
+//!   old version are replanned. Additions are the exception: a stored plan
+//!   cannot reference a variant that did not exist when it was written.
+//! * `func_registry_source.json`, the sources. Changes here need judgment, a
+//!   body may or may not have changed behavior, so they are reported without
+//!   demanding a bump.
+//! * `func_registry_digests.json`, a digest of the properties file per LIR
+//!   version. `REWRITE=1` only ever writes the current version's entry, so
+//!   after a bump the previous version's digest stays as it was, recording
+//!   what that version's properties were. Old properties content is in git
+//!   history, keyed by that digest. Unlike `lir_v{N}.json`, no tooling needs
+//!   to read an old version's properties, so no per-version copy is kept.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_compute_types::plan::LIR_VERSION;
-use mz_expr::func::registry::FuncRegistry;
+use mz_expr::func::registry::{FuncRegistry, Record};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 const SNAPSHOT_DIR: &str = "tests/snapshots";
+const PROPERTIES_PATH: &str = "tests/snapshots/func_registry.json";
+const SOURCE_PATH: &str = "tests/snapshots/func_registry_source.json";
+const DIGESTS_PATH: &str = "tests/snapshots/func_registry_digests.json";
 
-/// The freshly built registry, rewritten on every run. Gitignored. Diff it
-/// against the checked-in snapshot to see exactly what changed.
-const CURRENT_PATH: &str = "tests/snapshots/func_registry_current.json";
+/// The freshly built halves, rewritten on every run. Gitignored. Diff them
+/// against the checked-in files to see exactly what changed.
+const PROPERTIES_CURRENT_PATH: &str = "tests/snapshots/func_registry_current.json";
+const SOURCE_CURRENT_PATH: &str = "tests/snapshots/func_registry_source_current.json";
 
-/// Record fields whose change does not by itself alter what a stored plan
-/// computes or how it was optimized.
-///
-/// `body_fingerprint` tracks the implementation---changes may or may not be
-/// breaking. `sqlfunc_decl` is source text: the properties it declares are
-/// recorded as their own fields (`sqlfunc_signature` carries the parameter and
-/// return types), so what remains in it alone is parameter names, argument
-/// order and the like. `display` only feeds EXPLAIN output, since LIR stores
-/// variant names.
-const INFORMATIONAL_FIELDS: &[&str] = &["body_fingerprint", "display", "sqlfunc_decl"];
+const REWRITE_COMMAND: &str = "REWRITE=1 cargo test -p mz-compute-types --test func_registry";
 
-fn snapshot_path() -> String {
-    format!("{SNAPSHOT_DIR}/func_registry_v{LIR_VERSION}.json")
+/// Enum name, then canonical variant name, then the record as a JSON object.
+type Records = BTreeMap<String, BTreeMap<String, serde_json::Value>>;
+
+/// Splits the registry into its properties and source halves, each keyed by
+/// enum name and canonical variant name.
+fn split(registry: &FuncRegistry) -> (Records, Records) {
+    fn split_into<P: Serialize>(
+        properties: &mut Records,
+        sources: &mut Records,
+        enum_name: &str,
+        map: &BTreeMap<String, Record<P>>,
+    ) {
+        for (name, record) in map {
+            properties
+                .entry(enum_name.to_string())
+                .or_default()
+                .insert(name.clone(), to_value(&record.properties));
+            sources
+                .entry(enum_name.to_string())
+                .or_default()
+                .insert(name.clone(), to_value(&record.source));
+        }
+    }
+    let (mut properties, mut sources) = (Records::new(), Records::new());
+    split_into(&mut properties, &mut sources, "UnaryFunc", &registry.unary);
+    split_into(
+        &mut properties,
+        &mut sources,
+        "BinaryFunc",
+        &registry.binary,
+    );
+    split_into(
+        &mut properties,
+        &mut sources,
+        "VariadicFunc",
+        &registry.variadic,
+    );
+    (properties, sources)
 }
 
-fn registry_json(registry: &FuncRegistry) -> String {
-    let mut json = serde_json::to_string_pretty(registry).expect("registry serializes to JSON");
-    // Lint requires text files to end with a newline.
-    json.push('\n');
-    json
+fn to_value<T: Serialize>(value: &T) -> serde_json::Value {
+    serde_json::to_value(value).expect("registry records serialize to JSON")
 }
 
-type Records = BTreeMap<String, BTreeMap<String, serde_json::Map<String, serde_json::Value>>>;
+/// Renders records as a JSON object of objects with one compact line per
+/// record. Valid JSON, and a changed record is a one-line diff.
+fn render(records: &Records) -> String {
+    let mut out = String::from("{\n");
+    let mut enums = records.iter().peekable();
+    while let Some((enum_name, entries)) = enums.next() {
+        out.push_str(&format!(
+            "  {}: {{\n",
+            serde_json::to_string(enum_name).unwrap()
+        ));
+        let mut entries = entries.iter().peekable();
+        while let Some((name, record)) = entries.next() {
+            out.push_str(&format!(
+                "    {}: {}{}\n",
+                serde_json::to_string(name).unwrap(),
+                serde_json::to_string(record).unwrap(),
+                if entries.peek().is_some() { "," } else { "" }
+            ));
+        }
+        out.push_str(&format!(
+            "  }}{}\n",
+            if enums.peek().is_some() { "," } else { "" }
+        ));
+    }
+    out.push_str("}\n");
+    out
+}
 
-/// Splits the differences between two registry documents into property
-/// changes, which require a version bump once shipped, and informational
-/// ones: added records and changes confined to [`INFORMATIONAL_FIELDS`].
-fn classify_diff(expected: &str, actual: &str) -> (Vec<String>, Vec<String>) {
-    let expected: Records = serde_json::from_str(expected).expect("snapshot is a registry");
-    let actual: Records = serde_json::from_str(actual).expect("registry is JSON");
-    let mut properties = Vec::new();
-    let mut implementations = Vec::new();
+fn digest(contents: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(contents.as_bytes()))
+}
 
-    for enum_name in expected
-        .keys()
-        .chain(actual.keys())
-        .collect::<std::collections::BTreeSet<_>>()
-    {
+/// Per-record differences between two rendered record files.
+struct Diff {
+    added: Vec<String>,
+    removed: Vec<String>,
+    /// Record key, then the changed field names.
+    changed: Vec<(String, Vec<String>)>,
+}
+
+fn diff(expected: &str, actual: &str) -> Diff {
+    let expected: Records = serde_json::from_str(expected).expect("snapshot is a record file");
+    let actual: Records = serde_json::from_str(actual).expect("rendered records are JSON");
+    let mut diff = Diff {
+        added: Vec::new(),
+        removed: Vec::new(),
+        changed: Vec::new(),
+    };
+    let enum_names: BTreeSet<_> = expected.keys().chain(actual.keys()).collect();
+    for enum_name in enum_names {
         let empty = BTreeMap::new();
         let old = expected.get(enum_name).unwrap_or(&empty);
         let new = actual.get(enum_name).unwrap_or(&empty);
-        // A stored plan cannot reference a variant that did not exist when it
-        // was written, so an addition changes nothing about existing plans.
         for name in new.keys().filter(|name| !old.contains_key(*name)) {
-            implementations.push(format!("  added {enum_name} `{name}`"));
+            diff.added.push(format!("{enum_name} `{name}`"));
         }
         for name in old.keys().filter(|name| !new.contains_key(*name)) {
-            properties.push(format!("  removed {enum_name} `{name}`"));
+            diff.removed.push(format!("{enum_name} `{name}`"));
         }
         for (name, new_record) in new {
             let Some(old_record) = old.get(name) else {
                 continue;
             };
-            let changed: Vec<&str> = old_record
+            if old_record == new_record {
+                continue;
+            }
+            let (Some(old_record), Some(new_record)) =
+                (old_record.as_object(), new_record.as_object())
+            else {
+                diff.changed.push((format!("{enum_name} `{name}`"), vec![]));
+                continue;
+            };
+            let fields: BTreeSet<_> = old_record
                 .keys()
                 .chain(new_record.keys())
                 .filter(|field| old_record.get(*field) != new_record.get(*field))
-                .map(String::as_str)
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
+                .cloned()
                 .collect();
-            if changed.is_empty() {
-                continue;
-            }
-            if changed
-                .iter()
-                .all(|field| INFORMATIONAL_FIELDS.contains(field))
-            {
-                implementations.push(format!("  {enum_name} `{name}`: {changed:?}"));
-            } else {
-                properties.push(format!("  changed {enum_name} `{name}`: {changed:?}"));
-            }
+            diff.changed.push((
+                format!("{enum_name} `{name}`"),
+                fields.into_iter().collect(),
+            ));
         }
     }
-    (properties, implementations)
+    diff
 }
 
-/// The registry must match the checked-in snapshot for [`LIR_VERSION`].
+fn describe(diff: &Diff) -> String {
+    let mut lines = Vec::new();
+    lines.extend(diff.removed.iter().map(|key| format!("  removed {key}")));
+    lines.extend(
+        diff.changed
+            .iter()
+            .map(|(key, fields)| format!("  changed {key}: {fields:?}")),
+    );
+    lines.extend(diff.added.iter().map(|key| format!("  added {key}")));
+    lines.join("\n")
+}
+
+fn read(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|_| {
+        panic!(
+            "missing registry snapshot '{path}'.\n\nGenerate it with:\n\n    {REWRITE_COMMAND}\n"
+        )
+    })
+}
+
+/// The registry must match the checked-in snapshots, and the properties
+/// digest recorded for [`LIR_VERSION`] must match the properties file.
 ///
-/// Run with `REWRITE=1` to regenerate the current version's snapshot. The
-/// rewrite never touches other versions' snapshots.
+/// Run with `REWRITE=1` to regenerate both halves and the current version's
+/// digest. The rewrite never touches other versions' digests.
 #[mz_ore::test]
 fn func_registry_snapshot() {
     let registry = FuncRegistry::build();
-    let actual = registry_json(&registry);
-    let path = snapshot_path();
+    let (properties, source) = split(&registry);
+    let (properties, source) = (render(&properties), render(&source));
 
     std::fs::create_dir_all(SNAPSHOT_DIR).expect("create snapshot dir");
-    std::fs::write(CURRENT_PATH, &actual).expect("write current registry");
+    std::fs::write(PROPERTIES_CURRENT_PATH, &properties).expect("write current properties");
+    std::fs::write(SOURCE_CURRENT_PATH, &source).expect("write current source");
 
+    let version = LIR_VERSION.to_string();
     if std::env::var_os("REWRITE").is_some() {
-        std::fs::write(&path, actual).expect("write snapshot");
+        let mut digests: BTreeMap<String, String> = std::fs::read_to_string(DIGESTS_PATH)
+            .ok()
+            .map(|json| serde_json::from_str(&json).expect("digest table is JSON"))
+            .unwrap_or_default();
+        digests.insert(version, digest(&properties));
+        let mut digests = serde_json::to_string_pretty(&digests).expect("digests serialize");
+        digests.push('\n');
+        std::fs::write(PROPERTIES_PATH, properties).expect("write properties");
+        std::fs::write(SOURCE_PATH, source).expect("write source");
+        std::fs::write(DIGESTS_PATH, digests).expect("write digests");
         return;
     }
 
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!(
-            "missing function registry snapshot '{path}'.\n\n\
-             Generate it with:\n\n    \
-             REWRITE=1 cargo test -p mz-compute-types --test func_registry\n"
-        )
-    });
-    if expected == actual {
-        return;
-    }
-
-    let (properties, implementations) = classify_diff(&expected, &actual);
+    let expected_properties = read(PROPERTIES_PATH);
+    let expected_source = read(SOURCE_PATH);
+    let digests: BTreeMap<String, String> =
+        serde_json::from_str(&read(DIGESTS_PATH)).expect("digest table is JSON");
     let regenerate = format!(
-        "Full detail: diff '{path}' against the freshly built registry at\n\
-         '{CURRENT_PATH}'.\n\n\
-         Then regenerate the snapshot and review the diff:\n\n    \
-         REWRITE=1 cargo test -p mz-compute-types --test func_registry\n"
+        "Full detail: diff '{PROPERTIES_PATH}' against '{PROPERTIES_CURRENT_PATH}' and\n\
+         '{SOURCE_PATH}' against '{SOURCE_CURRENT_PATH}'.\n\n\
+         Then regenerate the snapshots and review the diff:\n\n    {REWRITE_COMMAND}\n"
     );
-    if !properties.is_empty() {
-        let implementations = if implementations.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "\nFunctions with informational changes only:\n{}\n",
-                implementations.join("\n")
-            )
-        };
+
+    let properties_diff = diff(&expected_properties, &properties);
+    if !properties_diff.removed.is_empty() || !properties_diff.changed.is_empty() {
         panic!(
             "Scalar function properties changed!\n\n\
              The declared properties of the scalar functions no longer match\n\
-             '{path}'. Any durably stored LIR plan using these functions may now\n\
-             compute something else, or was optimized under assumptions that no\n\
+             '{PROPERTIES_PATH}'. Any durably stored LIR plan using these functions may\n\
+             now compute something else, or was optimized under assumptions that no\n\
              longer hold.\n\n\
-             What changed:\n{}\n{implementations}\n\
+             What changed:\n{}\n\n\
              If LIR version {LIR_VERSION} has already shipped, bump LIR_VERSION in\n\
-             src/compute-types/src/plan.rs so the change lands as a new version.\n\
+             src/compute-types/src/plan.rs so the change lands as a new version and\n\
+             version {LIR_VERSION}'s digest in '{DIGESTS_PATH}' stays as it is.\n\
              If version {LIR_VERSION} is unshipped, regenerating in place is fine.\n\n\
              {regenerate}",
-            properties.join("\n"),
+            describe(&properties_diff),
         );
     }
-    panic!(
-        "Scalar function registry changed without affecting stored plans!\n\n\
-         These records were added, or differ from '{path}' only in fields\n\
-         that do not by themselves change stored plans (a function body, its\n\
-         declaration text, or its SQL display name):\n\
-         {}\n\n\
-         For a body_fingerprint change, review whether the new body alters the\n\
-         result for any input. If it does and LIR version {LIR_VERSION} has\n\
-         already shipped, bump LIR_VERSION in src/compute-types/src/plan.rs so\n\
-         stored plans are replanned. Otherwise, or if version {LIR_VERSION} is\n\
-         unshipped, regenerating in place is fine.\n\n\
-         {regenerate}",
-        implementations.join("\n"),
+
+    let mut informational = Vec::new();
+    if !properties_diff.added.is_empty() {
+        informational.push(format!("Added functions:\n{}", describe(&properties_diff)));
+    }
+    if expected_source != source {
+        informational.push(format!(
+            "Functions whose source changed (a body, its declaration text, or its\n\
+             SQL display name), without a change to their properties:\n{}",
+            describe(&diff(&expected_source, &source)),
+        ));
+    }
+    if !informational.is_empty() {
+        panic!(
+            "Scalar function registry changed without affecting stored plans!\n\n\
+             {}\n\n\
+             For a body_fingerprint change, review whether the new body alters the\n\
+             result for any input. If it does and LIR version {LIR_VERSION} has\n\
+             already shipped, bump LIR_VERSION in src/compute-types/src/plan.rs so\n\
+             stored plans are replanned. Otherwise, or if version {LIR_VERSION} is\n\
+             unshipped, regenerating in place is fine.\n\n\
+             {regenerate}",
+            informational.join("\n\n"),
+        );
+    }
+
+    // Both files match, so the table must agree with the properties file.
+    // A stale entry means someone edited the file or the table by hand.
+    assert_eq!(
+        digests.get(&version),
+        Some(&digest(&expected_properties)),
+        "'{DIGESTS_PATH}' has no matching digest for LIR version {LIR_VERSION}. \
+         Regenerate it:\n\n    {REWRITE_COMMAND}\n"
     );
 }
 
-/// The `#[sqlfunc]` macro must plumb its declaration and body fingerprint
-/// through to the registry. A silently absent source would make the snapshot
-/// blind to implementation changes without failing anything.
+/// The `#[sqlfunc]` macro must plumb its source through to the registry. A
+/// silently absent source would make the snapshot blind to implementation
+/// changes without failing anything.
 #[mz_ore::test]
 fn func_registry_records_sqlfunc_sources() {
     let registry = FuncRegistry::build();
@@ -201,12 +310,12 @@ fn func_registry_records_sqlfunc_sources() {
     assert!(decl.contains(" fn abs_int16("), "{decl}");
     assert!(abs.source.body_fingerprint.is_some());
     assert_eq!(
-        abs.source.sqlfunc_signature,
+        abs.properties.sqlfunc_signature,
         Some("fn(i16) -> Result<i16, EvalError>")
     );
     // The macro's natural input types drive the output type probe.
-    assert_eq!(abs.input_types, ["Int16:NotNull"]);
-    assert_eq!(abs.output_type.as_deref(), Some("Int16:NotNull"));
+    assert_eq!(abs.properties.input_types, ["Int16:NotNull"]);
+    assert_eq!(abs.properties.output_type.as_deref(), Some("Int16:NotNull"));
 
     // Hand-written functions have no source to record.
     let record_get = &registry.unary["record_get"];
@@ -215,10 +324,34 @@ fn func_registry_records_sqlfunc_sources() {
 }
 
 #[mz_ore::test]
-fn additions_are_informational_and_removals_are_not() {
-    let old = r#"{"UnaryFunc": {"kept": {"could_error": false}, "gone": {"could_error": false}}}"#;
-    let new = r#"{"UnaryFunc": {"kept": {"could_error": false}, "fresh": {"could_error": true}}}"#;
-    let (properties, informational) = classify_diff(old, new);
-    assert_eq!(properties, ["  removed UnaryFunc `gone`"]);
-    assert_eq!(informational, ["  added UnaryFunc `fresh`"]);
+fn diff_reports_each_kind_of_change() {
+    let old = r#"{"UnaryFunc": {"kept": {"a": 1, "b": 1}, "gone": {"a": 1}}}"#;
+    let new = r#"{"UnaryFunc": {"kept": {"a": 1, "b": 2}, "fresh": {"a": 1}}}"#;
+    let diff = diff(old, new);
+    assert_eq!(diff.added, ["UnaryFunc `fresh`"]);
+    assert_eq!(diff.removed, ["UnaryFunc `gone`"]);
+    assert_eq!(
+        diff.changed,
+        [("UnaryFunc `kept`".to_string(), vec!["b".to_string()])]
+    );
+}
+
+#[mz_ore::test]
+fn render_is_one_line_per_record_and_valid_json() {
+    let mut records = Records::new();
+    records.entry("UnaryFunc".into()).or_default().insert(
+        "f".into(),
+        serde_json::json!({"a": [1, 2], "b": {"c": null}}),
+    );
+    records
+        .entry("BinaryFunc".into())
+        .or_default()
+        .insert("g".into(), serde_json::json!({"a": 1}));
+    let rendered = render(&records);
+    assert_eq!(
+        rendered,
+        "{\n  \"BinaryFunc\": {\n    \"g\": {\"a\":1}\n  },\n  \"UnaryFunc\": {\n    \"f\": {\"a\":[1,2],\"b\":{\"c\":null}}\n  }\n}\n"
+    );
+    let reparsed: Records = serde_json::from_str(&rendered).expect("valid JSON");
+    assert_eq!(reparsed, records);
 }

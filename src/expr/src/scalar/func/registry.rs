@@ -19,8 +19,8 @@
 //!
 //! [`FuncRegistry::build`] records those properties for one representative
 //! instance of every variant, and `tests/func_registry.rs` in
-//! `mz-compute-types` compares the result against a checked-in snapshot per
-//! LIR version. The module exists only under the `func-registry` feature,
+//! `mz-compute-types` compares the result against checked-in snapshots, one
+//! per half of [`Record`]. The module exists only under the `func-registry` feature,
 //! which that test enables. Production builds carry none of it. For `#[sqlfunc]`
 //! functions the record also carries the declaration text, the types-only
 //! signature and a fingerprint of the function body, see [`SqlFuncSource`],
@@ -80,30 +80,48 @@ impl<F> Sample<F> {
     }
 }
 
-/// The declared properties of every variant of the three scalar function
-/// enums, keyed by canonical variant name (see
-/// [`FuncName`]).
-#[derive(Debug, Serialize)]
+/// The registry of every variant of the three scalar function enums, keyed
+/// by canonical variant name (see [`FuncName`]) as described on [`Sample`].
+#[derive(Debug)]
 pub struct FuncRegistry {
-    #[serde(rename = "UnaryFunc")]
-    pub unary: BTreeMap<String, UnaryFuncProperties>,
-    #[serde(rename = "BinaryFunc")]
-    pub binary: BTreeMap<String, BinaryFuncProperties>,
-    #[serde(rename = "VariadicFunc")]
-    pub variadic: BTreeMap<String, VariadicFuncProperties>,
+    pub unary: BTreeMap<String, Record<UnaryFuncProperties>>,
+    pub binary: BTreeMap<String, Record<BinaryFuncProperties>>,
+    pub variadic: BTreeMap<String, Record<VariadicFuncProperties>>,
 }
 
-/// The `#[sqlfunc]` source of a function, in the registry's serialized form.
+/// One registry entry: the properties that decide what a stored plan using
+/// the function computes, and the source they were read from.
 ///
-/// `sqlfunc_signature` is a property: the parameter and return types decide
-/// what a stored plan computes. The other two describe the source text and
-/// body, and the snapshot test in `mz-compute-types` classifies changes to
-/// them as informational.
+/// The two halves are snapshotted separately by the test in
+/// `mz-compute-types`. A change to `properties` of a shipped LIR version
+/// requires a version bump. A change to `source` alone is informational.
+#[derive(Debug)]
+pub struct Record<P> {
+    pub properties: P,
+    pub source: FuncSource,
+}
+
+/// Where a record's properties came from.
+///
+/// `display` only feeds EXPLAIN output, since LIR stores variant names.
+/// `sqlfunc_decl` is the declaration text, whose semantic content the
+/// properties already carry as their own fields. `body_fingerprint` tracks
+/// the implementation, whose semantics only a reader can judge.
 #[derive(Debug, Serialize)]
-pub struct SourceProperties {
-    pub sqlfunc_signature: Option<&'static str>,
+pub struct FuncSource {
+    pub display: String,
     pub sqlfunc_decl: Option<&'static str>,
     pub body_fingerprint: Option<String>,
+}
+
+impl FuncSource {
+    fn of(display: String, source: Option<SqlFuncSource>) -> Self {
+        FuncSource {
+            display,
+            sqlfunc_decl: source.map(|s| s.decl),
+            body_fingerprint: source.map(|s| format!("{:016x}", s.body_fingerprint)),
+        }
+    }
 }
 
 /// Resolves a Rust parameter type to its column type by autoref
@@ -140,7 +158,6 @@ impl<T> ProbeColumnTypeFallback for &ColumnTypeProbe<T> {
 #[derive(Debug, Serialize)]
 pub struct UnaryFuncProperties {
     pub variant: String,
-    pub display: String,
     pub propagates_nulls: bool,
     pub introduces_nulls: bool,
     pub could_error: bool,
@@ -151,14 +168,14 @@ pub struct UnaryFuncProperties {
     pub inverse: Option<&'static str>,
     pub input_types: Vec<String>,
     pub output_type: Option<String>,
-    #[serde(flatten)]
-    pub source: SourceProperties,
+    /// The `#[sqlfunc]` parameter and return types as written, see
+    /// [`SqlFuncSource::signature`].
+    pub sqlfunc_signature: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct BinaryFuncProperties {
     pub variant: String,
-    pub display: String,
     pub propagates_nulls: bool,
     pub introduces_nulls: bool,
     pub could_error: bool,
@@ -169,14 +186,14 @@ pub struct BinaryFuncProperties {
     pub negate: Option<&'static str>,
     pub input_types: Vec<String>,
     pub output_type: Option<String>,
-    #[serde(flatten)]
-    pub source: SourceProperties,
+    /// The `#[sqlfunc]` parameter and return types as written, see
+    /// [`SqlFuncSource::signature`].
+    pub sqlfunc_signature: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct VariadicFuncProperties {
     pub variant: String,
-    pub display: String,
     pub propagates_nulls: bool,
     pub introduces_nulls: bool,
     pub could_error: bool,
@@ -185,8 +202,9 @@ pub struct VariadicFuncProperties {
     pub is_infix_op: bool,
     pub input_types: Vec<String>,
     pub output_type: Option<String>,
-    #[serde(flatten)]
-    pub source: SourceProperties,
+    /// The `#[sqlfunc]` parameter and return types as written, see
+    /// [`SqlFuncSource::signature`].
+    pub sqlfunc_signature: Option<&'static str>,
 }
 
 impl FuncRegistry {
@@ -350,31 +368,21 @@ fn variant_ident<F: Serialize>(func: &F) -> String {
     }
 }
 
-impl From<Option<SqlFuncSource>> for SourceProperties {
-    fn from(source: Option<SqlFuncSource>) -> Self {
-        SourceProperties {
-            sqlfunc_signature: source.map(|s| s.signature),
-            sqlfunc_decl: source.map(|s| s.decl),
-            body_fingerprint: source.map(|s| format!("{:016x}", s.body_fingerprint)),
-        }
-    }
-}
-
 fn type_strings(types: &[SqlColumnType]) -> Vec<String> {
     types.iter().map(ToString::to_string).collect()
 }
 
 impl UnaryFuncProperties {
-    fn of(sample: &Sample<UnaryFunc>) -> Self {
+    fn of(sample: &Sample<UnaryFunc>) -> Record<Self> {
         let func = &sample.func;
         let output_type = match sample.input_types.as_slice() {
             [] => None,
             [input] => Some(func.output_sql_type(input.clone()).to_string()),
             _ => panic!("unary sample `{}` needs exactly one input type", func),
         };
-        UnaryFuncProperties {
+        let source = func.sqlfunc_source();
+        let properties = UnaryFuncProperties {
             variant: variant_ident(func),
-            display: func.to_string(),
             propagates_nulls: func.propagates_nulls(),
             introduces_nulls: func.introduces_nulls(),
             could_error: func.could_error(),
@@ -384,22 +392,26 @@ impl UnaryFuncProperties {
             inverse: func.inverse().map(|f| f.variant_name()),
             input_types: type_strings(&sample.input_types),
             output_type,
-            source: func.sqlfunc_source().into(),
+            sqlfunc_signature: source.map(|s| s.signature),
+        };
+        Record {
+            properties,
+            source: FuncSource::of(func.to_string(), source),
         }
     }
 }
 
 impl BinaryFuncProperties {
-    fn of(sample: &Sample<BinaryFunc>) -> Self {
+    fn of(sample: &Sample<BinaryFunc>) -> Record<Self> {
         let func = &sample.func;
         let output_type = match sample.input_types.as_slice() {
             [] => None,
             [_, _] => Some(func.output_sql_type(&sample.input_types).to_string()),
             _ => panic!("binary sample `{}` needs exactly two input types", func),
         };
-        BinaryFuncProperties {
+        let source = func.sqlfunc_source();
+        let properties = BinaryFuncProperties {
             variant: variant_ident(func),
-            display: func.to_string(),
             propagates_nulls: func.propagates_nulls(),
             introduces_nulls: func.introduces_nulls(),
             could_error: func.could_error(),
@@ -409,19 +421,23 @@ impl BinaryFuncProperties {
             negate: func.negate().map(|f| f.variant_name()),
             input_types: type_strings(&sample.input_types),
             output_type,
-            source: func.sqlfunc_source().into(),
+            sqlfunc_signature: source.map(|s| s.signature),
+        };
+        Record {
+            properties,
+            source: FuncSource::of(func.to_string(), source),
         }
     }
 }
 
 impl VariadicFuncProperties {
-    fn of(sample: &Sample<VariadicFunc>) -> Self {
+    fn of(sample: &Sample<VariadicFunc>) -> Record<Self> {
         let func = &sample.func;
         let output_type = (!sample.input_types.is_empty())
             .then(|| func.output_sql_type(sample.input_types.clone()).to_string());
-        VariadicFuncProperties {
+        let source = func.sqlfunc_source();
+        let properties = VariadicFuncProperties {
             variant: variant_ident(func),
-            display: func.to_string(),
             propagates_nulls: func.propagates_nulls(),
             introduces_nulls: func.introduces_nulls(),
             could_error: func.could_error(),
@@ -430,7 +446,11 @@ impl VariadicFuncProperties {
             is_infix_op: func.is_infix_op(),
             input_types: type_strings(&sample.input_types),
             output_type,
-            source: func.sqlfunc_source().into(),
+            sqlfunc_signature: source.map(|s| s.signature),
+        };
+        Record {
+            properties,
+            source: FuncSource::of(func.to_string(), source),
         }
     }
 }

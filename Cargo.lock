@@ -7063,6 +7063,7 @@ dependencies = [
  "serde",
  "serde-reflection",
  "serde_json",
+ "sha2 0.10.9",
  "timely",
  "tracing",
 ]

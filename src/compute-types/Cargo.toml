@@ -30,6 +30,7 @@ mz-expr = { path = "../expr", features = ["func-registry"] }
 mz-pgtz = { path = "../pgtz" }
 serde-reflection.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [features]
 default = []
