@@ -170,8 +170,17 @@ struct Args {
 
     /// Forward storage's timely logging events to compute so storage operators appear in
     /// `mz_introspection.mz_dataflow_*` tables.
+    ///
+    /// Has no effect on a unified cluster, where storage dataflows run on the compute Timely
+    /// cluster and appear in its logging unconditionally.
     #[clap(long)]
     enable_storage_introspection_logs: bool,
+
+    /// Host storage objects on the compute Timely cluster instead of building a separate
+    /// storage Timely cluster. The storage and compute controller protocols are served
+    /// unchanged, from the same cluster.
+    #[clap(long, env = "UNIFIED_CLUSTER")]
+    unified_cluster: bool,
 }
 
 /// The process ordinal for a StatefulSet pod, taken from the trailing
@@ -433,6 +442,65 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
+    if args.unified_cluster {
+        info!("running with a unified timely cluster");
+
+        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+            compute_timely_config,
+            ComputeRuntimeRole::Solo,
+            &metrics_registry,
+            persist_clients,
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory.clone(),
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context: connection_context.clone(),
+            },
+            SYSTEM_TIME.clone(),
+            connection_context,
+            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+        )
+        .await?;
+
+        info!(
+            "listening for storage controller connections on {}",
+            args.storage_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "storage_server",
+            transport::serve(
+                args.storage_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host.clone(),
+                Duration::MAX,
+                storage_client_builder,
+                cluster_server_metrics.for_server("storage"),
+            )
+            .instrument(info_span!("ctp", name = "storage")),
+        );
+
+        info!(
+            "listening for compute controller connections on {}",
+            args.compute_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "compute_server",
+            transport::serve(
+                args.compute_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host,
+                Duration::MAX,
+                compute_client_builder,
+                cluster_server_metrics.for_server("compute"),
+            )
+            .instrument(info_span!("ctp", name = "compute")),
+        );
+
+        // Block forever.
+        return future::pending().await;
+    }
+
     // Create per-worker bridges for forwarding storage timely logging events to compute.
     let (storage_log_writers, storage_log_readers) = if args.enable_storage_introspection_logs {
         (0..storage_timely_config.workers)
@@ -505,7 +573,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .instrument(info_span!("ctp", name = "compute")),
     );
 
-    // TODO: unify storage and compute servers to use one timely cluster.
+    // TODO: retire this two-cluster topology once the unified cluster has production mileage.
 
     // Block forever.
     future::pending().await
