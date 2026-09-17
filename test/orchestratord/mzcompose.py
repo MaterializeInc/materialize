@@ -2358,9 +2358,15 @@ def workflow_documentation_defaults(
             "misc/helm-charts/operator/values.yaml",
             os.path.join(dir, "sample-values.yaml"),
         )
+        # MinIO is test scaffolding rather than part of the release, so always
+        # use the local manifest. Copies at older release tags reference the
+        # `minio/minio` Docker Hub image, which MinIO has deleted.
+        shutil.copyfile(
+            "misc/helm-charts/testing/minio.yaml",
+            os.path.join(dir, "sample-minio.yaml"),
+        )
         files = {
             "sample-postgres.yaml": "misc/helm-charts/testing/postgres.yaml",
-            "sample-minio.yaml": "misc/helm-charts/testing/minio.yaml",
             "sample-materialize.yaml": "misc/helm-charts/testing/materialize.yaml",
         }
 
