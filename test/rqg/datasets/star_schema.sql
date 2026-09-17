@@ -104,8 +104,10 @@ INSERT INTO d3 VALUES
 -- PK materialized views
 -- ---------------------
 
+-- ft_pk carries all fact-table columns so the grammar can swap it in for ft.
+-- k is unique in the data above, which keeps DISTINCT ON deterministic.
 CREATE MATERIALIZED VIEW ft_pk AS
-SELECT DISTINCT ON (k) k, v FROM ft;
+SELECT DISTINCT ON (k) k, v, fk1, fk2 FROM ft;
 
 CREATE MATERIALIZED VIEW d1_pk AS
 SELECT DISTINCT ON (pk1, pk2) pk1, pk2, v FROM d1;
