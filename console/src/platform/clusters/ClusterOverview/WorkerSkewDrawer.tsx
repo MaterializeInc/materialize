@@ -29,10 +29,14 @@ import ErrorBox from "~/components/ErrorBox";
 import { SideDrawer } from "~/components/SideDrawer";
 import { useFlags } from "~/hooks/useFlags";
 import { regionPath } from "~/platform/routeHelpers";
+import { useAllObjects } from "~/store/allObjects";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
-import { useDataflowCpuPerWorker } from "../queries";
+import {
+  CPU_MEASUREMENT_WINDOW_MS,
+  useDataflowCpuMeasurement,
+} from "../queries";
 import { SortMode, WorkerSkewHeatmap } from "./WorkerSkewHeatmap";
 import { DataflowRow, pivotDataflowCpuPerWorker } from "./workerSkewPivot";
 
@@ -137,14 +141,51 @@ const ReplicaHeatmap = ({
   const flags = useFlags();
   const maintainedObjectsEnabled = flags["maintained-objects-ui-50"];
 
-  const { data, isLoading, isError, error } = useDataflowCpuPerWorker({
-    clusterName,
-    replicaName,
-  });
+  const { state, rows, measuredAt, error, measure } = useDataflowCpuMeasurement(
+    {
+      clusterName,
+      replicaName,
+    },
+  );
 
-  const pivot = data ? pivotDataflowCpuPerWorker(data) : null;
+  // Names come from the app-wide objects subscribe rather than from the CPU
+  // query, which is pinned to the replica and would plan a `mz_objects` join on
+  // the customer's cluster.
+  const { data: allObjects } = useAllObjects();
+  const resolveNaming = React.useCallback(
+    (objectId: string) => {
+      const object = allObjects?.find((o) => o.id === objectId);
+      if (!object) return undefined;
+      return {
+        name: object.name,
+        schemaName: object.schemaName,
+        databaseName: object.databaseName,
+      };
+    },
+    [allObjects],
+  );
 
-  if (isLoading) {
+  const pivot = rows ? pivotDataflowCpuPerWorker(rows, resolveNaming) : null;
+
+  if (state === "idle") {
+    return (
+      <Box py={12} textAlign="center" color={colors.foreground.secondary}>
+        <Text>
+          Measure CPU across workers over a {CPU_MEASUREMENT_WINDOW_MS / 1000}{" "}
+          second window.
+        </Text>
+        <Text fontSize="xs" mt={1}>
+          This runs two queries on {clusterName}, so it is not started
+          automatically.
+        </Text>
+        <Button mt={4} onClick={measure}>
+          Measure
+        </Button>
+      </Box>
+    );
+  }
+
+  if (state === "sampling") {
     return (
       <Flex
         justifyContent="center"
@@ -153,16 +194,16 @@ const ReplicaHeatmap = ({
         color={colors.foreground.secondary}
       >
         <Spinner mr={3} />
-        <Text>Loading dataflow CPU…</Text>
+        <Text>Sampling for {CPU_MEASUREMENT_WINDOW_MS / 1000} seconds…</Text>
       </Flex>
     );
   }
 
-  if (isError) {
+  if (state === "error") {
     return (
       <ErrorBox
         message={
-          error instanceof Error ? error.message : "Failed to load dataflow CPU"
+          error instanceof Error ? error.message : "Failed to measure CPU"
         }
       />
     );
@@ -171,10 +212,13 @@ const ReplicaHeatmap = ({
   if (!pivot || pivot.rows.length === 0) {
     return (
       <Box py={12} textAlign="center" color={colors.foreground.secondary}>
-        <Text>No dataflows are scheduled on this replica yet.</Text>
+        <Text>No dataflow used CPU during the sampling window.</Text>
         <Text fontSize="xs" mt={1}>
           Maintained objects show up here once they begin processing work.
         </Text>
+        <Button mt={4} onClick={measure}>
+          Measure again
+        </Button>
       </Box>
     );
   }
@@ -185,13 +229,29 @@ const ReplicaHeatmap = ({
   };
 
   return (
-    <WorkerSkewHeatmap
-      rows={pivot.rows}
-      numWorkers={pivot.numWorkers}
-      globalWorkerTotals={pivot.globalWorkerTotals}
-      sortMode={sortMode}
-      onRowClick={maintainedObjectsEnabled ? handleRowClick : undefined}
-    />
+    <>
+      <Flex
+        justifyContent="space-between"
+        alignItems="center"
+        mb={3}
+        color={colors.foreground.secondary}
+      >
+        <Text fontSize="xs">
+          CPU over {CPU_MEASUREMENT_WINDOW_MS / 1000}s
+          {measuredAt ? `, measured ${measuredAt.toLocaleTimeString()}` : null}
+        </Text>
+        <Button size="sm" variant="secondary" onClick={measure}>
+          Measure again
+        </Button>
+      </Flex>
+      <WorkerSkewHeatmap
+        rows={pivot.rows}
+        numWorkers={pivot.numWorkers}
+        globalWorkerTotals={pivot.globalWorkerTotals}
+        sortMode={sortMode}
+        onRowClick={maintainedObjectsEnabled ? handleRowClick : undefined}
+      />
+    </>
   );
 };
 

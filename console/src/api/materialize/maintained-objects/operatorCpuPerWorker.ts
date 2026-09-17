@@ -14,7 +14,7 @@ import {
   buildSessionVariables,
   executeSqlV2,
   queryBuilder,
-} from "~/api/materialize";
+} from "~/api/materialize/";
 
 export type OperatorCpuPerWorkerParams = {
   /** GlobalId of the maintained object (index, materialized view). */
@@ -25,34 +25,58 @@ export type OperatorCpuPerWorkerParams = {
 
 /**
  * One row per (operator within this object's dataflow, worker on the selected
- * replica) with elapsed CPU since the replica started. Powers the heatmap on
- * the object detail Performance tab.
+ * replica) with cumulative CPU elapsed. Powers the object detail Performance tab.
  *
- * Structural operators are filtered out — the list mirrors the one in the
- * upstream dataflow-troubleshooting prototype (Frank McSherry / docs) so the
- * remaining rows are the operators a user can actually reason about (joins,
- * arrangements, reduces, sources, sinks, etc.).
+ * Scoped to one object, so the `export_id` equality can be served by the
+ * per-cluster index on `mz_compute_exports_per_worker (export_id, worker_id)`
+ * that every replica maintains automatically. That makes this the cheaper of
+ * the two skew queries and the better default entry point.
+ *
+ * `mz_scheduling_elapsed_per_worker` already groups by (id, worker_id), so
+ * there is exactly one row per (operator, worker) and no aggregation is needed
+ * here. As with the cluster query, `elapsed_ns` is cumulative and callers
+ * difference two samples to get a rate.
+ *
+ * Structural operators are filtered out by name so the remaining rows are ones
+ * a user can reason about. TODO: `EXPLAIN ANALYZE ... WITH SKEW` resolves
+ * operators through `mz_lir_mapping` instead of by name prefix, which is both
+ * more accurate and not ours to maintain. Move to it rather than growing this
+ * list.
  */
 export function buildOperatorCpuPerWorkerQuery(objectId: string) {
   return queryBuilder
     .selectFrom("mz_scheduling_elapsed_per_worker as mse")
-    .innerJoin("mz_dataflow_operator_dataflows as dod", "dod.id", "mse.id")
-    .innerJoin("mz_compute_exports as ce", "ce.dataflow_id", "dod.dataflow_id")
+    .innerJoin(
+      (eb) =>
+        eb
+          .selectFrom("mz_dataflow_addresses")
+          .select(({ ref }) => [
+            "id",
+            sql<number>`${ref("address")}[1]`.as("dataflowId"),
+          ])
+          .as("addrs"),
+      (join) => join.onRef("addrs.id", "=", "mse.id"),
+    )
+    .innerJoin("mz_dataflow_operators as ops", (join) =>
+      join.onRef("ops.id", "=", "mse.id"),
+    )
+    .innerJoin("mz_compute_exports as ce", (join) =>
+      join.onRef("ce.dataflow_id", "=", "addrs.dataflowId"),
+    )
     .where("ce.export_id", "=", objectId)
-    .where("dod.name", "not like", "Dataflow:%")
-    .where("dod.name", "not like", "BuildRegion:%")
-    .where("dod.name", "not like", "BuildingObject%")
-    .where("dod.name", "not like", "InputRegion:%")
-    .where("dod.name", "not like", "Binding(LocalId%")
-    .where("dod.name", "not like", "LogOperatorHydration%")
-    .where("dod.name", "!=", "Main Body")
+    .where("ops.name", "not like", "Dataflow:%")
+    .where("ops.name", "not like", "BuildRegion:%")
+    .where("ops.name", "not like", "BuildingObject%")
+    .where("ops.name", "not like", "InputRegion:%")
+    .where("ops.name", "not like", "Binding(LocalId%")
+    .where("ops.name", "not like", "LogOperatorHydration%")
+    .where("ops.name", "!=", "Main Body")
     .select((eb) => [
-      sql<string>`${sql.id("dod", "id")}::text`.as("operatorId"),
-      eb.ref("dod.name").as("operatorName"),
+      sql<string>`${sql.id("ops", "id")}::text`.as("operatorId"),
+      eb.ref("ops.name").as("operatorName"),
       sql<number>`${sql.id("mse", "worker_id")}::int`.as("workerId"),
-      sql<bigint>`sum(${sql.id("mse", "elapsed_ns")})::bigint`.as("elapsedNs"),
-    ])
-    .groupBy(["dod.id", "dod.name", "mse.worker_id"]);
+      sql<bigint>`${sql.id("mse", "elapsed_ns")}::bigint`.as("elapsedNs"),
+    ]);
 }
 
 export async function fetchOperatorCpuPerWorker({
@@ -64,13 +88,15 @@ export async function fetchOperatorCpuPerWorker({
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
-  const query = buildOperatorCpuPerWorkerQuery(params.objectId).compile();
+  const compiledQuery = buildOperatorCpuPerWorkerQuery(
+    params.objectId,
+  ).compile();
   return executeSqlV2({
     sessionVariables: buildSessionVariables({
       cluster: params.clusterName,
       cluster_replica: params.replicaName,
     }),
-    queries: query,
+    queries: compiledQuery,
     queryKey,
     requestOptions,
   });

@@ -15,7 +15,7 @@ import {
 } from "@tanstack/react-query";
 import { flatGroup, group } from "d3";
 import { subMinutes } from "date-fns";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   buildQueryKeyPart,
@@ -100,6 +100,11 @@ import { roleQueryKeys } from "~/platform/roles/queries";
 import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
+
+import {
+  CpuSampleRow,
+  diffDataflowCpuSamples,
+} from "./ClusterOverview/workerSkewPivot";
 
 type ReplicaUtilizationHistoryFilters = {
   clusterIds: ReplicaUtilizationHistoryParameters["clusterIds"];
@@ -1023,7 +1028,12 @@ export function useDataflowCpuPerWorker(
   params: Partial<DataflowCpuPerWorkerParams>,
 ) {
   return useQuery({
-    refetchInterval: 30_000,
+    // Deliberately not polled. This query is pinned to a replica, so it runs on
+    // the customer's own cluster, and a background interval would charge every
+    // viewer of this page for a reading nobody asked for. The measurement is
+    // driven explicitly by `useDataflowCpuMeasurement` instead.
+    refetchInterval: false,
+    staleTime: Infinity,
     enabled: Boolean(params.clusterName && params.replicaName),
     queryKey: clusterQueryKeys.dataflowCpuPerWorker({
       clusterName: params.clusterName ?? "",
@@ -1039,4 +1049,74 @@ export function useDataflowCpuPerWorker(
     },
     select: (data) => data?.rows ?? [],
   });
+}
+
+/** How long to let the CPU counters accumulate between the two samples. */
+export const CPU_MEASUREMENT_WINDOW_MS = 10_000;
+
+export type CpuMeasurementState = "idle" | "sampling" | "ready" | "error";
+
+/**
+ * Runs a bounded CPU measurement against one replica: sample, wait, sample
+ * again, return the difference.
+ *
+ * The underlying counters are cumulative from the moment each operator was
+ * created, so a single read reports a lifetime average rather than current
+ * behaviour. Differencing two samples a fixed window apart is what makes the
+ * heatmap mean "CPU spent in the last ten seconds", which is what a person
+ * opening it is asking about.
+ *
+ * Nothing runs until `measure` is called, so opening the page costs nothing.
+ */
+export function useDataflowCpuMeasurement(
+  params: Partial<DataflowCpuPerWorkerParams>,
+) {
+  const queryClient = useQueryClient();
+  const [state, setState] = useState<CpuMeasurementState>("idle");
+  const [rows, setRows] = useState<CpuSampleRow[] | null>(null);
+  const [measuredAt, setMeasuredAt] = useState<Date | null>(null);
+  const [error, setError] = useState<unknown>(null);
+
+  const { clusterName, replicaName } = params;
+
+  const measure = useCallback(async () => {
+    if (!clusterName || !replicaName) return;
+
+    const queryKey = clusterQueryKeys.dataflowCpuPerWorker({
+      clusterName,
+      replicaName,
+    });
+    const sample = () =>
+      queryClient.fetchQuery({
+        queryKey,
+        // Each sample must hit the replica: a cached response would difference
+        // against itself and report no activity at all.
+        staleTime: 0,
+        gcTime: 0,
+        queryFn: ({ signal }) =>
+          fetchDataflowCpuPerWorker({
+            queryKey,
+            params: { clusterName, replicaName },
+            requestOptions: { signal },
+          }),
+      });
+
+    setState("sampling");
+    setError(null);
+    try {
+      const first = await sample();
+      await new Promise((resolve) =>
+        setTimeout(resolve, CPU_MEASUREMENT_WINDOW_MS),
+      );
+      const second = await sample();
+      setRows(diffDataflowCpuSamples(first?.rows ?? [], second?.rows ?? []));
+      setMeasuredAt(new Date());
+      setState("ready");
+    } catch (e) {
+      setError(e);
+      setState("error");
+    }
+  }, [clusterName, replicaName, queryClient]);
+
+  return { state, rows, measuredAt, error, measure };
 }

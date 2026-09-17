@@ -14,7 +14,7 @@ import {
   buildSessionVariables,
   executeSqlV2,
   queryBuilder,
-} from "~/api/materialize";
+} from "~/api/materialize/";
 
 export type DataflowCpuPerWorkerParams = {
   clusterName: string;
@@ -23,54 +23,55 @@ export type DataflowCpuPerWorkerParams = {
 
 /**
  * One row per (dataflow on this cluster, worker on the selected replica) with
- * total CPU elapsed since the replica started. Powers the cluster CPU heatmap.
+ * cumulative CPU elapsed. Powers the cluster CPU heatmap.
  *
- * Joined paths:
- * - mz_scheduling_elapsed_per_worker x mz_dataflow_operator_dataflows: per-op
- *   CPU by worker, summed to the dataflow root (operator name `Dataflow:%`).
- * - mz_compute_exports: dataflow_id -> the GlobalId of the exported object,
- *   so each row links back to its index / materialized view / subscription.
- * - mz_objects / mz_schemas / mz_databases: human-readable identity.
+ * This runs with the session pinned to a replica, so every relation it touches
+ * is planned and executed on the customer's own cluster. Two consequences drive
+ * the shape below.
+ *
+ * Reaching the dataflow via `mz_dataflow_addresses.address[1]`, the root of the
+ * operator's address tree, avoids `mz_dataflow_operator_dataflows`, which is a
+ * filter over a three-way join that re-reads the operators and addresses logs a
+ * second time. Both join views drop out of the plan.
+ *
+ * Object names are deliberately absent. Joining `mz_objects` here would plan
+ * that join on the customer's cluster rather than against the indexes on
+ * `mz_catalog_server`, so the caller resolves names from the app-wide objects
+ * subscribe instead.
+ *
+ * `elapsed_ns` is cumulative since the operator was created, never windowed, so
+ * a single result is a lifetime average. Callers difference two samples
+ * (`diffDataflowCpuSamples`) to get a rate.
  */
 export function buildDataflowCpuPerWorkerQuery() {
   return (
     queryBuilder
       .selectFrom("mz_scheduling_elapsed_per_worker as mse")
-      .innerJoin("mz_dataflow_operator_dataflows as dod", "dod.id", "mse.id")
       .innerJoin(
-        "mz_compute_exports as ce",
-        "ce.dataflow_id",
-        "dod.dataflow_id",
+        (eb) =>
+          eb
+            .selectFrom("mz_dataflow_addresses")
+            .select(({ ref }) => [
+              "id",
+              sql<number>`${ref("address")}[1]`.as("dataflowId"),
+            ])
+            .as("addrs"),
+        (join) => join.onRef("addrs.id", "=", "mse.id"),
       )
-      .leftJoin("mz_objects as o", "o.id", "ce.export_id")
-      .leftJoin("mz_schemas as sc", "sc.id", "o.schema_id")
-      .leftJoin("mz_databases as da", "da.id", "sc.database_id")
-      .where("dod.name", "like", "Dataflow:%")
-      // Filter transient dataflows (peeks, subscribes) — they have ids like `t12`.
+      .innerJoin("mz_compute_exports as ce", (join) =>
+        join.onRef("ce.dataflow_id", "=", "addrs.dataflowId"),
+      )
+      // Transient dataflows (peeks, subscribes) have ids like `t12` and vanish
+      // between samples, so they would only ever add noise to the heatmap.
       .where("ce.export_id", "not like", "t%")
       .select((eb) => [
         eb.ref("ce.export_id").as("objectId"),
-        eb.ref("o.name").as("objectName"),
-        eb.ref("sc.name").as("schemaName"),
-        eb.ref("da.name").as("databaseName"),
-        sql<"materialized-view" | "index" | "subscription">`o.type`.as(
-          "objectType",
-        ),
-        eb.ref("dod.dataflow_name").as("dataflowName"),
         sql<number>`${sql.id("mse", "worker_id")}::int`.as("workerId"),
         sql<bigint>`sum(${sql.id("mse", "elapsed_ns")})::bigint`.as(
           "elapsedNs",
         ),
       ])
-      .groupBy([
-        "ce.export_id",
-        "o.name",
-        "sc.name",
-        "da.name",
-        "o.type",
-        "dod.dataflow_name",
-        "mse.worker_id",
-      ])
+      .groupBy(["ce.export_id", "mse.worker_id"])
   );
 }
 
@@ -83,13 +84,13 @@ export async function fetchDataflowCpuPerWorker({
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
-  const query = buildDataflowCpuPerWorkerQuery().compile();
+  const compiledQuery = buildDataflowCpuPerWorkerQuery().compile();
   return executeSqlV2({
     sessionVariables: buildSessionVariables({
       cluster: params.clusterName,
       cluster_replica: params.replicaName,
     }),
-    queries: query,
+    queries: compiledQuery,
     queryKey,
     requestOptions,
   });

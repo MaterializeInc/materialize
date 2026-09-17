@@ -11,19 +11,24 @@ import { describe, expect, it } from "vitest";
 
 import { DataflowCpuPerWorkerRow } from "~/api/materialize/cluster/dataflowCpuPerWorker";
 
-import { pivotDataflowCpuPerWorker } from "./workerSkewPivot";
+import {
+  diffDataflowCpuSamples,
+  pivotDataflowCpuPerWorker,
+  ResolveObjectNaming,
+} from "./workerSkewPivot";
 
 const mkRow = (
-  overrides: Partial<DataflowCpuPerWorkerRow> &
-    Pick<DataflowCpuPerWorkerRow, "dataflowName" | "workerId" | "elapsedNs">,
+  overrides: Pick<DataflowCpuPerWorkerRow, "workerId" | "elapsedNs"> &
+    Partial<DataflowCpuPerWorkerRow>,
 ): DataflowCpuPerWorkerRow => ({
   objectId: "u100",
-  objectName: "my_mv",
-  schemaName: "public",
-  databaseName: "materialize",
-  objectType: "materialized-view",
   ...overrides,
 });
+
+const naming: ResolveObjectNaming = (objectId) =>
+  objectId === "u100"
+    ? { name: "my_mv", schemaName: "public", databaseName: "materialize" }
+    : undefined;
 
 describe("pivotDataflowCpuPerWorker", () => {
   it("returns an empty result when there are no rows", () => {
@@ -35,21 +40,9 @@ describe("pivotDataflowCpuPerWorker", () => {
 
   it("collapses per-worker rows into a single DataflowRow with workers indexed by id", () => {
     const result = pivotDataflowCpuPerWorker([
-      mkRow({
-        dataflowName: "Dataflow: materialize.public.my_mv",
-        workerId: 0,
-        elapsedNs: 100n,
-      }),
-      mkRow({
-        dataflowName: "Dataflow: materialize.public.my_mv",
-        workerId: 1,
-        elapsedNs: 200n,
-      }),
-      mkRow({
-        dataflowName: "Dataflow: materialize.public.my_mv",
-        workerId: 2,
-        elapsedNs: 300n,
-      }),
+      mkRow({ workerId: 0, elapsedNs: 100n }),
+      mkRow({ workerId: 1, elapsedNs: 200n }),
+      mkRow({ workerId: 2, elapsedNs: 300n }),
     ]);
 
     expect(result.numWorkers).toBe(3);
@@ -65,9 +58,8 @@ describe("pivotDataflowCpuPerWorker", () => {
 
   it("backfills missing worker slots with zero when a dataflow skips workers", () => {
     const result = pivotDataflowCpuPerWorker([
-      mkRow({ dataflowName: "Dataflow: a", workerId: 0, elapsedNs: 100n }),
-      mkRow({ dataflowName: "Dataflow: a", workerId: 2, elapsedNs: 300n }),
-      // numWorkers is derived from the max worker_id across all rows (here, 2 from above)
+      mkRow({ workerId: 0, elapsedNs: 100n }),
+      mkRow({ workerId: 2, elapsedNs: 300n }),
     ]);
 
     expect(result.numWorkers).toBe(3);
@@ -79,46 +71,104 @@ describe("pivotDataflowCpuPerWorker", () => {
     expect(row.skew).toBe(1);
   });
 
-  it("computes per-worker totals across multiple dataflows", () => {
+  it("computes per-worker totals across multiple objects", () => {
     const result = pivotDataflowCpuPerWorker([
-      mkRow({ dataflowName: "Dataflow: a", workerId: 0, elapsedNs: 10n }),
-      mkRow({ dataflowName: "Dataflow: a", workerId: 1, elapsedNs: 20n }),
-      mkRow({ dataflowName: "Dataflow: b", workerId: 0, elapsedNs: 100n }),
-      mkRow({ dataflowName: "Dataflow: b", workerId: 1, elapsedNs: 200n }),
+      mkRow({ objectId: "u1", workerId: 0, elapsedNs: 10n }),
+      mkRow({ objectId: "u1", workerId: 1, elapsedNs: 20n }),
+      mkRow({ objectId: "u2", workerId: 0, elapsedNs: 100n }),
+      mkRow({ objectId: "u2", workerId: 1, elapsedNs: 200n }),
     ]);
 
     expect(result.rows).toHaveLength(2);
     expect(result.globalWorkerTotals).toEqual([110, 220]);
   });
 
-  it("uses the object name as the label when present", () => {
-    const result = pivotDataflowCpuPerWorker([
-      mkRow({
-        objectName: "my_mv",
-        dataflowName: "Dataflow: materialize.public.my_mv",
-        workerId: 0,
-        elapsedNs: 1n,
-      }),
-    ]);
+  it("labels rows from the resolver rather than from the query", () => {
+    const result = pivotDataflowCpuPerWorker(
+      [mkRow({ workerId: 0, elapsedNs: 1n })],
+      naming,
+    );
     expect(result.rows[0].label).toBe("my_mv");
+    expect(result.rows[0].subLabel).toBe("materialize.public");
     expect(result.rows[0].clickable).toBe(true);
   });
 
-  it("falls back to the dataflow name suffix when the object is orphaned", () => {
-    const result = pivotDataflowCpuPerWorker([
-      mkRow({
-        // Orphaned: objectId still references the dropped GlobalId, but the
-        // LEFT JOIN to mz_objects/mz_schemas/mz_databases returns null.
-        objectName: null,
-        schemaName: null,
-        databaseName: null,
-        dataflowName: "Dataflow: materialize.public.dropped_idx",
-        workerId: 0,
-        elapsedNs: 1n,
-      }),
-    ]);
-    expect(result.rows[0].label).toBe("dropped_idx");
-    // Not clickable — would navigate to a deleted object.
+  it("falls back to the object id and blocks navigation for an orphaned dataflow", () => {
+    // The dataflow is still running on the replica after its catalog entry was
+    // dropped, so the objects subscribe has nothing to resolve.
+    const result = pivotDataflowCpuPerWorker(
+      [mkRow({ objectId: "u999", workerId: 0, elapsedNs: 1n })],
+      naming,
+    );
+    expect(result.rows[0].label).toBe("u999");
     expect(result.rows[0].clickable).toBe(false);
+  });
+});
+
+describe("diffDataflowCpuSamples", () => {
+  it("reports the CPU spent between the two samples, not the lifetime total", () => {
+    const result = diffDataflowCpuSamples(
+      [mkRow({ workerId: 0, elapsedNs: 1_000n })],
+      [mkRow({ workerId: 0, elapsedNs: 1_250n })],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].elapsedNs).toBe(250);
+  });
+
+  it("keeps workers separate when differencing", () => {
+    const result = diffDataflowCpuSamples(
+      [
+        mkRow({ workerId: 0, elapsedNs: 100n }),
+        mkRow({ workerId: 1, elapsedNs: 100n }),
+      ],
+      [
+        mkRow({ workerId: 0, elapsedNs: 400n }),
+        mkRow({ workerId: 1, elapsedNs: 150n }),
+      ],
+    );
+    expect(result.map((r) => r.elapsedNs)).toEqual([300, 50]);
+  });
+
+  it("passes through a dataflow that first appeared inside the window", () => {
+    const result = diffDataflowCpuSamples(
+      [],
+      [mkRow({ objectId: "u7", workerId: 0, elapsedNs: 42n })],
+    );
+    expect(result[0].elapsedNs).toBe(42);
+  });
+
+  it("drops a dataflow that went away during the window", () => {
+    const result = diffDataflowCpuSamples(
+      [mkRow({ objectId: "u7", workerId: 0, elapsedNs: 42n })],
+      [],
+    );
+    expect(result).toHaveLength(0);
+  });
+
+  it("clamps to zero when the replica restarted and reset the counter", () => {
+    const result = diffDataflowCpuSamples(
+      [mkRow({ workerId: 0, elapsedNs: 5_000n })],
+      [mkRow({ workerId: 0, elapsedNs: 12n })],
+    );
+    expect(result[0].elapsedNs).toBe(0);
+  });
+
+  it("surfaces skew that a single cumulative sample would hide", () => {
+    // Both workers have burned the same CPU over the replica's lifetime, but in
+    // this window worker 1 did nine times the work of worker 0.
+    const previous = [
+      mkRow({ workerId: 0, elapsedNs: 1_000_000n }),
+      mkRow({ workerId: 1, elapsedNs: 999_000n }),
+    ];
+    const next = [
+      mkRow({ workerId: 0, elapsedNs: 1_000_100n }),
+      mkRow({ workerId: 1, elapsedNs: 999_900n }),
+    ];
+
+    expect(pivotDataflowCpuPerWorker(next).rows[0].skew).toBeCloseTo(1, 2);
+    expect(
+      pivotDataflowCpuPerWorker(diffDataflowCpuSamples(previous, next)).rows[0]
+        .skew,
+    ).toBe(9);
   });
 });
