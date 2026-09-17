@@ -333,8 +333,8 @@ impl IdPool {
 }
 
 /// A row for `mz_object_arrangement_size_history`, prepared off-thread by the
-/// arrangement sizes snapshot task and stamped with a collection timestamp at
-/// write time.
+/// arrangement sizes snapshot task and stamped with the snapshot's read
+/// timestamp when written.
 #[derive(Debug)]
 pub struct ArrangementSizeRecord {
     pub replica_id: String,
@@ -386,7 +386,10 @@ pub enum Message {
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
-    ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
+    ArrangementSizesWrite {
+        records: Vec<ArrangementSizeRecord>,
+        collection_ts: EpochMillis,
+    },
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     HydrationHistorySchedule,
     HydrationHistoryRun,
@@ -547,7 +550,7 @@ impl Message {
             Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
-            Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
+            Message::ArrangementSizesWrite { .. } => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::HydrationHistorySchedule => "hydration_history_schedule",
             Message::HydrationHistoryRun => "hydration_history_run",
@@ -4105,7 +4108,7 @@ impl Coordinator {
             });
 
             self.schedule_storage_usage_collection().await;
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
@@ -4818,9 +4821,11 @@ impl Coordinator {
 /// `mz_object_arrangement_size_history` snapshot whose `collection_timestamp`
 /// (column 3) is strictly before `cutoff_ts`.
 ///
-/// Panics if any input row has `diff != 1`: the caller must consolidate first,
-/// and a consolidated history table should never contain retractions because
-/// the only source of retractions is this function itself.
+/// Every input row should have `diff == 1`: the caller must consolidate first,
+/// this function is the only source of retractions, and a single writer never
+/// repeats a `collection_timestamp`. Any other diff is a soft panic, and the
+/// expired row is retracted at its full multiplicity. A hard panic here would
+/// fail every boot, since this runs at startup.
 fn arrangement_sizes_expired_retractions(
     rows: impl IntoIterator<Item = (mz_repr::Row, i64)>,
     cutoff_ts: u128,
@@ -4828,10 +4833,11 @@ fn arrangement_sizes_expired_retractions(
 ) -> Vec<BuiltinTableUpdate> {
     let mut expired = Vec::new();
     for (row, diff) in rows {
-        assert_eq!(
-            diff, 1,
-            "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
-        );
+        if diff != 1 {
+            soft_panic_or_log!(
+                "consolidated contents should only contain diff 1: ({row:#?}, {diff:#?})"
+            );
+        }
         let collection_timestamp = row
             .unpack()
             .get(3)
@@ -4842,7 +4848,7 @@ fn arrangement_sizes_expired_retractions(
             .try_into()
             .expect("all collections happen after Jan 1 1970");
         if collection_timestamp < cutoff_ts {
-            expired.push(BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE));
+            expired.push(BuiltinTableUpdate::row(item_id, row, -Diff::from(diff)));
         }
     }
     expired
@@ -5904,7 +5910,7 @@ mod arrangement_sizes_pruner_tests {
     }
 
     #[mz_ore::test]
-    #[should_panic(expected = "consolidated contents should not contain retractions")]
+    #[should_panic(expected = "consolidated contents should only contain diff 1")]
     fn retraction_in_input_panics() {
         let rows = vec![(history_row(100), -1)];
         let _ = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
