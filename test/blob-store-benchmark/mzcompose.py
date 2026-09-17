@@ -30,6 +30,7 @@ from materialize.mzcompose.services.garage import Garage
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.rustfs import RustFs
+from materialize.mzcompose.services.seaweedfs import SeaweedFs
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -39,6 +40,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     Garage(setup_materialize=True),
     RustFs(setup_materialize=True),
+    SeaweedFs(setup_materialize=True),
     Azurite(),
     Persistcli(),
 ]
@@ -59,9 +61,19 @@ PERSISTCLI_FIELDS = [
     "max_ms",
     "retries",
 ]
-CSV_FIELDS = ["store", "fill_bytes"] + PERSISTCLI_FIELDS + ["cpu_pct_max", "mem_bytes_max"]
+CSV_FIELDS = (
+    ["store", "fill_bytes"] + PERSISTCLI_FIELDS + ["cpu_pct_max", "mem_bytes_max"]
+)
 
-UNITS = {"": 1, "k": 1024, "kib": 1024, "m": 1024**2, "mib": 1024**2, "g": 1024**3, "gib": 1024**3}
+UNITS = {
+    "": 1,
+    "k": 1024,
+    "kib": 1024,
+    "m": 1024**2,
+    "mib": 1024**2,
+    "g": 1024**3,
+    "gib": 1024**3,
+}
 
 
 def parse_bytes(text: str) -> int:
@@ -114,7 +126,9 @@ class ContainerStats(threading.Thread):
                 continue
             cpu, mem = out.strip().split("\t")
             self.cpu_pct_max = max(self.cpu_pct_max, float(cpu.rstrip("%")))
-            self.mem_bytes_max = max(self.mem_bytes_max, parse_docker_mem(mem.split("/")[0]))
+            self.mem_bytes_max = max(
+                self.mem_bytes_max, parse_docker_mem(mem.split("/")[0])
+            )
 
     def stop(self) -> None:
         self._stop.set()
@@ -183,13 +197,17 @@ def objects_per_cell(args: argparse.Namespace, size: int, concurrency: int) -> i
     """How many objects a cell writes: enough bytes to be representative and
     enough objects to keep `concurrency` busy, within the caps."""
     count = max(concurrency, args.bytes_per_cell // size)
-    count = min(count, args.max_objects_per_cell, max(1, args.max_bytes_per_cell // size))
+    count = min(
+        count, args.max_objects_per_cell, max(1, args.max_bytes_per_cell // size)
+    )
     return count
 
 
 def print_report(rows: list[dict[str, str]]) -> None:
     stores = list(dict.fromkeys(row["store"] for row in rows))
-    by_cell: dict[tuple[str, str, str], dict[tuple[str, str], dict[str, str]]] = defaultdict(dict)
+    by_cell: dict[tuple[str, str, str], dict[tuple[str, str], dict[str, str]]] = (
+        defaultdict(dict)
+    )
     for row in rows:
         by_cell[(row["fill_bytes"], row["op"], row["size_bytes"])][
             (row["store"], row["concurrency"])
@@ -219,7 +237,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--blob-store",
         action="append",
         choices=BLOB_STORES,
-        help="Blob stores to benchmark (default: minio, garage, rustfs)",
+        help="Blob stores to benchmark (default: minio, garage, rustfs, seaweedfs)",
     )
     parser.add_argument(
         "--size",
@@ -270,7 +288,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    stores = args.blob_store or ["minio", "garage", "rustfs"]
+    stores = args.blob_store or ["minio", "garage", "rustfs", "seaweedfs"]
     sizes = args.size or [4 * 1024, 64 * 1024, 1024**2, 8 * 1024**2, 64 * 1024**2]
     concurrencies = args.concurrency or [1, 8, 32, 128]
     fills = sorted(set(args.fill or [0]))
@@ -308,7 +326,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     # The cells at this fill level would measure a store
                     # holding less than they claim, so skip the rest of them.
                     failures.append(f"{store}: fill to {format_bytes(fill_bytes)}: {e}")
-                    print(f"Fill failed, skipping the remaining fill levels for {store}: {e}")
+                    print(
+                        f"Fill failed, skipping the remaining fill levels for {store}: {e}"
+                    )
                     break
                 filled = fill_bytes
             for size in sizes:
@@ -357,6 +377,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"  {failure}")
         raise FailedTestExecutionError(
             errors=[
-                TestFailureDetails(message=failure, details=None) for failure in failures
+                TestFailureDetails(message=failure, details=None)
+                for failure in failures
             ]
         )

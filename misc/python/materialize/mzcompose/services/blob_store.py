@@ -17,8 +17,9 @@ from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.garage import garage_blob_uri
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.rustfs import rustfs_blob_uri
+from materialize.mzcompose.services.seaweedfs import seaweedfs_blob_uri
 
-BLOB_STORES = ["minio", "azurite", "garage", "rustfs"]
+BLOB_STORES = ["minio", "azurite", "garage", "rustfs", "seaweedfs"]
 
 
 def blob_store_uri(blob_store: str) -> str:
@@ -32,4 +33,8 @@ def blob_store_uri(blob_store: str) -> str:
             return garage_blob_uri()
         case "rustfs":
             return rustfs_blob_uri()
-    raise ValueError(f"unknown blob store {blob_store!r}, expected one of {BLOB_STORES}")
+        case "seaweedfs":
+            return seaweedfs_blob_uri()
+    raise ValueError(
+        f"unknown blob store {blob_store!r}, expected one of {BLOB_STORES}"
+    )

@@ -54,6 +54,7 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.rustfs import RustFs
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.seaweedfs import SeaweedFs
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -114,6 +115,7 @@ SERVICES = [
     Azurite(),
     Garage(setup_materialize=True),
     RustFs(setup_materialize=True),
+    SeaweedFs(setup_materialize=True),
     KgenService(),
     Postgres(),
     MySql(),
