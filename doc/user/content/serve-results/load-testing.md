@@ -15,8 +15,8 @@ generator that doesn't become the bottleneck itself.
 
 In our experience, the majority of disappointing load-test results are not
 produced by Materialize. They are produced by the test harness: an
-under-provisioned load generator, an unindexed query compiling a new dataflow
-on every request, or a client re-parsing the same statement millions of times.
+under-provisioned load generator, a CPU-throttled proxy, or an unindexed query
+compiling a new dataflow on every request.
 This guide helps you rule all of that out, so that whatever number you end up
 with is a number you can trust.
 
@@ -47,20 +47,21 @@ Two properties of this path shape everything else in this guide:
    up a key in an index the cluster already maintains — microseconds of
    replica work. Most of the remaining per-query cost is protocol work in the
    coordinator: parsing, planning, and timestamp selection. This is why the
-   biggest wins in this guide are protocol-level (prepared statements, query
-   shape), not hardware-level.
+   biggest wins in this guide come from query and workload shape, not from
+   hardware.
 
-2. **The coordinator sequences all queries in the environment.** Throughput
-   eventually plateaus at the rate the coordinator can sequence statements,
-   no matter how many serving clusters or client connections you add. Past
-   that plateau, additional concurrency only adds queueing latency.
+2. **The coordinator sequences all queries in the environment.** For fast
+   path workloads, throughput eventually plateaus at the rate the coordinator
+   can sequence statements, no matter how many serving clusters or client
+   connections you add. Past that plateau, additional concurrency only adds
+   queueing latency. (Standard path workloads usually saturate the serving
+   cluster first — see the sizing section below.)
 
 ### What you control
 
 | Lever | Materialize Cloud | Self-managed |
 |---|---|---|
 | Query shape / indexes (fast path) | ✔ | ✔ |
-| Prepared statements | ✔ | ✔ |
 | Isolation level | ✔ | ✔ |
 | Connection count / pooling | ✔ | ✔ |
 | Cluster (replica) sizes | ✔ | ✔ |
@@ -120,33 +121,6 @@ objects so that it is:
   dataflow cost cannot interfere with the latency of the fast path serving
   traffic.
 
-## Use prepared statements
-
-For fast path workloads, **parsing and planning is typically the single
-largest per-query cost** — and it is pure overhead when the application sends
-the same parameterized statement over and over, as API and GraphQL resolver
-layers do.
-
-[Prepared statements](https://www.postgresql.org/docs/current/sql-prepare.html)
-let the client parse and plan once per connection, then execute repeatedly
-with different parameters. In our load testing, switching a keyed-lookup
-workload from per-query parsing to prepared statements increased sustainable
-throughput by more than half and reduced median latency by an order of
-magnitude, on identical infrastructure.
-
-Most PostgreSQL drivers support prepared statements natively (often
-automatically for repeated statements — check your driver's documentation).
-Two things to verify:
-
-- **Your benchmark client uses them.** Many load-testing harnesses issue each
-  query as a fresh parse+bind+execute. If your production application will
-  use prepared statements, a harness that doesn't is understating what your
-  deployment can do.
-- **Your connection pooler preserves them.** Poolers in transaction-pooling
-  mode may not support named prepared statements across transactions. See
-  [Connection pooling](/serve-results/connection-pooling/) for configuration
-  guidance.
-
 ## Choose the isolation level deliberately
 
 Materialize defaults to [strict
@@ -187,22 +161,30 @@ Beyond the knee you are purchasing latency, not throughput.
 
 ## Size the infrastructure for serving
 
-### Serving clusters: size for state, not for QPS
+### Serving clusters: size for the work your queries actually do
 
-Fast path lookups barely use the serving cluster — the arrangements are
-already maintained, and a peek is a keyed read. In our testing, the same fast
-path workload measured **identical throughput on clusters four times apart in
-size**, with the larger replica nearly idle. Cluster size matters for:
+How cluster size relates to QPS depends entirely on which execution path your
+workload takes:
 
-- the **memory** to hold your indexed views and indexes (watch sustained
-  memory utilization — see the operational notes below),
-- **standard path** queries and the maintenance of the dataflows themselves,
-- **hydration** (rebuilding state after a restart or resize).
+- **Fast path workloads: size for state, not QPS.** Fast path lookups barely
+  use the serving cluster — the arrangements are already maintained, and a
+  peek is a keyed read. In our testing, the same fast path workload measured
+  **identical throughput on clusters four times apart in size**, with the
+  larger replica nearly idle; the throughput plateau lived in the coordinator.
+  For these workloads, size the cluster for the **memory** to hold your
+  indexed views (watch sustained memory utilization) and for **hydration**
+  (rebuilding state after a restart or resize) — not for query throughput.
+  Per-peek coordination overhead even grows slightly with worker count, so an
+  oversized cluster can cost a little throughput on peek-heavy workloads.
+- **Standard path workloads: cluster CPU is the throughput.** Every standard
+  path query compiles and runs a dataflow on the cluster, so QPS scales with
+  the cluster's compute — here, scaling the cluster up (or isolating these
+  queries on their own cluster) directly raises throughput and protects the
+  latency of any fast path traffic sharing the environment.
 
-Do not scale a serving cluster up in the hope of raising fast path QPS; the
-plateau lives in the coordinator, not the replica. Conversely, per-peek
-coordination overhead grows slightly with worker count, so an oversized
-serving cluster can even cost a little throughput on peek-heavy workloads.
+If your mix contains both, measure them separately: the standard path fraction
+will dominate cluster CPU, and its ceiling responds to cluster sizing, while
+the fast path fraction's ceiling does not.
 
 ### Self-managed: `environmentd` and `balancerd`
 
@@ -216,8 +198,8 @@ these components are sized and managed by Materialize.
   if it is pinned near its allocation while serving clusters idle, it is the
   ceiling. Give it dedicated headroom (several full cores; production serving
   deployments commonly run 8–16 CPUs) and note that coordinator scaling is
-  sublinear — at high statement rates, reducing per-statement work (prepared
-  statements, fast path shapes) buys more than adding cores.
+  sublinear — at high statement rates, reducing per-statement work (fast path
+  query shapes) often buys more than adding cores.
 - **`balancerd`** terminates TLS and proxies every byte of every session.
   Give it a real CPU allocation (at least 1 CPU per replica, 2+ replicas)
   and **do not set CPU limits** on it. Its memory scales with connection
@@ -330,7 +312,6 @@ while the source database is busy. When testing combined read + write load:
 Before trusting a load-test number:
 
 - [ ] Every serving query shows `Explained Query (fast path)` under `EXPLAIN`.
-- [ ] The client uses prepared statements (and the pooler preserves them).
 - [ ] Isolation level is set explicitly and recorded.
 - [ ] Concurrency was swept; you're reporting the knee, not an arbitrary point.
 - [ ] The generator is distributed, un-throttled, in-region, and never
