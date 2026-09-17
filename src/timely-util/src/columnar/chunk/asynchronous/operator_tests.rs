@@ -130,30 +130,93 @@ fn install(
     (input, token)
 }
 
-fn column(round: u64, rows: u64) -> Column<Update> {
-    let mut column = Column::default();
-    for row in 0..rows {
-        let mut key = (round * rows + row).wrapping_add(0x9e3779b97f4a7c15);
-        key = (key ^ (key >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        key = (key ^ (key >> 27)).wrapping_mul(0x94d049bb133111eb);
-        key ^= key >> 31;
-        let mut random = key;
-        let pattern: Vec<u8> = (0..475)
-            .map(|_| {
-                random ^= random << 13;
-                random ^= random >> 7;
-                random ^= random << 17;
-                random.to_le_bytes()[0]
-            })
-            .collect();
-        column.push_into(((key, pattern.repeat(4)), round, 1i64));
+/// One source's update generator.
+///
+/// `MZ_BENCH_KEY_SPACE` bounds the keys. A repeated key retracts its previous
+/// value alongside the new insert, the shape an upsert operator's feedback
+/// takes, so the trace only shrinks to the live keys once merges consolidate.
+struct Generator {
+    key_space: u64,
+    live: std::collections::BTreeMap<u64, u64>,
+    emitted: usize,
+}
+
+impl Generator {
+    fn new() -> Self {
+        Generator {
+            key_space: u64::try_from(parameter("MZ_BENCH_KEY_SPACE", 0)).unwrap(),
+            live: Default::default(),
+            emitted: 0,
+        }
     }
-    column
+
+    /// One round's updates at `time`, consolidated the way the batcher publishes them.
+    fn column(&mut self, time: u64, round: u64, rows: u64) -> Column<Update> {
+        let mut updates = Vec::new();
+        for row in 0..rows {
+            let seed = mix(round * rows + row);
+            let key = if self.key_space == 0 {
+                seed
+            } else {
+                seed % self.key_space
+            };
+            if self.key_space != 0 {
+                if let Some(previous) = self.live.insert(key, seed) {
+                    updates.push(((key, value(previous)), time, -1i64));
+                }
+            }
+            updates.push(((key, value(seed)), time, 1i64));
+        }
+        if self.key_space != 0 {
+            differential_dataflow::consolidation::consolidate_updates(&mut updates);
+        }
+        self.emitted += updates.len();
+        let mut column = Column::default();
+        for update in &updates {
+            column.push_into(update);
+        }
+        column
+    }
+
+    /// Rows a fully consolidated trace retains.
+    fn live_keys(&self) -> usize {
+        if self.key_space == 0 {
+            self.emitted
+        } else {
+            self.live.len()
+        }
+    }
+}
+
+fn mix(mut key: u64) -> u64 {
+    key = key.wrapping_add(0x9e3779b97f4a7c15);
+    key = (key ^ (key >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    key = (key ^ (key >> 27)).wrapping_mul(0x94d049bb133111eb);
+    key ^ (key >> 31)
+}
+
+fn value(mut random: u64) -> Vec<u8> {
+    let pattern: Vec<u8> = (0..475)
+        .map(|_| {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            random.to_le_bytes()[0]
+        })
+        .collect();
+    pattern.repeat(4)
 }
 
 /// Send one round, as a single message or split into `message_rows`-row messages.
-fn send_round(input: &mut InputPort, round: u64, rows: u64, message_rows: usize) {
-    let mut column = column(round, rows);
+fn send_round(
+    input: &mut InputPort,
+    generator: &mut Generator,
+    time: u64,
+    round: u64,
+    rows: u64,
+    message_rows: usize,
+) {
+    let mut column = generator.column(time, round, rows);
     if message_rows == 0 || message_rows >= usize::try_from(rows).unwrap() {
         input.send_batch(&mut column);
         return;
@@ -188,8 +251,33 @@ struct Measurement {
     elapsed: Duration,
     batches: usize,
     trace_batches: usize,
+    /// Non-empty trace batches and retained rows when the last input round published.
+    hydrated_batches: usize,
+    hydrated_rows: usize,
+    peaks: Peaks,
+    /// Per-round publication latency of the probe sources: worst and 99th percentile.
+    probe_max: Duration,
+    probe_p99: Duration,
     grants: usize,
     stats: PoolStats,
+}
+
+/// Maxima observed at worker steps during ingestion.
+#[derive(Default, Clone, Copy)]
+struct Peaks {
+    /// Non-empty trace batches across the worker's traces.
+    batches: usize,
+    /// Pool-resident bytes.
+    resident: u64,
+    /// Decoded bytes admitted under the shared read budget.
+    reserved: usize,
+}
+
+fn sample(observed: &Observed, pool: &Pool, budget: &ReadBudget, peaks: &mut Peaks) {
+    let batches = observed.traces.iter().map(|trace| trace().0).sum();
+    peaks.batches = peaks.batches.max(batches);
+    peaks.resident = peaks.resident.max(pool.stats().resident_bytes);
+    peaks.reserved = peaks.reserved.max(budget.reserved_bytes());
 }
 
 fn run(config: Config) -> Measurement {
@@ -198,6 +286,12 @@ fn run(config: Config) -> Measurement {
     let workers = parameter("MZ_BENCH_WORKERS", 1);
     let idle = Duration::from_millis(u64::try_from(parameter("MZ_BENCH_IDLE_MS", 0)).unwrap());
     assert!(idle.is_zero() || parameter("MZ_BENCH_INDEPENDENT", 0) == 0);
+    // Small sources sharing the worker with the configured ones. Their
+    // per-round publication latency shows how much a large source's
+    // maintenance stalls its neighbours.
+    let probe_sources = parameter("MZ_BENCH_PROBE_SOURCES", 0);
+    let probe_rows = u64::try_from(parameter("MZ_BENCH_PROBE_ROWS", 64)).unwrap();
+    assert!(probe_sources == 0 || parameter("MZ_BENCH_INDEPENDENT", 0) == 0);
     assert!(workers > 0 && config.sources > 0 && config.burst > 0);
     assert!(config.rounds > 0 && config.rows > 0);
     let mut timely_config = timely::Config::process(workers);
@@ -249,7 +343,11 @@ fn run(config: Config) -> Measurement {
     );
     let pool = Pool::new().unwrap();
     pool.set_spill_threads(parameter("MZ_BENCH_SPILL_THREADS", 0));
+    pool.set_runtime_reads(parameter("MZ_BENCH_TOKIO_READS", 0) != 0);
     pool.set_budget(config.pool_bytes);
+    pool.set_read_delay(Duration::from_micros(
+        u64::try_from(parameter("MZ_BENCH_READ_DELAY_US", 0)).unwrap(),
+    ));
     let worker_pool = pool.clone();
     let budget =
         ReadBudget::new(u32::try_from(parameter("MZ_BENCH_READ_BYTES", 256 << 20)).unwrap());
@@ -268,7 +366,7 @@ fn run(config: Config) -> Measurement {
                 let observed = Rc::new(RefCell::new(Observed::default()));
                 let mut inputs = Vec::new();
                 let mut tokens = Vec::new();
-                for _ in 0..config.sources {
+                for _ in 0..config.sources + probe_sources {
                     let probe = ProbeHandle::new();
                     dataflows.push(worker.next_dataflow_index());
                     let (input, token) = worker.dataflow(|scope| {
@@ -285,12 +383,20 @@ fn run(config: Config) -> Measurement {
                     probes.push(probe);
                 }
                 barrier.wait();
+                let mut generators: Vec<Generator> = (0..config.sources + probe_sources)
+                    .map(|_| Generator::new())
+                    .collect();
+                let mut peaks = Peaks::default();
+                let mut probe_latencies: Vec<Duration> = Vec::new();
                 let start = Instant::now();
                 if parameter("MZ_BENCH_INDEPENDENT", 0) != 0 {
                     let mut rounds = vec![0; config.sources];
                     while rounds.iter().any(|round| *round < config.rounds) {
-                        for ((input, probe), round) in
-                            inputs.iter_mut().zip_eq(&probes).zip_eq(&mut rounds)
+                        for (((input, probe), round), generator) in inputs
+                            .iter_mut()
+                            .zip_eq(&probes)
+                            .zip_eq(&mut rounds)
+                            .zip_eq(&mut generators)
                         {
                             while *round < config.rounds {
                                 let required =
@@ -298,35 +404,72 @@ fn run(config: Config) -> Measurement {
                                 if probe.less_than(&required) {
                                     break;
                                 }
-                                input.send_batch(&mut column(*round, config.rows));
+                                input.send_batch(&mut generator.column(
+                                    *round,
+                                    *round,
+                                    config.rows,
+                                ));
                                 *round += 1;
                                 input.advance_to(*round);
                             }
                         }
                         worker.step();
                         std::thread::yield_now();
+                        sample(&observed.borrow(), &pool, &budget, &mut peaks);
                         check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
                     }
                 } else {
                     let message_rows = parameter("MZ_BENCH_MESSAGE_ROWS", 0);
                     let tick_steps = parameter("MZ_BENCH_TICK_STEPS", 0);
+                    // The first `snapshot_rounds` rounds share timestamp zero and
+                    // no frontier advance separates them, the shape a source's
+                    // initial snapshot presents to the arranger.
+                    let snapshot_rounds =
+                        u64::try_from(parameter("MZ_BENCH_SNAPSHOT_ROUNDS", 0)).unwrap();
                     for round in 0..config.rounds {
-                        for input in &mut inputs {
-                            send_round(input, round, config.rows, message_rows);
-                            input.advance_to(round + 1);
+                        let time = if round < snapshot_rounds { 0 } else { round };
+                        let advance = round + 1 > snapshot_rounds;
+                        for (index, (input, generator)) in
+                            inputs.iter_mut().zip_eq(&mut generators).enumerate()
+                        {
+                            let rows = if index < config.sources {
+                                config.rows
+                            } else {
+                                probe_rows
+                            };
+                            send_round(input, generator, time, round, rows, message_rows);
+                            if advance {
+                                input.advance_to(round + 1);
+                            }
                         }
                         // Activations per input tick, independent of wall-clock
                         // speed. Both spines receive one exertion turn per step.
                         for _ in 0..tick_steps {
                             worker.step();
+                            sample(&observed.borrow(), &pool, &budget, &mut peaks);
                             check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
                         }
-                        if usize::try_from(round + 1).unwrap() % config.burst == 0 {
+                        if advance && usize::try_from(round + 1).unwrap() % config.burst == 0 {
+                            let round_start = Instant::now();
+                            let mut probe_latency = None;
                             worker.step();
                             while probes.iter().any(|probe| probe.less_than(&(round + 1))) {
+                                if probe_latency.is_none()
+                                    && probe_sources > 0
+                                    && probes[config.sources..]
+                                        .iter()
+                                        .all(|probe| !probe.less_than(&(round + 1)))
+                                {
+                                    probe_latency = Some(round_start.elapsed());
+                                }
                                 worker.step();
                                 std::thread::yield_now();
+                                sample(&observed.borrow(), &pool, &budget, &mut peaks);
                                 check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
+                            }
+                            if probe_sources > 0 {
+                                probe_latencies
+                                    .push(probe_latency.unwrap_or_else(|| round_start.elapsed()));
                             }
                             let idle_start = Instant::now();
                             while idle_start.elapsed() < idle {
@@ -340,9 +483,16 @@ fn run(config: Config) -> Measurement {
                 while probes.iter().any(|probe| probe.less_than(&config.rounds)) {
                     worker.step();
                     std::thread::yield_now();
+                    sample(&observed.borrow(), &pool, &budget, &mut peaks);
                     check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
                 }
                 let hydrated = start.elapsed();
+                let (hydrated_batches, hydrated_rows) = observed
+                    .borrow()
+                    .traces
+                    .iter()
+                    .map(|trace| trace())
+                    .fold((0, 0), |sum, next| (sum.0 + next.0, sum.1 + next.1));
                 let ingestion_grants = grants.load(Ordering::Relaxed);
                 // Optional consolidation is funded by input frontier advances, so
                 // the drain keeps ticking the inputs the way a live source does.
@@ -389,19 +539,32 @@ fn run(config: Config) -> Measurement {
                 let observed = observed.borrow();
                 assert_eq!(
                     observed.batches.iter().sum::<usize>(),
-                    usize::try_from(config.rounds * config.rows).unwrap() * config.sources
+                    generators.iter().map(|g| g.emitted).sum::<usize>()
                 );
                 let mut trace_batches = 0;
-                for trace in &observed.traces {
+                for (trace, generator) in observed.traces.iter().zip_eq(&generators) {
                     let (batches, rows) = trace();
                     trace_batches += batches;
-                    assert_eq!(rows, usize::try_from(config.rounds * config.rows).unwrap());
+                    assert_eq!(rows, generator.live_keys());
                 }
+                probe_latencies.sort();
+                let probe_max: Duration =
+                    probe_latencies.iter().max().map_or(Duration::ZERO, |d| *d);
+                let p99_index = probe_latencies.len().saturating_sub(1) * 99 / 100;
+                let probe_p99: Duration = probe_latencies
+                    .iter()
+                    .nth(p99_index)
+                    .map_or(Duration::ZERO, |d| *d);
                 let result = Measurement {
                     hydrated,
                     elapsed,
                     batches: observed.batches.len(),
                     trace_batches,
+                    hydrated_batches,
+                    hydrated_rows,
+                    peaks,
+                    probe_max,
+                    probe_p99,
                     grants: ingestion_grants,
                     stats: pool.stats(),
                 };
@@ -436,6 +599,13 @@ fn run(config: Config) -> Measurement {
         result.hydrated = result.hydrated.max(next.hydrated);
         result.batches += next.batches;
         result.trace_batches += next.trace_batches;
+        result.hydrated_batches += next.hydrated_batches;
+        result.hydrated_rows += next.hydrated_rows;
+        result.peaks.batches += next.peaks.batches;
+        result.peaks.resident = result.peaks.resident.max(next.peaks.resident);
+        result.peaks.reserved = result.peaks.reserved.max(next.peaks.reserved);
+        result.probe_max = result.probe_max.max(next.probe_max);
+        result.probe_p99 = result.probe_p99.max(next.probe_p99);
         result.grants = result.grants.max(next.grants);
     }
     result.stats = pool.stats();
@@ -512,7 +682,23 @@ fn operator_microbench() {
                     }
                 }
                 eprintln!(
-                    "OPERATOR trace_batches={} workers={} idle_ms={} tick_steps={} message_rows={} grants={} sample={sample} async={asynchronous} burst={burst} sources={} rows={} pool={} direct={} ms={} hydrated_ms={} batches={} inserts={} bytes={} reads={}",
+                    "OPERATOR spill_threads={} tokio_reads={} spill_reads={} probe_sources={} probe_rows={} read_delay_us={} probe_max_ms={} probe_p99_ms={} key_space={} snapshot_rounds={} unfunded={} hydrated_batches={} hydrated_rows={} peak_batches={} peak_resident={} peak_reserved={} trace_batches={} workers={} idle_ms={} tick_steps={} message_rows={} grants={} sample={sample} async={asynchronous} burst={burst} sources={} rows={} pool={} direct={} ms={} hydrated_ms={} batches={} inserts={} bytes={} reads={}",
+                    parameter("MZ_BENCH_SPILL_THREADS", 0),
+                    parameter("MZ_BENCH_TOKIO_READS", 0),
+                    m.stats.spill_reads,
+                    parameter("MZ_BENCH_PROBE_SOURCES", 0),
+                    parameter("MZ_BENCH_PROBE_ROWS", 64),
+                    parameter("MZ_BENCH_READ_DELAY_US", 0),
+                    m.probe_max.as_millis(),
+                    m.probe_p99.as_millis(),
+                    parameter("MZ_BENCH_KEY_SPACE", 0),
+                    parameter("MZ_BENCH_SNAPSHOT_ROUNDS", 0),
+                    std::env::var_os("MZ_BENCH_UNFUNDED").is_some(),
+                    m.hydrated_batches,
+                    m.hydrated_rows,
+                    m.peaks.batches,
+                    m.peaks.resident,
+                    m.peaks.reserved,
                     m.trace_batches,
                     parameter("MZ_BENCH_WORKERS", 1),
                     parameter("MZ_BENCH_IDLE_MS", 0),

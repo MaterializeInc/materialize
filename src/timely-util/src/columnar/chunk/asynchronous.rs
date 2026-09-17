@@ -136,7 +136,12 @@ where
             // A read completion resumes the existing allowance; only a spine with
             // no maintenance in flight asks policy for another. No trace borrow
             // may cross an await: reader compaction can change the same spine.
-            let exertion = if upper.is_empty() {
+            // Test fixtures compare against unbounded consolidation on an open input.
+            #[cfg(test)]
+            let unfunded = std::env::var_os("MZ_BENCH_UNFUNDED").is_some();
+            #[cfg(not(test))]
+            let unfunded = false;
+            let exertion = if upper.is_empty() || unfunded {
                 Exertion::Idle
             } else {
                 Exertion::Funded
