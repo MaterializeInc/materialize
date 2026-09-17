@@ -232,7 +232,7 @@ impl Coordinator {
         {
             let entry = entry.trim();
             if !entry.is_empty() && !CURATED.iter().any(|d| d.name == entry) {
-                debug!(
+                warn!(
                     name = entry,
                     "disabled_metric_sinks entry matches no curated definition"
                 );
