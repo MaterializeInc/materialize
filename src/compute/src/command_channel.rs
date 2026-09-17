@@ -22,12 +22,18 @@
 //! compute protocol the command belongs to, allowing workers to recognize client reconnects that
 //! require a reconciliation.
 //!
-//! The channel uses a two-hop structure copied from storage's command sequencer: producers tag
-//! commands with a per-producer index, worker 0 fixes one definitive order and assigns a global
-//! index, and receivers restore that order. Timely channels do not guarantee that they preserve
-//! the order of their inputs, so the explicit indexing is required for correctness.
+//! The channel optionally also carries storage-internal commands, for
+//! clusters that host storage objects alongside compute objects. Both command kinds are sequenced
+//! through a single lane, so all workers observe one consistent interleaving and therefore
+//! construct all dataflows, compute and storage alike, in the same order. Unlike compute commands,
+//! storage-internal commands may be injected from any worker (e.g. by health operators triggering
+//! a suspend-and-restart), so the channel uses a two-hop structure copied from storage's command
+//! sequencer: producers tag commands with a per-producer index, worker 0 fixes one definitive
+//! order and assigns a global index, and receivers restore that order.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 
@@ -35,13 +41,27 @@ use itertools::Itertools;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
+use mz_storage::internal_control::InternalStorageCommand;
 use mz_timely_util::scope_label::ScopeExt;
+use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
-use timely::scheduling::SyncActivator;
+use timely::scheduling::{Activator, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use uuid::Uuid;
+
+#[cfg(test)]
+mod tests;
+
+/// A command in the unified command lane.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum UnifiedCommand {
+    /// A compute command, tagged with the client nonce.
+    Compute(ComputeCommand, Uuid),
+    /// A storage-internal command.
+    Storage(InternalStorageCommand),
+}
 
 /// A sender pushing compute commands onto the command channel.
 pub struct Sender {
@@ -66,7 +86,7 @@ impl Sender {
 
 /// A receiver reading commands from the command channel.
 pub struct Receiver {
-    rx: mpsc::Receiver<(ComputeCommand, Uuid)>,
+    rx: mpsc::Receiver<UnifiedCommand>,
 }
 
 impl Receiver {
@@ -74,7 +94,7 @@ impl Receiver {
     ///
     /// This returns `None` when there are currently no commands but there might be commands again
     /// in the future.
-    pub fn try_recv(&self) -> Option<(ComputeCommand, Uuid)> {
+    pub fn try_recv(&self) -> Option<UnifiedCommand> {
         match self.rx.try_recv() {
             Ok(msg) => Some(msg),
             Err(TryRecvError::Empty) => None,
@@ -85,8 +105,23 @@ impl Receiver {
     }
 }
 
+/// Per-worker storage-side inputs to the command channel.
+///
+/// Created by the host before rendering the channel. The sending half of `rx` and the filled
+/// `activator_slot` together back the guest's `InternalCommandSender`.
+pub struct StorageLaneInput {
+    /// Receiver for storage-internal commands injected on this worker.
+    pub rx: mpsc::Receiver<InternalStorageCommand>,
+    /// Slot the channel fills with an activator for the source operator, so sends wake the
+    /// dataflow.
+    pub activator_slot: Rc<RefCell<Option<Activator>>>,
+}
+
 /// Render the command channel dataflow.
-pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
+pub fn render(
+    timely_worker: &mut TimelyWorker,
+    storage_input: Option<StorageLaneInput>,
+) -> (Sender, Receiver) {
     let (input_tx, input_rx) = mpsc::channel();
     let (output_tx, output_rx) = mpsc::channel();
     let activator = Arc::new(Mutex::new(None));
@@ -98,7 +133,7 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
             let peers = scope.peers();
 
-            // Create a stream of commands received from this worker's input queue.
+            // Create a stream of commands received from this worker's input queues.
             //
             // The output commands are tagged by worker ID and a per-producer command index,
             // allowing the sequencer to restore their correct relative order.
@@ -106,9 +141,14 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
                 let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
                 *activator.lock().expect("poisoned") = Some(sync_activator);
 
+                if let Some(input) = &storage_input {
+                    let act = scope.activator_for(info.address);
+                    *input.activator_slot.borrow_mut() = Some(act);
+                }
+
                 let worker_id = scope.index();
                 let mut cmd_index = 0_u64;
-                let capability = Some(cap);
+                let mut capability = Some(cap);
 
                 move |output| {
                     let Some(cap) = &capability else {
@@ -117,15 +157,59 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
                     let mut session = output.session(cap);
 
-                    while let Ok((cmd, nonce)) = input_rx.try_recv() {
-                        if worker_id == 0 {
-                            session.give((worker_id, cmd_index, (cmd, nonce)));
-                            cmd_index += 1;
-                        } else {
-                            // Non-leader workers only receive `UpdateConfiguration` commands
-                            // from the controller and must drop them to not sequence duplicates.
-                            assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                    let mut compute_disconnected = false;
+                    loop {
+                        match input_rx.try_recv() {
+                            Ok((cmd, nonce)) if worker_id == 0 => {
+                                session.give((
+                                    worker_id,
+                                    cmd_index,
+                                    UnifiedCommand::Compute(cmd, nonce),
+                                ));
+                                cmd_index += 1;
+                            }
+                            Ok((cmd, _nonce)) => {
+                                // Non-leader workers only receive `UpdateConfiguration` commands
+                                // from the controller and must drop them to not sequence
+                                // duplicates.
+                                assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                            }
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Disconnected) => {
+                                compute_disconnected = true;
+                                break;
+                            }
                         }
+                    }
+
+                    let mut storage_disconnected = true;
+                    if let Some(input) = &storage_input {
+                        storage_disconnected = false;
+                        loop {
+                            match input.rx.try_recv() {
+                                Ok(cmd) => {
+                                    session.give((
+                                        worker_id,
+                                        cmd_index,
+                                        UnifiedCommand::Storage(cmd),
+                                    ));
+                                    cmd_index += 1;
+                                }
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => {
+                                    storage_disconnected = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    drop(session);
+
+                    // Once every sender is gone no further commands can arrive, so release the
+                    // capability to let the dataflow shut down.
+                    if compute_disconnected && storage_disconnected {
+                        capability = None;
                     }
                 }
             });
@@ -143,7 +227,7 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
                     // For each producer, keep an ordered list of pending commands, as well as the
                     // index of the next command.
-                    let mut pending: Vec<(BTreeMap<u64, (ComputeCommand, Uuid)>, u64)> =
+                    let mut pending: Vec<(BTreeMap<u64, UnifiedCommand>, u64)> =
                         vec![(BTreeMap::new(), 0); peers];
 
                     move |(input, frontier), output| {
@@ -175,9 +259,9 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
                                 .first_key_value()
                                 .is_some_and(|(i, _)| i == next_idx)
                             {
-                                let (_, (cmd, nonce)) = commands.pop_first().unwrap();
+                                let (_, cmd) = commands.pop_first().unwrap();
                                 for (target, part) in split_command(cmd, peers) {
-                                    session.give((target, global_index, (part, nonce)));
+                                    session.give((target, global_index, part));
                                 }
 
                                 *next_idx += 1;
@@ -246,16 +330,16 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
 /// Split the given command into one part per target worker.
 ///
-/// `CreateDataflow` commands are partitioned among the workers. Every other command is replicated
-/// to all workers.
+/// Compute `CreateDataflow` commands are partitioned among the workers. Every other command is
+/// replicated to all workers.
 fn split_command(
-    command: ComputeCommand,
+    command: UnifiedCommand,
     parts: usize,
-) -> impl Iterator<Item = (usize, ComputeCommand)> {
+) -> impl Iterator<Item = (usize, UnifiedCommand)> {
     use itertools::Either;
 
     let commands = match command {
-        ComputeCommand::CreateDataflow(dataflow) => {
+        UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), nonce) => {
             let dataflow = *dataflow;
 
             // A list of descriptions of objects for each part to build.
@@ -290,7 +374,9 @@ fn split_command(
                     time_dependence: dataflow.time_dependence.clone(),
                 })
                 .map(Box::new)
-                .map(ComputeCommand::CreateDataflow);
+                .map(move |dataflow| {
+                    UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), nonce)
+                });
             Either::Left(commands)
         }
         command => {
