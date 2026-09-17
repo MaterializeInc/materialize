@@ -93,7 +93,7 @@ impl CastTemplate {
     /// Builds a template from a builder of the erroring cast.
     ///
     /// Under [`CastFailureMode::NullFallback`] the template emits the same
-    /// stages with each one that could error wrapped in [`TryCast`], so a
+    /// stages with each one that could error wrapped in `TryCast`, so a
     /// failure at any stage yields NULL. A stage that cannot error is emitted as
     /// is, so a cast that cannot fail plans exactly as `CAST` does and keeps its
     /// nullability. That requires the builder to apply only unary functions to its
@@ -1548,12 +1548,22 @@ pub fn plan_coerce_with_failure_mode<'a>(
 
         LiteralRecord(exprs) => {
             let arity = exprs.len();
-            let coercions = match coerce_to {
-                SqlScalarType::Record { fields, .. } if fields.len() == arity => fields
-                    .iter()
-                    .map(|(_name, ty)| &ty.scalar_type)
-                    .cloned()
-                    .collect(),
+            // Under `NullFallback` the target field types are not pushed into
+            // the literal. Fields are typed on their own, so every field
+            // conversion happens inside the record cast that follows, where
+            // the `TryCast` wrapper covers it, and a bad field yields NULL for
+            // the whole record rather than a record with a NULL field. This
+            // mirrors how `plan_cast` treats collection constructors.
+            let coercions = match (coerce_to, mode) {
+                (SqlScalarType::Record { fields, .. }, CastFailureMode::Error)
+                    if fields.len() == arity =>
+                {
+                    fields
+                        .iter()
+                        .map(|(_name, ty)| &ty.scalar_type)
+                        .cloned()
+                        .collect()
+                }
                 _ => vec![SqlScalarType::String; exprs.len()],
             };
             let mut out = vec![];

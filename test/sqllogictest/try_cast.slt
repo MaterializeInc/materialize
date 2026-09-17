@@ -95,6 +95,13 @@ SELECT TRY_CAST(ROW(100000, 'a') AS rec2)::text, TRY_CAST(ROW(1, 'a') AS rec8)::
 ----
 NULL (1,a)
 
+# The same holds when the fields are untyped literals, which are typed on
+# their own rather than coerced to the record's field types.
+query TT
+SELECT TRY_CAST(ROW('100000', 'a') AS rec2)::text, TRY_CAST(ROW('1', 'a') AS rec8)::text
+----
+NULL (1,a)
+
 # Because the literal is typed on its own, an empty collection literal needs
 # its own type annotation.
 statement error cannot determine type of empty array
