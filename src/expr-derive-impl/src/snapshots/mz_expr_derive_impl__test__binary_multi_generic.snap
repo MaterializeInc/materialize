@@ -63,6 +63,28 @@ impl std::fmt::Display for MultiGeneric {
 }
 impl crate::func::FuncName for MultiGeneric {
     const NAME: &'static str = stringify!(multi_generic);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(sqlname = \"multi_generic\",)] fn multi_generic<'a, A, B>(a: DatumList<'a, A>, b: DatumList<'a, B>,) -> Option<B>",
+        signature: "fn(DatumList<'a, A>, DatumList<'a, B>) -> Option<B>",
+        body_fingerprint: 4726381389472009124u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                DatumList<'static, Datum<'static>>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                DatumList<'static, Datum<'static>>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn multi_generic<'a, A, B>(a: DatumList<'a, A>, b: DatumList<'a, B>) -> Option<B> {
     unimplemented!()

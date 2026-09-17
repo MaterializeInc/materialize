@@ -210,9 +210,12 @@ impl std::fmt::Display for LirId {
 /// Version of the stable LIR serialization format.
 ///
 /// Bump this when the serialized representation of [`LirRelationExpr`] or
-/// anything it transitively contains changes. The schema snapshot test in
-/// `tests/lir_schema.rs` enforces that the traced schema matches the
-/// checked-in `tests/snapshots/lir_v{LIR_VERSION}.json`.
+/// anything it transitively contains changes, or when a scalar function's
+/// declared properties change. Two snapshot tests key off it: the schema
+/// snapshot in `tests/lir_schema.rs` against
+/// `tests/snapshots/lir_v{LIR_VERSION}.json`, and the function property
+/// registry in `tests/func_registry.rs` against
+/// `tests/snapshots/func_registry_v{LIR_VERSION}.json`.
 pub const LIR_VERSION: u64 = 1;
 
 pub use constant_rows_serde::ConstantRows;
