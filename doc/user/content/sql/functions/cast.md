@@ -27,8 +27,8 @@ The following special syntax is permitted if _val_ is a string literal:
 `cast` returns the value with the type specified by the _type_ parameter.
 
 `try_cast` returns the value with the type specified by the _type_ parameter,
-or `NULL` if the conversion fails. Its result is always nullable, even when the
-value being converted is not.
+or `NULL` if the conversion fails. Its result is nullable whenever the
+conversion can fail, even when the value being converted is not.
 
 ## Details
 

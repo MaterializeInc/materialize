@@ -130,6 +130,21 @@ impl<E: Eval> LazyUnaryFunc for TryCast<E> {
     }
 }
 
+impl<E: Eval> UnaryFunc<E> {
+    /// Wraps `inner` in [`TryCast`] if it could error, so that its errors
+    /// become NULL. A function that cannot error has nothing to fall back
+    /// from and is returned as is, keeping its nullability.
+    pub fn try_cast(inner: UnaryFunc<E>) -> UnaryFunc<E> {
+        if inner.could_error() {
+            UnaryFunc::TryCast(TryCast {
+                inner: Box::new(inner),
+            })
+        } else {
+            inner
+        }
+    }
+}
+
 impl<E> TryCast<E> {
     /// Rebuilds this function with any expressions stored in `inner` converted
     /// to `E2`.

@@ -17,7 +17,7 @@ use std::sync::LazyLock;
 use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
 use mz_expr::func::variadic::{JsonbBuildObject, RecordCreate};
-use mz_expr::func::{CastArrayToJsonb, CastListToJsonb, TryCast};
+use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_expr::{CastFailureMode, func};
 use mz_ore::soft_panic_or_log;
 use mz_repr::{
@@ -93,8 +93,10 @@ impl CastTemplate {
     /// Builds a template from a builder of the erroring cast.
     ///
     /// Under [`CastFailureMode::NullFallback`] the template emits the same
-    /// stages with each wrapped in [`TryCast`], so a failure at any stage yields
-    /// NULL. That requires the builder to apply only unary functions to its
+    /// stages with each one that could error wrapped in [`TryCast`], so a
+    /// failure at any stage yields NULL. A stage that cannot error is emitted as
+    /// is, so a cast that cannot fail plans exactly as `CAST` does and keeps its
+    /// nullability. That requires the builder to apply only unary functions to its
     /// input, which [`extract_unary_stages_for_try_cast`] verifies; a builder of any other shape
     /// yields `None` under `NullFallback` and must use
     /// [`CastTemplate::strict_only`] instead.
@@ -114,9 +116,7 @@ impl CastTemplate {
                     let stages = extract_unary_stages_for_try_cast(from_ty, cast)?;
                     Some(Box::new(move |mut expr: HirScalarExpr| {
                         for stage in stages {
-                            expr = expr.call_unary(UnaryFunc::TryCast(TryCast {
-                                inner: Box::new(stage),
-                            }));
+                            expr = expr.call_unary(UnaryFunc::try_cast(stage));
                         }
                         expr
                     }))
