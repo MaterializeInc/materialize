@@ -811,6 +811,7 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
+mz_builtin_indexes
 mz_builtin_materialized_views
 mz_builtin_sources
 mz_builtin_tables

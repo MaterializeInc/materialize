@@ -2840,6 +2840,63 @@ fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
     Ok(())
 }
 
+/// A time-valued `REFRESH` option. The two plan identically and differ only in
+/// how errors name them.
+#[derive(Clone, Copy, Debug)]
+pub enum RefreshTimeOption {
+    At,
+    AlignedTo,
+}
+
+impl RefreshTimeOption {
+    fn name(self) -> &'static str {
+        match self {
+            RefreshTimeOption::At => "REFRESH AT",
+            RefreshTimeOption::AlignedTo => "REFRESH EVERY ... ALIGNED TO",
+        }
+    }
+
+    fn not_a_constant(self) -> PlanError {
+        match self {
+            RefreshTimeOption::At => PlanError::InvalidRefreshAt,
+            RefreshTimeOption::AlignedTo => PlanError::InvalidRefreshEveryAlignedTo,
+        }
+    }
+}
+
+/// Plans a `REFRESH AT` time or `ALIGNED TO` alignment down to the `mz_timestamp`
+/// it denotes.
+///
+/// Purification has already replaced `mz_now()` with a literal, so the expression
+/// must fold to a constant, which must also be renderable as a `timestamptz`.
+pub fn plan_refresh_time(
+    scx: &StatementContext,
+    option: RefreshTimeOption,
+    mut time: Expr<Aug>,
+) -> Result<Timestamp, PlanError> {
+    transform_ast::transform(scx, &mut time)?;
+    let ecx = &ExprContext {
+        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+        name: option.name(),
+        scope: &Scope::empty(),
+        relation_type: &SqlRelationType::empty(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    let hir = plan_expr(ecx, &time)?.cast_to(
+        ecx,
+        CastContext::Assignment,
+        &SqlScalarType::MzTimestamp,
+    )?;
+    let timestamp = hir
+        .into_literal_mz_timestamp()
+        .ok_or_else(|| option.not_a_constant())?;
+    check_refresh_time(option.name(), timestamp)?;
+    Ok(timestamp)
+}
+
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
@@ -2927,28 +2984,8 @@ pub fn plan_create_materialized_view(
                     soft_panic_or_log!("REFRESH AT CREATION should have been purified away");
                     bail_internal!("REFRESH AT CREATION should have been purified away")
                 }
-                RefreshOptionValue::At(RefreshAtOptionValue { mut time }) => {
-                    transform_ast::transform(scx, &mut time)?; // Desugar the expression
-                    let ecx = &ExprContext {
-                        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
-                        name: "REFRESH AT",
-                        scope: &Scope::empty(),
-                        relation_type: &SqlRelationType::empty(),
-                        allow_aggregates: false,
-                        allow_subqueries: false,
-                        allow_parameters: false,
-                        allow_windows: false,
-                    };
-                    let hir = plan_expr(ecx, &time)?.cast_to(
-                        ecx,
-                        CastContext::Assignment,
-                        &SqlScalarType::MzTimestamp,
-                    )?;
-                    // (mz_now was purified away to a literal earlier)
-                    let timestamp = hir
-                        .into_literal_mz_timestamp()
-                        .ok_or_else(|| PlanError::InvalidRefreshAt)?;
-                    check_refresh_time("REFRESH AT", timestamp)?;
+                RefreshOptionValue::At(RefreshAtOptionValue { time }) => {
+                    let timestamp = plan_refresh_time(scx, RefreshTimeOption::At, time)?;
                     refresh_schedule.ats.push(timestamp);
                 }
                 RefreshOptionValue::Every(RefreshEveryOptionValue {
@@ -2980,7 +3017,7 @@ pub fn plan_create_materialized_view(
                         sql_bail!("REFRESH interval must be at least 1 ms")
                     }
 
-                    let mut aligned_to = match aligned_to {
+                    let aligned_to = match aligned_to {
                         Some(aligned_to) => aligned_to,
                         None => {
                             soft_panic_or_log!(
@@ -2991,34 +3028,12 @@ pub fn plan_create_materialized_view(
                             )
                         }
                     };
-
-                    // Desugar the `aligned_to` expression
-                    transform_ast::transform(scx, &mut aligned_to)?;
-
-                    let ecx = &ExprContext {
-                        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
-                        name: "REFRESH EVERY ... ALIGNED TO",
-                        scope: &Scope::empty(),
-                        relation_type: &SqlRelationType::empty(),
-                        allow_aggregates: false,
-                        allow_subqueries: false,
-                        allow_parameters: false,
-                        allow_windows: false,
-                    };
-                    let aligned_to_hir = plan_expr(ecx, &aligned_to)?.cast_to(
-                        ecx,
-                        CastContext::Assignment,
-                        &SqlScalarType::MzTimestamp,
-                    )?;
-                    // (mz_now was purified away to a literal earlier)
-                    let aligned_to_const = aligned_to_hir
-                        .into_literal_mz_timestamp()
-                        .ok_or_else(|| PlanError::InvalidRefreshEveryAlignedTo)?;
-                    check_refresh_time("REFRESH EVERY ... ALIGNED TO", aligned_to_const)?;
+                    let aligned_to =
+                        plan_refresh_time(scx, RefreshTimeOption::AlignedTo, aligned_to)?;
 
                     refresh_schedule.everies.push(RefreshEvery {
                         interval,
-                        aligned_to: aligned_to_const,
+                        aligned_to,
                     });
                 }
             }

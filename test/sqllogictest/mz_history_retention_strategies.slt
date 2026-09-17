@@ -1,0 +1,264 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_history_retention_strategies. The
+# relation is a BuiltinMaterializedView over the RETAIN HISTORY option of each
+# item's create_sql in mz_internal.mz_catalog_raw, plus the retained-metrics
+# flags of the builtins: see MZ_HISTORY_RETENTION_STRATEGIES in
+# src/catalog/src/builtin/mz_internal.rs. test/sqllogictest/retain_history.slt
+# covers ALTER ... RETAIN HISTORY on indexes and sources in more depth.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_index_options = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unlimited_retain_history = true
+----
+COMPLETE 0
+
+# --- Schema -------------------------------------------------------------------
+
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_history_retention_strategies' AND s.name = 'mz_internal'
+ORDER BY c.position
+----
+id  text  false
+strategy  text  false
+value  jsonb  false
+
+# --- Exactly the objects with a compaction window have one row each ----------
+
+# Tables, sources other than logs, indexes and materialized views, builtins and
+# introspection indexes included.
+query T
+SELECT DISTINCT o.type
+FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_catalog.mz_objects o ON o.id = h.id
+ORDER BY o.type
+----
+index
+materialized-view
+source
+table
+
+query I
+SELECT count(*)
+FROM mz_catalog.mz_sources s
+JOIN mz_internal.mz_history_retention_strategies h ON h.id = s.id
+WHERE s.type = 'log'
+----
+0
+
+query I
+SELECT count(*)
+FROM (
+    SELECT id FROM mz_catalog.mz_tables
+    UNION ALL SELECT id FROM mz_catalog.mz_sources WHERE type <> 'log'
+    UNION ALL SELECT id FROM mz_catalog.mz_indexes
+    UNION ALL SELECT id FROM mz_catalog.mz_materialized_views
+) o
+FULL OUTER JOIN mz_internal.mz_history_retention_strategies h ON h.id = o.id
+WHERE o.id IS NULL OR h.id IS NULL
+----
+0
+
+query I
+SELECT count(*)
+FROM (SELECT id FROM mz_internal.mz_history_retention_strategies GROUP BY id HAVING count(*) > 1)
+----
+0
+
+query T
+SELECT DISTINCT strategy FROM mz_internal.mz_history_retention_strategies
+----
+FOR
+
+# --- Builtins -----------------------------------------------------------------
+
+# A retained-metrics builtin table, source or index follows metrics_retention,
+# whose default is 30 days. Any other builtin has the default window, including
+# a materialized view whose definition carries the retained-metrics flag, which
+# has no effect on materialized views (see MZ_HISTORY_RETENTION_STRATEGIES).
+query TT
+SELECT o.name, h.value
+FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_catalog.mz_objects o ON o.id = h.id
+WHERE
+    o.id LIKE 's%' AND
+    o.name IN (
+        'mz_cluster_replica_sizes',
+        'mz_source_statistics_raw',
+        'mz_cluster_replicas_ind',
+        'mz_tables',
+        'mz_columns',
+        'mz_catalog_raw',
+        'mz_views',
+        'mz_object_dependencies_ind'
+    )
+ORDER BY o.name
+----
+mz_catalog_raw  1000
+mz_cluster_replica_sizes  2592000000
+mz_cluster_replicas_ind  2592000000
+mz_columns  1000
+mz_object_dependencies_ind  2592000000
+mz_source_statistics_raw  2592000000
+mz_tables  1000
+mz_views  1000
+
+# Introspection source indexes have the default window.
+query T
+SELECT DISTINCT value FROM mz_internal.mz_history_retention_strategies WHERE id LIKE 'si%'
+----
+1000
+
+# A metrics_retention override applies to the retained-metrics builtins. The
+# persisted form of the override is `<count> <unit>`.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET metrics_retention = '90min'
+----
+COMPLETE 0
+
+query TT
+SELECT o.name, h.value
+FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_catalog.mz_objects o ON o.id = h.id
+WHERE o.id LIKE 's%' AND o.name IN ('mz_cluster_replica_sizes', 'mz_columns')
+ORDER BY o.name
+----
+mz_cluster_replica_sizes  5400000
+mz_columns  1000
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET metrics_retention
+----
+COMPLETE 0
+
+query T
+SELECT h.value
+FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_catalog.mz_objects o ON o.id = h.id
+WHERE o.id LIKE 's%' AND o.name = 'mz_cluster_replica_sizes'
+----
+2592000000
+
+# --- User objects -------------------------------------------------------------
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+CREATE TABLE t_1h (a int) WITH (RETAIN HISTORY FOR '1h')
+
+statement ok
+CREATE TABLE t_interval (a int) WITH (RETAIN HISTORY FOR INTERVAL '2' DAY)
+
+# A bare number is a number of seconds.
+statement ok
+CREATE TABLE t_seconds (a int) WITH (RETAIN HISTORY FOR 90)
+
+# A zero window disables compaction, which reads as the maximum timestamp.
+statement ok
+CREATE TABLE t_unlimited (a int) WITH (RETAIN HISTORY FOR '0')
+
+statement ok
+CREATE SOURCE lg IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '1m')
+
+statement ok
+CREATE VIEW v AS SELECT a FROM t
+
+statement ok
+CREATE INDEX v_idx ON v (a) WITH (RETAIN HISTORY FOR '2m')
+
+statement ok
+CREATE INDEX t_idx ON t (a)
+
+statement ok
+CREATE MATERIALIZED VIEW mv WITH (RETAIN HISTORY FOR '3m') AS SELECT a FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv_default AS SELECT a FROM t
+
+statement ok
+CREATE TEMPORARY TABLE tmp (a int)
+
+# Views have no compaction window, so `v` has no row.
+query TT
+SELECT o.name, h.value
+FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_catalog.mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%'
+ORDER BY o.name
+----
+lg  60000
+mv  180000
+mv_default  1000
+t  1000
+t_1h  3600000
+t_idx  1000
+t_interval  172800000
+t_seconds  90000
+t_unlimited  18446744073709551615
+tmp  1000
+v_idx  120000
+
+# --- ALTER ... RETAIN HISTORY rewrites create_sql, and so the row -------------
+
+statement ok
+ALTER TABLE t SET (RETAIN HISTORY FOR '10m')
+
+statement ok
+ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY FOR '4m')
+
+statement ok
+ALTER INDEX v_idx RESET (RETAIN HISTORY)
+
+statement ok
+ALTER SOURCE lg RESET (RETAIN HISTORY)
+
+query TT
+SELECT o.name, h.value
+FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_catalog.mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%' AND o.name IN ('t', 'mv', 'v_idx', 'lg')
+ORDER BY o.name
+----
+lg  1000
+mv  240000
+t  600000
+v_idx  1000
+
+# --- Retraction ---------------------------------------------------------------
+
+statement ok
+DROP TABLE t CASCADE
+
+query T
+SELECT o.name
+FROM mz_internal.mz_history_retention_strategies h
+JOIN mz_catalog.mz_objects o ON o.id = h.id
+WHERE o.id LIKE 'u%'
+ORDER BY o.name
+----
+lg
+t_1h
+t_interval
+t_seconds
+t_unlimited
+tmp
