@@ -153,6 +153,14 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
                         input.for_each(|_time, data| {
                             for (producer, index, cmd) in data.drain(..) {
+                                // An index below the next expected one was already sequenced, so
+                                // it would sit in the pending map forever, wedging this producer.
+                                let next_idx = pending[producer].1;
+                                mz_ore::soft_assert_or_log!(
+                                    index >= next_idx,
+                                    "command index {index} from producer {producer} \
+                                     stepped back behind {next_idx}"
+                                );
                                 let duplicate = pending[producer].0.insert(index, cmd);
                                 mz_ore::soft_assert_or_log!(
                                     duplicate.is_none(),
@@ -199,6 +207,12 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
                     move |(input, _frontier)| {
                         input.for_each(|_time, data| {
                             for (_target, index, cmd) in data.drain(..) {
+                                // An index below the next expected one was already delivered, so
+                                // it would sit in the pending map forever, wedging the channel.
+                                mz_ore::soft_assert_or_log!(
+                                    index >= next_idx,
+                                    "global command index {index} stepped back behind {next_idx}"
+                                );
                                 let duplicate = pending.insert(index, cmd);
                                 mz_ore::soft_assert_or_log!(
                                     duplicate.is_none(),
