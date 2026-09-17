@@ -3353,6 +3353,7 @@ class FlipFlagsAction(Action):
             "balancerd_sigterm_listen_wait",
             "balancerd_inject_proxy_protocol_header_http",
             "balancerd_max_connections",
+            "balancerd_pre_resolved_timeout",
             "balancerd_log_filter",
             "balancerd_opentelemetry_filter",
             "balancerd_log_filter_defaults",

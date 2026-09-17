@@ -55,6 +55,21 @@ pub const MAX_CONNECTIONS: Config<u32> = Config::new(
     ParameterScope::Environment,
 );
 
+/// How long a client has to reach a resolved backend before the connection is closed.
+///
+/// Everything before resolution is paced by the client: the TLS handshake, the startup
+/// sequence, and any credential exchange. The connection limit counts a connection from the
+/// moment it is accepted, so without a deadline a client that connects and then says nothing
+/// holds a slot indefinitely. One absolute deadline covers the whole phase, so a client cannot
+/// extend its stay by completing one step at a time. Zero disables it.
+pub const PRE_RESOLVED_TIMEOUT: Config<Duration> = Config::new(
+    "balancerd_pre_resolved_timeout",
+    Duration::from_secs(30),
+    "How long a client has to complete the TLS handshake, the startup sequence and any credential \
+    exchange before the connection is closed. Zero disables the deadline.",
+    ParameterScope::Environment,
+);
+
 /// Sets the filter to apply to stderr logging.
 pub const LOGGING_FILTER: Config<&str> = Config::new(
     "balancerd_log_filter",
@@ -116,6 +131,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
         .add(&MAX_CONNECTIONS)
+        .add(&PRE_RESOLVED_TIMEOUT)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
         .add(&LOGGING_FILTER_DEFAULTS)
@@ -146,6 +162,11 @@ pub(crate) fn set_defaults(
             config_updates.add_dynamic(
                 MAX_CONNECTIONS.name(),
                 mz_dyncfg::ConfigVal::U32(u32::from_str(v)?),
+            )
+        } else if k.as_str() == PRE_RESOLVED_TIMEOUT.name() {
+            config_updates.add_dynamic(
+                PRE_RESOLVED_TIMEOUT.name(),
+                mz_dyncfg::ConfigVal::Duration(humantime::parse_duration(v)?),
             )
         } else {
             return Err(anyhow!("Invalid default config value {k}"));
