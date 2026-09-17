@@ -41,8 +41,8 @@ use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{assert_contains, assert_err, assert_ok, task};
 use mz_pgwire_common::{
-    FrontendStartupMessage, MAX_FORWARDED_STARTUP_FRAME_SIZE, MAX_STARTUP_FRAME_SIZE,
-    REJECT_ENCRYPTION, VERSION_3,
+    ACCEPT_SSL_ENCRYPTION, FrontendStartupMessage, MAX_FORWARDED_STARTUP_FRAME_SIZE,
+    MAX_STARTUP_FRAME_SIZE, REJECT_ENCRYPTION, VERSION_3,
 };
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
@@ -421,10 +421,23 @@ async fn test_balancer() {
 /// not. These tests never get far enough to be forwarded anywhere.
 async fn start_balancer() -> SocketAddr {
     // Unreachable upstream: these tests never get far enough to be forwarded.
-    start_balancer_to("127.0.0.1:1".to_string()).await
+    start_balancer_to("127.0.0.1:1".to_string(), vec![], None)
+        .await
+        .pgwire
 }
 
-async fn start_balancer_to(upstream: String) -> SocketAddr {
+/// Listen addresses of a started balancerd.
+struct Balancer {
+    pgwire: SocketAddr,
+    internal_http: SocketAddr,
+}
+
+/// Starts a balancerd proxying to `upstream`, with the given dyncfg defaults.
+async fn start_balancer_to(
+    upstream: String,
+    default_configs: Vec<(String, String)>,
+    tls: Option<TlsCertConfig>,
+) -> Balancer {
     let unreachable = upstream;
     let (_reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
     let balancer_cfg = BalancerConfig::new(
@@ -435,9 +448,7 @@ async fn start_balancer_to(upstream: String) -> SocketAddr {
         CancellationResolver::Static(unreachable.clone()),
         BalancerResolver::Static(unreachable.clone()),
         unreachable.clone(),
-        // No certificate. These connections are rejected or parked before TLS
-        // would have come into it.
-        None,
+        tls,
         false,
         MetricsRegistry::new(),
         Box::pin(reload_rx),
@@ -448,14 +459,49 @@ async fn start_balancer_to(upstream: String) -> SocketAddr {
         None,
         None,
         TracingHandle::disabled(),
-        vec![],
+        default_configs,
     );
     let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
-    let pgwire_addr = balancer_server.pgwire.0.local_addr();
+    let addrs = Balancer {
+        pgwire: balancer_server.pgwire.0.local_addr(),
+        internal_http: balancer_server.internal_http.0.local_addr(),
+    };
     task::spawn(|| "balancer", async {
         balancer_server.serve().await.unwrap();
     });
-    pgwire_addr
+    addrs
+}
+
+/// Narrows a metric to the pgwire listener's series.
+const PGWIRE: Option<&str> = Some("source=\"pgwire\"");
+
+/// The current value of a metric, optionally narrowed to lines carrying `label`.
+async fn metric_value(internal_http: SocketAddr, name: &str, label: Option<&str>) -> Option<f64> {
+    let body = reqwest::get(format!("http://{internal_http}/metrics"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    body.lines()
+        .find(|line| line.starts_with(name) && label.is_none_or(|l| line.contains(l)))
+        .and_then(|line| line.rsplit(' ').next())
+        .map(|value| value.parse().unwrap())
+}
+
+/// Waits for `name` to read `expected`. The server-side guard is dropped shortly after the
+/// client observes the close, so the metric can lag the assertion by a moment.
+async fn assert_metric(internal_http: SocketAddr, name: &str, label: Option<&str>, expected: f64) {
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry_async(|_| async {
+            match metric_value(internal_http, name, label).await {
+                Some(value) if value == expected => Ok(()),
+                other => Err(format!("{name} is {other:?}, expected {expected}")),
+            }
+        })
+        .await
+        .unwrap();
 }
 
 /// Opens a pgwire connection, writes a startup frame-length header declaring
@@ -467,10 +513,11 @@ async fn startup_header_only(addr: SocketAddr, frame_len: u32) -> TcpStream {
     stream
 }
 
-/// Whether balancerd closed the connection rather than waiting for a body.
-async fn was_closed(stream: &mut TcpStream) -> bool {
+/// Whether balancerd closed the connection within `within`, rather than
+/// continuing to wait on us.
+async fn was_closed(stream: &mut TcpStream, within: Duration) -> bool {
     let mut byte = [0u8; 1];
-    match tokio::time::timeout(Duration::from_secs(10), stream.read(&mut byte)).await {
+    match tokio::time::timeout(within, stream.read(&mut byte)).await {
         // Still waiting on us, so the frame was accepted.
         Err(_elapsed) => false,
         Ok(Ok(0)) => true,
@@ -492,7 +539,7 @@ async fn test_pgwire_oversized_startup_frame_is_rejected() {
     for declared in [budget + 1, protocol_max] {
         let mut stream = startup_header_only(pgwire_addr, declared).await;
         assert!(
-            was_closed(&mut stream).await,
+            was_closed(&mut stream, Duration::from_secs(10)).await,
             "balancerd accepted a {declared} byte startup frame and waited for the body",
         );
     }
@@ -501,7 +548,7 @@ async fn test_pgwire_oversized_startup_frame_is_rejected() {
     // its job rather than balancerd refusing everything.
     let mut stream = startup_header_only(pgwire_addr, budget).await;
     assert!(
-        !was_closed(&mut stream).await,
+        !was_closed(&mut stream, Duration::from_secs(10)).await,
         "balancerd rejected a startup frame at the budget",
     );
 
@@ -530,7 +577,9 @@ async fn test_forwarded_startup_frame_fits_downstream_budget() {
     // Stands in for environmentd, only to capture the frame balancerd sends it.
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
-    let pgwire_addr = start_balancer_to(upstream_addr.to_string()).await;
+    let pgwire_addr = start_balancer_to(upstream_addr.to_string(), vec![], None)
+        .await
+        .pgwire;
 
     // The largest startup frame balancerd will accept from a client. `user` is required to get
     // past `run`, and `options` pads the rest out to exactly the budget.
@@ -571,5 +620,127 @@ async fn test_forwarded_startup_frame_fits_downstream_budget() {
         "balancerd forwarded a {forwarded_len} byte startup frame, over the \
          {MAX_FORWARDED_STARTUP_FRAME_SIZE} byte budget downstream allows. If a parameter was \
          added to the forwarded set, raise FORWARDED_STARTUP_PARAM_ALLOWANCE to match.",
+    );
+}
+
+/// The connection limit counts a connection from the moment it is accepted, and the pre-resolved
+/// deadline releases connections that never resolve, so the limit cannot be held shut by clients
+/// that connect and say nothing. The metrics tell the two phases apart.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_connection_limit_covers_unresolved_connections() {
+    const ACTIVE: &str = "mz_balancer_pre_resolved_connection_active";
+    const TIMEOUTS: &str = "mz_balancer_pre_resolved_timeout_total";
+    const REJECTED: &str = "mz_balancer_connection_rejected_total";
+    let balancer = start_balancer_to(
+        "127.0.0.1:1".to_string(),
+        vec![
+            ("balancerd_max_connections".into(), "1".into()),
+            ("balancerd_pre_resolved_timeout".into(), "5s".into()),
+        ],
+        None,
+    )
+    .await;
+
+    // One connection parks before resolving and holds the only slot.
+    let mut held = startup_header_only(balancer.pgwire, 1 << 10).await;
+    assert!(
+        !was_closed(&mut held, Duration::from_millis(500)).await,
+        "the first connection should be admitted and waited on",
+    );
+    assert_metric(balancer.internal_http, ACTIVE, PGWIRE, 1.0).await;
+
+    // The next is refused at accept while the limit is reached. The window is well inside the
+    // deadline on purpose: a wider one would also be satisfied by a connection that was wrongly
+    // admitted and then closed by its own deadline, so the test would pass with no limit at all.
+    let mut refused = startup_header_only(balancer.pgwire, 1 << 10).await;
+    assert!(
+        was_closed(&mut refused, Duration::from_secs(2)).await,
+        "a connection beyond the limit should be refused at accept, not left to the deadline",
+    );
+    assert_metric(balancer.internal_http, REJECTED, None, 1.0).await;
+
+    // The deadline reclaims the slot, so the limit is not a one-way door.
+    assert!(
+        was_closed(&mut held, Duration::from_secs(20)).await,
+        "the held connection should be closed once the pre-resolved deadline passes",
+    );
+    assert_metric(balancer.internal_http, ACTIVE, PGWIRE, 0.0).await;
+    assert_metric(balancer.internal_http, TIMEOUTS, PGWIRE, 1.0).await;
+    let mut after = startup_header_only(balancer.pgwire, 1 << 10).await;
+    assert!(
+        !was_closed(&mut after, Duration::from_millis(500)).await,
+        "capacity should be available again once the deadline reclaimed the slot",
+    );
+}
+
+/// A client that asks for TLS and then never starts the handshake is closed by the pre-resolved
+/// deadline. The handshake is the one step of the phase that is neither a frame read nor part of
+/// resolution, so it has to be covered explicitly rather than by the reads around it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_stalled_tls_handshake_is_closed() {
+    const TIMEOUTS: &str = "mz_balancer_pre_resolved_timeout_total";
+    let ca = Ca::new_root("test ca").unwrap();
+    let (cert, key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let balancer = start_balancer_to(
+        "127.0.0.1:1".to_string(),
+        vec![("balancerd_pre_resolved_timeout".into(), "5s".into())],
+        Some(TlsCertConfig { cert, key }),
+    )
+    .await;
+
+    let mut stream = TcpStream::connect(balancer.pgwire).await.unwrap();
+    let mut ssl_request = BytesMut::new();
+    FrontendStartupMessage::SslRequest
+        .encode(&mut ssl_request)
+        .unwrap();
+    stream.write_all(&ssl_request).await.unwrap();
+
+    // balancerd agrees to TLS and waits for a ClientHello that never comes.
+    let mut reply = [0u8; 1];
+    stream.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply, [ACCEPT_SSL_ENCRYPTION]);
+
+    assert!(
+        was_closed(&mut stream, Duration::from_secs(20)).await,
+        "a connection stalled mid-handshake should be closed once the deadline passes",
+    );
+    assert_metric(balancer.internal_http, TIMEOUTS, PGWIRE, 1.0).await;
+}
+
+/// A client that is rejected during startup is told why, rather than having the connection
+/// closed under it. `FramedConn::send` only enqueues, so these paths are only correct if the
+/// rejection is flushed before the connection is dropped.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_startup_rejection_reaches_the_client() {
+    let pgwire_addr = start_balancer().await;
+
+    // An unsupported protocol version, which balancerd answers and then stops on.
+    let mut frame = BytesMut::new();
+    FrontendStartupMessage::Startup {
+        version: VERSION_3 + 1,
+        params: BTreeMap::from([("user".to_string(), "mz".to_string())]),
+    }
+    .encode(&mut frame)
+    .unwrap();
+
+    let mut stream = TcpStream::connect(pgwire_addr).await.unwrap();
+    stream.write_all(&frame).await.unwrap();
+    stream.flush().await.unwrap();
+
+    let mut tag = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut tag))
+        .await
+        .expect("balancerd should answer rather than leave the client waiting")
+        .unwrap();
+    assert_eq!(
+        (read, tag),
+        (1, [b'E']),
+        "expected an ErrorResponse, got {read} bytes; a rejection that is not flushed reaches \
+         the client as a bare close",
     );
 }

@@ -801,7 +801,9 @@ def workflow_max_connections(c: Composition) -> None:
                 sql_cursor(c)
                 raise RuntimeError("connect() expected to fail")
             except OperationalError as e:
-                assert "balancer is at its connection limit" in str(e), e
+                # The limit is applied at accept, before the client has sent anything, so
+                # the refusal is a closed socket rather than a pgwire error message.
+                assert "server closed the connection unexpectedly" in str(e), e
 
             # The established connection is unaffected by the rejection.
             cursor.execute("SELECT 'abc'")
