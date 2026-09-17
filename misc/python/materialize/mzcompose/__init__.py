@@ -293,6 +293,19 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_columnar_merge_batcher", "true", ["true", "false"]
         ),
+        # Varied rather than defaulted on, unlike the two flags above. This one
+        # takes precedence over `enable_columnar_merge_batcher`, so defaulting it
+        # on would take the columnar arm's coverage away rather than add to it.
+        VariableSystemParameter(
+            "enable_column_paged_batcher", "false", ["true", "false"]
+        ),
+        # Varied for the same reason, and because it reaches past the arrange
+        # sites: it installs the process buffer pool and enables the column pager
+        # the MV sink's correction buffer and storage's upsert stash draw from, so
+        # defaulting it on would move several subsystems' memory behavior at once.
+        VariableSystemParameter(
+            "enable_column_paged_batcher_spill", "false", ["true", "false"]
+        ),
         # On by default so CI exercises the columnar accumulable diff layout, which
         # is off in production while it earns trust.
         VariableSystemParameter(
@@ -679,8 +692,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
-    "enable_column_paged_batcher",
-    "enable_column_paged_batcher_spill",
     "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
