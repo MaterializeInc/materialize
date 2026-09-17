@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use anyhow::bail;
 use k8s_controller::TraceMetadata;
 use k8s_openapi::{
@@ -36,6 +38,7 @@ use tracing::{trace, warn};
 use crate::{
     Error,
     k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
+    reconcile::{self, Outcome},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -45,6 +48,11 @@ use mz_cloud_resources::crd::{
 };
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
+
+/// The `controller` label that this controller's metrics and Kubernetes events
+/// carry. Shared by `Observed` and by every step this controller records, which
+/// must agree for a pass and its steps to line up.
+pub const CONTROLLER_NAME: &str = "balancer";
 
 #[derive(Clone)]
 pub struct Config {
@@ -69,11 +77,18 @@ pub struct Config {
 
 pub struct Context {
     config: Config,
+    metrics: Arc<reconcile::Metrics>,
 }
 
 impl Context {
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new(config: Config, metrics: Arc<reconcile::Metrics>) -> Self {
+        Self { config, metrics }
+    }
+
+    /// Starts recording the step named `step` of this controller's
+    /// reconciliation.
+    fn step(&self, step: &'static str) -> reconcile::Step<'_> {
+        self.metrics.step(CONTROLLER_NAME, step)
     }
 
     async fn sync_deployment_status(
@@ -562,6 +577,7 @@ impl k8s_controller::Context for Context {
         _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         if balancer.status.is_none() {
+            let step = self.step("initialize_status");
             let balancer_api: Api<Balancer> =
                 Api::namespaced(client.clone(), &balancer.meta().namespace.clone().unwrap());
             let mut new_balancer = balancer.clone();
@@ -573,6 +589,7 @@ impl k8s_controller::Context for Context {
                     &new_balancer,
                 )
                 .await?;
+            step.finish(Outcome::Applied);
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
             return Ok(None);
@@ -583,21 +600,31 @@ impl k8s_controller::Context for Context {
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
 
+        let step = self.step("certificate");
         if let Some(external_certificate) = self.create_external_certificate_object(balancer)? {
             trace!("creating new balancerd external certificate");
             apply_resource(&certificate_api, &external_certificate).await?;
+            step.finish(Outcome::Applied);
+        } else {
+            step.finish(Outcome::Skipped);
         }
 
+        let step = self.step("deployment");
         let deployment = self.create_deployment_object(balancer)?;
         self.fix_deployment(&deployment_api, &deployment).await?;
         trace!("creating new balancerd deployment");
         apply_resource(&deployment_api, &deployment).await?;
+        step.finish(Outcome::Applied);
 
+        let step = self.step("service");
         let service = self.create_service_object(balancer);
         trace!("creating new balancerd service");
         apply_resource(&service_api, &service).await?;
+        step.finish(Outcome::Applied);
 
+        let step = self.step("sync_status");
         self.sync_deployment_status(&client, balancer).await?;
+        step.finish(Outcome::Applied);
 
         Ok(None)
     }
