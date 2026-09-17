@@ -435,6 +435,10 @@ mod tests {
     /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
     #[mz_ore::test]
     fn test_compute_response_size() {
-        assert_eq!(std::mem::size_of::<ComputeResponse>(), 112);
+        // Grew from 112 when `SubscribeBatch` gained the error a subscribe discarded under
+        // `IGNORE ERRORS`. The subscribe variant is the largest, so the field lands on the
+        // whole enum. Boxing it does not help: the variant is padded to the same width either
+        // way.
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 120);
     }
 }

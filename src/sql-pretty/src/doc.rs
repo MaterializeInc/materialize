@@ -930,6 +930,16 @@ impl Pretty {
         } else {
             query
         };
+        if !v.options.is_empty() {
+            doc = intersperse_line_nest([
+                doc,
+                bracket(
+                    "WITH (",
+                    comma_separate(|o| self.doc_display_pass(o), &v.options),
+                    ")",
+                ),
+            ]);
+        }
         if let Some(as_of) = &v.as_of {
             doc = intersperse_line_nest([doc, self.doc_as_of(as_of)]);
         }

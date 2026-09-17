@@ -311,9 +311,9 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
 
 /// An option on a `SELECT` statement.
 ///
-/// Distinct from [`SelectOptionName`], which attaches to an inner `Select` and carries
-/// planner hints. These options describe the statement as a whole, so a subquery cannot
-/// carry them.
+/// Distinct from [`crate::ast::SelectOptionName`], which attaches to an inner `Select` and
+/// carries planner hints. These options describe the statement as a whole, so a subquery
+/// cannot carry them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SelectStatementOptionName {
     IgnoreErrors,
