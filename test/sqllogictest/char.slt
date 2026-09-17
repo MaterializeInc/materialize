@@ -143,6 +143,40 @@ SELECT (-1)::int4::"char"::int4;
 ----
 -1
 
+# integer <-> "char" is explicit only, so it does not apply on assignment.
+
+statement ok
+CREATE TABLE char_sink (c "char");
+
+statement error column "c" is of type "char" but expression is of type integer
+INSERT INTO char_sink VALUES (97::int4);
+
+statement error column "c" is of type "char" but expression is of type integer
+INSERT INTO char_sink SELECT 97;
+
+statement ok
+INSERT INTO char_sink VALUES (97::int4::"char"), ('97'::text);
+
+query TI rowsort
+SELECT c, c::int4 FROM char_sink;
+----
+9
+57
+a
+97
+
+statement ok
+CREATE TABLE int_sink (i int4);
+
+statement error column "i" is of type integer but expression is of type "char"
+INSERT INTO int_sink VALUES ('1'::"char");
+
+statement ok
+DROP TABLE char_sink;
+
+statement ok
+DROP TABLE int_sink;
+
 query I
 SELECT ''::"char"::int4;
 ----

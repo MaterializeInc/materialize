@@ -1555,20 +1555,21 @@ pub fn plan_cast(
             .map_err(|e| e.into_plan_error(ecx.name.into()))
     };
 
-    // A cast registered directly between the two types wins. Otherwise,
-    // string-like types get special handling modeled on PostgreSQL, which
-    // falls back to converting through the text representation when one side
-    // is string-like. Unlike PostgreSQL, the fallback also applies when a
-    // direct cast exists but is not permitted in this cast context.
+    // A cast registered directly between the two types wins, even when it is
+    // not permitted in this cast context. Only pairs with no registered cast
+    // at all get the PostgreSQL fallback for string-like types, which converts
+    // through the text representation when exactly one side is string-like.
     // See: https://github.com/postgres/postgres/blob/6b04abdfc/
     //   src/backend/parser/parse_coerce.c#L3205-L3223
     let direct = get_cast(ecx, ccx, &from, to);
+    let registered = VALID_CASTS.contains_key(&((&from).into(), to.into()));
     let from_category = TypeCategory::from_type(&from);
     let to_category = TypeCategory::from_type(to);
     // The `from != String` and `to != String` guards ensure we don't just replay
     // the `get_cast` that just failed.
     match direct {
         Ok(cast) => Ok(cast(expr)),
+        Err(e) if registered => Err(e.into_plan_error(ecx.name.into())),
         Err(_)
             if from_category == TypeCategory::String
                 && to_category != TypeCategory::String
