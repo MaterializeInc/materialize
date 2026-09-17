@@ -227,7 +227,9 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 /// Emits the source-derived members of the generated `FuncName` impl: the
 /// `SQLFUNC` const (declaration text, types-only signature, body
 /// fingerprint) and `sqlfunc_input_types`, which yields the column types the
-/// function naturally consumes when every parameter type has one.
+/// function naturally consumes when every parameter type has one. Both exist
+/// only under mz-expr's `func-registry` feature, like the trait members they
+/// implement.
 ///
 /// Text comes from the token trees via [`render_tokens`], so formatting and
 /// comments do not affect it. `input_tys_raw` are the parameter types as
@@ -263,12 +265,14 @@ fn sqlfunc_source(
     let body_fingerprint = fnv1a64(render_tokens(&func.block.to_token_stream()).as_bytes());
     let probes: Vec<TokenStream> = input_tys.iter().flat_map(probe_column_types).collect();
     quote! {
+        #[cfg(feature = "func-registry")]
         const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
             decl: #decl,
             signature: #signature,
             body_fingerprint: #body_fingerprint,
         });
 
+        #[cfg(feature = "func-registry")]
         fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
             use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
             [#(#probes),*].into_iter().collect()

@@ -59,6 +59,7 @@ mod binary;
 mod encoding;
 pub(crate) mod format;
 pub(crate) mod impls;
+#[cfg(feature = "func-registry")]
 pub mod registry;
 mod unary;
 mod unmaterializable;
@@ -82,12 +83,14 @@ pub trait FuncName {
 
     /// The `#[sqlfunc]` declaration this function was generated from, or
     /// `None` for hand-written functions. Consumed by [`registry`].
+    #[cfg(feature = "func-registry")]
     const SQLFUNC: Option<SqlFuncSource> = None;
 
     /// The column types a `#[sqlfunc]` function naturally consumes, one per
     /// argument, when every parameter type maps to one. `None` for
     /// hand-written functions and for parameters typed as a bare `Datum`.
     /// Consumed by [`registry`] to probe the output type.
+    #[cfg(feature = "func-registry")]
     fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
         None
     }
@@ -98,6 +101,7 @@ pub trait FuncName {
 /// Comments and formatting are invisible to both fields, because they are
 /// derived from token streams. Helpers the body calls are not covered, so an
 /// unchanged fingerprint does not prove unchanged behavior.
+#[cfg(feature = "func-registry")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SqlFuncSource {
     /// The attribute arguments and the function signature, rendered as

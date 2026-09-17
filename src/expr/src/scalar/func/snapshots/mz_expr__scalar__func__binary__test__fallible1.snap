@@ -51,11 +51,13 @@ impl std::fmt::Display for Fallible1 {
 }
 impl crate::func::FuncName for Fallible1 {
     const NAME: &'static str = stringify!(fallible1);
+    #[cfg(feature = "func-registry")]
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(test = true)] fn fallible1(a: f32, b: f32) -> Result<f32, EvalError>",
         signature: "fn(f32, f32) -> Result<f32, EvalError>",
         body_fingerprint: 8368887150808413438u64,
     });
+    #[cfg(feature = "func-registry")]
     fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
         use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
         [

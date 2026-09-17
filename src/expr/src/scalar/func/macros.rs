@@ -234,6 +234,7 @@ macro_rules! derive_unary {
 
             /// The `#[sqlfunc]` source of this variant's function, `None` for
             /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
             pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
                 match self {
                     $(Self::$name(_) =>
@@ -242,6 +243,7 @@ macro_rules! derive_unary {
             }
 
             /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
             pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
                 match self {
                     $(Self::$name(_) =>
@@ -422,6 +424,7 @@ macro_rules! derive_variadic {
 
             /// The `#[sqlfunc]` source of this variant's function, `None` for
             /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
             pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
                 match self {
                     $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
@@ -429,6 +432,7 @@ macro_rules! derive_variadic {
             }
 
             /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
             pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
                 match self {
                     $(Self::$name(_) =>
@@ -575,6 +579,7 @@ macro_rules! derive_binary {
 
             /// The `#[sqlfunc]` source of this variant's function, `None` for
             /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
             pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
                 match self {
                     $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
@@ -582,6 +587,7 @@ macro_rules! derive_binary {
             }
 
             /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
             pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
                 match self {
                     $(Self::$name(_) =>

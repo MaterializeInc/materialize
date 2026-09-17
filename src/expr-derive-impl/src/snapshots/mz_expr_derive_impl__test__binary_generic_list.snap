@@ -89,11 +89,13 @@ impl std::fmt::Display for ListListConcat {
 }
 impl crate::func::FuncName for ListListConcat {
     const NAME: &'static str = stringify!(list_list_concat);
+    #[cfg(feature = "func-registry")]
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(is_infix_op = true, sqlname = \"||\", propagates_nulls = false, introduces_nulls = false,)] fn list_list_concat<'a, T>(a: Option<DatumList<'a, T>>, b: Option<DatumList<'a, T>>, temp_storage: &'a RowArena,) -> Option<DatumList<'a, T>>",
         signature: "fn(Option<DatumList<'a, T>>, Option<DatumList<'a, T>>) -> Option<DatumList<'a, T>>",
         body_fingerprint: 4726381389472009124u64,
     });
+    #[cfg(feature = "func-registry")]
     fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
         use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
         [

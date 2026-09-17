@@ -18,8 +18,10 @@
 //! serialized form.
 //!
 //! [`FuncRegistry::build`] records those properties for one representative
-//! instance of every variant, and `tests/func_registry.rs` compares the
-//! result against a checked-in snapshot per LIR version. For `#[sqlfunc]`
+//! instance of every variant, and `tests/func_registry.rs` in
+//! `mz-compute-types` compares the result against a checked-in snapshot per
+//! LIR version. The module exists only under the `func-registry` feature,
+//! which that test enables. Production builds carry none of it. For `#[sqlfunc]`
 //! functions the record also carries the declaration text, the types-only
 //! signature and a fingerprint of the function body, see [`SqlFuncSource`],
 //! and the output type is probed at the column types the parameter types
@@ -95,8 +97,8 @@ pub struct FuncRegistry {
 ///
 /// `sqlfunc_signature` is a property: the parameter and return types decide
 /// what a stored plan computes. The other two describe the source text and
-/// body, and the snapshot test in `tests/func_registry.rs` classifies changes
-/// to them as informational.
+/// body, and the snapshot test in `mz-compute-types` classifies changes to
+/// them as informational.
 #[derive(Debug, Serialize)]
 pub struct SourceProperties {
     pub sqlfunc_signature: Option<&'static str>,

@@ -12,8 +12,10 @@
 //! [`FuncRegistry::build`] records the declared properties of every
 //! `UnaryFunc`, `BinaryFunc` and `VariadicFunc` variant, and this test
 //! compares them against `tests/snapshots/func_registry_v{LIR_VERSION}.json`.
-//! It complements the LIR schema snapshot in `mz-compute-types`, which pins
-//! the serialized shape of these enums but not what the variants mean.
+//! It complements the LIR schema snapshot in `lir_schema.rs`, which pins the
+//! serialized shape of these enums but not what the variants mean. The
+//! registry lives in `mz-expr` behind its `func-registry` feature, which this
+//! crate's dev-dependency enables.
 //!
 //! A property change (null propagation, error behavior, monotonicity, output
 //! typing, an inverse or negation, and so on) changes what a stored plan
@@ -133,7 +135,7 @@ fn func_registry_snapshot() {
         panic!(
             "missing function registry snapshot '{path}'.\n\n\
              Generate it with:\n\n    \
-             REWRITE=1 cargo test -p mz-expr --test func_registry\n"
+             REWRITE=1 cargo test -p mz-compute-types --test func_registry\n"
         )
     });
     if expected == actual {
@@ -145,7 +147,7 @@ fn func_registry_snapshot() {
         "Full detail: diff '{path}' against the freshly built registry at\n\
          '{CURRENT_PATH}'.\n\n\
          Then regenerate the snapshot and review the diff:\n\n    \
-         REWRITE=1 cargo test -p mz-expr --test func_registry\n"
+         REWRITE=1 cargo test -p mz-compute-types --test func_registry\n"
     );
     if !properties.is_empty() {
         let implementations = if implementations.is_empty() {

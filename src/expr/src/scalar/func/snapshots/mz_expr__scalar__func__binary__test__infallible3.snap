@@ -51,11 +51,13 @@ impl std::fmt::Display for Infallible3 {
 }
 impl crate::func::FuncName for Infallible3 {
     const NAME: &'static str = stringify!(infallible3);
+    #[cfg(feature = "func-registry")]
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(test = true)] fn infallible3(a: f32, b: f32) -> Option<f32>",
         signature: "fn(f32, f32) -> Option<f32>",
         body_fingerprint: 6024937414198307004u64,
     });
+    #[cfg(feature = "func-registry")]
     fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
         use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
         [

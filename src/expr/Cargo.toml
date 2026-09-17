@@ -75,8 +75,7 @@ bincode.workspace = true
 criterion.workspace = true
 datadriven.workspace = true
 insta.workspace = true
-mz-compute-types = { path = "../compute-types" }
-mz-expr = { path = ".", features = ["proptest"] }
+mz-expr = { path = ".", features = ["func-registry", "proptest"] }
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-parser = { path = "../expr-parser" }
 mz-ore = { path = "../ore" }
@@ -92,3 +91,6 @@ prost-build.workspace = true
 [features]
 default = ["mz-build-tools/default"]
 proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest"]
+# The scalar function property registry, a development aid consumed by the
+# snapshot test in mz-compute-types. Off in production builds.
+func-registry = ["mz-ore/panic"]
