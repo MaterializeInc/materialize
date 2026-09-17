@@ -1,6 +1,6 @@
 ---
 title: "Load testing"
-description: "How to load test Materialize: what sits in the read critical path, how to build a trustworthy load generator, and how to reach the best throughput and latency."
+description: "How to load test Materialize: what sits in the read critical path, how to measure each component so latency is attributed correctly, and which levers to adjust based on what you find."
 menu:
   main:
     parent: serve-results
@@ -8,17 +8,15 @@ menu:
     name: "Load testing"
 ---
 
-This guide explains how to design a load test that measures what Materialize
-can actually do: what sits in the critical path of a query, which knobs move
-throughput and latency, and — just as importantly — how to build a load
-generator that doesn't become the bottleneck itself.
+This guide explains how to design a load test whose results you can trust:
+what sits in the critical path of a query, how to measure each hop so you can
+attribute latency to the component actually producing it, and which levers to
+adjust once the data tells you where the limit is.
 
-In our experience, the majority of disappointing load-test results are not
-produced by Materialize. They are produced by the test harness: an
-under-provisioned load generator, a CPU-throttled proxy, or an unindexed query
-compiling a new dataflow on every request.
-This guide helps you rule all of that out, so that whatever number you end up
-with is a number you can trust.
+A load-test result is a claim about a whole system — the client, the network,
+the proxy, the coordinator, and the cluster all sit between "query sent" and
+"result received". Rather than assuming any one of them is the bottleneck,
+instrument all of them and let the measurements decide.
 
 ## The read critical path
 
@@ -40,22 +38,13 @@ cluster replica      ── reads the result out of an
 back through environmentd → balancerd → client
 ```
 
-Two properties of this path shape everything else in this guide:
-
-1. **For well-indexed queries, per-query cost is dominated by coordination,
-   not computation.** A *fast path* query (see below) is answered by looking
-   up a key in an index the cluster already maintains — microseconds of
-   replica work. Most of the remaining per-query cost is protocol work in the
-   coordinator: parsing, planning, and timestamp selection. This is why the
-   biggest wins in this guide come from query and workload shape, not from
-   hardware.
-
-2. **The coordinator sequences all queries in the environment.** For fast
-   path workloads, throughput eventually plateaus at the rate the coordinator
-   can sequence statements, no matter how many serving clusters or client
-   connections you add. Past that plateau, additional concurrency only adds
-   queueing latency. (Standard path workloads usually saturate the serving
-   cluster first — see the sizing section below.)
+Every hop on this path can be the limiting factor, and each one leaves a
+different signature. The sections below cover, hop by hop, what to check and
+what the measurements mean. One property of the path is worth internalizing
+first: for a well-indexed (*fast path*) query, the replica's share of the work
+is a keyed lookup against state it already maintains — so when latency
+inflates under load, the added time is spent *somewhere* on this path, and
+the job of the load test is to find out where, not to guess.
 
 ### What you control
 
@@ -70,8 +59,7 @@ Two properties of this path shape everything else in this guide:
 | `balancerd` resources | managed for you | ✔ |
 
 Everything in the top section of the table applies identically to Cloud and
-self-managed deployments — and those levers are where most of the performance
-lives.
+self-managed deployments.
 
 ## Make every serving query a fast path query
 
@@ -86,8 +74,8 @@ Materialize executes a `SELECT` in one of two ways:
   runs it, returns the result, and tears it down. This is correct but orders
   of magnitude more expensive per query.
 
-A serving workload that is 90% fast path and 10% standard path will spend
-most of its cluster CPU on the 10%. Before load testing, verify **every**
+A serving workload that is 90% fast path and 10% standard path can easily
+spend most of its cluster CPU on the 10%. Before load testing, verify **every**
 query in your serving mix:
 
 ```mzsql
@@ -147,9 +135,8 @@ next query) obeys Little's law:
 throughput ≈ concurrent connections ÷ average latency
 ```
 
-Once you saturate the environment's statement pipeline, throughput stops
-rising — and every additional connection simply waits longer. The signature
-is unmistakable: doubling users leaves throughput flat while median latency
+Once any component on the path saturates, throughput stops rising — and
+every additional connection simply waits longer. The signature: doubling users leaves throughput flat while median latency
 doubles, and *every* query type inflates by the same amount regardless of its
 cost (because the wait happens in a shared queue before execution).
 
@@ -168,23 +155,23 @@ workload takes:
 
 - **Fast path workloads: size for state, not QPS.** Fast path lookups barely
   use the serving cluster — the arrangements are already maintained, and a
-  peek is a keyed read. In our testing, the same fast path workload measured
-  **identical throughput on clusters four times apart in size**, with the
-  larger replica nearly idle; the throughput plateau lived in the coordinator.
-  For these workloads, size the cluster for the **memory** to hold your
-  indexed views (watch sustained memory utilization) and for **hydration**
-  (rebuilding state after a restart or resize) — not for query throughput.
-  Per-peek coordination overhead even grows slightly with worker count, so an
-  oversized cluster can cost a little throughput on peek-heavy workloads.
+  peek is a keyed read. The diagnostic is replica utilization
+  (`mz_internal.mz_cluster_replica_utilization`): if throughput has plateaued
+  while the serving replica sits at low CPU, cluster size is not the limiting
+  factor, and scaling it will not help. For these workloads, size the cluster
+  for the **memory** to hold your indexed views (watch sustained memory
+  utilization) and for **hydration** (rebuilding state after a restart or
+  resize) — not for query throughput.
 - **Standard path workloads: cluster CPU is the throughput.** Every standard
   path query compiles and runs a dataflow on the cluster, so QPS scales with
   the cluster's compute — here, scaling the cluster up (or isolating these
   queries on their own cluster) directly raises throughput and protects the
   latency of any fast path traffic sharing the environment.
 
-If your mix contains both, measure them separately: the standard path fraction
-will dominate cluster CPU, and its ceiling responds to cluster sizing, while
-the fast path fraction's ceiling does not.
+If your mix contains both, measure them separately: the two fractions respond
+to different levers, and a blended number hides which one is limiting you. Use
+the replica-utilization check above to tell whether the cluster is the
+component under pressure.
 
 ### Self-managed: `environmentd` and `balancerd`
 
@@ -193,13 +180,12 @@ This section applies to self-managed deployments only. In Materialize Cloud,
 these components are sized and managed by Materialize.
 {{< /note >}}
 
-- **`environmentd`** hosts the coordinator, and its CPU is where fast path
-  throughput saturates. Watch `environmentd` container CPU during the test:
-  if it is pinned near its allocation while serving clusters idle, it is the
-  ceiling. Give it dedicated headroom (several full cores; production serving
-  deployments commonly run 8–16 CPUs) and note that coordinator scaling is
-  sublinear — at high statement rates, reducing per-statement work (fast path
-  query shapes) often buys more than adding cores.
+- **`environmentd`** hosts the coordinator, which every statement passes
+  through. Watch `environmentd` container CPU during the test: if it is
+  pinned near its allocation while serving clusters idle, it is the limiting
+  factor for that run — give it more headroom and re-measure. If it has
+  headroom while throughput has stopped rising, look elsewhere (client,
+  proxy, network) before adding cores.
 - **`balancerd`** terminates TLS and proxies every byte of every session.
   Give it a real CPU allocation (at least 1 CPU per replica, 2+ replicas)
   and **do not set CPU limits** on it. Its memory scales with connection
@@ -217,10 +203,10 @@ cAdvisor/Prometheus metrics), not at CPU usage.
 
 ## Build a load generator you can trust
 
-The load generator is the least glamorous part of the test and the most
-common source of wrong conclusions. The failure mode is always the same: the
-generator saturates, requests queue *inside the client*, and the queueing is
-reported as "database latency."
+The load generator is part of the system under test, whether you intend it
+to be or not. When a generator saturates, requests queue *inside the client*
+and the queueing is reported as "database latency" — so before attributing a
+number to Materialize, establish that the generator itself had headroom.
 
 - **Never CPU-limit the generator.** Kubernetes CPU limits and
   container-platform vCPU allocations (for example, Azure Container Apps
@@ -275,7 +261,7 @@ interactively.
 
 Alongside client metrics, record during every run:
 
-- `environmentd` CPU (self-managed) — the fast path ceiling indicator,
+- `environmentd` CPU (self-managed),
 - serving cluster CPU and memory (`mz_internal.mz_cluster_replica_utilization`),
 - `balancerd` CPU, memory, and restart count (self-managed),
 - the generator's own CPU and any throttling counters.
