@@ -3672,7 +3672,6 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_try_cast_wraps_every_stage_of_every_cast() {
         use mz_expr::UnaryFunc;
-        use mz_expr::func::TryCast;
         use mz_expr::visit::{Visit, VisitChildren};
         use mz_ore::collections::CollectionExt;
         use mz_repr::SqlScalarBaseType as B;
@@ -3830,16 +3829,12 @@ mod tests {
                         Ok(lenient) => {
                             let wrapped: Vec<UnaryFunc> = strict_funcs
                                 .iter()
-                                .map(|f| {
-                                    UnaryFunc::TryCast(TryCast {
-                                        inner: Box::new(f.clone()),
-                                    })
-                                })
+                                .map(|f| UnaryFunc::try_cast(f.clone()))
                                 .collect();
                             assert_eq!(
                                 unary_calls(&lenient),
                                 wrapped,
-                                "{source} to {to_name}: TRY_CAST must wrap every stage of CAST"
+                                "{source} to {to_name}: TRY_CAST must wrap every fallible stage of CAST"
                             );
                         }
                         Err(PlanError::TryCastUnsupported { .. }) => {

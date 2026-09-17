@@ -165,19 +165,17 @@ fn gen_leaf(u: &mut Unstructured, want: Ty, cols: &[Ty]) -> arbitrary::Result<Mi
     })
 }
 
-/// A cast as the planner emits it: strict, or, half the time, wrapped in
-/// `TryCast` the way `TRY_CAST` wraps every stage of a cast chain. The wrapper
-/// is strict in its argument and never errors, so it needs no special handling
-/// in the oracle; generating it checks that `reduce` treats it that way.
+/// A cast as the planner emits it: strict, or, half the time, as `TRY_CAST`
+/// would emit it, wrapped in `TryCast` when it could error. The wrapper is
+/// strict in its argument and never errors, so it needs no special handling in
+/// the oracle; generating it checks that `reduce` treats it that way.
 fn maybe_try_cast(
     u: &mut Unstructured,
     cast: impl Into<UnaryFunc>,
 ) -> arbitrary::Result<UnaryFunc> {
     let cast = cast.into();
     Ok(if bool::arbitrary(u)? {
-        UnaryFunc::TryCast(func::TryCast {
-            inner: Box::new(cast),
-        })
+        UnaryFunc::try_cast(cast)
     } else {
         cast
     })
