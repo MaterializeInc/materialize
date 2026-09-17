@@ -84,6 +84,7 @@ Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_repli
 - [Optimize hydration requirements](/clusters/optimize-hydration-requirements/)
 - [Autoscaling for hydration](/clusters/autoscaling/)
 - [Troubleshoot a cluster memory spike](/clusters/troubleshoot-clusters/memory-spike/)
+- [Troubleshoot a cluster CPU spike](/clusters/troubleshoot-clusters/cpu-troubleshooting/)
 
 ### Bug Fixes {#v26.42-bug-fixes}
 - Fixed `CREATE TABLE ... FROM SOURCE` and `ALTER SOURCE` connecting to a source's upstream system before checking the caller's privileges on that source, which let a role holding no privilege on the source read upstream schema, table, and column names out of the resulting purification errors; `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source plus schema `USAGE`, and `ALTER SOURCE` requires ownership.
