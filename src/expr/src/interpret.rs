@@ -1719,9 +1719,7 @@ mod tests {
                 cast.could_error(),
                 "{cast} never errors, so wrapping it is pointless"
             );
-            UnaryFunc::TryCast(TryCast {
-                inner: Box::new(cast.clone()),
-            })
+            UnaryFunc::try_cast(cast.clone())
         }));
         funcs
     }
