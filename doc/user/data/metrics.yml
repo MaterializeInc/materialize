@@ -774,6 +774,10 @@ metrics:
   - instance_id
   source: src/compute-client/src/metrics.rs
   visibility: internal
+- name: mz_compute_metric_sink_registration_retries_total
+  help: The number of times a metric sink failed to register its collector and scheduled a retry.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_peek_duration_seconds_bucket
   help: A histogram of peek durations since restart.
   labels:

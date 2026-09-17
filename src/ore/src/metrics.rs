@@ -307,25 +307,41 @@ impl MetricsRegistry {
     /// missing series rather than taking down the whole scrape. The contract is that a caller
     /// replacing a collector must drop the old handle before registering the new one: doing so
     /// unregisters the old descriptor id first, so the re-registration succeeds cleanly.
+    ///
+    /// A caller that expects such a collision should use
+    /// [`MetricsRegistry::try_register_collector_with_dropper`] instead.
     pub fn register_collector_with_dropper<C>(&self, collector: C) -> Box<dyn Any + Send + Sync>
     where
         C: 'static + prometheus::core::Collector + Clone + Send + Sync,
     {
-        match self.inner.register(Box::new(collector.clone())) {
-            Ok(()) => {
-                // `prometheus::Registry` is `Arc`-backed, so this clone is cheap and shares the
-                // same underlying registry the collector was registered into.
-                let registry = self.inner.clone();
-                Box::new(scopeguard::guard(collector, move |c| {
-                    let _ = registry.unregister(Box::new(c));
-                }))
-            }
-            Err(e) => {
+        self.try_register_collector_with_dropper(collector)
+            .unwrap_or_else(|e| {
                 crate::soft_panic_or_log!("collector already registered: {e}");
                 // Nothing was registered, so the handle must not unregister anything on drop.
                 Box::new(())
-            }
-        }
+            })
+    }
+
+    /// Like [`MetricsRegistry::register_collector_with_dropper`], but returns `Err` on a duplicate
+    /// descriptor id instead of soft-panicking.
+    ///
+    /// For callers that expect a transient collision, where a collector is re-registered before
+    /// its predecessor's teardown has dropped the old handle, and want to retry until the id frees
+    /// up. Nothing is registered on `Err`, so the caller may retry with the same collector.
+    pub fn try_register_collector_with_dropper<C>(
+        &self,
+        collector: C,
+    ) -> Result<Box<dyn Any + Send + Sync>, prometheus::Error>
+    where
+        C: 'static + prometheus::core::Collector + Clone + Send + Sync,
+    {
+        self.inner.register(Box::new(collector.clone()))?;
+        // `prometheus::Registry` is `Arc`-backed, so this clone is cheap and shares the same
+        // underlying registry the collector was registered into.
+        let registry = self.inner.clone();
+        Ok(Box::new(scopeguard::guard(collector, move |c| {
+            let _ = registry.unregister(Box::new(c));
+        })))
     }
 
     /// Registers a metric postprocessor.
@@ -1240,6 +1256,41 @@ mod tests {
         // Drop old before registering new, matching the required ordering.
         drop(handle);
         let handle = registry.register_collector_with_dropper(new);
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn try_register_errors_on_duplicate_then_succeeds_after_drop() {
+        use prometheus::IntGauge;
+
+        // The fallible variant reports the collision instead of soft-panicking, and the collision
+        // clears as soon as the incumbent's handle drops. This is the retry contract the metric
+        // sink operator leans on when a new incarnation races the old one's teardown.
+        let registry = MetricsRegistry::new();
+        let old = IntGauge::new("mz_test_try_register", "help").unwrap();
+        let new = IntGauge::new("mz_test_try_register", "help").unwrap();
+        let before = registry.gather().len();
+
+        let handle = registry
+            .try_register_collector_with_dropper(old)
+            .expect("first registration succeeds");
+        assert_eq!(registry.gather().len(), before + 1);
+
+        let err = registry
+            .try_register_collector_with_dropper(new.clone())
+            .err()
+            .expect("duplicate descriptor id is rejected");
+        assert!(matches!(err, prometheus::Error::AlreadyReg));
+        // The failed attempt registered nothing, so the incumbent is still the only series.
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle);
+        let handle = registry
+            .try_register_collector_with_dropper(new)
+            .expect("registration succeeds once the id is free");
         assert_eq!(registry.gather().len(), before + 1);
 
         drop(handle);
