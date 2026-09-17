@@ -54,9 +54,12 @@ source-level definite errors above.
 ## Solution proposal
 
 ```sql
-SELECT ...    WITH (IGNORE ERRORS);
-SUBSCRIBE ... WITH (IGNORE ERRORS);
+SELECT a FROM t ORDER BY a LIMIT 10 WITH (IGNORE ERRORS);
+SUBSCRIBE t WITH (IGNORE ERRORS);
 ```
+
+The option sits at the end of the statement, after `ORDER BY`, `LIMIT` and `OFFSET`
+and before `AS OF`, in the position `AS OF` already occupies relative to the query.
 
 ### Semantics
 
@@ -72,10 +75,16 @@ The 2024 design restricted its modifier to sources and subsources precisely to k
 guarantee here, namely that a decode error omits only the record that failed. This design
 drops that guarantee in exchange for requiring nothing of the optimizer.
 
+Where an error arises per row, only the rows that raised one are missing, because
+operators keep the ok stream as correct as they can. `SELECT 1 / a FROM t` over `a` in
+`{1, 2, 0}` returns two rows under the option rather than none. Nothing guarantees this
+in general, and it does not survive an aggregation or a join, so the guarantee stated
+above is the one to rely on.
+
 Two consequences follow:
 
-* `SELECT 1/0 WITH (IGNORE ERRORS)` returns zero rows and a notice, because an error
-  raised by the statement's own expressions is discarded along with the rest.
+* `SELECT 1/0 WITH (IGNORE ERRORS)` returns zero rows and a notice, because the query
+  folds to a constant error at plan time and has no ok rows left to return.
 * A source sealed by a definite error reports an empty upper
   (`src/storage/src/source/kafka.rs:1705`), which reads as a complete trace at
   `Timestamp::MAX` (`src/adapter/src/coord/timestamp_selection.rs:749-754`). The answer is
@@ -93,11 +102,16 @@ execution. The number would also not mean affected rows, both because compute co
 error multiplicities per binding during rendering (`src/compute/src/render.rs:1212`) and
 because a single source error poisons a whole collection with no row correspondence.
 
-For `SELECT`, pgwire drains pending notices before sending the execute response, so the
-notice precedes the rows (`src/pgwire/src/protocol.rs:1156`). For `SUBSCRIBE`, the
-copy-out loop selects on the notice channel and interleaves `NoticeResponse` with
-`CopyData` (`src/pgwire/src/protocol.rs:2908`), so a notice raised mid-stream is delivered
-rather than held to the end.
+For `SELECT`, the notice follows the rows and precedes `ReadyForQuery`. A peek learns
+what it discarded only as its rows stream, which is after the connection loop has already
+drained pending notices for that statement (`src/pgwire/src/protocol.rs:888`), so the
+drain that carries it is the one immediately before `ReadyForQuery`. Without that drain
+the notice arrives with the next statement, or is lost when the session ends after a
+single query, which is the interactive case the feature exists for.
+
+For `SUBSCRIBE`, the copy-out loop selects on the notice channel and interleaves
+`NoticeResponse` with `CopyData` (`src/pgwire/src/protocol.rs:2908`), so a notice raised
+mid-stream is delivered rather than held to the end.
 
 A notice is a weak channel. Most clients discard notices, so a script that adopts the
 option once can report frozen data as current indefinitely, and nothing in the catalog or
@@ -138,7 +152,7 @@ discards.
 | Peek offload and stash | `src/compute/src/compute_state/peek_offload.rs` | None, offload reuses the index scan |
 | Rendered-dataflow peek | `ErrorScan`, as above | None beyond the index fast path |
 | Persist fast path | `data.map_err(PeekError::from)?`, `src/compute/src/compute_state.rs:1804` | Skip the row, retain the first error |
-| Constant folding | `Err(e) => return Err(e.into())`, `src/adapter/src/coord/peek.rs:726` | Return an empty result and a notice |
+| Constant folding | `src/adapter/src/peek_client.rs` and `src/adapter/src/coord/peek.rs` | Return an empty result and a notice. Both peek paths fold constants, and each needs the branch |
 | Subscribe sink | `send_batch`, `src/compute/src/sink/subscribe.rs:198` | Drop pending errors, never poison |
 
 The index walk changes from a bounded probe to a full walk, since it no longer stops at
@@ -219,9 +233,6 @@ persisted by a materialized view is data-origin in spirit but query-origin by va
 
 ## Open questions
 
-* Should the notice fire once per statement or once per subscribe batch that discards an
-  error? Once per statement risks a long-lived subscribe never mentioning errors that
-  arise later. Per batch risks flooding a continuously erroring stream.
 * Should a subscribe that discards errors during its snapshot report before the first
   batch, so that a consumer using `SNAPSHOT = false` still learns the collection is
   poisoned?
