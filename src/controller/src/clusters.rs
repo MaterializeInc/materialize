@@ -458,7 +458,6 @@ impl Controller {
         role: ClusterRole,
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
-        enable_storage_introspection_logs: bool,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
@@ -486,7 +485,6 @@ impl Controller {
                     role,
                     m,
                     enable_worker_core_affinity,
-                    enable_storage_introspection_logs,
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
@@ -686,7 +684,6 @@ impl Controller {
         role: ClusterRole,
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
-        enable_storage_introspection_logs: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
@@ -811,9 +808,6 @@ impl Controller {
                     }
                     if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                         args.push("--worker-core-affinity".into());
-                    }
-                    if enable_storage_introspection_logs {
-                        args.push("--enable-storage-introspection-logs".into());
                     }
                     if unified_cluster {
                         args.push("--unified-cluster".into());

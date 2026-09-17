@@ -292,9 +292,6 @@ pub struct ComputeState {
     /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Antichain<Timestamp>,
-
-    /// The storage worker forwards its introspection logs to the compute worker.
-    pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 }
 
 impl ComputeState {
@@ -316,7 +313,6 @@ impl ComputeState {
         metrics_registry: MetricsRegistry,
         workers_per_process: usize,
         peek_permits: Arc<PeekPermits>,
-        storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
     ) -> Self {
         let worker_config: Rc<ConfigSet> = mz_dyncfgs::all_dyncfgs().into();
         let traces = TraceManager::new(metrics.clone());
@@ -352,7 +348,6 @@ impl ComputeState {
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
-            storage_log_reader,
         }
     }
 
@@ -726,8 +721,7 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.apply_expiration_offset(offset);
         }
 
-        let storage_log_reader = self.compute_state.storage_log_reader.take();
-        self.initialize_logging(config.logging, storage_log_reader);
+        self.initialize_logging(config.logging);
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
     }
@@ -1013,11 +1007,7 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
-    pub fn initialize_logging(
-        &mut self,
-        config: LoggingConfig,
-        storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
-    ) {
+    pub fn initialize_logging(&mut self, config: LoggingConfig) {
         if self.compute_state.compute_logger.is_some() {
             panic!("dataflow server has already initialized logging");
         }
@@ -1032,7 +1022,6 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.metrics_registry.clone(),
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
-            storage_log_reader,
         );
 
         let dataflow_index = Rc::new(dataflow_index);

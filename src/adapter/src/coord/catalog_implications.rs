@@ -1716,10 +1716,6 @@ impl Coordinator {
     ) {
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
-        let enable_storage_introspection_logs = self
-            .catalog()
-            .system_config()
-            .enable_storage_introspection_logs();
 
         // This replica's scoped (replica-local) overrides were pushed into the
         // controller's per-replica layer before this loop, by the
@@ -1736,7 +1732,6 @@ impl Coordinator {
                 role,
                 replica_config,
                 enable_worker_core_affinity,
-                enable_storage_introspection_logs,
             )
             .expect("creating replicas must not fail");
 
