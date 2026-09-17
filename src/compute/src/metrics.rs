@@ -89,6 +89,9 @@ pub struct ComputeMetrics {
 
     // subscribes
     subscribe_snapshots_skipped_total: IntCounter,
+
+    // metric sinks
+    metric_sink_registration_retries_total: IntCounter,
 }
 
 /// Applies the per-role const label to `opts`, unless `role` is `Solo`.
@@ -304,6 +307,10 @@ impl ComputeMetrics {
             subscribe_snapshots_skipped_total: registry.register(with_role(metric!(
                 name: "mz_subscribe_snapshots_skipped_total",
                 help: "The number of collection snapshots that were skipped by the subscribe snapshot optimization.",
+            ), role)),
+            metric_sink_registration_retries_total: registry.register(with_role(metric!(
+                name: "mz_compute_metric_sink_registration_retries_total",
+                help: "The number of times a metric sink failed to register its collector and scheduled a retry.",
             ), role)),
         }
     }
@@ -555,6 +562,14 @@ impl WorkerMetrics {
 
     pub fn inc_subscribe_snapshot_optimization(&self) {
         self.metrics.subscribe_snapshots_skipped_total.inc()
+    }
+
+    /// Record a metric sink collector registration that collided and will be retried.
+    ///
+    /// Unlabeled on purpose: this is an "is registration contending" signal, and the sink's
+    /// identity comes from the log line the sink emits on its first failure.
+    pub fn inc_metric_sink_registration_retry(&self) {
+        self.metrics.metric_sink_registration_retries_total.inc()
     }
 
     /// Sets the workload class for the compute metrics.
