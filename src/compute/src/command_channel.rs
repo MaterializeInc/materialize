@@ -153,7 +153,11 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
 
                         input.for_each(|_time, data| {
                             for (producer, index, cmd) in data.drain(..) {
-                                pending[producer].0.insert(index, cmd);
+                                let duplicate = pending[producer].0.insert(index, cmd);
+                                mz_ore::soft_assert_or_log!(
+                                    duplicate.is_none(),
+                                    "duplicate command index {index} from producer {producer}"
+                                );
                             }
                         });
 
@@ -195,7 +199,11 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
                     move |(input, _frontier)| {
                         input.for_each(|_time, data| {
                             for (_target, index, cmd) in data.drain(..) {
-                                pending.insert(index, cmd);
+                                let duplicate = pending.insert(index, cmd);
+                                mz_ore::soft_assert_or_log!(
+                                    duplicate.is_none(),
+                                    "duplicate global command index {index}"
+                                );
                             }
                         });
 
