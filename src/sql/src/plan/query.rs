@@ -4331,10 +4331,13 @@ fn plan_cast(
         // See: https://github.com/postgres/postgres/blob/31f403e95/src/backend/parser/parse_expr.c#L2762-L2768
         //
         // The hint makes the element casts part of the literal, where a
-        // failure mode cannot reach them. Under `NullFallback` the literal is
-        // planned on its own instead, so the cast that gets wrapped is the
-        // whole-value one, and a bad element yields NULL for the whole value
-        // just as it does for a non-literal source.
+        // failure mode cannot reach them. Under `NullFallback` an ARRAY or
+        // LIST literal is planned on its own instead, so the cast that gets
+        // wrapped is the whole-value one, and a bad element yields NULL for
+        // the whole value just as it does for a non-literal source. A MAP
+        // literal has no whole-value cast to fall back on, since there is no
+        // cast between map types, so under `NullFallback` it is rejected
+        // rather than converted with the hint's element-level strictness.
         (Expr::Array(exprs), mz_expr::CastFailureMode::Error) => {
             plan_array(ecx, exprs, Some(&to_scalar_type))?
         }
@@ -4343,6 +4346,9 @@ fn plan_cast(
         }
         (Expr::Map(exprs), mz_expr::CastFailureMode::Error) => {
             plan_map(ecx, exprs, Some(&to_scalar_type))?
+        }
+        (Expr::Map(_), mz_expr::CastFailureMode::NullFallback) => {
+            bail_unsupported!("MAP constructor as the argument of TRY_CAST")
         }
         (expr, _) => plan_expr(ecx, expr)?,
     };
