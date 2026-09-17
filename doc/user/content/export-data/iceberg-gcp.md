@@ -2,12 +2,12 @@
 title: "GCP BigLake"
 description: "How to export results from Materialize to Apache Iceberg tables on Google Cloud BigLake."
 menu:
-  main:
-    parent: sink-iceberg
-    name: "GCP BigLake"
-    weight: 20
+    main:
+        parent: sink-iceberg
+        name: "GCP BigLake"
+        weight: 20
 aliases:
-  - /serve-results/sink/iceberg-gcp/
+    - /serve-results/sink/iceberg-gcp/
 ---
 
 {{< private-preview />}}
@@ -55,6 +55,10 @@ authenticate to BigLake.
    Encoding the key first and decoding it in the `CREATE SECRET` statement
    avoids escaping quotes and newlines in the SQL string literal.
 
+#### (Optional) Configure your Lakehouse catalog to enable vended credentials
+
+If you plan to use vended credentials with your iceberg sink, you must [enable credential vending on your catalog](https://docs.cloud.google.com/lakehouse/docs/enable-credential-vending) before creating your sink.
+
 ### Step 2. Create a GCP connection and Iceberg catalog connection in Materialize
 
 {{% include-example file="examples/create_connection" example="example-iceberg-catalog-gcp-connection" %}}
@@ -90,10 +94,10 @@ name="exactly-once-delivery" >}}
 ### Limitations
 
 - {{< include-from-yaml data="examples/create_sink_iceberg"
-name="restrictions-limitations-gcp-maintenance-lakehouse" >}}
+  name="restrictions-limitations-gcp-maintenance-lakehouse" >}}
 
 - {{< include-from-yaml data="examples/create_sink_iceberg"
-name="restrictions-limitations-gcp-maintenance-bigquery" >}}
+  name="restrictions-limitations-gcp-maintenance-bigquery" >}}
 
 {{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 

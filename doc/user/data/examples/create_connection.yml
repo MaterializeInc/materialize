@@ -756,7 +756,8 @@
         CATALOG TYPE = 'rest',
         URL = '<catalog_url>',
         WAREHOUSE = '<warehouse>',
-        GCP CONNECTION = <gcp_connection>
+        GCP CONNECTION = <gcp_connection>,
+        ACCESS DELEGATION = 'vended-credentials'
     );
   syntax_elements:
     - name: "`<connection_name>`"
@@ -777,6 +778,15 @@
         *Value:* object name. Required.
 
         The name of a [GCP connection](#gcp) to use for authentication.
+    - name: "`ACCESS DELEGATION`"
+      description: |
+        *Value:* `'vended-credentials'`. Optional.
+
+        Requests temporary, table-scoped storage credentials from the catalog.
+        Required for catalogs that manage their own storage and vend credentials
+        as the only way to reach it.
+
+        See [Storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation).
 
 - name: "syntax-iceberg-catalog-rest"
   code: |
@@ -873,7 +883,8 @@
         CATALOG TYPE = 'rest',
         URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
         WAREHOUSE = 'gs://<bucket>',
-        GCP CONNECTION = gcp_connection
+        GCP CONNECTION = gcp_connection,
+        ACCESS DELEGATION = 'vended-credentials' -- Required for catalogs that manage their own storage and vend credentials as the only way to reach it.
     );
   testable: false
 
