@@ -27,6 +27,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::Eval;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row, RowArena, SharedRow};
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -47,8 +48,7 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::typedefs::{RowRowAgent, RowRowEnter};
-use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
+use crate::typedefs::{RowRowAgent, RowRowEnter, RowRowSpine};
 
 /// Available linear join implementations.
 ///
