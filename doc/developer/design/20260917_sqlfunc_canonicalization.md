@@ -1,6 +1,6 @@
 # Canonicalize the `#[sqlfunc]` macro and convert the remaining hand-written functions
 
-* Associated: [#36697](https://github.com/MaterializeInc/materialize/pull/36697) (to be closed), [#36705](https://github.com/MaterializeInc/materialize/pull/36705) (to be closed), [#33805](https://github.com/MaterializeInc/materialize/pull/33805) (closed)
+* Associated: [#36697](https://github.com/MaterializeInc/materialize/pull/36697) (open draft, to be closed by this work), [#36705](https://github.com/MaterializeInc/materialize/pull/36705) (open draft, to be closed by this work), [#33805](https://github.com/MaterializeInc/materialize/pull/33805) (closed)
 * Associated branches: `sqlfunc-self-arena`, `sqlfunc-binary-direct-unwrap`
 
 ## The Problem
@@ -15,8 +15,9 @@ Each hand-written implementation is an opportunity for those five methods to dri
 out of agreement with the function body. The immediate cause is not the functions
 themselves but a gap in the macro.
 
-Sixty of those 69 functions carry state in struct fields, and the macro refuses
-stateful unary and binary functions. `unary_func` and `binary_func` in
+Sixty-two of those 69 functions carry state in struct fields, and 60 of the 61
+unary and binary ones do. The macro refuses stateful unary and binary functions.
+`unary_func` and `binary_func` in
 `src/expr-derive-impl/src/sqlfunc.rs` index `sig.inputs` from position zero, so a
 `&self` receiver reaches `arg_type` and produces
 `compile_error!("Unsupported argument type")`. Both arms then emit `pub struct
@@ -27,7 +28,7 @@ solution, but the fix never reached the other two arms.
 
 The macro's own structure is what makes that fix expensive to apply. `sqlfunc.rs`
 is 1627 lines, of which `unary_func`, `binary_func`, and `variadic_func` account
-for 770 across three independent code paths. The three arms build the same eleven
+for 762 across three independent code paths. The three arms build the same eleven
 optional override methods with 19 near-identical `quote!` blocks, enforce modifier
 legality with 18 separately written `unknown_field` rejections, and each repeat the
 emission of `Display`, `FuncName`, and the original function. Adding one capability
@@ -45,8 +46,10 @@ therefore means writing it three times, which is exactly what the abandoned
   every remaining one is hand-written for a documented reason rather than for want of
   macro support.
 * No change to the SQL semantics, plan output, or `EXPLAIN` rendering of any
-  function. Optimizer goldens and sqllogictest results are unchanged except where a
-  golden records a function name that the change does not touch.
+  function. Optimizer goldens and sqllogictest results are unchanged. Because
+  `skip_display` preserves every hand-written `Display` body verbatim, no function
+  name or format changes, so any golden diff is a regression rather than an
+  expected outcome.
 * The refactor step alone produces byte-identical macro output, proven by the
   existing snapshot suite.
 
@@ -67,8 +70,11 @@ hand-written and the limitation is documented.
 **The seven short-circuiting variadic functions.** `And`, `Or`, `Coalesce`,
 `Greatest`, `Least`, `ErrorIfNull`, and `CaseLiteral` do not evaluate every operand.
 The macro emits `Eager*` implementations only, which evaluate all arguments before
-dispatch, so these cannot be expressed through it. `src/expr/src/scalar.rs:1413`
-already documents the non-strictness that makes them special.
+dispatch, so these cannot be expressed through it. The doc comment and `non_strict`
+match at `src/expr/src/scalar.rs:1413-1438` document this for `And`, `Or`, and
+`ErrorIfNull` only. The other four are short-circuiting by inspection of their `eval`
+bodies in `src/expr/src/scalar/func/variadic.rs` and
+`src/expr/src/scalar/func/impls/case_literal.rs`, not by any existing documentation.
 
 **Moving `ErrorIfNull` to the binary path.** It takes two operands and
 `LazyBinaryFunc::eval` accepts `exprs: &[&'a impl Eval]`, so the binary path is not
@@ -80,7 +86,7 @@ missing the laziness it needs. What holds it in `VariadicFunc` is enum membershi
 crate and it moves optimizer goldens, so mixing it into a macro stack would make
 both harder to review.
 
-**Collapsing per-function monomorphizations into vtable dispatch.** Both closed
+**Collapsing per-function monomorphizations into vtable dispatch.** Both superseded
 predecessor PRs describe themselves as preparation for this. It remains the
 motivating direction but is not part of this work.
 
@@ -125,19 +131,31 @@ on `self.length` in `impls/string.rs`.
 
 ### Why the arms diverged
 
-The three generators differ in five ways that are real, and in one way that is not.
+The three generators differ in six ways that are real, and in one way that is not.
 
 Real differences:
 
 * The trait path: `crate::func::EagerUnaryFunc`,
   `crate::func::binary::EagerBinaryFunc`, `crate::func::variadic::EagerVariadicFunc`.
 * The `Input<'a>` associated type: a bare type, a two-tuple, or a wider tuple.
-* Whether `call` receives a `&'a RowArena`.
-* The `output_sql_type` signature: `SqlColumnType` for unary against
-  `&[SqlColumnType]` for the other two, and a nullability formula that carries a
+* Whether `call` receives a `&'a RowArena`. Binary and variadic do
+  (`binary.rs:91`, `variadic.rs:1782`), unary does not (`unary.rs:114`).
+* The name of the output-type method. `EagerUnaryFunc` and `EagerBinaryFunc` declare
+  `output_sql_type` and carry a separate `output_type` convenience wrapper over
+  `ReprColumnType`. `EagerVariadicFunc` has no `output_sql_type` at all: its core
+  method is named `output_type` and takes `&[SqlColumnType]` directly
+  (`variadic.rs:1784`). PR1 preserves this split exactly, because renaming either
+  would move a snapshot.
+* The output-type method's parameter and nullability formula: `SqlColumnType` for
+  unary against `&[SqlColumnType]` for the other two, with a
   `non_nullable_position_checks` term only in the non-unary cases.
 * Which modifiers apply, and with which return type. `is_monotone` returns `bool`
   for unary and variadic but `(bool, bool)` for binary.
+
+The method-name split is the one place where `Shape` cannot pretend the traits are
+uniform. `Shape::output_method()` returns both the name and the signature, and
+`generate` uses whatever it returns. That is a per-shape quirk carried as data, which
+is the honest outcome, not a failure of the decomposition.
 
 The difference that is not real is everything else. The table below maps each
 optional override method to the arms that build it, and every cell is the same
@@ -169,7 +187,7 @@ impl Shape {
     fn trait_path(&self) -> TokenStream;
     fn input_assoc(&self, tys: &[syn::Type]) -> TokenStream;
     fn call_params(&self) -> TokenStream;
-    fn output_sql_type_sig(&self) -> TokenStream;
+    fn output_method(&self) -> (syn::Ident, TokenStream); // name and signature
     fn nullability(&self, checks: &[TokenStream]) -> TokenStream;
     fn modifiers(&self) -> &'static [(Modifier, ReturnTy)];
 }
@@ -212,7 +230,7 @@ as `is_infinity_monotone: _`. Under the table it becomes an error. All six uses 
 the tree are `mul_*` and `div_*` in `src/expr/src/scalar/func.rs`, all binary, so
 nothing in the tree is affected.
 
-### Decisions carried over from the closed predecessors
+### Decisions carried over from the superseded drafts
 
 Two choices from `sqlfunc-self-arena` are adopted rather than reinvented.
 
@@ -221,11 +239,23 @@ considered was extending `sqlname` to accept an expression evaluated with `self`
 scope. Suppression is simpler, it keeps the 24 hand-written `Display` bodies exactly
 as they read today, and it costs one modifier and one branch in the shared emission.
 
-`EagerUnaryFunc::call` takes `&'a self` and `&'a RowArena` unconditionally,
-mirroring the binary and variadic shapes. This removes the arena axis and the
-receiver axis from the descriptor entirely instead of parameterizing them, which is
-the point of canonicalizing. It costs a mechanical change at every unary call site
-and the blanket implementation in `src/expr/src/scalar/func/unary.rs`.
+`EagerUnaryFunc::call` gains a `&'a RowArena` parameter unconditionally. This part
+does mirror the other two shapes, which already take an arena at `binary.rs:91` and
+`variadic.rs:1782`, and it removes the arena axis from the descriptor instead of
+parameterizing it.
+
+Whether the receiver also becomes `&'a self` is a separate question and is not
+settled by precedent. No `Eager*Func::call` in the tree takes `&'a self` today, all
+three take a plain `&self`, and only the outer `Lazy*Func::eval` methods tie the
+receiver to `'a`. The reason to consider it is that a stateful function with arena
+access may need to produce output borrowed from its own fields, which a plain
+`&self` cannot express when the output carries `'a`. The cost is real: tying the
+receiver to the same `'a` as `Input<'a>` and `Output<'a>` is a variance change, not
+a signature tweak, and any call site holding the function value in a shorter-lived
+binding than its input will stop borrow-checking and need restructuring rather than
+a mechanical edit. The implementation should start from plain `&self`, which is the
+smaller change, and move to `&'a self` only if a conversion actually requires it.
+See Open questions.
 
 ### The stack
 
@@ -246,9 +276,9 @@ stay byte identical, including
 `compile_error!("Unary functions do not yet support RowArena.")`. That snapshot is
 the tripwire: if PR1 accidentally smuggles in capability, it moves.
 
-**PR2, the capabilities.** Changes `EagerUnaryFunc::call` to take `&'a self` and
-`&'a RowArena`, updates the blanket implementation and every unary call site,
-threads `struct_ty` and `has_self` into the unary and binary shapes, offsets
+**PR2, the capabilities.** Adds a `&'a RowArena` parameter to
+`EagerUnaryFunc::call`, updates the blanket implementation and every unary call
+site, threads `struct_ty` and `has_self` into the unary and binary shapes, offsets
 argument indices past the receiver, and adds `skip_display`. Because the arms are
 already unified, this is a change to `generate` plus two constant flags rather than
 two copies of the variadic arm. Snapshots move once, and `unary_arena_fn.snap` gains
@@ -260,7 +290,7 @@ LazyBinaryFunc for T` and emits an explicit `impl LazyBinaryFunc` per generated
 struct that calls `try_from_result` per argument instead of
 `<(T0, T1) as InputDatumType>::try_from_iter`. `ListLengthMax` and `RegexpReplace`
 keep the tuple path through a `lazy_via_eager_binary!` declarative macro until their
-conversion PRs land. The measurements recorded on the closed
+conversion PRs land. The measurements recorded on the superseded
 [#36705](https://github.com/MaterializeInc/materialize/pull/36705) were a 4.4%
 reduction in `cargo llvm-lines -p mz-expr` (1,289,072 to 1,232,567), elimination of
 93,259 lines across 218 copies of the tuple `try_from_iter`, and a 23.5% reduction
@@ -270,6 +300,27 @@ were taken against a May 2026 tree and must be re-measured.
 **PR4 onward, the conversions.** Each converts hand-written implementations to
 `#[sqlfunc]` and deletes the originals. The convertible functions span 20 files, so
 the cut is discussed under Open questions.
+
+### The conversion PRs share one file
+
+The conversion PRs are not file-disjoint, which affects how the stack is maintained.
+The `func_name!` block in `src/expr/src/scalar/func.rs` holds exactly 69 entries, one
+per hand-written implementation, and each expands to
+`impl FuncName for X { const NAME: &'static str = ...; }`. The macro emits that same
+implementation itself, in all three arms. Converting a function therefore requires
+deleting its `func_name!` entry in the same commit, or the build fails on a duplicate
+trait implementation.
+
+Fifty-two of the 53 conversions delete a line from that block. `RangeCreate` is the
+exception: it has no entry today and gains a generated one.
+
+The practical consequence is that every conversion PR touches
+`src/expr/src/scalar/func.rs`, so the stack needs a restack of every branch above a
+landing rather than a clean rebase of independent branches. The entries are sorted
+alphabetically and the proposed groupings do not map onto contiguous runs, for
+example the ten numeric-scale casts are interleaved with `CastList*` and `CastMap*`,
+so adjacent-line conflicts should be expected rather than hoped against. This argues
+for fewer and larger conversion PRs than the file-granular default.
 
 ### Conversion inventory
 
@@ -306,29 +357,52 @@ statement than the suite passing.
 
 The conversion PRs carry a residual risk that the existing suite does not fully
 close. When a modifier is absent the macro falls back to a default derived from the
-associated types, and its `output_sql_type` computes nullability as
-`output.nullable(nullable || (propagates_nulls && input_type.nullable))` rather than
-whatever the hand-written body said. A hand-written override that disagreed with the
-derived default would change meaning silently if no test exercises that column's
-nullability. The mitigation is procedural and costs nothing, because the
-`output_type_expr` has to be written anyway: for every function, diff the
-`output_type_expr` being written against the `output_sql_type` body being deleted,
-and justify any difference in the PR description.
+associated types, for example `propagates_nulls` as `!Self::Input::nullable()`. A
+hand-written override that disagreed with the derived default changes meaning
+silently.
+
+This applies to every one of the eleven override methods, not only to nullability.
+The nullability case is the most visible, because the generated `output_sql_type`
+computes `output.nullable(nullable || (propagates_nulls && input_type.nullable))`
+rather than whatever the hand-written body said. The more dangerous cases are the
+ones that change no query result at all: `preserves_uniqueness`, `is_monotone`,
+`inverse`, `is_eliminable_cast`, and `could_error` feed index selection, cast
+elimination, and error hoisting, so a disagreement there produces a different plan
+for the same answer. `bin/sqllogictest --optimized` compares answers, so it would
+not notice, and the optimizer goldens only notice if one happens to pin the plan
+shape for that function.
+
+The mitigation is procedural and costs nothing, because the modifiers have to be
+written anyway. For each converted function, enumerate every method the hand-written
+implementation overrode, confirm the conversion either carries it across as a
+modifier or matches the macro's derived default, and record any deliberate
+difference in the PR description. Deleting an override without either restating it
+or checking the default is the specific mistake to avoid.
 
 ### Dependencies that change
 
-* `EagerUnaryFunc::call` gains `&'a self` and a `&'a RowArena` parameter. Every
-  implementor and the blanket `impl<T: EagerUnaryFunc> LazyUnaryFunc for T` in
+* `EagerUnaryFunc::call` gains a `&'a RowArena` parameter. Every implementor and the
+  blanket `impl<T: EagerUnaryFunc> LazyUnaryFunc for T` in
   `src/expr/src/scalar/func/unary.rs` update in PR2.
 * The blanket `impl<T: EagerBinaryFunc> LazyBinaryFunc for T` in
   `src/expr/src/scalar/func/binary.rs` is removed in PR3.
+* The `func_name!` block in `src/expr/src/scalar/func.rs` loses 52 entries across the
+  conversion PRs.
 * `is_infinity_monotone` becomes an error on unary and variadic functions.
 * `doc/developer/sqlfunc.md` gains the `skip_display` modifier, a corrected arity
   table, and a section naming the two shapes the macro deliberately does not cover.
+* The rustdoc on `src/expr-derive/src/lib.rs` is corrected in PR2. Its Limitations
+  section states "Unary functions cannot yet receive a `&RowArena` as an argument"
+  (line 51), which PR2 falsifies, and its `output_type_expr` entry claims the
+  modifier "Applies to binary and variadic functions", which `unary_func` already
+  contradicts today.
+* Both [#36697](https://github.com/MaterializeInc/materialize/pull/36697) and
+  [#36705](https://github.com/MaterializeInc/materialize/pull/36705) are closed when
+  PR1 opens, with a comment pointing at this design.
 
 ## Minimal Viable Prototype
 
-The capability half of this design was already built and measured. The closed
+The capability half of this design was already built and measured. The
 `sqlfunc-self-arena` branch implemented `&self` support, arena support, and
 `skip_display` for unary and binary, and converted 19 hand-written implementations,
 and `sqlfunc-binary-direct-unwrap` implemented the direct-unwrap change on top with
@@ -367,7 +441,8 @@ review history on [#36697](https://github.com/MaterializeInc/materialize/pull/36
 and [#36705](https://github.com/MaterializeInc/materialize/pull/36705). It was
 rejected on two grounds. The macro portion rebases cleanly, since `sqlfunc.rs`
 drifted only 38 lines, but `src/expr/src/scalar/func/impls/` drifted by 3423 added
-and 276 removed lines and 26 of the 29 touched files conflict. More importantly, the
+and 276 removed lines, and 26 of the 29 files `sqlfunc-self-arena` touches were
+changed on `main`. More importantly, the
 branch's conversions of the compound casts hardcode `Box<MirScalarExpr>`, which was
 correct against its May 2026 base and is wrong now that `LirScalarExpr` also
 implements `Eval`. Landing the capability before the refactor also means writing it
@@ -375,7 +450,7 @@ three times and then unwriting two of them.
 
 **Add `&self` by copying the variadic arm into the other two and defer the
 refactor.** This is the shortest path to converting the 42 easiest functions. It was
-rejected because it is precisely what the closed draft did, and the resulting
+rejected because it is precisely what the superseded draft did, and the resulting
 triplication is the problem this design exists to remove.
 
 **Keep a dynamic `sqlname` instead of `skip_display`.** Extending `sqlname` to
@@ -395,15 +470,29 @@ that preserves file-level reviewability while cutting the build count to eight w
 be: the ten numeric-scale casts as one PR, `date.rs`, `time.rs`, the eight
 compound-type functions across `array.rs`, `list.rs`, `map.rs`, `range.rs`, and
 `record.rs` as one PR, `char.rs`, the six `CastStringTo*` functions, the five
-regular expression functions, and `timestamp.rs`. This needs a decision before the
-plan is written.
+regular expression functions, and `timestamp.rs`. The shared `func_name!` block
+strengthens the case for the smaller number, since every additional conversion PR is
+another branch to restack through the same file. This needs a decision before the
+plan is written, and until it is made PR4 onward have no defined boundaries.
+
+**Does `EagerBinaryFunc::call` also need `&'a self`?** PR2 gives the unary trait an
+arena but leaves all three receivers as plain `&self`. If a stateful binary function
+needs to return arena-borrowed output derived from its own fields, plain `&self`
+blocks it. The two stateful `EagerBinaryFunc` implementations are `ListLengthMax`
+(`impls/list.rs:312`) and `RegexpReplace` (`impls/string.rs:1363`). Confirm neither
+needs it before PR2 fixes the receiver shape, because changing it later is a
+variance change across every implementor rather than an additive one.
 
 **Are the [#36705](https://github.com/MaterializeInc/materialize/pull/36705)
 measurements still representative?** They were taken against a May 2026 tree, before
 the MIR and LIR separation changed the shape of the dispatch path. PR3 should
-re-measure before claiming the win.
+re-measure before claiming the win. If re-measurement shows a materially smaller
+win, PR3 still lands on the grounds that removing the blanket implementation makes
+the emitted code per struct explicit and reviewable, but the PR description must
+report the measured number rather than repeating the May figures. If it shows a
+regression, PR3 is dropped and the conversions proceed without it.
 
-**Where is the vtable dispatch prompt?** Both closed PRs link to
+**Where is the vtable dispatch prompt?** Both superseded drafts link to
 `doc/developer/prompts/sqlfunc-dyn-dispatch.md`, which was never committed on either
 branch. If it exists it would inform whether PR3's direct-unwrap is the right
 intermediate step or whether it should be skipped in favor of the end state.
