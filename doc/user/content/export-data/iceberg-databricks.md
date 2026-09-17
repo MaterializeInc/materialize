@@ -39,9 +39,6 @@ their data in Azure Data Lake Storage Gen2.
 {{</ tab >}}
 {{</ tabs >}}
 
-Links to Databricks documentation below point at the AWS variant. The Azure
-equivalent of each is the same path under `docs.databricks.com/azure/en/`.
-
 ## Prerequisites
 
 ### Allow network access from Materialize
@@ -94,8 +91,7 @@ CREATE SCHEMA <catalog_name>.<schema_name>;
 The managed location must be an ADLS Gen2 container on a storage account with
 [hierarchical
 namespace](https://learn.microsoft.com/azure/storage/blobs/data-lake-storage-namespace)
-enabled. Blob storage accounts without it cannot back a Unity Catalog external
-location.
+enabled.
 {{</ tab >}}
 {{</ tabs >}}
 
