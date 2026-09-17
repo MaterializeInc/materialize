@@ -20,6 +20,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.41.1
+*Released to Materialize Cloud: 2026-09-17* <br>
+*Released to Materialize Self-Managed: 2026-09-18* <br>
+
+### Improvements {#v26.41.1-improvements}
+- **Smaller persist Prometheus scrape payloads**: Persist's per-shard metrics have been cut back — `mz_persist_shard_live_writers`, `mz_persist_shard_since`, `mz_persist_shard_upper`, `mz_persist_shard_inline_part_bytes`, `mz_persist_shard_inline_backpressure_count`, `mz_persist_shard_rewrite_part_count`, `mz_persist_shard_schema_registry_version_count`, and `mz_persist_shard_batch_part_version_bytes` are removed, `mz_persist_shard_stale_version` is replaced by a process-level `mz_persist_stale_shard_count`, the three `mz_persist_shard_pubsub_diff_*` counters are renamed to `mz_persist_pubsub_client_receiver_diff_*`, and the three `mz_persist_backpressure_*` families no longer carry `shard` and `name` labels, reporting one summed series instead — so `/metrics` responses carry fewer series, and dashboards or alerts built on the removed, renamed, or relabeled metrics need updating.
+
 ## v26.41.0
 *Released to Materialize Cloud: 2026-09-10* <br>
 *Released to Materialize Self-Managed: 2026-09-11* <br>
