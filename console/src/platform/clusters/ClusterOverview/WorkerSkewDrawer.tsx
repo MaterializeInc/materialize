@@ -141,12 +141,15 @@ const ReplicaHeatmap = ({
   const flags = useFlags();
   const maintainedObjectsEnabled = flags["maintained-objects-ui-50"];
 
-  const { state, rows, measuredAt, error, measure } = useDataflowCpuMeasurement(
-    {
-      clusterName,
-      replicaName,
-    },
-  );
+  const {
+    state,
+    reading,
+    rows,
+    measuredAt,
+    error,
+    loadCumulative,
+    measureWindow,
+  } = useDataflowCpuMeasurement({ clusterName, replicaName });
 
   // Names come from the objects collection rather than from the CPU query,
   // which is pinned to the replica and would plan a `mz_objects` join on the
@@ -174,21 +177,17 @@ const ReplicaHeatmap = ({
 
   const pivot = rows ? pivotDataflowCpuPerWorker(rows, resolveNaming) : null;
 
-  if (state === "idle") {
+  if (state === "loading") {
     return (
-      <Box py={12} textAlign="center" color={colors.foreground.secondary}>
-        <Text>
-          Measure CPU across workers over a {CPU_MEASUREMENT_WINDOW_MS / 1000}{" "}
-          second window.
-        </Text>
-        <Text fontSize="xs" mt={1}>
-          This runs two queries on {clusterName}, so it is not started
-          automatically.
-        </Text>
-        <Button mt={4} onClick={measure}>
-          Measure
-        </Button>
-      </Box>
+      <Flex
+        justifyContent="center"
+        alignItems="center"
+        py={16}
+        color={colors.foreground.secondary}
+      >
+        <Spinner mr={3} />
+        <Text>Reading CPU counters…</Text>
+      </Flex>
     );
   }
 
@@ -216,15 +215,30 @@ const ReplicaHeatmap = ({
     );
   }
 
-  if (!pivot || pivot.rows.length === 0) {
+  // Only the windowed reading can legitimately come back all-zero: an idle but
+  // hydrated dataflow burns no CPU in ten seconds. Cumulative always has work.
+  const measuredNoWork =
+    reading === "window" &&
+    pivot !== null &&
+    pivot.rows.every((row) => row.total === 0);
+
+  if (!pivot || pivot.rows.length === 0 || measuredNoWork) {
     return (
       <Box py={12} textAlign="center" color={colors.foreground.secondary}>
-        <Text>No dataflow used CPU during the sampling window.</Text>
-        <Text fontSize="xs" mt={1}>
-          Maintained objects show up here once they begin processing work.
+        <Text>
+          {pivot && pivot.rows.length > 0
+            ? `No dataflow on this replica used CPU during the ${
+                CPU_MEASUREMENT_WINDOW_MS / 1000
+              } second window.`
+            : "No dataflows are scheduled on this replica yet."}
         </Text>
-        <Button mt={4} onClick={measure}>
-          Measure again
+        <Text fontSize="xs" mt={1}>
+          {pivot && pivot.rows.length > 0
+            ? "Hydrated objects with no incoming data are idle, so skew only shows while the cluster is working."
+            : "Maintained objects show up here once they begin processing work."}
+        </Text>
+        <Button mt={4} onClick={loadCumulative}>
+          Show total since start
         </Button>
       </Box>
     );
@@ -244,18 +258,28 @@ const ReplicaHeatmap = ({
         color={colors.foreground.secondary}
       >
         <Text fontSize="xs">
-          CPU over {CPU_MEASUREMENT_WINDOW_MS / 1000}s
-          {measuredAt ? `, measured ${measuredAt.toLocaleTimeString()}` : null}
+          {reading === "cumulative"
+            ? "Total CPU since the replica started"
+            : `CPU over ${CPU_MEASUREMENT_WINDOW_MS / 1000}s`}
+          {measuredAt ? `, read ${measuredAt.toLocaleTimeString()}` : null}
         </Text>
-        <Button size="sm" variant="secondary" onClick={measure}>
-          Measure again
-        </Button>
+        <ButtonGroup size="sm" isAttached variant="outline">
+          <Button isActive={reading === "cumulative"} onClick={loadCumulative}>
+            Since start
+          </Button>
+          <Button isActive={reading === "window"} onClick={measureWindow}>
+            Last {CPU_MEASUREMENT_WINDOW_MS / 1000}s
+          </Button>
+        </ButtonGroup>
       </Flex>
       <WorkerSkewHeatmap
         rows={pivot.rows}
         numWorkers={pivot.numWorkers}
         globalWorkerTotals={pivot.globalWorkerTotals}
         sortMode={sortMode}
+        windowSeconds={
+          reading === "window" ? CPU_MEASUREMENT_WINDOW_MS / 1000 : undefined
+        }
         onRowClick={maintainedObjectsEnabled ? handleRowClick : undefined}
       />
     </>

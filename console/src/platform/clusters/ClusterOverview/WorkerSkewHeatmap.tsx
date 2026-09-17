@@ -30,6 +30,9 @@ export interface WorkerSkewHeatmapProps<T extends HeatmapRow> {
   numWorkers: number;
   globalWorkerTotals: number[];
   sortMode: SortMode;
+  /** Length of the sampling window the elapsed times were measured over.
+   *  Omitted where the caller reports cumulative elapsed since replica start. */
+  windowSeconds?: number;
   /** Header text for the row-label column. Defaults to "Dataflow". */
   rowLabelHeader?: string;
   onRowClick?: (row: T) => void;
@@ -86,6 +89,7 @@ export const WorkerSkewHeatmap = <T extends HeatmapRow>({
   numWorkers,
   globalWorkerTotals,
   sortMode,
+  windowSeconds,
   rowLabelHeader = "Dataflow",
   onRowClick,
 }: WorkerSkewHeatmapProps<T>) => {
@@ -105,7 +109,11 @@ export const WorkerSkewHeatmap = <T extends HeatmapRow>({
 
   return (
     <Flex direction="column" gap={3}>
-      <HeatmapDescription numWorkers={numWorkers} stops={stops} />
+      <HeatmapDescription
+        numWorkers={numWorkers}
+        windowSeconds={windowSeconds}
+        stops={stops}
+      />
       <Box
         overflowX="auto"
         overflowY="auto"
@@ -202,25 +210,46 @@ export const WorkerSkewHeatmap = <T extends HeatmapRow>({
 
 interface HeatmapDescriptionProps {
   numWorkers: number;
+  windowSeconds?: number;
   stops: HeatStops;
 }
 
-const HeatmapDescription = ({ numWorkers, stops }: HeatmapDescriptionProps) => {
+const HeatmapDescription = ({
+  numWorkers,
+  windowSeconds,
+  stops,
+}: HeatmapDescriptionProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const period =
+    windowSeconds === undefined
+      ? "CPU used since the replica started."
+      : `CPU used over the last ${windowSeconds} seconds.`;
   return (
     <Flex justify="space-between" align="flex-end" gap={6} wrap="wrap">
       <Box maxW="640px">
         <Text textStyle="text-small" color={colors.foreground.secondary}>
-          CPU distribution across all {numWorkers} workers, since the replica
-          started.{" "}
-          <Text as="span" textStyle="text-small-heavy">
-            Horizontal patterns
-          </Text>{" "}
-          reveal object-level skew (often a bad <code>GROUP BY</code> key).{" "}
-          <Text as="span" textStyle="text-small-heavy">
-            Vertical columns
-          </Text>{" "}
-          reveal worker-level issues (a noisy neighbor).
+          {numWorkers === 1 ? (
+            <>
+              {period} This replica runs a{" "}
+              <Text as="span" textStyle="text-small-heavy">
+                single worker
+              </Text>
+              , so there is no distribution to compare and skew cannot be
+              measured here. Resize the replica to see skew.
+            </>
+          ) : (
+            <>
+              {period} Spread across all {numWorkers} workers.{" "}
+              <Text as="span" textStyle="text-small-heavy">
+                Horizontal patterns
+              </Text>{" "}
+              reveal object-level skew (often a bad <code>GROUP BY</code> key).{" "}
+              <Text as="span" textStyle="text-small-heavy">
+                Vertical columns
+              </Text>{" "}
+              reveal worker-level issues (a noisy neighbor).
+            </>
+          )}
         </Text>
       </Box>
       <Flex

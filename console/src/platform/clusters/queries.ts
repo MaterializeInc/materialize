@@ -15,7 +15,7 @@ import {
 } from "@tanstack/react-query";
 import { flatGroup, group } from "d3";
 import { subMinutes } from "date-fns";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   buildQueryKeyPart,
@@ -1054,53 +1054,80 @@ export function useDataflowCpuPerWorker(
 /** How long to let the CPU counters accumulate between the two samples. */
 export const CPU_MEASUREMENT_WINDOW_MS = 10_000;
 
-export type CpuMeasurementState = "idle" | "sampling" | "ready" | "error";
+export type CpuMeasurementState = "loading" | "ready" | "sampling" | "error";
+
+/** What the displayed elapsed times cover. */
+export type CpuReading = "cumulative" | "window";
 
 /**
- * Runs a bounded CPU measurement against one replica: sample, wait, sample
- * again, return the difference.
+ * Reads per-worker CPU for one replica, either cumulatively or over a bounded
+ * window.
  *
- * The underlying counters are cumulative from the moment each operator was
- * created, so a single read reports a lifetime average rather than current
- * behaviour. Differencing two samples a fixed window apart is what makes the
- * heatmap mean "CPU spent in the last ten seconds", which is what a person
- * opening it is asking about.
+ * The counters accumulate from the moment each operator was created, so a
+ * single read is a lifetime total. That is the right default: a badly chosen
+ * distribution key skews for a dataflow's whole life, which is the case this
+ * diagnostic mostly exists to find, and it is the only reading that shows
+ * anything at all on an idle cluster.
  *
- * Nothing runs until `measure` is called, so opening the page costs nothing.
+ * It cannot see a skew episode that started recently on a long-lived replica,
+ * though, since older even history swamps it. `measureWindow` takes a second
+ * sample and reports the difference for that.
+ *
+ * Nothing is polled. The cumulative read happens once when the drawer opens and
+ * the windowed one only on request, so a page view costs at most what the
+ * reader asked for.
  */
 export function useDataflowCpuMeasurement(
   params: Partial<DataflowCpuPerWorkerParams>,
 ) {
   const queryClient = useQueryClient();
-  const [state, setState] = useState<CpuMeasurementState>("idle");
+  const [reading, setReading] = useState<CpuReading>("cumulative");
+  const [state, setState] = useState<CpuMeasurementState>("loading");
   const [rows, setRows] = useState<CpuSampleRow[] | null>(null);
   const [measuredAt, setMeasuredAt] = useState<Date | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const { clusterName, replicaName } = params;
 
-  const measure = useCallback(async () => {
-    if (!clusterName || !replicaName) return;
-
+  const sample = useCallback(async () => {
+    if (!clusterName || !replicaName) return undefined;
     const queryKey = clusterQueryKeys.dataflowCpuPerWorker({
       clusterName,
       replicaName,
     });
-    const sample = () =>
-      queryClient.fetchQuery({
-        queryKey,
-        // Each sample must hit the replica: a cached response would difference
-        // against itself and report no activity at all.
-        staleTime: 0,
-        gcTime: 0,
-        queryFn: ({ signal }) =>
-          fetchDataflowCpuPerWorker({
-            queryKey,
-            params: { clusterName, replicaName },
-            requestOptions: { signal },
-          }),
-      });
+    return queryClient.fetchQuery({
+      queryKey,
+      // Every sample must reach the replica. A cached response would difference
+      // against itself and report no activity at all.
+      staleTime: 0,
+      gcTime: 0,
+      queryFn: ({ signal }) =>
+        fetchDataflowCpuPerWorker({
+          queryKey,
+          params: { clusterName, replicaName },
+          requestOptions: { signal },
+        }),
+    });
+  }, [clusterName, replicaName, queryClient]);
 
+  const loadCumulative = useCallback(async () => {
+    if (!clusterName || !replicaName) return;
+    setState("loading");
+    setError(null);
+    try {
+      const result = await sample();
+      setRows(result?.rows ?? []);
+      setReading("cumulative");
+      setMeasuredAt(new Date());
+      setState("ready");
+    } catch (e) {
+      setError(e);
+      setState("error");
+    }
+  }, [clusterName, replicaName, sample]);
+
+  const measureWindow = useCallback(async () => {
+    if (!clusterName || !replicaName) return;
     setState("sampling");
     setError(null);
     try {
@@ -1110,13 +1137,26 @@ export function useDataflowCpuMeasurement(
       );
       const second = await sample();
       setRows(diffDataflowCpuSamples(first?.rows ?? [], second?.rows ?? []));
+      setReading("window");
       setMeasuredAt(new Date());
       setState("ready");
     } catch (e) {
       setError(e);
       setState("error");
     }
-  }, [clusterName, replicaName, queryClient]);
+  }, [clusterName, replicaName, sample]);
 
-  return { state, rows, measuredAt, error, measure };
+  useEffect(() => {
+    void loadCumulative();
+  }, [loadCumulative]);
+
+  return {
+    state,
+    reading,
+    rows,
+    measuredAt,
+    error,
+    loadCumulative,
+    measureWindow,
+  };
 }
