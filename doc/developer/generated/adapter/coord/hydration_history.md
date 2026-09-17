@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/hydration_history.rs
-revision: 7cdbebdb15
+revision: bcc5f9222d
 ---
 
 # `adapter::coord::hydration_history`

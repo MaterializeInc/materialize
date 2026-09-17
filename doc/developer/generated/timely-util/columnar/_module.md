@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar.rs
-revision: 0a83b723a5
+revision: edaa839df6
 ---
 
 # timely-util::columnar
@@ -13,3 +13,4 @@ The `batcher` submodule provides `Chunker` and `ColumnChunker` for sorting and c
 `Col2ValBatcher` and `Col2KeyBatcher` type aliases tie these pieces together, using `MergeBatcher<ColInternalMerger<...>>` where `ColInternalMerger` is the merge strategy from `mz_timely_util::columnation`.
 `Col2ValPagedBatcher<K, V, T, R>` is the pageable counterpart to `Col2ValBatcher`: it routes every chunk produced by chunking, merging, or extract through a `ColumnPager`, so memory pressure can spill chains to a backing store without touching the merge/extract bodies. It is an alias for `merge_batcher::ColumnMergeBatcher<(K, V), T, R>` and defaults to `ColumnPager::disabled`; inject a real pager via `ColumnMergeBatcher::set_pager`.
 `Col2ValColBatcher<K, V, T, R>` is a columnar-native counterpart to `Col2ValBatcher`, holding `Column` chunks rather than columnation stacks and merging them via `batcher::ColumnMerger`. It pairs with `batcher::ColumnChunker` and any builder whose `Input` is `Column<((K, V), T, R)>`; unlike `Col2ValPagedBatcher`, the chains stay resident with no pager and no spill budget.
+`Column<(D, T, R)>` implements `timely::ResultsIn<T::Summary>`, allowing a columnar collection to serve as a differential `Variable` (loop feedback). The implementation advances each time by the summary, drops records whose time the summary does not map, and moves the data and diff columns across without copying when no records are dropped.

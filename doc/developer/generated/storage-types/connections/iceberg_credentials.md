@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/connections/iceberg_credentials.rs
-revision: 8ceeee9a3a
+revision: 6e55add85b
 ---
 
 # `storage_types::connections::iceberg_credentials`
@@ -17,7 +17,7 @@ Locating the `loadCredentials` endpoint requires a round trip to the catalog's `
 
 ## Key Types
 
-**`VendedCredential`** — A trait implemented by storage credentials a REST catalog can vend. Implementors carry the object store's notion of a credential and know which `storage-credentials` properties encode it. The `STORE` constant names the object store for diagnostics. `from_vended` builds the credential from a `StorageCredential`. `expires_at` returns when the credential expires, if the catalog reported it. Both `AwsCredential` (S3) and `GcsCredential` (GCS) implement this trait.
+**`VendedCredential`** — A trait implemented by storage credentials a REST catalog can vend. Implementors carry the object store's notion of a credential and know which `storage-credentials` properties encode it. The `STORE` constant names the object store for diagnostics. `from_vended` builds the credential from a `StorageCredential`. `expires_at` returns when the credential expires, if the catalog reported it. `AwsCredential` (S3), `GcsCredential` (GCS), and `AzdlsCredential` (ADLS) implement this trait. The `AzdlsCredential` implementation reads `adls.sas-token.<account>` and `adls.sas-token-expires-at-ms.<account>` properties from the vended credential, taking the first SAS token when multiple accounts are present.
 
 **`VendedCredentialLoader<C>`** — Generic over `C: VendedCredential`. Implements `ProvideCredential<Credential = C>` for OpenDAL. Holds the HTTP client, the resolved `credential_endpoint` URL, a `TokenProvider` for the catalog auth token, a `HeaderMap` of headers to include on every request (including the access-delegation header, which is inserted by `new`), and a `Mutex<Option<(C, Instant)>>` cache.
 

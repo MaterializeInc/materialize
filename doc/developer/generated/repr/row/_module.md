@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/row.rs
-revision: 336c0db4ba
+revision: 5fae8073ed
 ---
 
 # mz-repr::row
