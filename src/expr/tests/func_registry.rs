@@ -20,8 +20,8 @@
 //! computes or what the optimizer assumed when producing it. Once a LIR
 //! version has shipped, such a change must bump `LIR_VERSION` so pinned plans
 //! of the old version are replanned. Changes confined to
-//! [`INFORMATIONAL_FIELDS`] are reported separately, because they need a
-//! human decision rather than forcing a bump.
+//! [`INFORMATIONAL_FIELDS`] are reported separately, because they require
+//! judgment---they may or may not be breaking.
 
 use std::collections::BTreeMap;
 
@@ -37,8 +37,8 @@ const CURRENT_PATH: &str = "tests/snapshots/func_registry_current.json";
 /// Record fields whose change does not by itself alter what a stored plan
 /// computes or how it was optimized.
 ///
-/// `body_fingerprint` tracks the implementation, whose semantics only a
-/// reader can judge. `sqlfunc_decl` is source text: the properties it
+/// `body_fingerprint` tracks the implementation---changes may or may not be
+/// breaking. `sqlfunc_decl` is source text: the properties it
 /// declares are recorded as their own fields, so what remains in it alone is
 /// parameter names, argument order and the like. `display` only feeds
 /// EXPLAIN output, since LIR stores variant names.
