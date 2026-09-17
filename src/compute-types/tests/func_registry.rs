@@ -253,6 +253,10 @@ fn func_registry_snapshot() {
              now compute something else, or was optimized under assumptions that no\n\
              longer hold.\n\n\
              What changed:\n{}\n\n\
+             NOTE: if you only edited a Sample in src/expr/src/scalar/func/registry.rs,\n\
+             this is not a function change. The input_types and output_type fields\n\
+             record what the sample probed, and a removed `name[label]` record is a\n\
+             deleted labeled sample. In that case regenerate without bumping.\n\n\
              If LIR version {LIR_VERSION} has already shipped, bump LIR_VERSION in\n\
              src/compute-types/src/plan.rs so the change lands as a new version and\n\
              version {LIR_VERSION}'s digest in '{DIGESTS_PATH}' stays as it is.\n\
