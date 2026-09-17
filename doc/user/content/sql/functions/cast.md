@@ -198,23 +198,26 @@ ERROR:  division by zero
 ```
 
 Converting a value of a composite type ([`array`](../../types/array/),
-[`list`](../../types/list/), [`map`](../../types/map/), or
-[`record`](../../types/record/)) converts each element. If any element fails to
-convert, `TRY_CAST` returns `NULL` for the whole value rather than a value with
-`NULL` elements. This also applies to `ARRAY`, `LIST`, and `MAP` constructors
-written directly inside `TRY_CAST`, which are typed on their own before the
-conversion, so an empty constructor needs an explicit type:
+[`list`](../../types/list/), or [`record`](../../types/record/)) converts each
+element. If any element fails to convert, `TRY_CAST` returns `NULL` for the
+whole value rather than a value with `NULL` elements. This also applies to
+`ARRAY`, `LIST`, and `ROW` constructors written directly inside `TRY_CAST`,
+which are typed on their own before the conversion, so an empty constructor
+needs an explicit type:
 
 ```mzsql
 SELECT TRY_CAST(ARRAY[]::text[] AS int[]);
 ```
 
-`TRY_CAST` supports every explicit cast that `CAST` does, except casts to or
-from `regclass`, `regproc`, `regtype`, `aclitem`, and
-[`mz_aclitem`](../../types/mz_aclitem/), other than those between the `oid`
-alias types and the integer types. Those casts resolve names against the
-catalog, cannot fall back to `NULL`, and are rejected when the statement is
-planned.
+A `MAP` constructor cannot be the argument of `TRY_CAST`, because there is no
+cast between two [`map`](../../types/map/) types to fall back on. Convert it
+with `CAST` or `::` instead.
+
+`TRY_CAST` supports every explicit cast that `CAST` does with some exceptions:
+it does not currently casts between `MAP` types; it does not support casts to or
+from `regclass`, `regproc`, `regtype`, `aclitem`, and [`mz_aclitem`](../../types/mz_aclitem/),
+other than those between the `oid` alias types and the integer types. Trying
+to use `TRY_CAST` for these casts will be rejected when the statement is planned.
 
 ## Examples
 
