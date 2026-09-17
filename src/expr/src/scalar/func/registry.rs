@@ -29,7 +29,8 @@
 //! constructible variant, to probe its output type at chosen input types or
 //! to record payloads whose properties differ, see [`Sample`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use mz_repr::adt::char::CharLength;
 use mz_repr::adt::datetime::DateTimeUnits;
@@ -196,9 +197,15 @@ impl FuncRegistry {
 /// precedence so a constructible variant can still be probed at chosen input
 /// types.
 ///
-/// Panics if a variant has no primary, if two samples share a name and label,
-/// or if probing a sample panics, in which case the panic names the sample.
-fn collect<F, P>(
+/// A variant whose payload has fields must have at least one hand-written
+/// sample, even when the payload is constructible with every field defaulted,
+/// because a defaulted payload sees only one branch of any property that
+/// depends on it.
+///
+/// Panics if a variant has no primary or no required sample, if two samples
+/// share a name and label, or if probing a sample panics, in which case the
+/// panic names the sample.
+fn collect<F: fmt::Debug, P>(
     enum_name: &str,
     names: impl Iterator<Item = &'static str>,
     construct: fn(&str) -> Option<F>,
@@ -206,10 +213,16 @@ fn collect<F, P>(
     variant_name: fn(&F) -> &'static str,
     properties: fn(&Sample<F>) -> P,
 ) -> BTreeMap<String, P> {
+    let samples_fn = format!(
+        "{}_samples() in src/expr/src/scalar/func/registry.rs",
+        enum_name.trim_end_matches("Func").to_lowercase()
+    );
     let mut by_name: BTreeMap<(&'static str, &'static str), Sample<F>> = BTreeMap::new();
+    let mut hand_written = BTreeSet::new();
     for sample in samples {
         let name = variant_name(&sample.func);
         let label = sample.label;
+        hand_written.insert(name);
         let duplicate = by_name.insert((name, label), sample).is_some();
         assert!(
             !duplicate,
@@ -229,11 +242,15 @@ fn collect<F, P>(
         let primary = primary.unwrap_or_else(|| {
             panic!(
                 "{enum_name} variant `{name}` cannot be constructed from its name because \
-                 its payload needs data. Add a representative Sample for it to \
-                 {}_samples() in src/expr/src/scalar/func/registry.rs.",
-                enum_name.trim_end_matches("Func").to_lowercase()
+                 its payload needs data. Add a representative Sample for it to {samples_fn}."
             )
         });
+        assert!(
+            hand_written.contains(name) || !payload_has_fields(&primary.func),
+            "{enum_name} variant `{name}` has a payload with fields but only its defaulted \
+             instance is recorded. Add a Sample with a non-default payload to {samples_fn}, \
+             labeled if the defaulted instance should stay the primary record."
+        );
         records.insert(
             name.to_string(),
             probe(enum_name, name, &primary, properties),
@@ -250,6 +267,16 @@ fn collect<F, P>(
         );
     }
     records
+}
+
+/// Whether a variant's payload struct has any fields.
+///
+/// Decided from the `Debug` rendering, which every payload derives: a unit
+/// payload renders as `Variant(Payload)`, one with fields opens a second
+/// parenthesis or a brace.
+fn payload_has_fields<F: fmt::Debug>(func: &F) -> bool {
+    let rendered = format!("{func:?}");
+    rendered.matches('(').count() > 1 || rendered.contains('{')
 }
 
 /// Runs `properties` on a sample, attributing any panic (typically an
@@ -906,4 +933,23 @@ fn variadic_samples() -> Vec<Sample<VariadicFunc>> {
             vec![SqlScalarType::Int32, SqlScalarType::String],
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn payload_field_detection() {
+        fn unary(func: impl Into<UnaryFunc>) -> UnaryFunc {
+            func.into()
+        }
+        assert!(!payload_has_fields(&unary(Not)));
+        assert!(payload_has_fields(&unary(CastInt32ToNumeric(None))));
+        assert!(payload_has_fields(&unary(PadChar { length: None })));
+        assert!(!payload_has_fields(&VariadicFunc::from(And)));
+        assert!(payload_has_fields(&VariadicFunc::from(ArrayIndex {
+            offset: 0
+        })));
+    }
 }

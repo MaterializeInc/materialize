@@ -58,8 +58,8 @@ fn registry_json(registry: &FuncRegistry) -> String {
 type Records = BTreeMap<String, BTreeMap<String, serde_json::Map<String, serde_json::Value>>>;
 
 /// Splits the differences between two registry documents into property
-/// changes, which require a version bump once shipped, and changes confined
-/// to [`INFORMATIONAL_FIELDS`].
+/// changes, which require a version bump once shipped, and informational
+/// ones: added records and changes confined to [`INFORMATIONAL_FIELDS`].
 fn classify_diff(expected: &str, actual: &str) -> (Vec<String>, Vec<String>) {
     let expected: Records = serde_json::from_str(expected).expect("snapshot is a registry");
     let actual: Records = serde_json::from_str(actual).expect("registry is JSON");
@@ -74,8 +74,10 @@ fn classify_diff(expected: &str, actual: &str) -> (Vec<String>, Vec<String>) {
         let empty = BTreeMap::new();
         let old = expected.get(enum_name).unwrap_or(&empty);
         let new = actual.get(enum_name).unwrap_or(&empty);
+        // A stored plan cannot reference a variant that did not exist when it
+        // was written, so an addition changes nothing about existing plans.
         for name in new.keys().filter(|name| !old.contains_key(*name)) {
-            properties.push(format!("  added {enum_name} `{name}`"));
+            implementations.push(format!("  added {enum_name} `{name}`"));
         }
         for name in old.keys().filter(|name| !new.contains_key(*name)) {
             properties.push(format!("  removed {enum_name} `{name}`"));
@@ -168,10 +170,10 @@ fn func_registry_snapshot() {
         );
     }
     panic!(
-        "Scalar function sources changed!\n\n\
-         These functions differ from when '{path}' was generated only in\n\
-         fields that do not by themselves change stored plans (a function\n\
-         body, its declaration text, or its SQL display name):\n\
+        "Scalar function registry changed without affecting stored plans!\n\n\
+         These records were added, or differ from '{path}' only in fields\n\
+         that do not by themselves change stored plans (a function body, its\n\
+         declaration text, or its SQL display name):\n\
          {}\n\n\
          For a body_fingerprint change, review whether the new body alters the\n\
          result for any input. If it does and LIR version {LIR_VERSION} has\n\
@@ -200,4 +202,13 @@ fn func_registry_records_sqlfunc_sources() {
     let record_get = &registry.unary["record_get"];
     assert_eq!(record_get.source.sqlfunc_decl, None);
     assert_eq!(record_get.source.body_fingerprint, None);
+}
+
+#[mz_ore::test]
+fn additions_are_informational_and_removals_are_not() {
+    let old = r#"{"UnaryFunc": {"kept": {"could_error": false}, "gone": {"could_error": false}}}"#;
+    let new = r#"{"UnaryFunc": {"kept": {"could_error": false}, "fresh": {"could_error": true}}}"#;
+    let (properties, informational) = classify_diff(old, new);
+    assert_eq!(properties, ["  removed UnaryFunc `gone`"]);
+    assert_eq!(informational, ["  added UnaryFunc `fresh`"]);
 }
