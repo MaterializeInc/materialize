@@ -14,7 +14,6 @@
 use std::time::{Duration, Instant};
 
 use columnar::{Columnar, Index};
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
@@ -27,7 +26,7 @@ use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_dyncfg::ConfigSet;
 use mz_expr::Eval;
 use mz_repr::fixed_length::ExtendDatums;
-use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -35,17 +34,16 @@ use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{
     Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
 };
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::StreamExt;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 
 use crate::extensions::arrange::{ArrangementBatcher, MzArrangeCore};
 use crate::render::RenderTimestamp;
-use crate::render::columnar::{CollectionEdge, columnar_to_vec, vec_to_columnar};
+use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
@@ -203,20 +201,76 @@ impl YieldSpec {
     }
 }
 
+/// Applies `closure` to the datums of one record, packing the row it computes.
+///
+/// The two finalization paths differ only in where the datums come from, so this is what
+/// they share.
+fn apply_closure<'a>(
+    closure: &'a JoinClosure,
+    datums: &mut DatumVecBorrow<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Option<Row>, DataflowErrorSer> {
+    let mut row_builder = SharedRow::get();
+    // `cloned` detaches the result from `temp_storage` and the shared row builder, both of
+    // which drop at the end of the caller's per-record work.
+    closure
+        .apply(datums, temp_storage, &mut row_builder)
+        .map(|row| row.cloned())
+        .map_err(DataflowErrorSer::from)
+}
+
+/// Applies `closure` to every record of `edge`, writing the rows it computes onto the
+/// output edge.
+///
+/// The closure borrows the row it reads, so reading the edge costs nothing, whereas
+/// decoding it would cost an owned [`Row`] per record.
+fn apply_closure_to_edge<'s, T>(
+    edge: ColCollection<'s, T>,
+    name: &str,
+    closure: JoinClosure,
+) -> (
+    ColCollection<'s, T>,
+    VecCollection<'s, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    let (oks, errs) = flat_map_datums::<_, ConsolidatingColumnBuilder<Row, T, Diff>, _>(
+        edge,
+        name,
+        usize::MAX,
+        {
+            let mut datum_vec = DatumVec::new();
+            move |row_datums, time, diff, ok_session, err_session| {
+                // `JoinClosure::apply` unifies the lifetimes of `&self`, the datums, and
+                // the arena. Copying the datums into a local vec lets that lifetime shrink
+                // to this call. The copy moves datum references, not row data.
+                let temp_storage = RowArena::new();
+                let mut datums = datum_vec.borrow();
+                datums.extend(row_datums.iter());
+                match apply_closure(&closure, &mut datums, &temp_storage) {
+                    Ok(Some(row)) => {
+                        ok_session.give((row, time, diff));
+                        1
+                    }
+                    Ok(None) => 0,
+                    Err(e) => {
+                        err_session.give((e, time, diff));
+                        1
+                    }
+                }
+            }
+        },
+    );
+    (oks.as_collection(), errs.as_collection())
+}
+
 /// Different forms the streamed data might take.
 enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// The join's source input, before it enters the first stage.
     /// `differential_join` forms its arrangement key off the edge, so a columnar source
     /// needs no decode.
-    Edge(CollectionEdge<'scope, T>),
-    /// The intra-operator multi-stage accumulator.
-    ///
-    /// A stage whose output is consumed by another stage's arrangement or by a
-    /// finalization closure writes this. Both of those re-encode what they read,
-    /// and a `Vec` hands them moved `Row` allocations where a `Column` would
-    /// copy row bytes, so the accumulator stays `Vec`. Only a stage whose output
-    /// *is* the node's output writes [`JoinedFlavor::Edge`].
-    Collection(VecCollection<'scope, T, Row, Diff>),
+    Collection(ColCollection<'scope, T>),
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
@@ -285,39 +339,22 @@ where
                     // If there is no starting arrangement, then we can run filters
                     // directly on the starting collection.
                     // If there is only one input, we are done joining, so run filters.
-                    // The closure is `Vec`-internal, so the edge decodes here. Current
-                    // lowering never takes this branch.
-                    let name = "LinearJoinInitialization";
-                    type CB<C> = ConsolidatingContainerBuilder<C>;
-                    let (j, errs) = columnar_to_vec(joined)
-                        .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
-                            // Reuseable allocation for unpacking.
-                            let mut datums = DatumVec::new();
-                            move |row| {
-                                let mut row_builder = SharedRow::get();
-                                let temp_storage = RowArena::new();
-                                let mut datums_local = datums.borrow_with(&row);
-                                // TODO(mcsherry): re-use `row` allocation.
-                                closure
-                                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                                    .map(|row| row.cloned())
-                                    .map_err(DataflowErrorSer::from)
-                                    .transpose()
-                            }
-                        });
+                    // Current lowering never takes this branch.
+                    let (j, errs) =
+                        apply_closure_to_edge(joined, "LinearJoinInitialization", closure);
                     errors.push(errs);
                     JoinedFlavor::Collection(j)
                 } else {
-                    JoinedFlavor::Edge(joined)
+                    JoinedFlavor::Collection(joined)
                 }
             }
         };
 
         // progress through stages, updating partial results and errors.
         //
-        // The last stage writes the node's output edge directly, but only when
-        // no finalization closure follows it. With a closure, the closure's
-        // builder writes the edge and the stage feeds it the `Vec` accumulator.
+        // The last stage writes the node's output edge only when no finalization closure
+        // follows it. With a closure, the closure's builder writes the edge and the stage
+        // feeds it the accumulator, which the closure reads borrowed either way.
         let stage_count = linear_plan.stage_plans.len();
         let terminal_stage_writes_edge = linear_plan.final_closure.is_none();
         for (index, stage_plan) in linear_plan.stage_plans.into_iter().enumerate() {
@@ -336,49 +373,17 @@ where
         // We have completed the join building, but may have work remaining.
         // For example, we may have expressions not pushed down (e.g. literals)
         // and projections that could not be applied (e.g. column repetition).
-        // The result is either the source edge (single-input join, no stages) or
-        // the `Vec` accumulator (after one or more stages); it is never arranged.
-        let ok_edge = if let Some(closure) = linear_plan.final_closure {
-            // The finalization closure computes fresh output rows, so the owned give
-            // into the consolidating builder is a move.
-            let input = match joined {
-                JoinedFlavor::Edge(edge) => columnar_to_vec(edge),
-                JoinedFlavor::Collection(collection) => collection,
-                _ => panic!("Unexpectedly arranged join output"),
-            };
-            let name = "LinearJoinFinalization";
-            type OkCB<T> = ConsolidatingColumnBuilder<Row, T, Diff>;
-            type ErrCB<C> = ConsolidatingContainerBuilder<C>;
-            let (updates, errs) = input.flat_map_fallible::<OkCB<T>, ErrCB<_>, _, _, _, _>(name, {
-                // Reuseable allocation for unpacking.
-                let mut datums = DatumVec::new();
-                move |row| {
-                    let mut row_builder = SharedRow::get();
-                    let temp_storage = RowArena::new();
-                    let mut datums_local = datums.borrow_with(&row);
-                    // TODO(mcsherry): re-use `row` allocation.
-                    closure
-                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                        .map(|row| row.cloned())
-                        .map_err(DataflowErrorSer::from)
-                        .transpose()
-                }
-            });
-            errors.push(errs);
-            updates
-        } else {
-            // Identity finalization: the raw output is the result. A single-input join
-            // passes its source edge through, and with stages the last one wrote the
-            // edge itself, because `terminal_stage_writes_edge` holds exactly here.
-            //
-            // The accumulator arm is reachable only through an initial closure on a
-            // stage-less join, which current lowering never emits. It encodes rather
-            // than panics, so a lowering change stays correct.
-            match joined {
-                JoinedFlavor::Edge(edge) => edge,
-                JoinedFlavor::Collection(collection) => vec_to_columnar(collection),
-                _ => panic!("Unexpectedly arranged join output"),
+        // The result is either the source edge (single-input join, no stages) or the
+        // accumulator (after one or more stages); it is never arranged.
+        let ok_edge = match (joined, linear_plan.final_closure) {
+            (JoinedFlavor::Collection(edge), None) => edge,
+            (JoinedFlavor::Collection(edge), Some(closure)) => {
+                let (updates, errs) =
+                    apply_closure_to_edge(edge, "LinearJoinFinalization", closure);
+                errors.push(errs);
+                updates
             }
+            _ => panic!("Unexpectedly arranged join output"),
         };
 
         // Return joined results and all produced errors collected together.
@@ -408,24 +413,11 @@ where
         terminal: bool,
         errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) -> JoinedFlavor<'s, T> {
-        // If we have a streamed input, we must first form an arrangement. The
-        // source edge keys off the `CollectionEdge` (a columnar source has no
-        // `ColumnarToVec` hop); the intra-operator accumulator is a bare
-        // `VecCollection` and keys off its `Vec`-forming logic.
+        // A streamed input must first form an arrangement.
         match joined {
-            JoinedFlavor::Edge(edge) => {
+            JoinedFlavor::Collection(edge) => {
                 let (arranged, errs) = arrange_join_input(
                     edge,
-                    stream_key,
-                    stream_thinning,
-                    ArrangementBatcher::from_config(&self.config_set),
-                );
-                errors.push(errs);
-                joined = JoinedFlavor::Local(arranged);
-            }
-            JoinedFlavor::Collection(collection) => {
-                let (arranged, errs) = arrange_join_collection(
-                    collection,
                     stream_key,
                     stream_thinning,
                     ArrangementBatcher::from_config(&self.config_set),
@@ -442,7 +434,7 @@ where
             .expect("Arrangement absent despite explicit construction");
 
         match joined {
-            JoinedFlavor::Edge(_) | JoinedFlavor::Collection(_) => {
+            JoinedFlavor::Collection(_) => {
                 unreachable!("streamed join input arranged at top of method");
             }
             JoinedFlavor::Local(local) => match arrangement {
@@ -498,11 +490,9 @@ where
     ///
     /// The return type includes an optional error collection, which may be
     /// `None` if we can determine that `closure` cannot error.
-    /// `terminal` marks a stage whose output is the node's output, which makes
-    /// the ok side write a [`ColumnBuilder`] instead of the `Vec` accumulator,
-    /// so the node needs no leaf encode. An error-capable closure writes the
-    /// accumulator either way, because its output has to be demuxed by
-    /// `ok_err` before the ok side can be encoded.
+    /// Every arm writes the columnar collection, so `terminal` selects only whether the
+    /// builder consolidates: a terminal stage's output leaves the operator, while a
+    /// non-terminal stage's is consolidated by the next stage's batcher.
     fn differential_join_inner<'s, Tr1, Tr2>(
         &self,
         prev_keyed: Arranged<'s, Tr1>,
@@ -524,12 +514,11 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
 
-        // The `Vec` accumulator's builder. Named because the ok side picks
-        // between it and a `ColumnBuilder` on `terminal`.
+        // The builder for the error-capable arm, whose `Result`s are not columnar.
         type VecCB<D, T> = CapacityContainerBuilder<Vec<(D, T, Diff)>>;
 
         if closure.could_error() {
-            let (oks, err) = self
+            let results = self
                 .linear_join_spec
                 .render::<T, _, _, _, _, VecCB<Result<Row, DataflowErrorSer>, T>>(
                     prev_keyed,
@@ -539,24 +528,9 @@ where
                             .map_err(DataflowErrorSer::from)
                             .transpose()
                     },
-                )
-                .ok_err(|(x, t, d)| {
-                    // TODO(mcsherry): consider `ok_err()` for `Collection`.
-                    match x {
-                        Ok(x) => Ok((x, t, d)),
-                        Err(x) => Err((x, t, d)),
-                    }
-                });
-
-            let oks = oks.as_collection();
-            let oks = if terminal {
-                // The demux already materialized the ok side as a `Vec`, so the
-                // leaf encode stands here.
-                JoinedFlavor::Edge(vec_to_columnar(oks))
-            } else {
-                JoinedFlavor::Collection(oks)
-            };
-            (oks, Some(err.as_collection()))
+                );
+            let (oks, errs) = demux_join_results(results);
+            (JoinedFlavor::Collection(oks), Some(errs))
         } else if terminal {
             let oks = self
                 .linear_join_spec
@@ -569,11 +543,13 @@ where
                     },
                 );
 
-            (JoinedFlavor::Edge(oks.as_collection()), None)
+            (JoinedFlavor::Collection(oks.as_collection()), None)
         } else {
+            // The next stage's arrangement batcher consolidates this, and `mz_join_core`
+            // has already consolidated each chunk it produces, so this builder does not.
             let oks = self
                 .linear_join_spec
-                .render::<T, _, _, _, _, VecCB<Row, T>>(
+                .render::<T, _, _, _, _, ColumnBuilder<(Row, T, Diff)>>(
                     prev_keyed,
                     next_input,
                     move |key, old, new| {
@@ -617,6 +593,41 @@ where
         .map(|row| row.cloned())
 }
 
+/// Splits a stage's `Result`s, writing the rows onto the edge and the errors to a `Vec`.
+///
+/// [`LinearJoinSpec::render`] has one output, so a stage whose closure can error produces
+/// `Result`s and separates them afterwards. The rows are pushed borrowed, so the split is
+/// also the encode.
+fn demux_join_results<'s, T>(
+    results: Stream<'s, T, Vec<(Result<Row, DataflowErrorSer>, T, Diff)>>,
+) -> (
+    ColCollection<'s, T>,
+    VecCollection<'s, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    let (oks, errs) = results.unary_fallible::<ColumnBuilder<(Row, T, Diff)>, _, _, _>(
+        Pipeline,
+        "LinearJoinStageDemux",
+        |_, _| {
+            Box::new(move |input, ok, err| {
+                input.for_each(|time, data| {
+                    let mut ok_session = ok.session_with_builder(&time);
+                    let mut err_session = err.session(&time);
+                    for (result, time, diff) in data.drain(..) {
+                        match result {
+                            Ok(row) => ok_session.give((&row, &time, &diff)),
+                            Err(e) => err_session.give((e, time, diff)),
+                        }
+                    }
+                });
+            })
+        },
+    );
+    (oks.as_collection(), errs.as_collection())
+}
+
 /// Re-encodes a `Vec` collection through `CB`.
 ///
 /// For a join implementation that builds its own `Vec` output and so cannot be
@@ -641,61 +652,6 @@ where
                 });
             }
         })
-}
-
-/// Keys a row-formatted join input stream into columnar `((key, value), t, d)`
-/// updates, splitting off key-evaluation errors into a separate stream.
-///
-/// The key and value are pushed borrowed into a `ColumnBuilder`, so the ok path
-/// materializes no owned `Row` per record. The error path owns time and diff.
-/// Called by [`arrange_join_collection`] for the intra-operator accumulator,
-/// which is row-formatted. [`arrange_join_input`] does the same job for the
-/// columnar source edge, reading records from the borrowed column instead.
-fn key_join_input_vec<'s, T>(
-    stream: Stream<'s, T, Vec<(Row, T, Diff)>>,
-    stream_key: Vec<LirScalarExpr>,
-    stream_thinning: Vec<usize>,
-) -> (
-    Stream<'s, T, Column<((Row, Row), T, Diff)>>,
-    Stream<'s, T, Vec<(DataflowErrorSer, T, Diff)>>,
-)
-where
-    T: RenderTimestamp,
-{
-    stream.unary_fallible::<ColumnBuilder<((Row, Row), T, Diff)>, _, _, _>(
-        Pipeline,
-        "LinearJoinAccumulatorKeyPreparation",
-        |_, _| {
-            Box::new(move |input, ok, errs| {
-                let mut temp_storage = RowArena::new();
-                let mut key_buf = Row::default();
-                let mut val_buf = Row::default();
-                let mut datums = DatumVec::new();
-                input.for_each(|time, data| {
-                    let mut ok_session = ok.session_with_builder(&time);
-                    let mut err_session = errs.session(&time);
-                    for (row, time, diff) in data.iter() {
-                        temp_storage.clear();
-                        let datums_local = datums.borrow_with(row);
-                        let datums = stream_key
-                            .iter()
-                            .map(|e| e.eval(&datums_local, &temp_storage));
-                        match key_buf.packer().try_extend(datums) {
-                            Ok(()) => {
-                                val_buf
-                                    .packer()
-                                    .extend(stream_thinning.iter().map(|e| datums_local[*e]));
-                                ok_session.give(((&key_buf, &val_buf), time, diff));
-                            }
-                            Err(e) => {
-                                err_session.give((e.into(), time.clone(), *diff));
-                            }
-                        }
-                    }
-                });
-            })
-        },
-    )
 }
 
 /// Exchanges keyed join updates by key and arranges them into a `RowRowSpine`.
@@ -744,7 +700,7 @@ where
 /// consumes, so the ok path holds no owned `Row` per record. Only the error path owns a
 /// time and diff.
 fn arrange_join_input<'s, T>(
-    edge: CollectionEdge<'s, T>,
+    edge: ColCollection<'s, T>,
     stream_key: Vec<LirScalarExpr>,
     stream_thinning: Vec<usize>,
     batcher: ArrangementBatcher,
@@ -795,26 +751,6 @@ where
                 })
             },
         );
-    arrange_keyed_join_input(keyed, errs, batcher)
-}
-
-/// Forms the arrangement for the intra-operator `Vec` accumulator of a linear
-/// join. Unlike [`arrange_join_input`], the accumulator is a bare `VecCollection`
-/// rather than a collection edge: `mz_join_core` is `Vec`-internal, so the
-/// accumulator never carries the collection edge type.
-fn arrange_join_collection<'s, T>(
-    collection: VecCollection<'s, T, Row, Diff>,
-    stream_key: Vec<LirScalarExpr>,
-    stream_thinning: Vec<usize>,
-    batcher: ArrangementBatcher,
-) -> (
-    Arranged<'s, RowRowAgent<T, Diff>>,
-    VecCollection<'s, T, DataflowErrorSer, Diff>,
-)
-where
-    T: Lattice + RenderTimestamp,
-{
-    let (keyed, errs) = key_join_input_vec(collection.inner, stream_key, stream_thinning);
     arrange_keyed_join_input(keyed, errs, batcher)
 }
 
@@ -952,52 +888,5 @@ mod tests {
         let (ok, err) = run_columnar(test_input(), key);
         assert!(ok.is_empty());
         assert!(!err.is_empty());
-    }
-
-    /// The bare-`VecCollection` accumulator path (`arrange_join_collection`, used
-    /// for join stages after the first) forms the same keyed arrangement as the
-    /// columnar source edge path (`arrange_join_input`). The two use different
-    /// keying implementations (`arrange_join_input` keys inline off the borrowed
-    /// column, `arrange_join_collection` keys via `key_join_input_vec`), so this
-    /// cross-checks the two keying paths against each other.
-    #[mz_ore::test]
-    fn arrange_join_collection_matches_edge() {
-        let key = vec![LirScalarExpr::column(0)];
-        let input = test_input();
-        let (edge_ok, acc_ok) = timely::execute_directly(move |worker| {
-            worker.dataflow::<Timestamp, _, _>(|scope| {
-                let (mut handle, collection) = scope.new_collection();
-                let (edge_arr, _edge_errs) = arrange_join_input(
-                    vec_to_columnar(collection.clone()),
-                    key.clone(),
-                    vec![1],
-                    ArrangementBatcher::Columnation,
-                );
-                let (acc_arr, _acc_errs) = arrange_join_collection(
-                    collection,
-                    key.clone(),
-                    vec![1],
-                    ArrangementBatcher::Columnation,
-                );
-                let edge_ok = edge_arr
-                    .as_collection(|k, v| (k.to_row(), v.to_row()))
-                    .inner
-                    .capture();
-                let acc_ok = acc_arr
-                    .as_collection(|k, v| (k.to_row(), v.to_row()))
-                    .inner
-                    .capture();
-                for (row, time, diff) in input {
-                    handle.update_at(row, Timestamp::from(time), diff);
-                }
-                handle.advance_to(Timestamp::from(3_u64));
-                handle.flush();
-                (edge_ok, acc_ok)
-            })
-        });
-        let edge_ok = extract_sorted(edge_ok);
-        let acc_ok = extract_sorted(acc_ok);
-        assert!(!edge_ok.is_empty());
-        assert_eq!(edge_ok, acc_ok);
     }
 }

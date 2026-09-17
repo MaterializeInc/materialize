@@ -9,8 +9,8 @@
 
 //! Columnar dataflow edge support.
 //!
-//! Defines [`CollectionEdge`], the columnar batch representation that dataflow
-//! edges between Plan nodes carry. Every producer emits this representation.
+//! Defines [`ColCollection`], the columnar collection that dataflow edges between Plan
+//! nodes carry. Every producer emits this representation.
 //!
 //! Within a Plan node, operators may freely materialize `Vec` collections. Only
 //! the collection edge format is constrained. A node that produces a row-based
@@ -21,6 +21,7 @@
 //! introspection.
 
 use columnar::{Borrow, Columnar, Container, Index, Len, Push};
+use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
@@ -30,11 +31,13 @@ use mz_timely_util::columnar::columnar_consolidate_exchange;
 use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
-use timely::container::CapacityContainerBuilder;
+use timely::container::{CapacityContainerBuilder, NoopBuilder};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{Operator, OutputBuilder};
 use timely::dataflow::{Scope, Stream, StreamVec};
+use timely::order::Product;
+use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ECB, Session};
@@ -47,14 +50,15 @@ use crate::render::errors::DataflowErrorSer;
 /// container is [`Column<(D, T, R)>`] instead of `Vec<(D, T, R)>`.
 pub type ColumnarCollection<'scope, T, D, R> = Collection<'scope, T, Column<(D, T, R)>>;
 
-/// A dataflow edge between Plan nodes: a columnar collection of `(Row, Diff)` updates.
-pub type CollectionEdge<'scope, T> = ColumnarCollection<'scope, T, Row, Diff>;
+/// A columnar collection of `(Row, Diff)` updates, which is what a dataflow edge between
+/// Plan nodes carries.
+pub type ColCollection<'scope, T> = ColumnarCollection<'scope, T, Row, Diff>;
 
 /// Concatenates a collection of columnar edges.
-pub fn concat_many<'scope, T, I>(scope: Scope<'scope, T>, edges: I) -> CollectionEdge<'scope, T>
+pub fn concat_many<'scope, T, I>(scope: Scope<'scope, T>, edges: I) -> ColCollection<'scope, T>
 where
     T: RenderTimestamp,
-    I: IntoIterator<Item = CollectionEdge<'scope, T>>,
+    I: IntoIterator<Item = ColCollection<'scope, T>>,
 {
     let cols: Vec<_> = edges.into_iter().collect();
     differential_dataflow::collection::concatenate(scope, cols)
@@ -63,14 +67,15 @@ where
 /// Applies `logic` to each record in `edge`, exposing the record as a borrowed
 /// [`DatumVecBorrow`] and giving it ok and err output sessions.
 ///
-/// `max_demand` bounds the number of columns decoded per row. Pass `usize::MAX`
-/// to decode all columns.
+/// `name` is the rendered operator's name. `max_demand` bounds the number of columns decoded
+/// per row. Pass `usize::MAX` to decode all columns.
 ///
 /// This is the canonical entry point for "decoding consumers" (operators that
 /// read [`mz_repr::Datum`]s from each row anyway). It iterates the columnar
 /// batch directly without going through an owned [`Row`].
 pub fn flat_map_datums<'scope, T, DCB, L>(
-    edge: CollectionEdge<'scope, T>,
+    edge: ColCollection<'scope, T>,
+    name: &str,
     max_demand: usize,
     mut logic: L,
 ) -> (
@@ -90,7 +95,7 @@ where
         + 'static,
 {
     let scope = edge.inner.scope();
-    let mut builder = OperatorBuilder::new("CollectionFlatMap".to_string(), scope);
+    let mut builder = OperatorBuilder::new(name.to_string(), scope);
     let (ok_output, ok_stream) = builder.new_output();
     let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
     let (err_output, err_stream) = builder.new_output();
@@ -174,6 +179,102 @@ where
     }
 }
 
+/// The timestamp of a scope that carries iteration coordinates.
+pub type RecTimestamp = Product<mz_repr::Timestamp, PointStamp<u64>>;
+
+/// Truncates every time in `column` to `level - 1` iteration coordinates.
+///
+/// A `Typed` input hands its row and diff columns over untouched, because truncation only
+/// rewrites times. A serialized input keeps all three columns in one buffer, so its rows
+/// and diffs are copied in bulk rather than per record.
+fn truncate_times(
+    column: Column<(Row, RecTimestamp, Diff)>,
+    level: usize,
+) -> Column<(Row, RecTimestamp, Diff)> {
+    /// Collects the truncation of every time in `times` into a fresh column.
+    fn truncated<'a, C>(times: C, level: usize) -> <RecTimestamp as Columnar>::Container
+    where
+        C: Len + Index<Ref = columnar::Ref<'a, RecTimestamp>> + 'a,
+    {
+        let mut truncated = <RecTimestamp as Columnar>::Container::default();
+        let mut time = RecTimestamp::default();
+        for reference in times.into_index_iter() {
+            time.copy_from(reference);
+            let mut coordinates = std::mem::take(&mut time.inner).into_inner();
+            coordinates.truncate(level - 1);
+            time.inner = PointStamp::new(coordinates);
+            truncated.push(&time);
+        }
+        truncated
+    }
+
+    match column {
+        Column::Typed((rows, times, diffs)) => {
+            let times = truncated(times.borrow(), level);
+            Column::Typed((rows, times, diffs))
+        }
+        column => {
+            let view = column.borrow();
+            let len = view.len();
+            let mut out = <(Row, RecTimestamp, Diff) as Columnar>::Container::default();
+            let (rows, times, diffs) = &mut out;
+            rows.extend_from_self(view.0, 0..len);
+            *times = truncated(view.1, level);
+            diffs.extend_from_self(view.2, 0..len);
+            Column::Typed(out)
+        }
+    }
+}
+
+/// Leaves a dynamically created scope that has `level` iteration coordinates.
+///
+/// The columnar counterpart of differential's `leave_dynamic`, which it offers only for
+/// `Vec` collections. Keeping the recursive binding's result on the edge is what lets the
+/// feedback loop run without a decode and a re-encode per iteration.
+pub fn columnar_leave_dynamic<'scope>(
+    collection: ColumnarCollection<'scope, RecTimestamp, Row, Diff>,
+    level: usize,
+) -> ColumnarCollection<'scope, RecTimestamp, Row, Diff> {
+    let scope = collection.inner.scope();
+    let mut builder = OperatorBuilder::new("ColumnarLeaveDynamic".to_string(), scope);
+    let (output, stream) = builder.new_output();
+    let mut output =
+        OutputBuilder::<_, NoopBuilder<Column<(Row, RecTimestamp, Diff)>>>::from(output);
+    // The connection summary tells the scope that this operator drops all but `level - 1`
+    // coordinates, so a downstream frontier is not held back by the iteration it leaves.
+    let summary = Product {
+        outer: Default::default(),
+        inner: PointStampSummary {
+            retain: Some(level - 1),
+            actions: Vec::new(),
+        },
+    };
+    let mut input = builder.new_input_connection(
+        collection.inner,
+        Pipeline,
+        [(0, Antichain::from_elem(summary))],
+    );
+
+    builder.build(move |_capability| {
+        move |_frontier| {
+            let mut output = output.activate();
+            input.for_each(|cap, data| {
+                let mut time = cap.time().clone();
+                let mut coordinates = std::mem::take(&mut time.inner).into_inner();
+                coordinates.truncate(level - 1);
+                time.inner = PointStamp::new(coordinates);
+                let cap = cap.delayed(&time, 0);
+                let mut truncated = truncate_times(std::mem::take(data), level);
+                output
+                    .session_with_builder(&cap)
+                    .give_container(&mut truncated);
+            });
+        }
+    });
+
+    stream.as_collection()
+}
+
 /// Negates the diff of every record in a [`ColumnarCollection`].
 pub fn columnar_negate<'scope, T>(
     collection: ColumnarCollection<'scope, T, Row, Diff>,
@@ -183,14 +284,16 @@ where
 {
     collection
         .inner
-        .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
+        .unary::<NoopBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
             "ColumnarNegate",
             |_cap, _info| {
                 move |input, output| {
                     input.for_each(|time, data| {
                         let mut negated = negate_column(std::mem::take(data));
-                        output.session(&time).give_container(&mut negated);
+                        output
+                            .session_with_builder(&time)
+                            .give_container(&mut negated);
                     });
                 }
             },
@@ -234,13 +337,13 @@ where
     // hazard on large consolidations. `consolidate_named`'s unpack does the same, so a
     // fuel fix has to cover both.
     consolidated
-        .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
+        .unary::<NoopBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
             &format!("Flatten {name}"),
             |_cap, _info| {
                 move |input, output| {
                     input.for_each(|time, data| {
-                        let mut session = output.session(&time);
+                        let mut session = output.session_with_builder(&time);
                         for mut chunk in data.drain(..).flatten() {
                             session.give_container(&mut chunk);
                         }
@@ -448,6 +551,7 @@ mod tests {
                 let (mut input, collection) = scope.new_collection();
                 let (oks, _errs) = flat_map_datums::<_, RowBuilder, _>(
                     vec_to_columnar(collection),
+                    "test",
                     1,
                     |datums, t, d, ok_session, _err_session| {
                         ok_session.give((Row::pack(datums.iter()), t, d));

@@ -4,7 +4,7 @@ description: "This section contains guides for installing Materialize Agent skil
 disable_list: true
 menu:
   main:
-    name: "Setup agents"
+    name: "MCP servers"
     identifier: mcp-server
     parent: developer-tools
     weight: 10
