@@ -310,6 +310,8 @@ pub enum Command {
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
         statement_logging_id: Option<StatementLoggingId>,
+        /// Where a discarded error is reported, since the coordinator holds no session.
+        notice_tx: tokio::sync::mpsc::UnboundedSender<crate::AdapterNotice>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 

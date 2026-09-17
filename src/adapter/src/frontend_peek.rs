@@ -1065,6 +1065,7 @@ impl PeekClient {
                     view_id,
                     index_id,
                     plan.with_snapshot,
+                    plan.ignore_errors,
                     plan.up_to,
                     debug_name,
                     optimizer_config,
@@ -1410,6 +1411,7 @@ impl PeekClient {
                         read_holds,
                         plan: subscribe_plan,
                         statement_logging_id: logging.id(),
+                        notice_tx: session.retain_notice_transmitter(),
                         tx,
                     })
                     .await??;

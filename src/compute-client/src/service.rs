@@ -288,6 +288,11 @@ impl PartitionedComputeState {
                 frontiers.update_iter(batch.upper.into_iter().map(|t| (t, 1)));
                 let new_frontier = frontiers.frontier().to_owned();
 
+                // Any one worker's discarded error serves for the merged stream, so the first
+                // to arrive is kept and the rest are dropped.
+                if tracked.ignored_error.is_none() {
+                    tracked.ignored_error = batch.ignored_error;
+                }
                 tracked.stash(batch.updates, self.max_result_size);
 
                 // If the frontier has advanced, it is time to announce subscribe progress. Unless
@@ -323,6 +328,7 @@ impl PartitionedComputeState {
                             lower: old_frontier,
                             upper: new_frontier,
                             updates,
+                            ignored_error: tracked.ignored_error.take(),
                         }),
                     ))
                 } else {
@@ -513,6 +519,9 @@ struct PendingSubscribe {
     ///
     /// This field is used to ensure we emit such a response only once.
     dropped: bool,
+    /// An error a worker discarded under `SubscribeSinkConnection::ignore_errors`, held until
+    /// the next batch goes out and then cleared, so the merged stream reports it once.
+    ignored_error: Option<String>,
 }
 
 impl PendingSubscribe {
@@ -525,6 +534,7 @@ impl PendingSubscribe {
         Self {
             frontiers,
             stashed_updates: Ok(Vec::new()),
+            ignored_error: None,
             stashed_result_size: 0,
             dropped: false,
         }

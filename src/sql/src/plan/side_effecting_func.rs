@@ -136,18 +136,12 @@ fn extract_sef_call(
                 limit: None,
                 offset: None,
             },
-        options,
+        options: statement_options,
         as_of: None,
     } = select
     else {
         return Ok(None);
     };
-    // A side-effecting function is planned outside the normal query path, which has no
-    // error collection to discard, so an option that speaks about one cannot be honored
-    // here. Rejecting beats silently dropping it.
-    if let Some(option) = options.first() {
-        sql_bail!("{} is not supported with this function", option.name);
-    }
     if !ctes.is_empty() || !order_by.is_empty() {
         return Ok(None);
     }
@@ -205,6 +199,14 @@ fn extract_sef_call(
     let Some(sef_impl) = PG_CATALOG_SEF_BUILTINS.get(&func_impl.oid) else {
         return Ok(None);
     };
+
+    // This call is planned outside the normal query path, which has no error collection to
+    // discard, so a statement option that speaks about one cannot be honored. Rejecting beats
+    // silently dropping it. Checked only once the statement is known to be one of these calls,
+    // so that an ordinary query carrying the option still reaches normal planning.
+    if let Some(option) = statement_options.first() {
+        sql_bail!("{} is not supported with this function", option.name);
+    }
 
     // Check that the number of provided arguments matches the function
     // signature.

@@ -399,6 +399,14 @@ impl PeekClient {
 
             let mut rows = match rows_res {
                 Ok(rows) => rows,
+                // The option covers a constant answer too, so an error folded at plan time
+                // becomes an empty result rather than a failure.
+                Err(e) if ignore_errors => {
+                    let _ = notice_tx.send(crate::AdapterNotice::IgnoredErrors {
+                        error: e.to_string(),
+                    });
+                    Vec::new()
+                }
                 Err(e) => return Err(e.into()),
             };
             consolidate(&mut rows);

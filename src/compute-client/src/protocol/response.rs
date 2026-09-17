@@ -397,6 +397,12 @@ pub struct SubscribeBatch {
     ///
     /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
     pub updates: Result<Vec<UpdateCollection>, String>,
+    /// The first error this subscribe discarded under `SubscribeSinkConnection::ignore_errors`.
+    ///
+    /// Set on the one batch that discarded it and empty on every batch after, so that a stream
+    /// erroring continuously reports once rather than on every batch. `updates` is an `Ok` when
+    /// this is set: the error arm is the poison channel that the option removes.
+    pub ignored_error: Option<String>,
 }
 
 impl SubscribeBatch {

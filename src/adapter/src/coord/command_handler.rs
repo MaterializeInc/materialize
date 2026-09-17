@@ -474,6 +474,7 @@ impl Coordinator {
                     read_holds,
                     plan,
                     statement_logging_id,
+                    notice_tx,
                     tx,
                 } => {
                     let mut ctx_extra = ExecuteContextGuard::new(
@@ -491,6 +492,7 @@ impl Coordinator {
                             session_uuid,
                             read_holds,
                             plan,
+                            notice_tx,
                         )
                         .await
                     {
