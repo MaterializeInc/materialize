@@ -1565,9 +1565,15 @@ pub fn plan_cast(
     let direct = get_cast(ecx, ccx, &from, to);
     let from_category = TypeCategory::from_type(&from);
     let to_category = TypeCategory::from_type(to);
+    // The `from != String` and `to != String` guards ensure we don't just replay
+    // the `get_cast` that just failed.
     match direct {
         Ok(cast) => Ok(cast(expr)),
-        Err(_) if from_category == TypeCategory::String && to_category != TypeCategory::String => {
+        Err(_)
+            if from_category == TypeCategory::String
+                && to_category != TypeCategory::String
+                && from != SqlScalarType::String =>
+        {
             // Converting from stringlike to something non-stringlike. Handle as
             // if `from` were a `SqlScalarType::String`.
             //
@@ -1582,7 +1588,11 @@ pub fn plan_cast(
             };
             cast_inner(&SqlScalarType::String, to, expr)
         }
-        Err(_) if from_category != TypeCategory::String && to_category == TypeCategory::String => {
+        Err(_)
+            if from_category != TypeCategory::String
+                && to_category == TypeCategory::String
+                && *to != SqlScalarType::String =>
+        {
             // Converting from non-stringlike to something stringlike. Convert to
             // a `SqlScalarType::String` and then to the desired type.
             let expr = cast_inner(&from, &SqlScalarType::String, expr)?;
