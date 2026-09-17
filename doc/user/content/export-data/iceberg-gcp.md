@@ -49,19 +49,42 @@ authenticate to BigLake.
     - `storage.objectUser` (Storage Object User)
 4. [Create a service account key in JSON format.](https://docs.cloud.google.com/iam/docs/keys-create-delete#iam-service-account-keys-create-gcloud)
 
-5. Base64-encode the entire JSON key (e.g. `base64 < sa_key.json`). In the [next
+5. (Optional) [Enable credential vending on your
+   catalog.](https://docs.cloud.google.com/lakehouse/docs/enable-credential-vending)
+   Do this if you want Materialize to reach the warehouse bucket with
+   temporary, table-scoped credentials that the catalog vends, rather than with
+   the service account key. See [Storage access
+   delegation](/sql/create-connection/#iceberg-catalog-access-delegation).
+
+6. Base64-encode the entire JSON key (e.g. `base64 < sa_key.json`). In the [next
    step](#step-2-create-a-gcp-connection-and-iceberg-catalog-connection-in-materialize),
    you will decode the resulting string in the `CREATE SECRET` statement.
    Encoding the key first and decoding it in the `CREATE SECRET` statement
    avoids escaping quotes and newlines in the SQL string literal.
 
-#### (Optional) Configure your Lakehouse catalog to enable vended credentials
-
-If you plan to use vended credentials with your iceberg sink, you must [enable credential vending on your catalog](https://docs.cloud.google.com/lakehouse/docs/enable-credential-vending) before creating your sink.
-
 ### Step 2. Create a GCP connection and Iceberg catalog connection in Materialize
 
+How you configure the Iceberg catalog connection depends on how Materialize
+reaches the warehouse bucket.
+
+{{< tabs >}}
+{{< tab "Using Vended Credentials" >}}
+
+Use this configuration if you [enabled credential vending on your
+catalog](https://docs.cloud.google.com/lakehouse/docs/enable-credential-vending).
+
+{{% include-example file="examples/create_connection" example="example-iceberg-catalog-gcp-connection-vended-credentials" %}}
+
+{{< /tab >}}
+{{< tab "Using Storage access credentials" >}}
+
+Use this configuration if the service account holds `storage.objectUser` on the
+warehouse bucket and the catalog does not vend credentials.
+
 {{% include-example file="examples/create_connection" example="example-iceberg-catalog-gcp-connection" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Create the Iceberg sink in Materialize
 
