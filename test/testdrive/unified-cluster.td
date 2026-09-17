@@ -15,6 +15,14 @@
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unified_cluster = true
 
+# Disable the storage log bridge, which the CI configuration turns on. The
+# bridge would make storage dataflows visible in compute introspection on a
+# two-cluster replica as well, so with it enabled the dataflow assertion below
+# holds on either topology and the file carries no signal that the flag
+# reached the replica.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_storage_introspection_logs = false
+
 > CREATE CLUSTER uc (SIZE '${arg.default-replica-size}')
 
 > CREATE SOURCE uc_auction
@@ -45,6 +53,9 @@ true
 > DROP SOURCE uc_auction CASCADE
 
 > DROP CLUSTER uc
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET enable_storage_introspection_logs
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM RESET enable_unified_cluster
