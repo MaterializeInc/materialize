@@ -944,6 +944,7 @@ fn generate_rbac_requirements(
         Plan::Select(plan::SelectPlan {
             source,
             select: _,
+            ignore_errors: _,
             when: _,
             finishing: _,
             copy_to: _,
@@ -967,6 +968,7 @@ fn generate_rbac_requirements(
         }
         Plan::Subscribe(plan::SubscribePlan {
             from,
+            ignore_errors: _,
             with_snapshot: _,
             when: _,
             up_to: _,

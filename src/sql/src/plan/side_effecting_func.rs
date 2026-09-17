@@ -136,11 +136,18 @@ fn extract_sef_call(
                 limit: None,
                 offset: None,
             },
+        options,
         as_of: None,
     } = select
     else {
         return Ok(None);
     };
+    // A side-effecting function is planned outside the normal query path, which has no
+    // error collection to discard, so an option that speaks about one cannot be honored
+    // here. Rejecting beats silently dropping it.
+    if let Some(option) = options.first() {
+        sql_bail!("{} is not supported with this function", option.name);
+    }
     if !ctes.is_empty() || !order_by.is_empty() {
         return Ok(None);
     }

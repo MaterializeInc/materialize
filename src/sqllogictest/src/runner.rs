@@ -2987,6 +2987,7 @@ fn generate_view_sql(
 
     // `SELECT [* | {projection}] FROM {name} [ORDER BY {view_order_by}]`
     let view_sql = AstStatement::<Raw>::Select(SelectStatement {
+        options: vec![],
         query: Query {
             ctes: CteBlock::Simple(vec![]),
             body: SetExpr::Select(Box::new(Select {

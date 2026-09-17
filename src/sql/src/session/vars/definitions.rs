@@ -2030,6 +2030,14 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_ignore_errors,
+        desc: "SELECT .. WITH (IGNORE ERRORS) and SUBSCRIBE .. WITH (IGNORE ERRORS) syntax",
+        default: false,
+        // The syntax is rejected on every statement that defines a catalog item, so it can
+        // never appear in one.
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_kafka_broker_matching_rules,
         desc: "MATCHING broker rules in BROKERS for Kafka PrivateLink connections",
         default: false,
