@@ -182,17 +182,19 @@ contains:invalid COMPRESSION TYPE: pied-piper
 
 # The Kafka APIs do not make it possible to assess whether the compression
 # actually took place, so we settle for just validating that the data is
-# readable.
-$ kafka-verify-data format=json key=false sink=materialize.public.lz4_sink_implicit
+# readable. Six sinks write the same two rows into this one topic, and neither
+# the interleaving across sinks nor the order within one sink's snapshot is
+# fixed, so compare the twelve records as a sorted multiset.
+$ kafka-verify-data format=json key=false sink=materialize.public.lz4_sink_implicit sort-messages=true
+{"a": "hello"}
+{"a": "hello"}
+{"a": "hello"}
+{"a": "hello"}
+{"a": "hello"}
 {"a": "hello"}
 {"a": "world"}
-{"a": "hello"}
 {"a": "world"}
-{"a": "hello"}
 {"a": "world"}
-{"a": "hello"}
 {"a": "world"}
-{"a": "hello"}
 {"a": "world"}
-{"a": "hello"}
 {"a": "world"}
