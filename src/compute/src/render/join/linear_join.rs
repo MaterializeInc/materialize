@@ -34,6 +34,7 @@ use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{
     Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
 };
+use mz_timely_util::containers::split::{SplitBuilder, unzip};
 use mz_timely_util::operator::StreamExt;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -514,13 +515,10 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
 
-        // The builder for the error-capable arm, whose `Result`s are not columnar.
-        type VecCB<D, T> = CapacityContainerBuilder<Vec<(D, T, Diff)>>;
-
         if closure.could_error() {
             let results = self
                 .linear_join_spec
-                .render::<T, _, _, _, _, VecCB<Result<Row, DataflowErrorSer>, T>>(
+                .render::<T, _, _, _, _, StageBuilder<T>>(
                     prev_keyed,
                     next_input,
                     move |key, old, new| {
@@ -529,8 +527,11 @@ where
                             .transpose()
                     },
                 );
-            let (oks, errs) = demux_join_results(results);
-            (JoinedFlavor::Collection(oks), Some(errs))
+            let (oks, errs) = unzip(results, "LinearJoinStageUnzip");
+            (
+                JoinedFlavor::Collection(oks.as_collection()),
+                Some(errs.as_collection()),
+            )
         } else if terminal {
             let oks = self
                 .linear_join_spec
@@ -593,40 +594,15 @@ where
         .map(|row| row.cloned())
 }
 
-/// Splits a stage's `Result`s, writing the rows onto the edge and the errors to a `Vec`.
+/// The output builder of a stage whose closure can error.
 ///
-/// [`LinearJoinSpec::render`] has one output, so a stage whose closure can error produces
-/// `Result`s and separates them afterwards. The rows are pushed borrowed, so the split is
-/// also the encode.
-fn demux_join_results<'s, T>(
-    results: Stream<'s, T, Vec<(Result<Row, DataflowErrorSer>, T, Diff)>>,
-) -> (
-    ColCollection<'s, T>,
-    VecCollection<'s, T, DataflowErrorSer, Diff>,
-)
-where
-    T: RenderTimestamp,
-{
-    let (oks, errs) = results.unary_fallible::<ColumnBuilder<(Row, T, Diff)>, _, _, _>(
-        Pipeline,
-        "LinearJoinStageDemux",
-        |_, _| {
-            Box::new(move |input, ok, err| {
-                input.for_each(|time, data| {
-                    let mut ok_session = ok.session_with_builder(&time);
-                    let mut err_session = err.session(&time);
-                    for (result, time, diff) in data.drain(..) {
-                        match result {
-                            Ok(row) => ok_session.give((&row, &time, &diff)),
-                            Err(e) => err_session.give((e, time, diff)),
-                        }
-                    }
-                });
-            })
-        },
-    );
-    (oks.as_collection(), errs.as_collection())
-}
+/// [`LinearJoinSpec::render`] has one output, so such a stage produces `Result`s. The
+/// builder routes each one as it is pushed, so the rows land in a column and the errors
+/// in a `Vec` without either half ever holding the other's records.
+type StageBuilder<T> = SplitBuilder<
+    ColumnBuilder<(Row, T, Diff)>,
+    CapacityContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>,
+>;
 
 /// Re-encodes a `Vec` collection through `CB`.
 ///

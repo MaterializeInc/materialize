@@ -30,10 +30,10 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::Eval;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_timely_util::containers::split::{SplitBuilder, unzip};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
-use timely::container::CapacityContainerBuilder;
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::generic::Session;
 use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
@@ -475,6 +475,16 @@ where
     }
 }
 
+/// Output builder for a half join whose closure can error.
+///
+/// A half join has one output, so such a closure produces `Result`s. The builder routes
+/// each one as it is pushed, and [`unzip`] separates the halves afterwards without
+/// visiting a record.
+type FallibleHalfJoinBuilder<T> = SplitBuilder<
+    CapacityContainerBuilder<Vec<((Row, T), T, Diff)>>,
+    CapacityContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>,
+>;
+
 /// `half_join2` implementation (less-quadratic, new default).
 fn build_halfjoin2<'scope, T, Tr, CF>(
     updates: VecCollection<'scope, T, (Row, Row, T), Diff>,
@@ -501,7 +511,7 @@ where
     type CB<C> = CapacityContainerBuilder<C>;
 
     if closure.could_error() {
-        let (oks, errs2) = differential_dogs3::operators::half_join2::half_join_internal_unsafe(
+        let results = differential_dogs3::operators::half_join2::half_join_internal_unsafe(
             updates,
             trace,
             |time, antichain| {
@@ -512,7 +522,13 @@ where
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-            move |session: &mut CB<Vec<_>>, key, stream_row, lookup_row, initial, diff1, output| {
+            move |session: &mut FallibleHalfJoinBuilder<T>,
+                  key,
+                  stream_row,
+                  lookup_row,
+                  initial,
+                  diff1,
+                  output| {
                 let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
 
@@ -521,29 +537,29 @@ where
                 datums_local.extend(stream_row.iter());
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
-                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+                let result = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
 
                 for (time, diff2) in output.drain(..) {
-                    let row = row.as_ref().map(|row| row.cloned()).map_err(Clone::clone);
                     let diff = diff1.clone() * diff2.clone();
-                    let data = ((row, time.clone()), initial.clone(), diff);
-                    use timely::container::PushInto;
-                    session.push_into(data);
+                    // One owned row per produced record, since each carries its own time.
+                    match result.as_ref().map(|row| row.cloned()) {
+                        // The closure filtered this match out.
+                        Ok(None) => {}
+                        Ok(Some(row)) => {
+                            session.push_into((Ok((row, time.clone())), initial.clone(), diff));
+                        }
+                        Err(err) => session.push_into((
+                            Err(DataflowErrorSer::from(err.clone())),
+                            initial.clone(),
+                            diff,
+                        )),
+                    }
                 }
             },
-        )
-        .ok_err(|(data_time, init_time, diff)| {
-            // TODO(mcsherry): consider `ok_err()` for `Collection`.
-            match data_time {
-                (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
-                (Err(err), _time) => Err((DataflowErrorSer::from(err), init_time, diff)),
-            }
-        });
+        );
+        let (oks, errs2) = unzip(results, "DeltaHalfJoin2Unzip");
 
-        (
-            oks.as_collection().flat_map(|x| x),
-            errs.concat(errs2.as_collection()),
-        )
+        (oks.as_collection(), errs.concat(errs2.as_collection()))
     } else {
         let oks = differential_dogs3::operators::half_join2::half_join_internal_unsafe(
             updates,
@@ -612,7 +628,7 @@ where
     type CB<C> = CapacityContainerBuilder<C>;
 
     if closure.could_error() {
-        let (oks, errs2) = differential_dogs3::operators::half_join::half_join_internal_unsafe(
+        let results = differential_dogs3::operators::half_join::half_join_internal_unsafe(
             updates,
             trace,
             |time, antichain| {
@@ -620,7 +636,7 @@ where
             },
             comparison,
             |_timer, count| count > 1_000_000,
-            move |session: &mut Session<'_, '_, T, CB<Vec<_>>, _>,
+            move |session: &mut Session<'_, '_, T, FallibleHalfJoinBuilder<T>, _>,
                   key,
                   stream_row: &Row,
                   lookup_row,
@@ -635,25 +651,29 @@ where
                 datums_local.extend(stream_row.iter());
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
-                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+                let result = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
 
                 for (time, diff2) in output.drain(..) {
-                    let row = row.as_ref().map(|row| row.cloned()).map_err(Clone::clone);
                     let diff = diff1.clone() * diff2.clone();
-                    let data = ((row, time.clone()), initial.clone(), diff);
-                    session.give(data);
+                    // One owned row per produced record, since each carries its own time.
+                    match result.as_ref().map(|row| row.cloned()) {
+                        // The closure filtered this match out.
+                        Ok(None) => {}
+                        Ok(Some(row)) => {
+                            session.give((Ok((row, time.clone())), initial.clone(), diff));
+                        }
+                        Err(err) => session.give((
+                            Err(DataflowErrorSer::from(err.clone())),
+                            initial.clone(),
+                            diff,
+                        )),
+                    }
                 }
             },
-        )
-        .ok_err(|(data_time, init_time, diff)| match data_time {
-            (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
-            (Err(err), _time) => Err((DataflowErrorSer::from(err), init_time, diff)),
-        });
+        );
+        let (oks, errs2) = unzip(results, "DeltaHalfJoinUnzip");
 
-        (
-            oks.as_collection().flat_map(|x| x),
-            errs.concat(errs2.as_collection()),
-        )
+        (oks.as_collection(), errs.concat(errs2.as_collection()))
     } else {
         let oks = differential_dogs3::operators::half_join::half_join_internal_unsafe(
             updates,
