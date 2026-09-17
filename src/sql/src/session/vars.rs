@@ -2130,8 +2130,11 @@ impl SystemVars {
     }
 
     /// Returns the `disabled_metric_sinks` configuration parameter.
-    pub fn disabled_metric_sinks(&self) -> &str {
-        self.expect_value::<String>(&DISABLED_METRIC_SINKS)
+    pub fn disabled_metric_sinks(&self) -> Vec<String> {
+        self.expect_value::<Vec<Ident>>(&DISABLED_METRIC_SINKS)
+            .into_iter()
+            .map(|s| s.as_str().into())
+            .collect()
     }
 
     /// Returns the `unsafe_mock_audit_event_timestamp` configuration parameter.

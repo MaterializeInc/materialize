@@ -646,7 +646,7 @@ pub static METRICS_RETENTION: VarDefinition = VarDefinition::new(
 /// subtracts from `enable_metric_sink`: with that flag off nothing installs regardless.
 pub static DISABLED_METRIC_SINKS: VarDefinition = VarDefinition::new(
     "disabled_metric_sinks",
-    value!(String; String::new()),
+    value!(Vec<Ident>; Vec::new()),
     "Curated metric sinks to tear down and keep from installing, comma-separated (Materialize).",
     false,
 );

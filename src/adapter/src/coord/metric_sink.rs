@@ -46,7 +46,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
 use mz_sql::session::vars::{ENABLE_METRIC_SINK, SystemVars};
-use tracing::{Span, debug, info};
+use tracing::{Span, info, warn};
 
 use crate::catalog::Catalog;
 use crate::coord::{
@@ -224,16 +224,10 @@ impl Coordinator {
     ///
     /// Reconciles the whole set rather than the delta.
     pub(super) async fn reconcile_metric_sinks(&mut self) {
-        for entry in self
-            .catalog()
-            .system_config()
-            .disabled_metric_sinks()
-            .split(',')
-        {
-            let entry = entry.trim();
-            if !entry.is_empty() && !CURATED.iter().any(|d| d.name == entry) {
+        for entry in self.catalog().system_config().disabled_metric_sinks() {
+            if !CURATED.iter().any(|d| d.name == entry) {
                 warn!(
-                    name = entry,
+                    name = %entry,
                     "disabled_metric_sinks entry matches no curated definition"
                 );
             }
@@ -249,6 +243,10 @@ impl Coordinator {
             self.drop_metric_sink(replica_id, name);
         }
 
+        // Reinstall the full non-denied set on every replica. `install_metric_sink` is
+        // idempotent: it skips a definition already recorded in `metric_sinks`
+        // (`contains_key`, see `install_metric_sink`), so re-running the whole set only
+        // installs the ones a preceding `disabled_metric_sinks` edit un-denied.
         for (cluster_id, replica_id) in self.all_cluster_replicas() {
             self.install_metric_sinks(cluster_id, replica_id).await;
         }
@@ -566,8 +564,8 @@ impl Coordinator {
 fn metric_sink_denied(system_config: &SystemVars, name: &str) -> bool {
     system_config
         .disabled_metric_sinks()
-        .split(',')
-        .any(|denied| denied.trim() == name)
+        .iter()
+        .any(|denied| denied == name)
 }
 
 /// The names of the definitions installed on `replica_id`, in key order.
@@ -744,8 +742,9 @@ mod tests {
         assert!(metric_sinks_on_replica(&sinks, r(5)).is_empty());
     }
 
-    /// Parsing tolerates a hand-typed list: padding, empty entries, a trailing comma. Matching is
-    /// otherwise exact.
+    /// The var is a `Vec<Ident>`, so parsing follows the SQL identifier-list rules: surrounding
+    /// whitespace is tolerated, an unquoted name folds to lowercase, and a quoted name keeps its
+    /// case. Matching is otherwise exact (no prefix match).
     #[mz_ore::test]
     fn denylist_matches_names_leniently() {
         let denied = |list: &str, name: &str| {
@@ -759,14 +758,23 @@ mod tests {
         assert!(denied("a", "a"));
         assert!(denied("a,b", "b"));
         assert!(denied("  a , b  ", "a"));
-        assert!(denied("a,,b,", "b"));
         // An unknown name denies nothing but is carried without error.
         assert!(!denied("nope", "a"));
         assert!(denied("nope,a", "a"));
-        // Exact match only: no prefix match, no case fold.
+        // Exact match only: no prefix match.
         assert!(!denied("a", "ab"));
         assert!(!denied("ab", "a"));
-        assert!(!denied("A", "a"));
+        // Unquoted names fold to lowercase; quoting pins the case.
+        assert!(denied("A", "a"));
+        assert!(!denied("\"A\"", "a"));
+
+        // An empty entry between commas is rejected by the identifier parser (unlike the old
+        // naive split, which silently dropped it).
+        let mut vars = SystemVars::new();
+        assert!(
+            vars.set(DISABLED_METRIC_SINKS.name(), VarInput::Flat("a,,b"))
+                .is_err()
+        );
     }
 
     #[mz_ore::test]
