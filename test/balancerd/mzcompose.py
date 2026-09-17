@@ -578,6 +578,10 @@ def workflow_long_query(c: Composition) -> None:
             or "EOF detected" in msg
             or "unexpected eof while reading" in msg
             or "frame size too big" in msg
+            # pgwire reports the oversized frame itself since #38809:
+            # "frame of N bytes exceeds the M byte limit". Which of that
+            # and the connection close the client sees first is a race.
+            or "exceeds the" in msg
         )
     except:
         raise RuntimeError("execute() threw an unexpected exception")
