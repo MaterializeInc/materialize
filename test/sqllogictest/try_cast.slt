@@ -107,6 +107,16 @@ NULL (1,a)
 statement error cannot determine type of empty array
 SELECT TRY_CAST(ARRAY[] AS int4[])
 
+# There is no cast between map types, so a MAP constructor has no whole-value
+# cast to fall back on and is rejected rather than converted element by element.
+statement error MAP constructor as the argument of TRY_CAST not yet supported
+SELECT TRY_CAST(MAP['k' => '1'] AS map[text=>int4])
+
+query T
+SELECT TRY_CAST(MAP['k' => '1']::map[text=>int4] AS map[text=>int4])::text
+----
+{k=>1}
+
 query T
 SELECT TRY_CAST(ARRAY[]::int4[] AS int8[])::text
 ----
