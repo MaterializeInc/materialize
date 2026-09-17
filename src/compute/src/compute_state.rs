@@ -532,6 +532,7 @@ impl ComputeState {
             } else {
                 let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
                 let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
+                let runtime_reads = COLUMN_POOL_RUNTIME_READS.get(config);
 
                 // Budget derivation: fraction of physical RAM, with a 128 MiB
                 // floor so the no-pressure case doesn't page per chunk.
@@ -556,6 +557,7 @@ impl ComputeState {
                     budget_bytes: total,
                     spill_threads,
                     eager_backing,
+                    runtime_reads,
                     rss_target_bytes: rss_target,
                 });
                 if applied {
@@ -567,6 +569,7 @@ impl ComputeState {
                         budget_bytes = total,
                         spill_threads,
                         eager_backing,
+                        runtime_reads,
                         rss_target_bytes = rss_target,
                         "chunk spill: applying buffer-pool config",
                     );

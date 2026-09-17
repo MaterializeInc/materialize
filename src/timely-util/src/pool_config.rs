@@ -101,6 +101,7 @@ pub fn apply_pool_config(cfg: PoolPagerConfig) -> bool {
     pool.set_rss_target(cfg.rss_target_bytes);
     pool.set_spill_threads(cfg.spill_threads);
     pool.set_eager_backing(cfg.eager_backing);
+    pool.set_runtime_reads(cfg.runtime_reads);
     POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
     true
 }
@@ -118,6 +119,9 @@ pub struct PoolPagerConfig {
     /// Whether idle spill threads eagerly compress chunks to
     /// `BackedResident` ahead of pressure.
     pub eager_backing: bool,
+    /// Whether nonresident reads use the async runtime's blocking executor
+    /// rather than the spill threads.
+    pub runtime_reads: bool,
     /// Ceiling on the pool's total RSS; the compressed-resident tier is the
     /// headroom above the budget and warm cap. Zero collapses the tier.
     pub rss_target_bytes: usize,
@@ -138,6 +142,7 @@ mod tests {
             budget_bytes: 1 << 30,
             spill_threads: 0,
             eager_backing: false,
+            runtime_reads: false,
             rss_target_bytes: 0,
         });
         assert!(ok, "pool reservation expected to succeed in tests");

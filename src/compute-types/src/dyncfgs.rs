@@ -232,6 +232,18 @@ pub const COLUMN_PAGED_BATCHER_EAGER_BACKING: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Serve the buffer pool's nonresident reads on the async runtime's blocking
+/// executor instead of the spill threads. Off, reads queue ahead of evictions
+/// on the spill threads and need no runtime. Only meaningful with spill
+/// workers; without them reads always use the runtime.
+pub const COLUMN_POOL_RUNTIME_READS: Config<bool> = Config::new(
+    "column_pool_runtime_reads",
+    false,
+    "Serve buffer-pool nonresident reads on the async runtime's blocking executor rather than \
+     the spill threads. Only meaningful with spill workers.",
+    ParameterScope::Replica,
+);
+
 /// Ceiling on the buffer pool's total RSS, as a fraction of *physical RAM*
 /// (never the announced limit, which includes swap on swap-provisioned
 /// nodes). The compressed-but-resident extent tier is the headroom above the
@@ -859,6 +871,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
         .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
+        .add(&COLUMN_POOL_RUNTIME_READS)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
         .add(&COLUMN_CHUNK_COMPRESS_MIN_DEPTH)
         .add(&ENABLE_COLUMN_CHUNK_DIRECT_COMPRESSED_OUTPUT)

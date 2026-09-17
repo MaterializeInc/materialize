@@ -2657,6 +2657,7 @@ mod tests {
                 budget_bytes: 32 << 20,
                 spill_threads: 1,
                 eager_backing: false,
+                runtime_reads: false,
                 rss_target_bytes: 16 << 20,
             });
         assert!(installed, "pool reservation failed");
