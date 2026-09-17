@@ -468,6 +468,12 @@ pub struct Peek {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
+    /// Whether to answer from the ok rows alone, discarding the errors the peek meets.
+    ///
+    /// The rows carry no correctness guarantee when this is set, since the ok stream has no
+    /// semantics while the error stream is non-empty. The peek retains one discarded error so
+    /// the client can be told the answer is degraded.
+    pub ignore_errors: bool,
     /// An `OpenTelemetryContext` to forward trace information along
     /// to the compute worker to allow associating traces between
     /// the compute controller and the compute worker.

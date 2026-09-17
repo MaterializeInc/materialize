@@ -1760,6 +1760,7 @@ impl Instance {
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        ignore_errors: bool,
         mut read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
@@ -1804,6 +1805,7 @@ impl Instance {
             timestamp,
             finishing,
             map_filter_project,
+            ignore_errors,
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
             otel_ctx,

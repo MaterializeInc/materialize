@@ -439,6 +439,8 @@ impl Coordinator {
                     conn_id,
                     max_result_size,
                     max_query_result_size,
+                    ignore_errors,
+                    notice_tx,
                     watch_set,
                     tx,
                 } => {
@@ -454,6 +456,8 @@ impl Coordinator {
                             conn_id,
                             max_result_size,
                             max_query_result_size,
+                            ignore_errors,
+                            notice_tx,
                             watch_set,
                         )
                         .await;

@@ -579,7 +579,10 @@ struct PendingPeek {
 impl PendingPeek {
     fn new() -> Self {
         Self {
-            response: PeekResponse::Rows(vec![RowCollection::default()]),
+            response: PeekResponse::Rows {
+                rows: vec![RowCollection::default()],
+                ignored_error: None,
+            },
             inline_byte_len: 0,
             ready_shards: BTreeSet::new(),
         }
@@ -620,12 +623,39 @@ fn merge_peek_responses(resp1: PeekResponse, resp2: PeekResponse) -> PeekRespons
     };
 
     match (resp1, resp2) {
-        (Rows(mut rows1), Rows(rows2)) => {
+        (
+            Rows {
+                rows: mut rows1,
+                ignored_error: ignored1,
+            },
+            Rows {
+                rows: rows2,
+                ignored_error: ignored2,
+            },
+        ) => {
             rows1.extend(rows2);
-            Rows(rows1)
+            Rows {
+                rows: rows1,
+                ignored_error: merge_ignored_errors(ignored1, ignored2),
+            }
         }
-        (Rows(rows), Stashed(mut stashed)) | (Stashed(mut stashed), Rows(rows)) => {
+        (
+            Rows {
+                rows,
+                ignored_error,
+            },
+            Stashed(mut stashed),
+        )
+        | (
+            Stashed(mut stashed),
+            Rows {
+                rows,
+                ignored_error,
+            },
+        ) => {
             stashed.inline_rows.extend(rows);
+            stashed.ignored_error =
+                merge_ignored_errors(stashed.ignored_error.take(), ignored_error);
             Stashed(stashed)
         }
         (Stashed(stashed1), Stashed(stashed2)) => {
@@ -638,6 +668,7 @@ fn merge_peek_responses(resp1: PeekResponse, resp2: PeekResponse) -> PeekRespons
                 shard_id: shard_id1,
                 batches: mut batches1,
                 inline_rows: mut inline_rows1,
+                ignored_error: ignored_error1,
             } = *stashed1;
             let StashedPeekResponse {
                 num_rows_batches: num_rows_batches2,
@@ -646,6 +677,7 @@ fn merge_peek_responses(resp1: PeekResponse, resp2: PeekResponse) -> PeekRespons
                 shard_id: shard_id2,
                 batches: mut batches2,
                 inline_rows: inline_rows2,
+                ignored_error: ignored_error2,
             } = *stashed2;
 
             if shard_id1 != shard_id2 {
@@ -673,10 +705,19 @@ fn merge_peek_responses(resp1: PeekResponse, resp2: PeekResponse) -> PeekRespons
                 shard_id: shard_id1,
                 batches: batches1,
                 inline_rows: inline_rows1,
+                ignored_error: merge_ignored_errors(ignored_error1, ignored_error2),
             }))
         }
         _ => unreachable!("handled above"),
     }
+}
+
+/// Merge the errors two workers discarded under `Peek::ignore_errors`.
+///
+/// Any one of them serves, because a retained error is a sample rather than a tally: it says the
+/// answer is degraded and shows one reason, and no count of affected rows exists to be had.
+fn merge_ignored_errors(error1: Option<PeekError>, error2: Option<PeekError>) -> Option<PeekError> {
+    error1.or(error2)
 }
 
 /// Merge two [`PeekError`]s into the one we report.
