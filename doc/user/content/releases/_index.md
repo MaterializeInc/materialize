@@ -86,6 +86,7 @@ Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_repli
 - [Troubleshoot a cluster memory spike](/clusters/troubleshoot-clusters/memory-spike/)
 
 ### Bug Fixes {#v26.42-bug-fixes}
+- Fixed a security vulnerability in the `rustls` dependency (RUSTSEC-2026-0285), where TLS 1.3 handshake messages sent at the wrong encryption level were accepted rather than rejected.
 - Fixed `CREATE TABLE ... FROM SOURCE` and `ALTER SOURCE` connecting to a source's upstream system before checking the caller's privileges on that source, which let a role holding no privilege on the source read upstream schema, table, and column names out of the resulting purification errors; `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source plus schema `USAGE`, and `ALTER SOURCE` requires ownership.
 - Fixed `ALTER CLUSTER` resource-limit enforcement during graceful reconfiguration, which predicted a reshape's peak replica overlap instead of checking the replica set actually being created; a target that does not fit now leaves the existing replicas serving and reports `INSUFFICIENT_RESOURCES` with a hint.
 - Fixed `ALTER CLUSTER ... WITH (WAIT UNTIL READY (..., ON TIMEOUT = 'COMMIT'))` needing room for the old and new replica sets at once when its deadline passed; the cut-over is now a single transaction that creates the target and retires the previous replicas together, so only the net change has to fit.
