@@ -38,10 +38,11 @@ const CURRENT_PATH: &str = "tests/snapshots/func_registry_current.json";
 /// computes or how it was optimized.
 ///
 /// `body_fingerprint` tracks the implementation---changes may or may not be
-/// breaking. `sqlfunc_decl` is source text: the properties it
-/// declares are recorded as their own fields, so what remains in it alone is
-/// parameter names, argument order and the like. `display` only feeds
-/// EXPLAIN output, since LIR stores variant names.
+/// breaking. `sqlfunc_decl` is source text: the properties it declares are
+/// recorded as their own fields (`sqlfunc_signature` carries the parameter and
+/// return types), so what remains in it alone is parameter names, argument
+/// order and the like. `display` only feeds EXPLAIN output, since LIR stores
+/// variant names.
 const INFORMATIONAL_FIELDS: &[&str] = &["body_fingerprint", "display", "sqlfunc_decl"];
 
 fn snapshot_path() -> String {
@@ -197,6 +198,13 @@ fn func_registry_records_sqlfunc_sources() {
     assert!(decl.starts_with("#[sqlfunc("), "{decl}");
     assert!(decl.contains(" fn abs_int16("), "{decl}");
     assert!(abs.source.body_fingerprint.is_some());
+    assert_eq!(
+        abs.source.sqlfunc_signature,
+        Some("fn(i16) -> Result<i16, EvalError>")
+    );
+    // The macro's natural input types drive the output type probe.
+    assert_eq!(abs.input_types, ["Int16:NotNull"]);
+    assert_eq!(abs.output_type.as_deref(), Some("Int16:NotNull"));
 
     // Hand-written functions have no source to record.
     let record_get = &registry.unary["record_get"];

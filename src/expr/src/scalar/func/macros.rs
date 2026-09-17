@@ -241,6 +241,14 @@ macro_rules! derive_unary {
                 }
             }
 
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$name $(<$marker>)? as crate::func::FuncName>::sqlfunc_input_types(),)*
+                }
+            }
+
             /// Rebuilds this function with any stored expressions converted to
             /// `E2`. Fails if any expression conversion fails, reporting the
             /// first failure.
@@ -420,6 +428,14 @@ macro_rules! derive_variadic {
                 }
             }
 
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$variant as crate::func::FuncName>::sqlfunc_input_types(),)*
+                }
+            }
+
             /// Attempts to construct a `VariadicFunc` from the canonical name
             /// of one of its variants, as declared by the variant's
             /// [`FuncName`](crate::func::FuncName) impl (the name of the
@@ -562,6 +578,14 @@ macro_rules! derive_binary {
             pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
                 match self {
                     $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$variant as crate::func::FuncName>::sqlfunc_input_types(),)*
                 }
             }
 

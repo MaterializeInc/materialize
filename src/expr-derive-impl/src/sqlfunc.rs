@@ -115,17 +115,15 @@ pub fn sqlfunc(
     let modifiers = Modifiers::from_list(&attr_args).unwrap();
     let generate_tests = modifiers.test.unwrap_or(false);
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
-    let source = sqlfunc_source(&attr, &func);
-
     let tokens = match determine_arity(&func) {
         Arity::Nullary => Err(darling::Error::custom("Nullary functions not supported")),
-        Arity::Unary { arena: false } => unary_func(&func, modifiers, &source),
+        Arity::Unary { arena: false } => unary_func(&func, modifiers, &attr),
         Arity::Unary { arena: true } => Err(darling::Error::custom(
             "Unary functions do not yet support RowArena.",
         )),
-        Arity::Binary { arena } => binary_func(&func, modifiers, arena, &source),
+        Arity::Binary { arena } => binary_func(&func, modifiers, arena, &attr),
         Arity::Variadic { arena, has_self } => {
-            variadic_func(&func, modifiers, struct_ty, arena, has_self, &source)
+            variadic_func(&func, modifiers, struct_ty, arena, has_self, &attr)
         }
     }?;
 
@@ -226,11 +224,22 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     })
 }
 
-/// Emits the `SQLFUNC` const of the generated `FuncName` impl: the
-/// declaration (attribute arguments and signature) as text and a fingerprint
-/// of the body. Both come from the token trees via [`render_tokens`], so
-/// formatting and comments do not affect them.
-fn sqlfunc_source(attr: &TokenStream, func: &syn::ItemFn) -> TokenStream {
+/// Emits the source-derived members of the generated `FuncName` impl: the
+/// `SQLFUNC` const (declaration text, types-only signature, body
+/// fingerprint) and `sqlfunc_input_types`, which yields the column types the
+/// function naturally consumes when every parameter type has one.
+///
+/// Text comes from the token trees via [`render_tokens`], so formatting and
+/// comments do not affect it. `input_tys_raw` are the parameter types as
+/// written, for the signature. `input_tys` are the erased types the trait
+/// impl uses, for the probes.
+fn sqlfunc_source(
+    attr: &TokenStream,
+    func: &syn::ItemFn,
+    input_tys_raw: &[syn::Type],
+    output_ty_raw: &syn::Type,
+    input_tys: &[syn::Type],
+) -> TokenStream {
     let attr = render_tokens(attr);
     let attr = if attr.is_empty() {
         String::new()
@@ -241,13 +250,108 @@ fn sqlfunc_source(attr: &TokenStream, func: &syn::ItemFn) -> TokenStream {
         "#[sqlfunc{attr}] {}",
         render_tokens(&func.sig.to_token_stream())
     );
+    let render_type = |ty: &syn::Type| render_tokens(&ty.to_token_stream());
+    let signature = format!(
+        "fn({}) -> {}",
+        input_tys_raw
+            .iter()
+            .map(render_type)
+            .collect::<Vec<_>>()
+            .join(", "),
+        render_type(output_ty_raw)
+    );
     let body_fingerprint = fnv1a64(render_tokens(&func.block.to_token_stream()).as_bytes());
+    let probes: Vec<TokenStream> = input_tys.iter().flat_map(probe_column_types).collect();
     quote! {
         const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
             decl: #decl,
+            signature: #signature,
             body_fingerprint: #body_fingerprint,
         });
+
+        fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+            use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+            [#(#probes),*].into_iter().collect()
+        }
     }
+}
+
+/// One probe expression per datum a parameter consumes. `Variadic<T>` stands
+/// for two `T` arguments and `OptionalArg<T>` for one present `T`.
+fn probe_column_types(ty: &syn::Type) -> Vec<TokenStream> {
+    if let Some((wrapper, inner)) = single_generic_arg(ty) {
+        match wrapper.as_str() {
+            "Variadic" => return vec![probe_column_type(inner), probe_column_type(inner)],
+            "OptionalArg" => return vec![probe_column_type(inner)],
+            _ => {}
+        }
+    }
+    vec![probe_column_type(ty)]
+}
+
+/// An expression of type `Option<SqlColumnType>`: the column type of `ty` if
+/// it implements `AsColumnType`, else `None`. Resolved by autoref
+/// specialization on `ColumnTypeProbe`, so it needs no trait bound the macro
+/// cannot check.
+fn probe_column_type(ty: &syn::Type) -> TokenStream {
+    let ty = staticize_lifetimes(ty);
+    quote! {
+        (&crate::func::registry::ColumnTypeProbe::<#ty>(::std::marker::PhantomData)).column_type()
+    }
+}
+
+/// The last path segment's name and its single type argument, for types
+/// shaped like `Wrapper<T>`.
+fn single_generic_arg(ty: &syn::Type) -> Option<(String, &syn::Type)> {
+    let syn::Type::Path(path) = ty else {
+        return None;
+    };
+    let segment = path.path.segments.last()?;
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    let mut types = args.args.iter().filter_map(|arg| match arg {
+        syn::GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    });
+    let inner = types.next()?;
+    if types.next().is_some() {
+        return None;
+    }
+    Some((segment.ident.to_string(), inner))
+}
+
+/// Replaces every lifetime in `ty` with `'static`, so a type written against
+/// the trait impl's `'a` can be named in a function body.
+fn staticize_lifetimes(ty: &syn::Type) -> syn::Type {
+    let mut ty = ty.clone();
+    fn walk(ty: &mut syn::Type) {
+        match ty {
+            syn::Type::Reference(r) => {
+                r.lifetime = Some(Lifetime::new("'static", r.span()));
+                walk(&mut r.elem);
+            }
+            syn::Type::Tuple(t) => t.elems.iter_mut().for_each(walk),
+            syn::Type::Path(p) => {
+                for segment in &mut p.path.segments {
+                    if let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments {
+                        for arg in &mut args.args {
+                            match arg {
+                                syn::GenericArgument::Lifetime(lt) => {
+                                    *lt = Lifetime::new("'static", lt.span());
+                                }
+                                syn::GenericArgument::Type(ty) => walk(ty),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(&mut ty);
+    ty
 }
 
 #[cfg(any(feature = "test", test))]
@@ -972,7 +1076,7 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
 fn unary_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
-    source: &TokenStream,
+    attr: &TokenStream,
 ) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
@@ -1006,7 +1110,7 @@ fn unary_func(
     if !generic_params.is_empty() {
         if output_type_expr.is_none() && output_type.is_none() {
             if let Some(derived) = derive_output_type_for_generics(
-                &[input_ty_raw],
+                std::slice::from_ref(&input_ty_raw),
                 output_ty_raw,
                 &generic_params,
                 true,
@@ -1119,6 +1223,14 @@ fn unary_func(
         }
     });
 
+    let source = sqlfunc_source(
+        attr,
+        func,
+        std::slice::from_ref(&input_ty_raw),
+        output_ty_raw,
+        std::slice::from_ref(&input_ty),
+    );
+
     let result = quote! {
         #[derive(
             Ord, PartialOrd, Clone,
@@ -1178,7 +1290,7 @@ fn binary_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
     arena: bool,
-    source: &TokenStream,
+    attr: &TokenStream,
 ) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
@@ -1214,7 +1326,7 @@ fn binary_func(
     if !generic_params.is_empty() {
         if output_type_expr.is_none() && output_type.is_none() {
             if let Some(derived) = derive_output_type_for_generics(
-                &[input1_ty_raw, input2_ty_raw],
+                &[input1_ty_raw.clone(), input2_ty_raw.clone()],
                 output_ty_raw,
                 &generic_params,
                 false,
@@ -1346,6 +1458,14 @@ fn binary_func(
     let binary_non_nullable_checks =
         non_nullable_position_checks(&[input1_ty.clone(), input2_ty.clone()]);
 
+    let source = sqlfunc_source(
+        attr,
+        func,
+        &[input1_ty_raw.clone(), input2_ty_raw.clone()],
+        output_ty_raw,
+        &[input1_ty.clone(), input2_ty.clone()],
+    );
+
     let result = quote! {
         #[derive(
             Ord, PartialOrd, Clone,
@@ -1428,7 +1548,7 @@ fn variadic_func(
     struct_ty: Option<syn::Path>,
     arena: bool,
     has_self: bool,
-    source: &TokenStream,
+    attr: &TokenStream,
 ) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let output_ty_raw = output_type(func)?;
@@ -1550,6 +1670,7 @@ fn variadic_func(
         }
     }
 
+    let param_types_raw = param_types.clone();
     // Erase generic type params → Datum<'a> in param types for the trait impl's associated types.
     for ty in &mut param_types {
         *ty = erase_all_generic_params(ty, &generic_params);
@@ -1710,6 +1831,7 @@ fn variadic_func(
         }
     };
 
+    let source = sqlfunc_source(attr, func, &param_types_raw, output_ty_raw, &param_types);
     let funcname_impl = quote! {
         impl crate::func::FuncName for #struct_name {
             const NAME: &'static str = stringify!(#fn_name);

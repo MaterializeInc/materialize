@@ -20,8 +20,10 @@
 //! [`FuncRegistry::build`] records those properties for one representative
 //! instance of every variant, and `tests/func_registry.rs` compares the
 //! result against a checked-in snapshot per LIR version. For `#[sqlfunc]`
-//! functions the record also carries the declaration text and a fingerprint
-//! of the function body, see [`SqlFuncSource`].
+//! functions the record also carries the declaration text, the types-only
+//! signature and a fingerprint of the function body, see [`SqlFuncSource`],
+//! and the output type is probed at the column types the parameter types
+//! map to, see [`ColumnTypeProbe`].
 //!
 //! Variants whose payload cannot be constructed without data need a
 //! representative [`Sample`] in this module. Building the registry panics
@@ -91,13 +93,46 @@ pub struct FuncRegistry {
 
 /// The `#[sqlfunc]` source of a function, in the registry's serialized form.
 ///
-/// Both fields describe the source rather than a derived property. The
-/// snapshot test in `tests/func_registry.rs` classifies changes to them as
-/// informational.
+/// `sqlfunc_signature` is a property: the parameter and return types decide
+/// what a stored plan computes. The other two describe the source text and
+/// body, and the snapshot test in `tests/func_registry.rs` classifies changes
+/// to them as informational.
 #[derive(Debug, Serialize)]
 pub struct SourceProperties {
+    pub sqlfunc_signature: Option<&'static str>,
     pub sqlfunc_decl: Option<&'static str>,
     pub body_fingerprint: Option<String>,
+}
+
+/// Resolves a Rust parameter type to its column type by autoref
+/// specialization: `(&ColumnTypeProbe::<T>(PhantomData)).column_type()` picks
+/// [`ProbeColumnType`] when `T: AsColumnType` and [`ProbeColumnTypeFallback`]
+/// otherwise. `#[sqlfunc]` emits that expression for each parameter, which is
+/// how it can ask for a column type without knowing whether one exists.
+#[derive(Debug)]
+pub struct ColumnTypeProbe<T>(pub std::marker::PhantomData<T>);
+
+/// The specialized arm of [`ColumnTypeProbe`].
+pub trait ProbeColumnType {
+    fn column_type(&self) -> Option<SqlColumnType>;
+}
+
+impl<T: mz_repr::AsColumnType> ProbeColumnType for ColumnTypeProbe<T> {
+    fn column_type(&self) -> Option<SqlColumnType> {
+        Some(T::as_column_type())
+    }
+}
+
+/// The fallback arm of [`ColumnTypeProbe`], reached through one more autoref
+/// than [`ProbeColumnType`] so it only applies when that one does not.
+pub trait ProbeColumnTypeFallback {
+    fn column_type(&self) -> Option<SqlColumnType>;
+}
+
+impl<T> ProbeColumnTypeFallback for &ColumnTypeProbe<T> {
+    fn column_type(&self) -> Option<SqlColumnType> {
+        None
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -164,6 +199,7 @@ impl FuncRegistry {
                 "UnaryFunc",
                 UnaryFunc::variant_names(),
                 UnaryFunc::from_variant_name,
+                UnaryFunc::sqlfunc_input_types,
                 unary_samples(),
                 UnaryFunc::variant_name,
                 UnaryFuncProperties::of,
@@ -172,6 +208,7 @@ impl FuncRegistry {
                 "BinaryFunc",
                 BinaryFunc::variant_names(),
                 BinaryFunc::from_variant_name,
+                BinaryFunc::sqlfunc_input_types,
                 binary_samples(),
                 BinaryFunc::variant_name,
                 BinaryFuncProperties::of,
@@ -180,6 +217,7 @@ impl FuncRegistry {
                 "VariadicFunc",
                 VariadicFunc::variant_names(),
                 VariadicFunc::from_variant_name,
+                VariadicFunc::sqlfunc_input_types,
                 variadic_samples(),
                 VariadicFunc::variant_name,
                 VariadicFuncProperties::of,
@@ -193,7 +231,8 @@ impl FuncRegistry {
 ///
 /// A variant's primary record comes from its unlabeled hand-written sample if
 /// there is one, otherwise from a payload-free instance built by `construct`
-/// (see `from_variant_name` on the enums). Hand-written primaries take
+/// (see `from_variant_name` on the enums), probed at the column types
+/// `natural_inputs` reports for it, if any. Hand-written primaries take
 /// precedence so a constructible variant can still be probed at chosen input
 /// types.
 ///
@@ -209,6 +248,7 @@ fn collect<F: fmt::Debug, P>(
     enum_name: &str,
     names: impl Iterator<Item = &'static str>,
     construct: fn(&str) -> Option<F>,
+    natural_inputs: fn(&F) -> Option<Vec<SqlColumnType>>,
     samples: Vec<Sample<F>>,
     variant_name: fn(&F) -> &'static str,
     properties: fn(&Sample<F>) -> P,
@@ -234,8 +274,8 @@ fn collect<F: fmt::Debug, P>(
     for name in names {
         let primary = by_name.remove(&(name, "")).or_else(|| {
             construct(name).map(|func| Sample {
+                input_types: natural_inputs(&func).unwrap_or_default(),
                 func,
-                input_types: vec![],
                 label: "",
             })
         });
@@ -311,6 +351,7 @@ fn variant_ident<F: Serialize>(func: &F) -> String {
 impl From<Option<SqlFuncSource>> for SourceProperties {
     fn from(source: Option<SqlFuncSource>) -> Self {
         SourceProperties {
+            sqlfunc_signature: source.map(|s| s.signature),
             sqlfunc_decl: source.map(|s| s.decl),
             body_fingerprint: source.map(|s| format!("{:016x}", s.body_fingerprint)),
         }

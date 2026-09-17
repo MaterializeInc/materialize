@@ -56,8 +56,28 @@ impl crate::func::FuncName for Replace {
     const NAME: &'static str = stringify!(replace);
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(Replace, sqlname = \"replace\",)] fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError>",
+        signature: "fn(&'a str, &'a str, &'a str) -> Result<String, EvalError>",
         body_fingerprint: 18087132299484514323u64,
     });
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     Ok(text.replace(from, to))

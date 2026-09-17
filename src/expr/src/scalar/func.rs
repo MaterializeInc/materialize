@@ -83,6 +83,14 @@ pub trait FuncName {
     /// The `#[sqlfunc]` declaration this function was generated from, or
     /// `None` for hand-written functions. Consumed by [`registry`].
     const SQLFUNC: Option<SqlFuncSource> = None;
+
+    /// The column types a `#[sqlfunc]` function naturally consumes, one per
+    /// argument, when every parameter type maps to one. `None` for
+    /// hand-written functions and for parameters typed as a bare `Datum`.
+    /// Consumed by [`registry`] to probe the output type.
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        None
+    }
 }
 
 /// The source of a `#[sqlfunc]`-generated function, as captured by the macro.
@@ -95,6 +103,8 @@ pub struct SqlFuncSource {
     /// The attribute arguments and the function signature, rendered as
     /// compact source text: `#[sqlfunc(<args>)] fn <name>(<params>) -> <ret>`.
     pub decl: &'static str,
+    /// The parameter and return types alone, as written: `fn(<types>) -> <ret>`.
+    pub signature: &'static str,
     /// FNV-1a fingerprint of the function body.
     pub body_fingerprint: u64,
 }

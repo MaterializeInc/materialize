@@ -52,8 +52,22 @@ impl crate::func::FuncName for UnaryFn {
     const NAME: &'static str = stringify!(unary_fn);
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(test = true)] fn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool",
+        signature: "fn(Datum<'a>, u16) -> bool",
         body_fingerprint: 4726381389472009124u64,
     });
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<u16>(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {
     unimplemented!()

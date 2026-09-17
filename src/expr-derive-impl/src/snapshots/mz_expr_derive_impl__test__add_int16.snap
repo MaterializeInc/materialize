@@ -63,8 +63,24 @@ impl crate::func::FuncName for AddInt16 {
     const NAME: &'static str = stringify!(add_int16);
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(is_monotone = (true, true), output_type = i16, is_infix_op = true, sqlname = \"+\", propagates_nulls = true, test = true,)] fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>",
+        signature: "fn(Datum<'a>, Datum<'a>) -> Result<Datum<'a>, EvalError>",
         body_fingerprint: 16347080343494466098u64,
     });
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int16()

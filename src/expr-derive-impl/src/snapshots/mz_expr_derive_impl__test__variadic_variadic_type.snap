@@ -56,8 +56,24 @@ impl crate::func::FuncName for Concat {
     const NAME: &'static str = stringify!(concat);
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(Concat, sqlname = \"concat\", is_associative = true,)] fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError>",
+        signature: "fn(Variadic<Option<&'a str>>) -> Result<String, EvalError>",
         body_fingerprint: 8293485034765095262u64,
     });
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Option<&'static str>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Option<&'static str>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
     Ok(strs.into_iter().flatten().collect())

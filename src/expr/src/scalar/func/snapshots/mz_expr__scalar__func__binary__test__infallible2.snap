@@ -51,8 +51,24 @@ impl crate::func::FuncName for Infallible2 {
     const NAME: &'static str = stringify!(infallible2);
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
         decl: "#[sqlfunc(test = true)] fn infallible2(a: Option<f32>, b: Option<f32>) -> f32",
+        signature: "fn(Option<f32>, Option<f32>) -> f32",
         body_fingerprint: 9026473334764378445u64,
     });
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Option<f32>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Option<f32>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 #[allow(dead_code)]
 fn infallible2(a: Option<f32>, b: Option<f32>) -> f32 {
