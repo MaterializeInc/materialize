@@ -29,7 +29,7 @@ import ErrorBox from "~/components/ErrorBox";
 import { SideDrawer } from "~/components/SideDrawer";
 import { useFlags } from "~/hooks/useFlags";
 import { regionPath } from "~/platform/routeHelpers";
-import { useAllObjects } from "~/store/allObjects";
+import { useAllObjectsLive } from "~/store/allObjectsCollection";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 
@@ -148,13 +148,20 @@ const ReplicaHeatmap = ({
     },
   );
 
-  // Names come from the app-wide objects subscribe rather than from the CPU
-  // query, which is pinned to the replica and would plan a `mz_objects` join on
-  // the customer's cluster.
-  const { data: allObjects } = useAllObjects();
+  // Names come from the objects collection rather than from the CPU query,
+  // which is pinned to the replica and would plan a `mz_objects` join on the
+  // customer's cluster. The collection seeds from its scoped cache before the
+  // subscribe snapshot lands, so rows are named on a cold load too.
+  const { data: allObjects } = useAllObjectsLive();
+  const objectsById = React.useMemo(
+    // Keyed once per change rather than scanned per row: the heatmap resolves a
+    // name for every dataflow on the replica.
+    () => new Map(allObjects.map((object) => [object.id, object])),
+    [allObjects],
+  );
   const resolveNaming = React.useCallback(
     (objectId: string) => {
-      const object = allObjects?.find((o) => o.id === objectId);
+      const object = objectsById.get(objectId);
       if (!object) return undefined;
       return {
         name: object.name,
@@ -162,7 +169,7 @@ const ReplicaHeatmap = ({
         databaseName: object.databaseName,
       };
     },
-    [allObjects],
+    [objectsById],
   );
 
   const pivot = rows ? pivotDataflowCpuPerWorker(rows, resolveNaming) : null;
