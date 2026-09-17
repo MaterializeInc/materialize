@@ -108,6 +108,10 @@ as join keys and `GROUP BY` keys. If one key value accounts for a
 disproportionate share of rows, the worker responsible for that value does
 disproportionate work while its peers idle.
 
+A cross join is the extreme case. It has no join key to hash on, so every cross
+join running on a replica moves all of its data to a single worker, no matter
+how the input values are distributed.
+
 ### Diagnosing the issue
 
 **Step 1. Find the skewed object.** Connect to the cluster and run
