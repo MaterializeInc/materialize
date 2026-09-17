@@ -172,18 +172,19 @@ impl Coordinator {
                 self.storage_usage_prune(expired).boxed_local().await;
             }
             Message::ArrangementSizesSchedule => {
-                self.schedule_arrangement_sizes_collection()
-                    .boxed_local()
-                    .await;
+                self.schedule_arrangement_sizes_collection();
             }
             Message::ArrangementSizesSnapshot => {
-                self.arrangement_sizes_snapshot().boxed_local().await;
+                self.arrangement_sizes_snapshot();
             }
-            Message::ArrangementSizesWrite(records) => {
-                self.arrangement_sizes_write(records).boxed_local().await;
+            Message::ArrangementSizesWrite {
+                records,
+                collection_ts,
+            } => {
+                self.arrangement_sizes_write(records, collection_ts);
             }
             Message::ArrangementSizesPrune(expired) => {
-                self.arrangement_sizes_prune(expired).boxed_local().await;
+                self.arrangement_sizes_prune(expired);
             }
             Message::HydrationHistorySchedule => {
                 self.schedule_hydration_history_collection();
@@ -431,7 +432,7 @@ impl Coordinator {
     /// synchronize across environments. Sleeps are capped at `MAX_SLEEP`,
     /// so dyncfg changes (interval edits or the `0s` disable sentinel) take
     /// effect within one cap rather than after the full interval.
-    pub async fn schedule_arrangement_sizes_collection(&self) {
+    pub fn schedule_arrangement_sizes_collection(&self) {
         const MAX_SLEEP: Duration = Duration::from_secs(60);
 
         let interval_duration =
@@ -469,27 +470,31 @@ impl Coordinator {
         // `rand::random_range` panics on an empty range.
         let interval_ms = interval_ms.max(1);
         let offset = rngs::SmallRng::from_seed(seed).random_range(0..interval_ms);
-        let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
-        let previous_collection_ts = (now_ts - (now_ts % interval_ms)) + offset;
-        let next_collection_ts = if previous_collection_ts > now_ts {
-            previous_collection_ts
-        } else {
-            previous_collection_ts + interval_ms
-        };
-        let sleep_for = Duration::from_millis(next_collection_ts - now_ts);
-
-        // Within one cap of the next fire we sleep the remainder and snapshot;
-        // further out we sleep the cap and re-enter so a dyncfg change is
-        // picked up before committing to a long sleep.
-        let (capped_sleep, fire_snapshot) = if sleep_for <= MAX_SLEEP {
-            (sleep_for, true)
-        } else {
-            (MAX_SLEEP, false)
-        };
-
+        // The oracle peek is a network round trip with unbounded tail latency,
+        // so it must not run on the coordinator loop.
+        let oracle = self.get_local_timestamp_oracle();
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| "arrangement_sizes_collection", async move {
+            let now_ts: EpochMillis = oracle.peek_write_ts().await.into();
+
+            let previous_collection_ts = (now_ts - (now_ts % interval_ms)) + offset;
+            let next_collection_ts = if previous_collection_ts > now_ts {
+                previous_collection_ts
+            } else {
+                previous_collection_ts + interval_ms
+            };
+            let sleep_for = Duration::from_millis(next_collection_ts - now_ts);
+
+            // Within one cap of the next fire we sleep the remainder and
+            // snapshot; further out we sleep the cap and re-enter so a dyncfg
+            // change is picked up before committing to a long sleep.
+            let (capped_sleep, fire_snapshot) = if sleep_for <= MAX_SLEEP {
+                (sleep_for, true)
+            } else {
+                (MAX_SLEEP, false)
+            };
+
             tokio::time::sleep(capped_sleep).await;
             let msg = if fire_snapshot {
                 Message::ArrangementSizesSnapshot
@@ -504,24 +509,25 @@ impl Coordinator {
     /// Kicks off a snapshot of `mz_object_arrangement_sizes` for appending to
     /// `mz_object_arrangement_size_history`.
     ///
-    /// The persist reads and row preparation are too slow for the coordinator
-    /// main loop, so they run on a spawned task. The prepared records come
-    /// back as [`Message::ArrangementSizesWrite`] and are appended by
-    /// [`Coordinator::arrangement_sizes_write`], which also reschedules the
-    /// next collection. An empty or failed snapshot reschedules directly.
+    /// The oracle read, persist reads, and row preparation are too slow for
+    /// the coordinator main loop, so they run on a spawned task. The prepared
+    /// records come back as [`Message::ArrangementSizesWrite`] and are
+    /// appended by [`Coordinator::arrangement_sizes_write`], which also
+    /// reschedules the next collection. An empty or failed snapshot
+    /// reschedules directly.
     ///
     /// Rows from replicas without fresh introspection data are excluded, so
     /// sizes predating an environmentd or replica restart are not recorded.
     /// See [`Coordinator::fresh_introspection_replicas`].
     #[mz_ore::instrument(level = "debug")]
-    async fn arrangement_sizes_snapshot(&self) {
+    fn arrangement_sizes_snapshot(&self) {
         // Builtin collections are not writable in read-only mode. Skip the
         // cycle but keep rescheduling, mirroring `storage_usage_fetch`, so
         // collection stays alive regardless of how the coordinator leaves
         // read-only mode. The transition is one-way, so
         // `arrangement_sizes_write` needs no check of its own.
         if self.controller.read_only() {
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             return;
         }
 
@@ -536,7 +542,7 @@ impl Coordinator {
         if fresh_size_replicas.is_empty() {
             // No replica has reported sizes in this process yet, so the live
             // collection contains only stale rows (or none). Skip the cycle.
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             return;
         }
 
@@ -603,18 +609,29 @@ impl Coordinator {
             let msg = if records.is_empty() {
                 Message::ArrangementSizesSchedule
             } else {
-                Message::ArrangementSizesWrite(records)
+                // `collection_ts` is the snapshot's read timestamp: exactly
+                // the state the rows describe, and monotone across restarts
+                // via the oracle.
+                Message::ArrangementSizesWrite {
+                    records,
+                    collection_ts: read_ts.into(),
+                }
             };
             // It is not an error for this task to outlive `internal_cmd_rx`.
             let _ = internal_cmd_tx.send(msg);
         });
     }
 
-    /// Stamps prepared snapshot records with a shared `collection_timestamp`
-    /// and appends them to `mz_object_arrangement_size_history`. Reschedules
-    /// the next collection once the append completes.
+    /// Appends prepared snapshot records to
+    /// `mz_object_arrangement_size_history`, stamped with the snapshot's
+    /// `collection_ts`. Reschedules the next collection once the append
+    /// completes.
     #[mz_ore::instrument(level = "debug")]
-    async fn arrangement_sizes_write(&mut self, records: Vec<ArrangementSizeRecord>) {
+    fn arrangement_sizes_write(
+        &mut self,
+        records: Vec<ArrangementSizeRecord>,
+        collection_ts: EpochMillis,
+    ) {
         // Freshness may have been invalidated while the snapshot task ran,
         // e.g. by a cluster event reporting a replica offline. Revalidate so
         // records prepared from a now-untrusted replica's data are dropped.
@@ -627,15 +644,10 @@ impl Coordinator {
             .filter(|record| fresh_size_replicas.contains(&record.replica_id))
             .collect();
         if records.is_empty() {
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             return;
         }
 
-        // `collection_ts` is stamped after the snapshot so it's always >= the
-        // state the rows describe, and monotone across restarts. The snapshot
-        // read and this stamp aren't atomic, but the resulting skew is bounded
-        // by snapshot latency and negligible at this cadence.
-        let collection_ts: EpochMillis = self.get_local_write_ts().await.timestamp.into();
         let collection_datum = Datum::TimestampTz(
             mz_ore::now::to_datetime(collection_ts)
                 .try_into()
@@ -686,7 +698,7 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
+    fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
         let fut = self.builtin_table_update().execute(expired);
         task::spawn(|| "arrangement_sizes_pruning_apply", async move {
             fut.await;

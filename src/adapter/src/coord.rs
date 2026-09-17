@@ -403,7 +403,10 @@ pub enum Message {
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
-    ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
+    ArrangementSizesWrite {
+        records: Vec<ArrangementSizeRecord>,
+        collection_ts: EpochMillis,
+    },
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     HydrationHistorySchedule,
     HydrationHistoryRun,
@@ -564,7 +567,7 @@ impl Message {
             Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
-            Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
+            Message::ArrangementSizesWrite { .. } => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::HydrationHistorySchedule => "hydration_history_schedule",
             Message::HydrationHistoryRun => "hydration_history_run",
@@ -4192,7 +4195,7 @@ impl Coordinator {
             });
 
             self.schedule_storage_usage_collection().await;
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
