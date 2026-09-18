@@ -263,9 +263,12 @@ More ways to establish known vs new:
   on an older main. From an up-to-date main checkout run
   `git log <BUILD_COMMIT>..HEAD -- <suspect-file>` or
   `git log -S '<error token>'`. A fix can also sit in a not-yet-merged PR,
-  invisible to git log: look at recently opened PRs for one that already
-  addresses the failure (a PR's file list shows which of the build's root
-  causes it covers). When citing a later build as evidence
+  invisible to git log: search open PRs for the step name or error token
+  (`gh pr list --state open --search '<...>'`); a PR's file list shows
+  which of the build's root causes it covers. Do this unconditionally for
+  a failure that has been red for several builds, which is where a fix in
+  flight is likeliest, and name any hit in the summary so nobody authors
+  a duplicate. When citing a later build as evidence
   of a fix, confirm the specific job's state there is `passed`: a build can
   be green because the job was `broken` and never ran.
 - Known-issue tracking lives in Linear. Annotations and `bin/ci-failures`
