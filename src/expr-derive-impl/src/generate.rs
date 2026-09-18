@@ -6,7 +6,6 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-
 //! Expansion shared by every scalar function arity.
 
 use proc_macro2::{Ident, Span, TokenStream};
@@ -26,7 +25,7 @@ use crate::signature;
 /// `introduces_nulls` is skipped because [`generate`] synthesizes that method from
 /// the output type when the modifier is absent, then places it with
 /// [`insert_introduces_nulls`].
-pub(crate) fn override_methods(shape: Shape, mods: &Modifiers) -> Vec<TokenStream> {
+fn override_methods(shape: Shape, mods: &Modifiers) -> Vec<TokenStream> {
     let present: Vec<_> = mods.iter().collect();
     shape
         .modifiers()
@@ -53,7 +52,7 @@ pub(crate) fn override_methods(shape: Shape, mods: &Modifiers) -> Vec<TokenStrea
 ///
 /// Only the modifiers ahead of `IntroducesNulls` in the table decide the insertion
 /// point, so whether `mods` itself carries `introduces_nulls` is immaterial.
-pub(crate) fn insert_introduces_nulls(
+fn insert_introduces_nulls(
     methods: &mut Vec<TokenStream>,
     shape: Shape,
     mods: &Modifiers,
@@ -69,19 +68,19 @@ pub(crate) fn insert_introduces_nulls(
 }
 
 /// What the shared expansion needs that is not arity specific.
-pub(crate) struct Expansion {
-    pub struct_name: Ident,
+struct Expansion {
+    struct_name: Ident,
     /// True when the struct is defined at the call site, so expansion attaches an
     /// inherent method instead of defining a unit struct.
-    pub has_self: bool,
-    pub sqlname: TokenStream,
-    pub fn_name: Ident,
+    has_self: bool,
+    sqlname: TokenStream,
+    fn_name: Ident,
 }
 
 /// Wraps an arity's trait impl with the parts every arity shares: the unit-struct
 /// definition (unless `has_self`), the `Display` impl, the `FuncName` impl, and the
 /// annotated function itself.
-pub(crate) fn expand(e: &Expansion, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStream {
+fn expand(e: &Expansion, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStream {
     let Expansion {
         struct_name,
         has_self,
@@ -232,6 +231,10 @@ pub(crate) fn generate(
         }
     }
 
+    // TODO: these two conflict checks construct their error with `unknown_field`,
+    // which renders as "Unknown field: <message>", while every other modifier
+    // legality error in the crate uses `Error::custom`. The message text is pinned
+    // by a snapshot, so changing the constructor requires updating that snapshot.
     if output_type.is_some() && output_type_expr.is_some() {
         return Err(darling::Error::unknown_field(
             "output_type and output_type_expr cannot be used together",

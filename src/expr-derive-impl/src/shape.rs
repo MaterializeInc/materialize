@@ -6,7 +6,6 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-
 //! Per-arity descriptions of the three scalar function shapes.
 //!
 //! A [`Shape`] answers the questions that differ between `EagerUnaryFunc`,
