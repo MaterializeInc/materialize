@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
-use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
+use crate::relation::func::{AggregateFunc, ConstantLagLeadArgs, LagLeadType, TableFunc};
 use crate::row::{RowCollection, RowCollectionIter};
 use crate::scalar::columns::Columns;
 use crate::scalar::func::variadic::{
@@ -2675,8 +2675,12 @@ impl AggregateExpr {
                 self.on_unique_ranking_window_funcs(input_type, "?dense_rank?")
             }
 
-            // The input type for LagLead is ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
-            AggregateFunc::LagLead { lag_lead, .. } => {
+            // The input type for LagLead is ((OriginalRow, EncodedArgs), OrderByExprs...)
+            AggregateFunc::LagLead {
+                lag_lead,
+                constant_args,
+                ..
+            } => {
                 let tuple = self
                     .expr
                     .clone()
@@ -2700,8 +2704,12 @@ impl AggregateExpr {
                 let encoded_args =
                     tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
-                let (result_expr, column_name) =
-                    Self::on_unique_lag_lead(lag_lead, encoded_args, lag_lead_return_type.clone());
+                let (result_expr, column_name) = Self::on_unique_lag_lead(
+                    lag_lead,
+                    constant_args.as_ref(),
+                    encoded_args,
+                    lag_lead_return_type.clone(),
+                );
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
@@ -2965,9 +2973,15 @@ impl AggregateExpr {
                             lag_lead,
                             order_by,
                             ignore_nulls: _,
+                            constant_args,
                         } => {
                             assert_eq!(order_by, outer_order_by);
-                            Self::on_unique_lag_lead(lag_lead, args_for_func, return_type_for_func)
+                            Self::on_unique_lag_lead(
+                                lag_lead,
+                                constant_args.as_ref(),
+                                args_for_func,
+                                return_type_for_func,
+                            )
                         }
                         AggregateFunc::FirstValue {
                             window_frame,
@@ -3109,19 +3123,40 @@ impl AggregateExpr {
     }
 
     /// `on_unique` for `lag` and `lead`
+    ///
+    /// `constant_args` says where the three arguments live: hoisted into the
+    /// function, or in a per-row record under `encoded_args`. See
+    /// [`ConstantLagLeadArgs`].
     fn on_unique_lag_lead(
         lag_lead: &LagLeadType,
+        constant_args: Option<&ConstantLagLeadArgs>,
         encoded_args: MirScalarExpr,
         return_type: ReprScalarType,
     ) -> (MirScalarExpr, ColumnName) {
-        let expr = encoded_args
-            .clone()
-            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-        let offset = encoded_args
-            .clone()
-            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
-        let default_value =
-            encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2)));
+        let (expr, offset, default_value) = match constant_args {
+            Some(ConstantLagLeadArgs { offset, default }) => (
+                encoded_args,
+                match offset {
+                    Some(offset) => {
+                        MirScalarExpr::literal_ok(Datum::Int32(*offset), ReprScalarType::Int32)
+                    }
+                    None => MirScalarExpr::literal_null(ReprScalarType::Int32),
+                },
+                MirScalarExpr::literal_from_single_element_row(
+                    default.0.clone(),
+                    return_type.clone(),
+                ),
+            ),
+            None => (
+                encoded_args
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
+                encoded_args
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1))),
+                encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2))),
+            ),
+        };
 
         // In this case, the window always has only one element, so if the offset is not null and
         // not zero, the default value should be returned instead.
