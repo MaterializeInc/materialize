@@ -58,12 +58,11 @@ pub(crate) struct Modifiers {
 impl Modifiers {
     /// The method-producing modifiers that are present, in this method's own fixed
     /// order, which does not match any of the three per-arity tables in
-    /// `crate::shape`.
+    /// `crate::shape`. A caller that needs table order joins against
+    /// `Shape::modifiers()` by `Modifier` instead.
     ///
     /// Modifiers that do not produce a trait method are excluded, because
-    /// `crate::generate` consumes those by name. A caller that needs table order,
-    /// such as `crate::generate::override_methods`, joins this iterator against
-    /// `Shape::modifiers()` by `Modifier` rather than relying on this order.
+    /// `crate::sqlfunc`'s generator arms consume those by name.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Modifier, &Expr)> + '_ {
         [
             (Modifier::CouldError, self.could_error.as_ref()),
@@ -1157,9 +1156,7 @@ fn unary_func(
     reject_inapplicable(Shape::Unary, &modifiers)?;
 
     let mut override_mods = modifiers.clone();
-    // The arm below always resolves `introduces_nulls` itself, from `output_type` when
-    // the modifier is absent or from the modifier directly otherwise, so exclude it
-    // here to avoid `override_methods` emitting a duplicate method.
+    // See `generate::insert_introduces_nulls`'s doc for why this is cleared.
     override_mods.introduces_nulls = None;
 
     let Modifiers {
@@ -1317,9 +1314,7 @@ fn binary_func(
     reject_inapplicable(Shape::Binary, &modifiers)?;
 
     let mut override_mods = modifiers.clone();
-    // The arm below always resolves `introduces_nulls` itself, from `output_type` when
-    // the modifier is absent or from the modifier directly otherwise, so exclude it
-    // here to avoid `override_methods` emitting a duplicate method.
+    // See `generate::insert_introduces_nulls`'s doc for why this is cleared.
     override_mods.introduces_nulls = None;
 
     let Modifiers {
@@ -1499,9 +1494,7 @@ fn variadic_func(
     reject_inapplicable(Shape::Variadic, &modifiers)?;
 
     let mut override_mods = modifiers.clone();
-    // The arm below always resolves `introduces_nulls` itself, from `output_type` when
-    // the modifier is absent or from the modifier directly otherwise, so exclude it
-    // here to avoid `override_methods` emitting a duplicate method.
+    // See `generate::insert_introduces_nulls`'s doc for why this is cleared.
     override_mods.introduces_nulls = None;
 
     let Modifiers {
