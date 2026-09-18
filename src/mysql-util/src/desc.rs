@@ -153,7 +153,9 @@ impl MySqlTableDesc {
                 );
             }
         }
-        // Our keys are all still present in exactly the same shape.
+        // Our keys are all still present in exactly the same shape. Keys over an
+        // excluded column are skipped: they were never recorded as Materialize
+        // keys, and they cannot be re-verified once the column is gone upstream.
         // TODO: Implement a more relaxed key compatibility check:
         // We should check that for all keys that we know about there exists an upstream key whose
         // set of columns is a subset of the set of columns of the key we know about. For example
@@ -161,7 +163,22 @@ impl MySqlTableDesc {
         // up of columns (a, b) and key2 made up of columns (a, c) but now the table only has a
         // single unique key of just the column a then it's compatible because {a} ⊆ {a, b} and
         // {a} ⊆ {a, c}.
-        if self.keys.difference(&other.keys).next().is_some() {
+        let excluded_columns: BTreeSet<&str> = self
+            .columns
+            .iter()
+            .filter(|c| c.column_type.is_none())
+            .map(|c| c.name.as_str())
+            .collect();
+        let key_altered = self
+            .keys
+            .iter()
+            .filter(|k| {
+                !k.columns
+                    .iter()
+                    .any(|c| excluded_columns.contains(c.as_str()))
+            })
+            .any(|k| !other.keys.contains(k));
+        if key_altered {
             bail!(
                 "keys in table {} have been altered: self: {:?}, other: {:?}",
                 self.name,
@@ -358,5 +375,60 @@ impl RustType<ProtoMySqlKeyDesc> for MySqlKeyDesc {
             is_primary: proto.is_primary,
             columns: proto.columns,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::SqlScalarType;
+
+    use super::{MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc};
+
+    fn column(name: &str, excluded: bool) -> MySqlColumnDesc {
+        MySqlColumnDesc {
+            name: name.into(),
+            column_type: (!excluded).then(|| SqlScalarType::Int32.nullable(false)),
+            meta: None,
+        }
+    }
+
+    fn key(name: &str, columns: &[&str]) -> MySqlKeyDesc {
+        MySqlKeyDesc {
+            name: name.into(),
+            is_primary: name == "PRIMARY",
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    fn desc(columns: Vec<MySqlColumnDesc>, keys: Vec<MySqlKeyDesc>) -> MySqlTableDesc {
+        MySqlTableDesc {
+            schema_name: "public".into(),
+            name: "t".into(),
+            columns,
+            keys: keys.into_iter().collect(),
+        }
+    }
+
+    #[mz_ore::test]
+    fn keys_over_excluded_columns_are_not_verified() {
+        let columns = || vec![column("f1", false), column("f2", true), column("f3", false)];
+        let recorded = desc(
+            columns(),
+            vec![
+                key("PRIMARY", &["f1"]),
+                key("uq_f2", &["f2"]),
+                key("uq_f1_f2", &["f1", "f2"]),
+            ],
+        );
+
+        // Upstream dropped both indexes over the excluded column.
+        let upstream = desc(columns(), vec![key("PRIMARY", &["f1"])]);
+        recorded
+            .determine_compatibility(&upstream, true)
+            .expect("keys over an excluded column are ignored");
+
+        // A key over included columns is still verified.
+        let upstream = desc(columns(), vec![key("uq_f2", &["f2"])]);
+        assert!(recorded.determine_compatibility(&upstream, true).is_err());
     }
 }
