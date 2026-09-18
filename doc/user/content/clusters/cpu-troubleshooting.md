@@ -20,8 +20,13 @@ resolve it, and how to prevent it from recurring.
 {{< important >}}
 The introspection relations and `EXPLAIN ANALYZE` statements in this guide
 report on **the cluster and replica your session is connected to**. Run
-`SET CLUSTER TO <cluster_name>` first, and re-run per replica on a cluster with
-a replication factor above 1.
+`SET CLUSTER TO <cluster_name>` first.
+
+On a cluster with a replication factor above 1, that is not enough: each replica
+collects this data about itself, so the query fails until you also pick one with
+`SET cluster_replica = <replica_name>`. Re-run per replica, then clear the
+targeting with `RESET cluster_replica`, which otherwise applies to every
+subsequent query in the session.
 {{< /important >}}
 
 ## Common causes
@@ -325,7 +330,7 @@ FROM mz_internal.mz_hydration_statuses h
 JOIN mz_catalog.mz_objects o ON h.object_id = o.id
 JOIN mz_catalog.mz_clusters c ON o.cluster_id = c.id
 WHERE c.name = '<cluster_name>'
-  AND NOT h.hydrated;
+  AND NOT coalesce(h.hydrated, false);
 ```
 
 ```nofmt
@@ -338,6 +343,10 @@ WHERE c.name = '<cluster_name>'
 Zero rows is the healthy steady state: everything on the cluster is hydrated.
 A `NULL` `replica_id` means compute introspection has not reported on the object
 yet, which is normal for an object that has only just been created.
+
+`hydrated` is itself `NULL` for a sink that has no status row yet, so the
+`coalesce` is what keeps those sinks in the result rather than filtering out
+exactly the objects the query looks for.
 
 ### Resolution
 
@@ -462,6 +471,10 @@ metrics](/sql/system-catalog/mz_internal/#counter-metrics). Joining
 `mz_catalog.mz_sources` restricts the result to top-level sources. To include
 the tables created from a source, join `mz_catalog.mz_objects` instead.
 
+`mz_source_statistics` is keyed by `(id, replica_id)`, so a cluster with a
+replication factor above 1 returns one row per source per replica. Add
+`ss.replica_id` to the select list to tell those rows apart.
+
 ### Resolution
 
 If the rate is far above what the workload was sized for, either size the
@@ -568,11 +581,12 @@ insertion (`mz_diff = 1`) of the new one.
 
 The `sum` is **cumulative** parked nanoseconds across all of the replica's
 workers, not a rate, so take the difference between two insertions to get the
-idle time for that interval. Over a window of `T` seconds, a fully idle cluster
-accrues `T × <number of workers>` seconds of idle time. As a rule of thumb, a
-cluster with healthy headroom stays above 10% of that.
-[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
-gives the worker count for a size.
+idle nanoseconds for that interval. Over a window of `T` seconds, a fully idle
+replica accrues `T × <number of workers> × 1e9` of them. As a rule of thumb, a
+replica with healthy headroom stays above 10% of that. A size's worker count is
+`processes * workers` from
+[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes),
+since `workers` is per process.
 
 Because this aggregates across workers, it will not reveal skew. Use it
 alongside `EXPLAIN ANALYZE CLUSTER CPU`, not instead of it.
