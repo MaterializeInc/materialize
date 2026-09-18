@@ -54,6 +54,7 @@ impl Connections {
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        live_sql: Option<&str>,
     ) -> Result<ObjectAction, CliError> {
         let Statement::CreateConnection(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateConnection");
@@ -68,12 +69,6 @@ impl Connections {
             _ => unreachable!(),
         };
 
-        let live_sql = client
-            .introspection()
-            .get_connection_create_sql(obj_id.expect_database(), obj_id.schema(), obj_id.object())
-            .await
-            .map_err(CliError::Connection)?;
-
         let action = match live_sql {
             None => {
                 // Object was in catalog batch check but SHOW CREATE returned nothing —
@@ -82,7 +77,7 @@ impl Connections {
                 ObjectAction::Created
             }
             Some(sql) => {
-                let live_create = parse_create_connection_sql(&sql)?;
+                let live_create = parse_create_connection_sql(sql)?;
                 let (to_set, to_drop) =
                     diff_connection_options(&resolved_stmt.values, &live_create.values);
 
@@ -179,6 +174,11 @@ pub async fn plan(
         .check_catalog_objects_exist(&target_ids, GRANT_KIND.catalog_table())
         .await
         .map_err(CliError::Connection)?;
+    let live_sqls = client
+        .introspection()
+        .get_connection_create_sqls(&existing)
+        .await
+        .map_err(CliError::Connection)?;
 
     let schemas: BTreeSet<_> = target_objects
         .iter()
@@ -200,7 +200,13 @@ pub async fn plan(
         executor.take_statements();
         let action = if existing.contains(&obj_id) {
             connections
-                .handle_existing(client, executor, &obj_id, typed_obj)
+                .handle_existing(
+                    client,
+                    executor,
+                    &obj_id,
+                    typed_obj,
+                    live_sqls.get(&obj_id).map(String::as_str),
+                )
                 .await?
         } else {
             connections
