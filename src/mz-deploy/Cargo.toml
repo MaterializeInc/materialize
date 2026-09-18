@@ -50,6 +50,7 @@ tokio-postgres = { workspace = true, features = ["with-chrono-0_4", "with-serde_
 postgres-openssl = { workspace = true }
 openssl = { workspace = true }
 toml = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true}
