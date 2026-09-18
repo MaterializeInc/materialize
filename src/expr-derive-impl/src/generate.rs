@@ -12,9 +12,9 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
+use crate::modifiers::{Modifiers, reject_inapplicable};
 use crate::shape::{Modifier, Shape};
-use crate::sqlfunc;
-use crate::sqlfunc::Modifiers;
+use crate::signature;
 
 /// One `fn name(&self) -> Ret { expr }` per modifier present in `mods`, except
 /// `introduces_nulls`.
@@ -157,7 +157,7 @@ fn variadic_params(
                     );
                 };
                 names.push(ident.ident.clone());
-                types.push(sqlfunc::patch_lifetimes(&pat.ty));
+                types.push(signature::patch_lifetimes(&pat.ty));
             }
             syn::FnArg::Receiver(_) => {
                 return Err(darling::Error::custom("unexpected self parameter"));
@@ -180,29 +180,29 @@ pub(crate) fn generate(
     struct_ty: Option<syn::Path>,
     has_self: bool,
 ) -> darling::Result<TokenStream> {
-    sqlfunc::reject_inapplicable(shape, &mods)?;
+    reject_inapplicable(shape, &mods)?;
 
     let fn_name = &func.sig.ident;
     let struct_name = struct_ty
         .as_ref()
         .and_then(|ty| ty.segments.last())
-        .map_or_else(|| sqlfunc::camel_case(fn_name), |seg| seg.ident.clone());
+        .map_or_else(|| signature::camel_case(fn_name), |seg| seg.ident.clone());
 
     // Whether the annotated function itself wants the arena, which is independent of
     // whether the trait's `call` receives one.
-    let arena = sqlfunc::last_is_arena(func);
-    let output_ty_raw = sqlfunc::output_type(func)?;
-    let generic_params = sqlfunc::find_generic_type_params(func);
+    let arena = signature::last_is_arena(func);
+    let output_ty_raw = signature::output_type(func)?;
+    let generic_params = signature::find_generic_type_params(func);
 
     // Unary and binary bind their inputs positionally, ignoring how the function
     // spells its parameters, while variadic forwards the real names.
     let (param_types_raw, param_names) = match shape {
         Shape::Unary => (
-            vec![sqlfunc::arg_type(func, 0)?],
+            vec![signature::arg_type(func, 0)?],
             vec![Ident::new("a", Span::call_site())],
         ),
         Shape::Binary => (
-            vec![sqlfunc::arg_type(func, 0)?, sqlfunc::arg_type(func, 1)?],
+            vec![signature::arg_type(func, 0)?, signature::arg_type(func, 1)?],
             vec![
                 Ident::new("a", Span::call_site()),
                 Ident::new("b", Span::call_site()),
@@ -218,7 +218,7 @@ pub(crate) fn generate(
     // Derive the output type from where the generic parameters land. This reads the
     // pre-erasure types, because erasure is what removes those parameters.
     if !generic_params.is_empty() && output_type.is_none() && output_type_expr.is_none() {
-        if let Some(derived) = sqlfunc::derive_output_type_for_generics(
+        if let Some(derived) = signature::derive_output_type_for_generics(
             &param_types_raw,
             output_ty_raw,
             &generic_params,
@@ -226,7 +226,7 @@ pub(crate) fn generate(
         )? {
             output_type_expr = Some(syn::parse2(derived)?);
             if introduces_nulls.is_none() {
-                let nullable = sqlfunc::is_option_wrapped(output_ty_raw);
+                let nullable = signature::is_option_wrapped(output_ty_raw);
                 introduces_nulls = Some(syn::parse_quote!(#nullable));
             }
         }
@@ -247,9 +247,9 @@ pub(crate) fn generate(
     // types, where the function's parameters are not in scope.
     let param_types: Vec<syn::Type> = param_types_raw
         .iter()
-        .map(|ty| sqlfunc::erase_all_generic_params(ty, &generic_params))
+        .map(|ty| signature::erase_all_generic_params(ty, &generic_params))
         .collect();
-    let output_ty = sqlfunc::erase_all_generic_params(output_ty_raw, &generic_params);
+    let output_ty = signature::erase_all_generic_params(output_ty_raw, &generic_params);
 
     // A lone input passes through bare. Several become a tuple.
     let input_ty: syn::Type = if let [ty] = param_types.as_slice() {
@@ -312,7 +312,7 @@ pub(crate) fn generate(
 
     let trait_path = shape.trait_path();
     let (output_method, output_method_param) = shape.output_method();
-    let nullability = shape.nullability(&sqlfunc::non_nullable_position_checks(&param_types));
+    let nullability = shape.nullability(&signature::non_nullable_position_checks(&param_types));
 
     let trait_impl = quote! {
         impl #trait_path for #struct_name {
@@ -363,7 +363,7 @@ mod tests {
 
     #[mz_ore::test]
     fn binary_is_monotone_emits_a_pair_return() {
-        let mods = crate::sqlfunc::Modifiers::from_tokens(quote! {
+        let mods = crate::modifiers::Modifiers::from_tokens(quote! {
             is_monotone = (true, true),
             could_error = false,
         })
@@ -386,8 +386,8 @@ mod tests {
 
     #[mz_ore::test]
     fn unary_is_monotone_emits_a_bool_return() {
-        let mods =
-            crate::sqlfunc::Modifiers::from_tokens(quote! { is_monotone = true }).expect("parses");
+        let mods = crate::modifiers::Modifiers::from_tokens(quote! { is_monotone = true })
+            .expect("parses");
         let methods = super::override_methods(Shape::Unary, &mods);
         let rendered = methods[0].to_string();
         assert!(
@@ -398,7 +398,7 @@ mod tests {
 
     #[mz_ore::test]
     fn override_methods_never_emits_introduces_nulls() {
-        let mods = crate::sqlfunc::Modifiers::from_tokens(quote! {
+        let mods = crate::modifiers::Modifiers::from_tokens(quote! {
             could_error = true,
             introduces_nulls = true,
         })
@@ -420,14 +420,17 @@ mod tests {
 
     #[mz_ore::test]
     fn absent_modifiers_emit_nothing() {
-        let mods = crate::sqlfunc::Modifiers::from_tokens(quote! {}).expect("parses");
+        let mods = crate::modifiers::Modifiers::from_tokens(quote! {}).expect("parses");
         assert!(super::override_methods(Shape::Unary, &mods).is_empty());
     }
 
     #[mz_ore::test]
     fn insert_introduces_nulls_lands_after_could_error() {
-        let mods = crate::sqlfunc::Modifiers::from_tokens(quote! {
+        // `introduces_nulls` is present here to pin `insert_introduces_nulls`'s claim
+        // that carrying it does not shift the insertion point.
+        let mods = crate::modifiers::Modifiers::from_tokens(quote! {
             could_error = true,
+            introduces_nulls = true,
             is_monotone = true,
         })
         .expect("parses");
@@ -454,8 +457,8 @@ mod tests {
 
     #[mz_ore::test]
     fn insert_introduces_nulls_leads_when_could_error_absent() {
-        let mods =
-            crate::sqlfunc::Modifiers::from_tokens(quote! { is_monotone = true }).expect("parses");
+        let mods = crate::modifiers::Modifiers::from_tokens(quote! { is_monotone = true })
+            .expect("parses");
         let mut methods = super::override_methods(Shape::Unary, &mods);
         assert_eq!(methods.len(), 1, "is_monotone only");
         super::insert_introduces_nulls(
