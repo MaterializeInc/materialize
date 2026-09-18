@@ -30,7 +30,7 @@ use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
     ColumnName, Datum, Diff, ReprColumnType, ReprRelationType, Row, RowArena, RowPacker, SharedRow,
-    SqlColumnType, SqlRelationType, SqlScalarType, datum_size,
+    SqlColumnType, SqlRelationType, SqlScalarType, StableRow, datum_size,
 };
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
@@ -334,22 +334,36 @@ pub fn order_aggregate_datums<'a: 'b, 'b, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    order_aggregate_datums_with_rank_inner(datums, order_by)
+    order_aggregate_datums_from(datums, order_by, &OrderByValues::Appended)
+}
+
+/// Like [`order_aggregate_datums`], for a window function, whose ORDER BY
+/// values are not always appended to the payload. See [`OrderByValues`].
+fn order_aggregate_datums_from<'a: 'b, 'b, I>(
+    datums: I,
+    order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    order_aggregate_datums_with_rank_inner(datums, order_by, order_by_values)
         .into_iter()
         // (`payload` is coerced here to `Datum<'b>` in the argument of the closure)
         .map(|(payload, _order_datums)| payload)
 }
 
-/// Assuming datums is a List, sort them by the 2nd through Nth elements
-/// corresponding to order_by, then return the 1st element and computed order by expression.
+/// Assuming datums is a List, sort them by the ORDER BY values, then return the
+/// payload and the computed order by expression.
 fn order_aggregate_datums_with_rank<'a, I>(
     datums: I,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
 ) -> impl Iterator<Item = (Datum<'a>, Row)>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    order_aggregate_datums_with_rank_inner(datums, order_by)
+    order_aggregate_datums_with_rank_inner(datums, order_by, order_by_values)
         .into_iter()
         .map(|(payload, order_by_datums)| (payload, Row::pack(order_by_datums)))
 }
@@ -357,10 +371,17 @@ where
 fn order_aggregate_datums_with_rank_inner<'a, I>(
     datums: I,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
 ) -> Vec<(Datum<'a>, Vec<Datum<'a>>)>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    // The furthest `OriginalRow` field any ORDER BY expression reads, which
+    // bounds the walk below.
+    let original_row_len = match order_by_values {
+        OrderByValues::Appended => 0,
+        OrderByValues::OriginalRow(fields) => fields.iter().max().map_or(0, |field| field + 1),
+    };
     let mut decoded: Vec<(Datum, Vec<Datum>)> = datums
         .into_iter()
         .map(|d| {
@@ -377,14 +398,35 @@ where
             //   anyway,
             // - and anyhow various other parts of the window function code already do decoding
             //   upfront.
-            let mut order_by_datums = Vec::with_capacity(order_by.len());
-            for _ in 0..order_by.len() {
-                order_by_datums.push(
-                    list_it
-                        .next()
-                        .expect("must have exactly the same number of Datums as `order_by`"),
-                );
-            }
+            let order_by_datums =
+                match order_by_values {
+                    OrderByValues::Appended => {
+                        let mut order_by_datums = Vec::with_capacity(order_by.len());
+                        for _ in 0..order_by.len() {
+                            order_by_datums.push(list_it.next().expect(
+                                "must have exactly the same number of Datums as `order_by`",
+                            ));
+                        }
+                        order_by_datums
+                    }
+                    OrderByValues::OriginalRow(fields) => {
+                        // `OriginalRow` leads the payload in every window
+                        // function's encoding: field 0 of the value families'
+                        // `(OriginalRow, EncodedArgs?)` record, and the single
+                        // element of the scalar family's list.
+                        let original_row = payload
+                            .unwrap_list()
+                            .iter()
+                            .next()
+                            .expect("payload leads with `OriginalRow`");
+                        let columns: SmallVec<[Datum; 16]> = original_row
+                            .unwrap_list()
+                            .iter()
+                            .take(original_row_len)
+                            .collect();
+                        fields.iter().map(|field| columns[*field]).collect()
+                    }
+                };
 
             (payload, order_by_datums)
         })
@@ -444,6 +486,7 @@ fn row_number<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -452,7 +495,7 @@ where
     // large number of new datums. This is because we don't want to make an assumption about
     // whether the caller creates a new temp_storage between window partitions.
     let temp_storage = RowArena::new();
-    let datums = row_number_no_list(datums, &temp_storage, order_by);
+    let datums = row_number_no_list(datums, &temp_storage, order_by, order_by_values);
 
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(datums);
@@ -465,11 +508,12 @@ fn row_number_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let datums = order_aggregate_datums(datums, order_by);
+    let datums = order_aggregate_datums_from(datums, order_by, order_by_values);
 
     callers_temp_storage.reserve(datums.size_hint().0);
     #[allow(clippy::disallowed_methods)]
@@ -491,12 +535,17 @@ where
 /// The expected input is in the format of `[((OriginalRow, [EncodedArgs]), OrderByExprs...)]`
 /// The output is in the format of `[result_value, original_row]`.
 /// See an example at `lag_lead`, where the input-output formats are similar.
-fn rank<'a, I>(datums: I, callers_temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+fn rank<'a, I>(
+    datums: I,
+    callers_temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
+) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let datums = rank_no_list(datums, &temp_storage, order_by);
+    let datums = rank_no_list(datums, &temp_storage, order_by, order_by_values);
 
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(datums);
@@ -509,12 +558,13 @@ fn rank_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     // Keep the row used for ordering around, as it is used to determine the rank
-    let datums = order_aggregate_datums_with_rank(datums, order_by);
+    let datums = order_aggregate_datums_with_rank(datums, order_by, order_by_values);
 
     let mut datums = datums
         .into_iter()
@@ -562,12 +612,13 @@ fn dense_rank<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let datums = dense_rank_no_list(datums, &temp_storage, order_by);
+    let datums = dense_rank_no_list(datums, &temp_storage, order_by, order_by_values);
 
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(datums);
@@ -580,12 +631,13 @@ fn dense_rank_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     // Keep the row used for ordering around, as it is used to determine the rank
-    let datums = order_aggregate_datums_with_rank(datums, order_by);
+    let datums = order_aggregate_datums_with_rank(datums, order_by, order_by_values);
 
     let mut datums = datums
         .into_iter()
@@ -650,14 +702,24 @@ fn lag_lead<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
+    args: &Option<LagLeadArgs>,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let iter = lag_lead_no_list(datums, &temp_storage, order_by, lag_lead_type, ignore_nulls);
+    let iter = lag_lead_no_list(
+        datums,
+        &temp_storage,
+        order_by,
+        order_by_values,
+        lag_lead_type,
+        ignore_nulls,
+        args,
+    );
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(iter);
     })
@@ -669,26 +731,28 @@ fn lag_lead_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
+    args: &Option<LagLeadArgs>,
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, EncodedArgs) record
-    let datums = order_aggregate_datums(datums, order_by);
+    let datums = order_aggregate_datums_from(datums, order_by, order_by_values);
 
-    // Take the (OriginalRow, EncodedArgs) records and unwrap them into separate datums.
-    // EncodedArgs = (InputValue, Offset, DefaultValue) for Lag/Lead
-    // (`OriginalRow` is kept in a record form, as we don't need to look inside that.)
+    // Take the (OriginalRow, EncodedArgs) records and unwrap them into separate
+    // datums. The encoded arguments are absent when the plan describes all
+    // three; `OriginalRow` is otherwise kept in record form, as the lag/lead
+    // computation does not look inside it.
+    let unwrap_args = lag_lead_arg_unwrapper(callers_temp_storage, args);
     let (orig_rows, unwrapped_args): (Vec<_>, Vec<_>) = datums
         .into_iter()
         .map(|d| {
             let mut iter = d.unwrap_list().iter();
             let original_row = iter.next().unwrap();
-            let (input_value, offset, default_value) =
-                unwrap_lag_lead_encoded_args(iter.next().unwrap());
-            (original_row, (input_value, offset, default_value))
+            (original_row, unwrap_args(original_row, iter.next()))
         })
         .unzip();
 
@@ -708,15 +772,57 @@ where
         })
 }
 
-/// lag/lead's arguments are in a record. This function unwraps this record.
-fn unwrap_lag_lead_encoded_args(encoded_args: Datum) -> (Datum, Datum, Datum) {
-    let mut encoded_args_iter = encoded_args.unwrap_list().iter();
-    let (input_value, offset, default_value) = (
-        encoded_args_iter.next().unwrap(),
-        encoded_args_iter.next().unwrap(),
-        encoded_args_iter.next().unwrap(),
+/// Returns a closure turning one row's `OriginalRow` record and encoded
+/// arguments into the `(value, offset, default)` triple the computation works
+/// on.
+///
+/// `args` selects the encoding, and so also which of the closure's inputs
+/// carry anything: `None` means the row's encoded arguments are a
+/// `(value, offset, default)` record, `Some` with no described `value` that
+/// they are the bare `value`, and `Some` with one that the row has no encoded
+/// arguments at all. The constant `default` is copied into `temp_storage`
+/// once here, so every row of the partition shares the one copy.
+fn lag_lead_arg_unwrapper<'a>(
+    temp_storage: &'a RowArena,
+    args: &Option<LagLeadArgs>,
+) -> impl Fn(Datum<'a>, Option<Datum<'a>>) -> (Datum<'a>, Datum<'a>, Datum<'a>) {
+    let described = args.as_ref().map(
+        |LagLeadArgs {
+             offset,
+             default,
+             value,
+         }| {
+            (
+                offset.map_or(Datum::Null, Datum::Int32),
+                temp_storage.make_datum(|packer| packer.push(default.unpack_first())),
+                *value,
+            )
+        },
     );
-    (input_value, offset, default_value)
+    move |original_row, encoded_args| match described {
+        Some((offset, default, value)) => {
+            let value = match value {
+                Some(field) => original_row
+                    .unwrap_list()
+                    .iter()
+                    .nth(field)
+                    .expect("`value` field is within `OriginalRow`"),
+                None => encoded_args.expect("`value` is encoded per row"),
+            };
+            (value, offset, default)
+        }
+        None => {
+            let mut iter = encoded_args
+                .expect("all arguments are encoded per row")
+                .unwrap_list()
+                .iter();
+            (
+                iter.next().unwrap(),
+                iter.next().unwrap(),
+                iter.next().unwrap(),
+            )
+        }
+    }
 }
 
 /// Each element of `args` has the 3 arguments evaluated for a single input row.
@@ -897,13 +1003,20 @@ fn first_value<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
     window_frame: &WindowFrame,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let iter = first_value_no_list(datums, &temp_storage, order_by, window_frame);
+    let iter = first_value_no_list(
+        datums,
+        &temp_storage,
+        order_by,
+        order_by_values,
+        window_frame,
+    );
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(iter);
     })
@@ -915,13 +1028,14 @@ fn first_value_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
     window_frame: &WindowFrame,
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, InputValue) record
-    let datums = order_aggregate_datums(datums, order_by);
+    let datums = order_aggregate_datums_from(datums, order_by, order_by_values);
 
     // Decode the input (OriginalRow, InputValue) into separate datums
     let (orig_rows, args): (Vec<_>, Vec<_>) = datums
@@ -1018,13 +1132,20 @@ fn last_value<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
     window_frame: &WindowFrame,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let iter = last_value_no_list(datums, &temp_storage, order_by, window_frame);
+    let iter = last_value_no_list(
+        datums,
+        &temp_storage,
+        order_by,
+        order_by_values,
+        window_frame,
+    );
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(iter);
     })
@@ -1036,6 +1157,7 @@ fn last_value_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
     window_frame: &WindowFrame,
 ) -> impl Iterator<Item = Datum<'b>>
 where
@@ -1043,7 +1165,7 @@ where
 {
     // Sort the datums according to the ORDER BY expressions and return the ((OriginalRow, InputValue), OrderByRow) record
     // The OrderByRow is kept around because it is required to compute the peer groups in RANGE mode
-    let datums = order_aggregate_datums_with_rank(datums, order_by);
+    let datums = order_aggregate_datums_with_rank(datums, order_by, order_by_values);
 
     // Decode the input (OriginalRow, InputValue) into separate datums, while keeping the OrderByRow
     let size_hint = datums.size_hint().0;
@@ -1174,12 +1296,19 @@ fn fused_value_window_func<'a, I>(
     callers_temp_storage: &'a RowArena,
     funcs: &Vec<AggregateFunc>,
     order_by: &Vec<ColumnOrder>,
+    order_by_values: &OrderByValues,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let iter = fused_value_window_func_no_list(input_datums, &temp_storage, funcs, order_by);
+    let iter = fused_value_window_func_no_list(
+        input_datums,
+        &temp_storage,
+        funcs,
+        order_by,
+        order_by_values,
+    );
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(iter);
     })
@@ -1192,6 +1321,7 @@ fn fused_value_window_func_no_list<'a: 'b, 'b, I>(
     callers_temp_storage: &'b RowArena,
     funcs: &Vec<AggregateFunc>,
     order_by: &Vec<ColumnOrder>,
+    order_by_values: &OrderByValues,
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -1200,7 +1330,16 @@ where
         .iter()
         .any(|f| matches!(f, AggregateFunc::LastValue { .. }));
 
-    let input_datums_with_ranks = order_aggregate_datums_with_rank(input_datums, order_by);
+    let input_datums_with_ranks =
+        order_aggregate_datums_with_rank(input_datums, order_by, order_by_values);
+
+    // A constituent whose arguments the plan fully describes contributes no
+    // field to the fused argument record, and no field at all is encoded when
+    // that holds for all of them. See `AggregateFunc::encodes_window_args`.
+    let encodes_args = funcs
+        .iter()
+        .map(AggregateFunc::encodes_window_args)
+        .collect_vec();
 
     let size_hint = input_datums_with_ranks.size_hint().0;
     let mut encoded_argsss = vec![Vec::with_capacity(size_hint); funcs.len()];
@@ -1210,10 +1349,15 @@ where
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
         original_rows.push(original_row);
-        let mut argss_iter = iter.next().unwrap().unwrap_list().iter();
-        for i in 0..funcs.len() {
-            let encoded_args = argss_iter.next().unwrap();
-            encoded_argsss[i].push(encoded_args);
+        let mut argss_iter = iter
+            .next()
+            .map(|argss| argss.unwrap_list().iter())
+            .into_iter()
+            .flatten();
+        for (i, encodes) in encodes_args.iter().enumerate() {
+            if *encodes {
+                encoded_argsss[i].push(argss_iter.next().unwrap());
+            }
         }
         if has_last_value {
             order_by_rows.push(order_by_row);
@@ -1225,30 +1369,46 @@ where
         let results = match func {
             AggregateFunc::LagLead {
                 order_by: inner_order_by,
+                order_by_values: inner_order_by_values,
                 lag_lead,
                 ignore_nulls,
+                args,
             } => {
                 assert_eq!(order_by, inner_order_by);
-                let unwrapped_argss = encoded_argss
-                    .into_iter()
-                    .map(|encoded_args| unwrap_lag_lead_encoded_args(encoded_args))
+                assert_eq!(order_by_values, inner_order_by_values);
+                let unwrap_args = lag_lead_arg_unwrapper(callers_temp_storage, args);
+                // `encoded_argss` is empty exactly when this constituent
+                // encodes nothing per row.
+                let encoded_argss = if encoded_argss.is_empty() {
+                    Either::Left(std::iter::repeat_n(None, original_rows.len()))
+                } else {
+                    Either::Right(encoded_argss.into_iter().map(Some))
+                };
+                let unwrapped_argss = original_rows
+                    .iter()
+                    .zip_eq(encoded_argss)
+                    .map(|(original_row, encoded_args)| unwrap_args(*original_row, encoded_args))
                     .collect();
                 lag_lead_inner(unwrapped_argss, lag_lead, ignore_nulls)
             }
             AggregateFunc::FirstValue {
                 order_by: inner_order_by,
+                order_by_values: inner_order_by_values,
                 window_frame,
             } => {
                 assert_eq!(order_by, inner_order_by);
+                assert_eq!(order_by_values, inner_order_by_values);
                 // (No unwrapping to do on the args here, because there is only 1 arg, so it's not
                 // wrapped into a record.)
                 first_value_inner(encoded_argss, window_frame)
             }
             AggregateFunc::LastValue {
                 order_by: inner_order_by,
+                order_by_values: inner_order_by_values,
                 window_frame,
             } => {
                 assert_eq!(order_by, inner_order_by);
+                assert_eq!(order_by_values, inner_order_by_values);
                 // (No unwrapping to do on the args here, because there is only 1 arg, so it's not
                 // wrapped into a record.)
                 last_value_inner(encoded_argss, &order_by_rows, window_frame)
@@ -1288,6 +1448,7 @@ fn window_aggr<'a, I, A>(
     callers_temp_storage: &'a RowArena,
     wrapped_aggregate: &AggregateFunc,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
     window_frame: &WindowFrame,
 ) -> Datum<'a>
 where
@@ -1300,6 +1461,7 @@ where
         &temp_storage,
         wrapped_aggregate,
         order_by,
+        order_by_values,
         window_frame,
     );
     callers_temp_storage.make_datum(|packer| {
@@ -1314,6 +1476,7 @@ fn window_aggr_no_list<'a: 'b, 'b, I, A>(
     callers_temp_storage: &'b RowArena,
     wrapped_aggregate: &AggregateFunc,
     order_by: &[ColumnOrder],
+    order_by_values: &OrderByValues,
     window_frame: &WindowFrame,
 ) -> impl Iterator<Item = Datum<'b>>
 where
@@ -1322,7 +1485,7 @@ where
 {
     // Sort the datums according to the ORDER BY expressions and return the ((OriginalRow, InputValue), OrderByRow) record
     // The OrderByRow is kept around because it is required to compute the peer groups in RANGE mode
-    let datums = order_aggregate_datums_with_rank(input_datums, order_by);
+    let datums = order_aggregate_datums_with_rank(input_datums, order_by, order_by_values);
 
     // Decode the input (OriginalRow, InputValue) into separate datums, while keeping the OrderByRow
     let size_hint = datums.size_hint().0;
@@ -1698,6 +1861,7 @@ fn fused_window_aggr<'a, I, A>(
     callers_temp_storage: &'a RowArena,
     wrapped_aggregates: &Vec<AggregateFunc>,
     order_by: &Vec<ColumnOrder>,
+    order_by_values: &OrderByValues,
     window_frame: &WindowFrame,
 ) -> Datum<'a>
 where
@@ -1710,6 +1874,7 @@ where
         &temp_storage,
         wrapped_aggregates,
         order_by,
+        order_by_values,
         window_frame,
     );
     callers_temp_storage.make_datum(|packer| {
@@ -1724,6 +1889,7 @@ fn fused_window_aggr_no_list<'a: 'b, 'b, I, A>(
     callers_temp_storage: &'b RowArena,
     wrapped_aggregates: &Vec<AggregateFunc>,
     order_by: &Vec<ColumnOrder>,
+    order_by_values: &OrderByValues,
     window_frame: &WindowFrame,
 ) -> impl Iterator<Item = Datum<'b>>
 where
@@ -1732,7 +1898,7 @@ where
 {
     // Sort the datums according to the ORDER BY expressions and return the ((OriginalRow, InputValue), OrderByRow) record
     // The OrderByRow is kept around because it is required to compute the peer groups in RANGE mode
-    let datums = order_aggregate_datums_with_rank(input_datums, order_by);
+    let datums = order_aggregate_datums_with_rank(input_datums, order_by, order_by_values);
 
     let size_hint = datums.size_hint().0;
     let mut argss = vec![Vec::with_capacity(size_hint); wrapped_aggregates.len()];
@@ -1861,6 +2027,80 @@ pub enum LagLeadType {
     Lead,
 }
 
+/// Where a `lag`/`lead` call's arguments come from, for the arguments the plan
+/// can describe instead of packing them into the reduce's per-row value.
+///
+/// `lag`/`lead` take three arguments, and by default the reduce encodes all
+/// three into a `(value, offset, default)` record per input row. `offset` and
+/// `default` are usually plan-time constants, and `value` is usually one of
+/// the input columns, which the row's `OriginalRow` record already carries.
+/// Describing them here leaves the per-row encoded argument as the bare
+/// `value` datum, or as nothing at all when `value` too is described.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+pub struct LagLeadArgs {
+    /// The `offset` argument; `None` is SQL NULL, for which `lag`/`lead`
+    /// returns NULL for every row.
+    pub offset: Option<i32>,
+    /// The `default` argument, as a single-datum row.
+    ///
+    /// A [`StableRow`] because `AggregateFunc` is part of the stable LIR
+    /// serialization surface, where raw `Row` bytes must not appear.
+    pub default: StableRow,
+    /// The field of the per-row `OriginalRow` record holding the `value`
+    /// argument, when `value` is one of the window function's input columns.
+    ///
+    /// `Some` leaves nothing to encode per row: the
+    /// `(OriginalRow, EncodedArgs)` record keeps only `OriginalRow`, and a
+    /// fused call contributes no field to the fused argument record. Reading
+    /// the value back walks `OriginalRow` as far as this field, which trades
+    /// a bounded datum walk per row for not storing the column twice.
+    pub value: Option<usize>,
+}
+
+/// Where a window function's ORDER BY values live in its per-row input.
+///
+/// An order-sensitive aggregate's input record holds the payload in its first
+/// field. The ORDER BY values normally follow it, one field per ORDER BY
+/// expression, which is the only encoding the non-window aggregates have.
+///
+/// A window function's payload leads with an `OriginalRow` record of every
+/// input column, so an ORDER BY expression that is a plain input column is
+/// already in the row. When all of them are, they are read from there and none
+/// are appended.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+pub enum OrderByValues {
+    /// Appended after the payload, one field per ORDER BY expression.
+    Appended,
+    /// Read from the `OriginalRow` record: one field index per ORDER BY
+    /// expression, in ORDER BY order. Reading them walks `OriginalRow` as far
+    /// as the last field listed, which trades a bounded datum walk per row for
+    /// not storing those columns twice.
+    ///
+    /// `ColumnOrder::column` indexes the ORDER BY expressions either way, so
+    /// the ordering itself reads the same in both encodings.
+    OriginalRow(Vec<usize>),
+}
+
 #[derive(
     Clone,
     Debug,
@@ -1959,24 +2199,41 @@ pub enum AggregateFunc {
     },
     RowNumber {
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
     },
     Rank {
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
     },
     DenseRank {
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
     },
     LagLead {
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
         lag_lead: LagLeadType,
         ignore_nulls: bool,
+        /// The arguments the plan describes rather than encoding per row,
+        /// which fixes the shape of the per-row encoded argument. `None` is
+        /// the full `(value, offset, default)` record; see [`LagLeadArgs`]
+        /// for the narrower shapes.
+        args: Option<LagLeadArgs>,
     },
     FirstValue {
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
         window_frame: WindowFrame,
     },
     LastValue {
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
         window_frame: WindowFrame,
     },
     /// Several value window functions fused into one function, to amortize overheads.
@@ -1985,15 +2242,21 @@ pub enum AggregateFunc {
         /// Currently, all the fused functions must have the same `order_by`. (We can later
         /// eliminate this limitation.)
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
     },
     WindowAggregate {
         wrapped_aggregate: Box<AggregateFunc>,
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
         window_frame: WindowFrame,
     },
     FusedWindowAggregate {
         wrapped_aggregates: Vec<AggregateFunc>,
         order_by: Vec<ColumnOrder>,
+        /// Where the ORDER BY values live; see [`OrderByValues`].
+        order_by_values: OrderByValues,
         window_frame: WindowFrame,
     },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
@@ -2176,45 +2439,84 @@ impl AggregateFunc {
             AggregateFunc::ArrayConcat { order_by } => array_concat(datums, temp_storage, order_by),
             AggregateFunc::ListConcat { order_by } => list_concat(datums, temp_storage, order_by),
             AggregateFunc::StringAgg { order_by } => string_agg(datums, temp_storage, order_by),
-            AggregateFunc::RowNumber { order_by } => row_number(datums, temp_storage, order_by),
-            AggregateFunc::Rank { order_by } => rank(datums, temp_storage, order_by),
-            AggregateFunc::DenseRank { order_by } => dense_rank(datums, temp_storage, order_by),
+            AggregateFunc::RowNumber {
+                order_by,
+                order_by_values,
+            } => row_number(datums, temp_storage, order_by, order_by_values),
+            AggregateFunc::Rank {
+                order_by,
+                order_by_values,
+            } => rank(datums, temp_storage, order_by, order_by_values),
+            AggregateFunc::DenseRank {
+                order_by,
+                order_by_values,
+            } => dense_rank(datums, temp_storage, order_by, order_by_values),
             AggregateFunc::LagLead {
                 order_by,
+                order_by_values,
                 lag_lead: lag_lead_type,
                 ignore_nulls,
-            } => lag_lead(datums, temp_storage, order_by, lag_lead_type, ignore_nulls),
+                args,
+            } => lag_lead(
+                datums,
+                temp_storage,
+                order_by,
+                order_by_values,
+                lag_lead_type,
+                ignore_nulls,
+                args,
+            ),
             AggregateFunc::FirstValue {
                 order_by,
+                order_by_values,
                 window_frame,
-            } => first_value(datums, temp_storage, order_by, window_frame),
+            } => first_value(
+                datums,
+                temp_storage,
+                order_by,
+                order_by_values,
+                window_frame,
+            ),
             AggregateFunc::LastValue {
                 order_by,
+                order_by_values,
                 window_frame,
-            } => last_value(datums, temp_storage, order_by, window_frame),
+            } => last_value(
+                datums,
+                temp_storage,
+                order_by,
+                order_by_values,
+                window_frame,
+            ),
             AggregateFunc::WindowAggregate {
                 wrapped_aggregate,
                 order_by,
+                order_by_values,
                 window_frame,
             } => window_aggr::<_, NaiveOneByOneAggr>(
                 datums,
                 temp_storage,
                 wrapped_aggregate,
                 order_by,
+                order_by_values,
                 window_frame,
             ),
-            AggregateFunc::FusedValueWindowFunc { funcs, order_by } => {
-                fused_value_window_func(datums, temp_storage, funcs, order_by)
-            }
+            AggregateFunc::FusedValueWindowFunc {
+                funcs,
+                order_by,
+                order_by_values,
+            } => fused_value_window_func(datums, temp_storage, funcs, order_by, order_by_values),
             AggregateFunc::FusedWindowAggregate {
                 wrapped_aggregates,
                 order_by,
+                order_by_values,
                 window_frame,
             } => fused_window_aggr::<_, NaiveOneByOneAggr>(
                 datums,
                 temp_storage,
                 wrapped_aggregates,
                 order_by,
+                order_by_values,
                 window_frame,
             ),
             AggregateFunc::Dummy => Datum::Dummy,
@@ -2237,23 +2539,27 @@ impl AggregateFunc {
             AggregateFunc::WindowAggregate {
                 wrapped_aggregate,
                 order_by,
+                order_by_values,
                 window_frame,
             } => window_aggr::<_, W>(
                 expand_counts(datums),
                 temp_storage,
                 wrapped_aggregate,
                 order_by,
+                order_by_values,
                 window_frame,
             ),
             AggregateFunc::FusedWindowAggregate {
                 wrapped_aggregates,
                 order_by,
+                order_by_values,
                 window_frame,
             } => fused_window_aggr::<_, W>(
                 expand_counts(datums),
                 temp_storage,
                 wrapped_aggregates,
                 order_by,
+                order_by_values,
                 window_frame,
             ),
             _ => self.eval(datums, temp_storage),
@@ -2274,53 +2580,95 @@ impl AggregateFunc {
         // Window functions are sensitive to multiplicity, so expand counts.
         let datums = expand_counts(datums);
         match self {
-            AggregateFunc::RowNumber { order_by } => {
-                row_number_no_list(datums, temp_storage, order_by).collect_vec()
-            }
-            AggregateFunc::Rank { order_by } => {
-                rank_no_list(datums, temp_storage, order_by).collect_vec()
-            }
-            AggregateFunc::DenseRank { order_by } => {
-                dense_rank_no_list(datums, temp_storage, order_by).collect_vec()
-            }
+            AggregateFunc::RowNumber {
+                order_by,
+                order_by_values,
+            } => row_number_no_list(datums, temp_storage, order_by, order_by_values).collect_vec(),
+            AggregateFunc::Rank {
+                order_by,
+                order_by_values,
+            } => rank_no_list(datums, temp_storage, order_by, order_by_values).collect_vec(),
+            AggregateFunc::DenseRank {
+                order_by,
+                order_by_values,
+            } => dense_rank_no_list(datums, temp_storage, order_by, order_by_values).collect_vec(),
             AggregateFunc::LagLead {
                 order_by,
+                order_by_values,
                 lag_lead: lag_lead_type,
                 ignore_nulls,
-            } => lag_lead_no_list(datums, temp_storage, order_by, lag_lead_type, ignore_nulls)
-                .collect_vec(),
+                args,
+            } => lag_lead_no_list(
+                datums,
+                temp_storage,
+                order_by,
+                order_by_values,
+                lag_lead_type,
+                ignore_nulls,
+                args,
+            )
+            .collect_vec(),
             AggregateFunc::FirstValue {
                 order_by,
+                order_by_values,
                 window_frame,
-            } => first_value_no_list(datums, temp_storage, order_by, window_frame).collect_vec(),
+            } => first_value_no_list(
+                datums,
+                temp_storage,
+                order_by,
+                order_by_values,
+                window_frame,
+            )
+            .collect_vec(),
             AggregateFunc::LastValue {
                 order_by,
+                order_by_values,
                 window_frame,
-            } => last_value_no_list(datums, temp_storage, order_by, window_frame).collect_vec(),
-            AggregateFunc::FusedValueWindowFunc { funcs, order_by } => {
-                fused_value_window_func_no_list(datums, temp_storage, funcs, order_by).collect_vec()
-            }
+            } => last_value_no_list(
+                datums,
+                temp_storage,
+                order_by,
+                order_by_values,
+                window_frame,
+            )
+            .collect_vec(),
+            AggregateFunc::FusedValueWindowFunc {
+                funcs,
+                order_by,
+                order_by_values,
+            } => fused_value_window_func_no_list(
+                datums,
+                temp_storage,
+                funcs,
+                order_by,
+                order_by_values,
+            )
+            .collect_vec(),
             AggregateFunc::WindowAggregate {
                 wrapped_aggregate,
                 order_by,
+                order_by_values,
                 window_frame,
             } => window_aggr_no_list::<_, W>(
                 datums,
                 temp_storage,
                 wrapped_aggregate,
                 order_by,
+                order_by_values,
                 window_frame,
             )
             .collect_vec(),
             AggregateFunc::FusedWindowAggregate {
                 wrapped_aggregates,
                 order_by,
+                order_by_values,
                 window_frame,
             } => fused_window_aggr_no_list::<_, W>(
                 datums,
                 temp_storage,
                 wrapped_aggregates,
                 order_by,
+                order_by_values,
                 window_frame,
             )
             .collect_vec(),
@@ -2520,15 +2868,16 @@ impl AggregateFunc {
             AggregateFunc::DenseRank { .. } => {
                 AggregateFunc::output_type_ranking_window_funcs(&input_type, "?dense_rank?")
             }
-            AggregateFunc::LagLead { lag_lead: lag_lead_type, .. } => {
-                // The input type for Lag is ((OriginalRow, EncodedArgs), OrderByExprs...)
+            AggregateFunc::LagLead { lag_lead: lag_lead_type, args, .. } => {
+                // The input type for Lag is ((OriginalRow, EncodedArgs?), OrderByExprs...)
                 let fields = input_type.scalar_type.unwrap_record_element_type();
-                let original_row_type = fields[0].unwrap_record_element_type()[0]
-                    .clone()
-                    .nullable(false);
-                let encoded_args = fields[0].unwrap_record_element_type()[1];
-                let output_type_inner =
-                    Self::lag_lead_output_type_inner_from_encoded_args(encoded_args);
+                let fn_input = fields[0].unwrap_record_element_type();
+                let original_row_type = fn_input[0].clone().nullable(false);
+                let output_type_inner = Self::lag_lead_output_type_inner(
+                    fn_input[0],
+                    fn_input.get(1).copied(),
+                    args.as_ref(),
+                );
                 let column_name = Self::lag_lead_result_column_name(lag_lead_type);
 
                 SqlScalarType::List {
@@ -2641,18 +2990,26 @@ impl AggregateFunc {
                     custom_id: None,
                 }
             }
-            AggregateFunc::FusedValueWindowFunc { funcs, order_by: _ } => {
+            AggregateFunc::FusedValueWindowFunc {
+                funcs,
+                order_by: _,
+                order_by_values: _,
+            } => {
                 // The input type is ((OriginalRow, EncodedArgs), OrderByExprs...)
                 // where EncodedArgs is a record, where each element is the argument to one of the
                 // function calls that got fused. This is a record for lag/lead, and a simple type
                 // for first_value/last_value.
                 let fields = input_type.scalar_type.unwrap_record_element_type();
-                let original_row_type = fields[0].unwrap_record_element_type()[0]
-                    .clone()
-                    .nullable(false);
-                let encoded_args_type = fields[0]
-                    .unwrap_record_element_type()[1]
-                    .unwrap_record_element_type();
+                let fn_input = fields[0].unwrap_record_element_type();
+                let original_row_type = fn_input[0];
+                // The argument record holds a field only for the constituents
+                // that encode one, and is itself absent when none do, so walk
+                // it alongside `funcs` rather than zipping the two.
+                let mut encoded_args_type = fn_input
+                    .get(1)
+                    .map(|t| t.unwrap_record_element_type().into_iter())
+                    .into_iter()
+                    .flatten();
 
                 SqlScalarType::List {
                     element_type: Box::new(SqlScalarType::Record {
@@ -2660,31 +3017,34 @@ impl AggregateFunc {
                             (
                                 ColumnName::from("?fused_value_window_func?"),
                                 SqlScalarType::Record {
-                                fields: encoded_args_type.into_iter().zip_eq(funcs).map(
-                                    |(arg_type, func)| {
+                                fields: funcs.iter().map(|func| {
+                                    let arg_type = func
+                                        .encodes_window_args()
+                                        .then(|| encoded_args_type.next().unwrap());
                                     match func {
                                         AggregateFunc::LagLead {
-                                            lag_lead: lag_lead_type, ..
+                                            lag_lead: lag_lead_type, args, ..
                                         } => {
                                             let name = Self::lag_lead_result_column_name(
                                                 lag_lead_type,
                                             );
-                                            let ty = Self
-                                                ::lag_lead_output_type_inner_from_encoded_args(
-                                                    arg_type,
-                                                );
+                                            let ty = Self::lag_lead_output_type_inner(
+                                                original_row_type,
+                                                arg_type,
+                                                args.as_ref(),
+                                            );
                                             (name, ty)
                                         },
                                         AggregateFunc::FirstValue { .. } => {
                                             (
                                                 ColumnName::from("?first_value?"),
-                                                arg_type.clone().nullable(true),
+                                                arg_type.unwrap().clone().nullable(true),
                                             )
                                         }
                                         AggregateFunc::LastValue { .. } => {
                                             (
                                                 ColumnName::from("?last_value?"),
-                                                arg_type.clone().nullable(true),
+                                                arg_type.unwrap().clone().nullable(true),
                                             )
                                         }
                                         _ => panic!("FusedValueWindowFunc has an unknown function"),
@@ -2692,7 +3052,7 @@ impl AggregateFunc {
                                 }).collect(),
                                 custom_id: None,
                             }.nullable(false)),
-                            (ColumnName::from("?orig_row?"), original_row_type),
+                            (ColumnName::from("?orig_row?"), original_row_type.clone().nullable(false)),
                         ].into(),
                         custom_id: None,
                     }),
@@ -2797,18 +3157,50 @@ impl AggregateFunc {
         }
     }
 
-    /// Given the `EncodedArgs` part of `((OriginalRow, EncodedArgs), OrderByExprs...)`,
-    /// this computes the type of the first field of the output type. (The first field is the
-    /// real result, the rest is the original row.)
-    fn lag_lead_output_type_inner_from_encoded_args(
-        encoded_args_type: &SqlScalarType,
+    /// The type of a `lag`/`lead` result, given the `OriginalRow` and (where
+    /// the row has one) `EncodedArgs` parts of
+    /// `((OriginalRow, EncodedArgs?), OrderByExprs...)`.
+    ///
+    /// This is the first field of the aggregate's output type; the rest is the
+    /// original row.
+    ///
+    /// The result has the type of the `value` argument, but is always nullable:
+    /// it is null when the lag/lead computation reaches over the bounds of the
+    /// window partition. Where `value` lives depends on `args`; see
+    /// [`LagLeadArgs`].
+    fn lag_lead_output_type_inner(
+        original_row_type: &SqlScalarType,
+        encoded_args_type: Option<&SqlScalarType>,
+        args: Option<&LagLeadArgs>,
     ) -> SqlColumnType {
-        // lag/lead have 3 arguments, and the output type is
-        // the same as the first of these, but always nullable. (It's null when the
-        // lag/lead computation reaches over the bounds of the window partition.)
-        encoded_args_type.unwrap_record_element_type()[0]
-            .clone()
-            .nullable(true)
+        let value_type = match args {
+            Some(LagLeadArgs {
+                value: Some(field), ..
+            }) => original_row_type.unwrap_record_element_type()[*field].clone(),
+            Some(_) => encoded_args_type
+                .expect("`value` is encoded per row")
+                .clone(),
+            None => encoded_args_type
+                .expect("all arguments are encoded per row")
+                .unwrap_record_element_type()[0]
+                .clone(),
+        };
+        value_type.nullable(true)
+    }
+
+    /// Whether this window function, as a constituent of a fused call,
+    /// contributes a field to the per-row fused argument record.
+    ///
+    /// Only `lag`/`lead` can decline: the others always read their single
+    /// argument from the row. A fused call whose constituents all decline
+    /// encodes no argument record at all.
+    pub fn encodes_window_args(&self) -> bool {
+        match self {
+            AggregateFunc::LagLead { args, .. } => {
+                !matches!(args, Some(LagLeadArgs { value: Some(_), .. }))
+            }
+            _ => true,
+        }
     }
 
     fn lag_lead_result_column_name(lag_lead_type: &LagLeadType) -> ColumnName {
@@ -3266,48 +3658,77 @@ where
             | MapAgg { order_by, .. }
             | ArrayConcat { order_by }
             | ListConcat { order_by }
-            | StringAgg { order_by }
-            | RowNumber { order_by }
-            | Rank { order_by }
-            | DenseRank { order_by } => {
+            | StringAgg { order_by } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
                 write!(f, "{}[order_by=[{}]]", name, separated(", ", order_by))
+            }
+            RowNumber {
+                order_by,
+                order_by_values,
+            }
+            | Rank {
+                order_by,
+                order_by_values,
+            }
+            | DenseRank {
+                order_by,
+                order_by_values,
+            } => {
+                f.write_str(name)?;
+                f.write_str("[")?;
+                self.fmt_window_order_by(f, order_by, order_by_values)?;
+                f.write_str("]")
             }
             LagLead {
                 lag_lead: _,
                 ignore_nulls,
                 order_by,
+                order_by_values,
+                args,
             } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
                 f.write_str(name)?;
                 f.write_str("[")?;
+                // The described arguments no longer appear in the argument
+                // expression this function is rendered next to, so print them
+                // here to keep the plan a complete description of the call.
+                // The two constants are literals, so they go through
+                // `humanize_datum` and are redacted along with every other
+                // literal in the plan.
+                if let Some(LagLeadArgs {
+                    offset,
+                    default,
+                    value,
+                }) = args
+                {
+                    if let Some(field) = value {
+                        write!(f, "value=orig_row[{field}], ")?;
+                    }
+                    f.write_str("offset=")?;
+                    self.mode
+                        .humanize_datum(offset.map_or(Datum::Null, Datum::Int32), f)?;
+                    f.write_str(", default=")?;
+                    self.mode.humanize_datum(default.unpack_first(), f)?;
+                    f.write_str(", ")?;
+                }
                 if *ignore_nulls {
                     f.write_str("ignore_nulls=true, ")?;
                 }
-                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                self.fmt_window_order_by(f, order_by, order_by_values)?;
                 f.write_str("]")
             }
             FirstValue {
                 order_by,
+                order_by_values,
                 window_frame,
-            } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
-                f.write_str(name)?;
-                f.write_str("[")?;
-                write!(f, "order_by=[{}]", separated(", ", order_by))?;
-                if *window_frame != WindowFrame::default() {
-                    write!(f, " {}", window_frame)?;
-                }
-                f.write_str("]")
             }
-            LastValue {
+            | LastValue {
                 order_by,
+                order_by_values,
                 window_frame,
             } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
                 f.write_str(name)?;
                 f.write_str("[")?;
-                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                self.fmt_window_order_by(f, order_by, order_by_values)?;
                 if *window_frame != WindowFrame::default() {
                     write!(f, " {}", window_frame)?;
                 }
@@ -3316,29 +3737,53 @@ where
             WindowAggregate {
                 wrapped_aggregate,
                 order_by,
+                order_by_values,
                 window_frame,
             } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
                 let wrapped_aggregate = self.child(wrapped_aggregate.deref());
                 f.write_str(name)?;
                 f.write_str("[")?;
                 write!(f, "{} ", wrapped_aggregate)?;
-                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                self.fmt_window_order_by(f, order_by, order_by_values)?;
                 if *window_frame != WindowFrame::default() {
                     write!(f, " {}", window_frame)?;
                 }
                 f.write_str("]")
             }
-            FusedValueWindowFunc { funcs, order_by } => {
-                let order_by = order_by.iter().map(|col| self.child(col));
+            FusedValueWindowFunc {
+                funcs,
+                order_by,
+                order_by_values,
+            } => {
                 let funcs = separated(", ", funcs.iter().map(|func| self.child(func)));
                 f.write_str(name)?;
                 f.write_str("[")?;
                 write!(f, "{} ", funcs)?;
-                write!(f, "order_by=[{}]", separated(", ", order_by))?;
+                self.fmt_window_order_by(f, order_by, order_by_values)?;
                 f.write_str("]")
             }
             _ => f.write_str(name),
+        }
+    }
+}
+
+impl<'a, M> HumanizedExpr<'a, AggregateFunc, M>
+where
+    M: HumanizerMode,
+{
+    /// Renders a window function's `order_by=[...]`, plus where the values it
+    /// orders by live when they are not appended to the row.
+    fn fmt_window_order_by(
+        &self,
+        f: &mut fmt::Formatter,
+        order_by: &[ColumnOrder],
+        order_by_values: &OrderByValues,
+    ) -> fmt::Result {
+        let columns = order_by.iter().map(|col| self.child(col));
+        write!(f, "order_by=[{}]", separated(", ", columns))?;
+        match order_by_values {
+            OrderByValues::Appended => Ok(()),
+            OrderByValues::OriginalRow(fields) => write!(f, " from=orig_row{fields:?}"),
         }
     }
 }

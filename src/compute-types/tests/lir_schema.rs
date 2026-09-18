@@ -55,8 +55,8 @@ use mz_compute_types::plan::{
 use mz_expr::func::{TimezoneTime, ToCharTimestamp};
 use mz_expr::like_pattern::Matcher;
 use mz_expr::{
-    AggregateFunc, BinaryFunc, EvalError, Id, LagLeadType, LetRecLimit, StableEvalError, TableFunc,
-    UnaryFunc, VariadicFunc, WindowFrameBound, WindowFrameUnits,
+    AggregateFunc, BinaryFunc, EvalError, Id, LagLeadType, LetRecLimit, OrderByValues,
+    StableEvalError, TableFunc, UnaryFunc, VariadicFunc, WindowFrameBound, WindowFrameUnits,
 };
 use mz_pgtz::timezone::Timezone;
 use mz_repr::adt::datetime::DateTimeUnits;
@@ -393,6 +393,7 @@ fn run_traces(
         SqlScalarType,
         DateTimeUnits,
         LagLeadType,
+        OrderByValues,
         WindowFrameBound,
         WindowFrameUnits,
         Timezone,
