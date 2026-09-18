@@ -20,20 +20,25 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::{CatalogItemId, GlobalId, RowArena};
 use mz_sql::names::{DatabaseId, SchemaId};
 use proptest::prelude::*;
 
 fn serialize_and_parse_catalog_id(val: &impl serde::Serialize) -> String {
     let json = serde_json::to_value(val).unwrap();
     let jsonb = Jsonb::from_serde_json(json).unwrap();
-    ParseCatalogId.call(jsonb.as_ref()).unwrap()
+    let temp_storage = RowArena::new();
+    ParseCatalogId.call(jsonb.as_ref(), &temp_storage).unwrap()
 }
 
 fn serialize_and_parse_catalog_privileges(val: &impl serde::Serialize) -> Vec<MzAclItem> {
     let json = serde_json::to_value(val).unwrap();
     let jsonb = Jsonb::from_serde_json(json).unwrap();
-    ParseCatalogPrivileges.call(jsonb.as_ref()).unwrap().0
+    let temp_storage = RowArena::new();
+    ParseCatalogPrivileges
+        .call(jsonb.as_ref(), &temp_storage)
+        .unwrap()
+        .0
 }
 
 proptest! {

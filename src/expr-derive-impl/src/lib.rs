@@ -110,6 +110,19 @@ mod test {
 
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
+    fn insta_test_unary_arena_used() {
+        let attr = quote! { sqlname = "to_arena_string", test = true };
+        let item = quote! {
+            fn to_arena_string<'a>(a: i32, temp_storage: &'a RowArena) -> &'a str {
+                temp_storage.push_string(a.to_string())
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("unary_arena_used", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
     fn insta_test_unary_ref() {
         let attr = quote! {test = true};
         let item = quote! {

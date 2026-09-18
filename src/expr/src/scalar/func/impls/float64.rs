@@ -14,7 +14,7 @@ use mz_expr_derive::sqlfunc;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -217,7 +217,7 @@ impl EagerUnaryFunc for CastFloat64ToNumeric {
     type Input<'a> = f64;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         if a.is_infinite() {
             return Err(EvalError::InfinityOutOfDomain(
                 "casting double precision to numeric".into(),

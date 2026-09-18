@@ -49,12 +49,7 @@ pub fn sqlfunc(
 
     let tokens = match determine_arity(&func) {
         Arity::Nullary => Err(darling::Error::custom("Nullary functions not supported")),
-        Arity::Unary { arena: false } => {
-            generate(Shape::Unary, &func, modifiers, None, false, &attr)
-        }
-        Arity::Unary { arena: true } => Err(darling::Error::custom(
-            "Unary functions do not yet support RowArena.",
-        )),
+        Arity::Unary => generate(Shape::Unary, &func, modifiers, None, false, &attr),
         Arity::Binary => generate(Shape::Binary, &func, modifiers, None, false, &attr),
         Arity::Variadic { has_self } => generate(
             Shape::Variadic,
@@ -100,15 +95,9 @@ fn generate_test(_attr: TokenStream, _item: TokenStream, _name: &Ident) -> Token
 /// Arity classification for a function annotated with `#[sqlfunc]`.
 enum Arity {
     Nullary,
-    Unary {
-        /// Whether a trailing `&RowArena` parameter is present, which
-        /// `EagerUnaryFunc::call` has no place for.
-        arena: bool,
-    },
+    Unary,
     Binary,
-    Variadic {
-        has_self: bool,
-    },
+    Variadic { has_self: bool },
 }
 
 /// Checks whether a parameter's type is `Variadic<...>` or `OptionalArg<...>`,
@@ -163,7 +152,7 @@ fn determine_arity(func: &syn::ItemFn) -> Arity {
     } else {
         match effective_count {
             0 => Arity::Nullary,
-            1 => Arity::Unary { arena },
+            1 => Arity::Unary,
             2 => Arity::Binary,
             _ => unreachable!(),
         }

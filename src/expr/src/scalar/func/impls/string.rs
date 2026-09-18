@@ -179,7 +179,7 @@ impl EagerUnaryFunc for CastStringToNumeric {
     type Input<'a> = &'a str;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let mut d = strconv::parse_numeric(a)?;
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
@@ -239,7 +239,7 @@ impl EagerUnaryFunc for CastStringToTimestamp {
     type Input<'a> = &'a str;
     type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let out = strconv::parse_timestamp(a)?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
@@ -292,7 +292,7 @@ impl EagerUnaryFunc for CastStringToTimestampTz {
     type Input<'a> = &'a str;
     type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let out = strconv::parse_timestamptz(a)?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
@@ -696,7 +696,7 @@ impl EagerUnaryFunc for CastStringToChar {
     type Input<'a> = &'a str;
     type Output<'a> = Result<Char<String>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
             assert!(self.fail_on_len);
             EvalError::StringValueTooLong {
@@ -878,7 +878,7 @@ impl EagerUnaryFunc for CastStringToVarChar {
     type Input<'a> = &'a str;
     type Output<'a> = Result<VarChar<&'a str>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let s =
             mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
                 assert!(self.fail_on_len);
@@ -1120,7 +1120,7 @@ impl EagerUnaryFunc for IsLikeMatch {
     type Input<'a> = &'a str;
     type Output<'a> = bool;
 
-    fn call<'a>(&self, haystack: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, haystack: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         self.0.is_match(haystack)
     }
 
@@ -1157,7 +1157,7 @@ impl EagerUnaryFunc for IsRegexpMatch {
     type Input<'a> = &'a str;
     type Output<'a> = bool;
 
-    fn call<'a>(&self, haystack: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, haystack: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         self.0.is_match(haystack)
     }
 

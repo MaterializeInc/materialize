@@ -170,9 +170,10 @@ impl Shape {
 
     /// Whether the trait's `call` receives a `&'a RowArena`.
     pub(crate) fn takes_arena(&self) -> bool {
+        // Exhaustive so each arity states its own answer instead of inheriting a
+        // constant.
         match self {
-            Shape::Unary => false,
-            Shape::Binary | Shape::Variadic => true,
+            Shape::Unary | Shape::Binary | Shape::Variadic => true,
         }
     }
 
