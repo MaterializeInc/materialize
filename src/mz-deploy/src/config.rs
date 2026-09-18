@@ -35,9 +35,21 @@ use crate::project::ir::object_id::ObjectId;
 /// Repository path for the Materialize Docker image, without a tag.
 const DOCKER_IMAGE_BASE: &str = "materialize/materialized";
 
+/// Tag tracking the most recently released Materialize version.
+const LATEST_TAG: &str = "latest";
+
 /// The Docker image used when no `mz_version` is configured.
+///
+/// Pins the sandbox to this build, so `test` and `explain` run against the same
+/// server version the project deploys against. Releases publish a `v{version}`
+/// tag; a pre-release build has no such image, so it falls back to the newest
+/// release.
 pub fn default_docker_image() -> String {
-    format!("{DOCKER_IMAGE_BASE}:latest")
+    if crate::BUILD_INFO.is_dev() {
+        format!("{DOCKER_IMAGE_BASE}:{LATEST_TAG}")
+    } else {
+        format!("{DOCKER_IMAGE_BASE}:v{}", crate::BUILD_INFO.version)
+    }
 }
 
 /// Security-related settings for a profile (e.g., AWS credentials for secret resolution).
@@ -191,7 +203,8 @@ impl ProjectSettings {
 
     pub fn docker_image(&self) -> String {
         match self.mz_version.as_deref() {
-            None | Some("cloud") => default_docker_image(),
+            Some("cloud") => format!("{DOCKER_IMAGE_BASE}:{LATEST_TAG}"),
+            None => default_docker_image(),
             Some(tag) => format!("{DOCKER_IMAGE_BASE}:{tag}"),
         }
     }
@@ -729,6 +742,38 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn test_default_docker_image_tracks_this_build() {
+        let image = default_docker_image();
+        let tag = image
+            .strip_prefix(&format!("{DOCKER_IMAGE_BASE}:"))
+            .unwrap_or_else(|| panic!("unexpected image repository: {image}"));
+        if crate::BUILD_INFO.is_dev() {
+            assert_eq!(tag, LATEST_TAG);
+        } else {
+            assert_eq!(tag, format!("v{}", crate::BUILD_INFO.version));
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_docker_image_honors_mz_version() {
+        let pinned: ProjectSettings = toml::from_str(r#"mz_version = "v25.1.0""#).unwrap();
+        assert_eq!(
+            pinned.docker_image(),
+            format!("{DOCKER_IMAGE_BASE}:v25.1.0")
+        );
+
+        // `cloud` tracks the newest release regardless of this build's version.
+        let cloud: ProjectSettings = toml::from_str(r#"mz_version = "cloud""#).unwrap();
+        assert_eq!(
+            cloud.docker_image(),
+            format!("{DOCKER_IMAGE_BASE}:{LATEST_TAG}")
+        );
+
+        let unset: ProjectSettings = toml::from_str("").unwrap();
+        assert_eq!(unset.docker_image(), default_docker_image());
+    }
 
     #[mz_ore::test]
     fn test_profile_config_deserializes_profile_suffix() {
