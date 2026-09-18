@@ -13,44 +13,94 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Expr, Lifetime, Lit};
 
+use crate::shape::{Modifier, Shape};
+
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
 #[derive(Debug, Default, darling::FromMeta)]
 pub(crate) struct Modifiers {
     /// An optional expression that evaluates to a boolean indicating whether the function is
     /// monotone with respect to its arguments. Defined for unary and binary functions.
-    is_monotone: Option<Expr>,
+    pub(crate) is_monotone: Option<Expr>,
     /// Optional expression evaluating to a boolean: whether `is_monotone`'s
     /// endpoint-sampling guarantee still holds when an operand may be infinite.
     /// Set `false` for multiplication and division. Applies to binary functions.
-    is_infinity_monotone: Option<Expr>,
+    pub(crate) is_infinity_monotone: Option<Expr>,
     /// The SQL name for the function. Applies to all functions.
     sqlname: Option<SqlName>,
     /// Whether the function preserves uniqueness. Applies to unary functions.
-    preserves_uniqueness: Option<Expr>,
+    pub(crate) preserves_uniqueness: Option<Expr>,
     /// The inverse of the function, if it exists. Applies to unary functions.
-    inverse: Option<Expr>,
+    pub(crate) inverse: Option<Expr>,
     /// The negated function, if it exists. Applies to binary functions.
-    negate: Option<Expr>,
+    pub(crate) negate: Option<Expr>,
     /// Whether the function is an infix operator. Applies to binary functions, and needs to
     /// be specified.
-    is_infix_op: Option<Expr>,
+    pub(crate) is_infix_op: Option<Expr>,
     /// The output type of the function, if it cannot be inferred. Applies to all functions.
     output_type: Option<syn::Path>,
     /// The output type of the function as an expression. Applies to binary and variadic functions.
     output_type_expr: Option<Expr>,
     /// Optional expression evaluating to a boolean indicating whether the function could error.
     /// Applies to all functions.
-    could_error: Option<Expr>,
+    pub(crate) could_error: Option<Expr>,
     /// Whether the function propagates nulls. Applies to binary and variadic functions.
-    propagates_nulls: Option<Expr>,
+    pub(crate) propagates_nulls: Option<Expr>,
     /// Whether the function introduces nulls. Applies to all functions.
-    introduces_nulls: Option<Expr>,
+    pub(crate) introduces_nulls: Option<Expr>,
     /// Whether the function is associative. Applies to variadic functions.
-    is_associative: Option<Expr>,
+    pub(crate) is_associative: Option<Expr>,
     /// Whether the function is a noop cast. Applies to unary functions.
-    is_eliminable_cast: Option<Expr>,
+    pub(crate) is_eliminable_cast: Option<Expr>,
     /// Whether to generate a snapshot test for the function. Defaults to false.
     test: Option<bool>,
+}
+
+impl Modifiers {
+    /// The method-producing modifiers that are present, in table order.
+    ///
+    /// Modifiers that do not produce a trait method are excluded, because
+    /// `crate::generate` consumes those by name.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (Modifier, &Expr)> + '_ {
+        [
+            (Modifier::CouldError, self.could_error.as_ref()),
+            (Modifier::IntroducesNulls, self.introduces_nulls.as_ref()),
+            (Modifier::IsMonotone, self.is_monotone.as_ref()),
+            (Modifier::IsInfixOp, self.is_infix_op.as_ref()),
+            (Modifier::PropagatesNulls, self.propagates_nulls.as_ref()),
+            (Modifier::Inverse, self.inverse.as_ref()),
+            (
+                Modifier::PreservesUniqueness,
+                self.preserves_uniqueness.as_ref(),
+            ),
+            (Modifier::IsEliminableCast, self.is_eliminable_cast.as_ref()),
+            (Modifier::Negate, self.negate.as_ref()),
+            (
+                Modifier::IsInfinityMonotone,
+                self.is_infinity_monotone.as_ref(),
+            ),
+            (Modifier::IsAssociative, self.is_associative.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(modifier, expr)| expr.map(|expr| (modifier, expr)))
+    }
+}
+
+/// Errors if `mods` carries a method-producing modifier `shape` does not accept.
+fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
+    for (modifier, _) in mods.iter() {
+        let accepted = shape
+            .modifiers()
+            .iter()
+            .any(|(candidate, _)| *candidate == modifier);
+        if !accepted {
+            return Err(darling::Error::custom(format!(
+                "`{}` is not supported for {} functions",
+                modifier.name(),
+                shape.label(),
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -864,22 +914,20 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     // Erase generic type params → Datum<'a> for use in the trait impl's associated types.
     let input_ty = erase_all_generic_params(&input_ty_raw, &generic_params);
     let output_ty = erase_all_generic_params(output_ty_raw, &generic_params);
+
+    reject_inapplicable(Shape::Unary, &modifiers)?;
+
     let Modifiers {
         is_monotone,
         sqlname,
         preserves_uniqueness,
         inverse,
-        is_infix_op,
         output_type,
         mut output_type_expr,
-        negate,
         could_error,
-        propagates_nulls,
         mut introduces_nulls,
-        is_associative,
         is_eliminable_cast,
-        is_infinity_monotone: _,
-        test: _,
+        ..
     } = modifiers;
 
     // If generic type parameters are present and no explicit output_type_expr,
@@ -902,11 +950,6 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         }
     }
 
-    if is_infix_op.is_some() {
-        return Err(darling::Error::unknown_field(
-            "is_infix_op not supported for unary functions",
-        ));
-    }
     if output_type.is_some() && output_type_expr.is_some() {
         return Err(darling::Error::unknown_field(
             "output_type and output_type_expr cannot be used together",
@@ -915,21 +958,6 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     if output_type_expr.is_some() && introduces_nulls.is_none() {
         return Err(darling::Error::unknown_field(
             "output_type_expr requires introduces_nulls",
-        ));
-    }
-    if negate.is_some() {
-        return Err(darling::Error::unknown_field(
-            "negate not supported for unary functions",
-        ));
-    }
-    if propagates_nulls.is_some() {
-        return Err(darling::Error::unknown_field(
-            "propagates_nulls not supported for unary functions",
-        ));
-    }
-    if is_associative.is_some() {
-        return Err(darling::Error::unknown_field(
-            "is_associative not supported for unary functions",
         ));
     }
 
@@ -1071,11 +1099,11 @@ fn binary_func(
     let input2_ty = erase_all_generic_params(&input2_ty_raw, &generic_params);
     let output_ty = erase_all_generic_params(output_ty_raw, &generic_params);
 
+    reject_inapplicable(Shape::Binary, &modifiers)?;
+
     let Modifiers {
         is_monotone,
         sqlname,
-        preserves_uniqueness,
-        inverse,
         is_infix_op,
         output_type,
         mut output_type_expr,
@@ -1083,10 +1111,8 @@ fn binary_func(
         could_error,
         propagates_nulls,
         mut introduces_nulls,
-        is_associative,
-        is_eliminable_cast,
         is_infinity_monotone,
-        test: _,
+        ..
     } = modifiers;
 
     // Auto-derive output_type_expr from generic parameters, if applicable.
@@ -1108,16 +1134,6 @@ fn binary_func(
         }
     }
 
-    if preserves_uniqueness.is_some() {
-        return Err(darling::Error::unknown_field(
-            "preserves_uniqueness not supported for binary functions",
-        ));
-    }
-    if inverse.is_some() {
-        return Err(darling::Error::unknown_field(
-            "inverse not supported for binary functions",
-        ));
-    }
     if output_type.is_some() && output_type_expr.is_some() {
         return Err(darling::Error::unknown_field(
             "output_type and output_type_expr cannot be used together",
@@ -1126,16 +1142,6 @@ fn binary_func(
     if output_type_expr.is_some() && introduces_nulls.is_none() {
         return Err(darling::Error::unknown_field(
             "output_type_expr requires introduces_nulls",
-        ));
-    }
-    if is_associative.is_some() {
-        return Err(darling::Error::unknown_field(
-            "is_associative not supported for binary functions",
-        ));
-    }
-    if is_eliminable_cast.is_some() {
-        return Err(darling::Error::unknown_field(
-            "is_eliminable_cast not supported for binary functions",
         ));
     }
 
@@ -1317,45 +1323,21 @@ fn variadic_func(
         .and_then(|ty| ty.segments.last())
         .map_or_else(|| camel_case(fn_name), |seg| seg.ident.clone());
 
+    reject_inapplicable(Shape::Variadic, &modifiers)?;
+
     let Modifiers {
         is_monotone,
         sqlname,
-        preserves_uniqueness,
-        inverse,
         is_infix_op,
         output_type,
         mut output_type_expr,
-        negate,
         could_error,
         propagates_nulls,
         mut introduces_nulls,
         is_associative,
-        is_eliminable_cast,
-        is_infinity_monotone: _,
-        test: _,
+        ..
     } = modifiers;
 
-    // Reject modifiers that don't apply to variadic functions.
-    if preserves_uniqueness.is_some() {
-        return Err(darling::Error::unknown_field(
-            "preserves_uniqueness not supported for variadic functions",
-        ));
-    }
-    if inverse.is_some() {
-        return Err(darling::Error::unknown_field(
-            "inverse not supported for variadic functions",
-        ));
-    }
-    if negate.is_some() {
-        return Err(darling::Error::unknown_field(
-            "negate not supported for variadic functions",
-        ));
-    }
-    if is_eliminable_cast.is_some() {
-        return Err(darling::Error::unknown_field(
-            "is_eliminable_cast not supported for variadic functions",
-        ));
-    }
     if output_type.is_some() && output_type_expr.is_some() {
         return Err(darling::Error::unknown_field(
             "output_type and output_type_expr cannot be used together",
