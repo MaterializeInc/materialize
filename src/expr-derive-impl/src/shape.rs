@@ -182,7 +182,7 @@ impl Shape {
     ///
     /// The caller binds `output`, `nullable`, and `propagates_nulls`, and names the
     /// input parameter as [`Shape::output_method`] spells it. `checks` are
-    /// per-position nullability checks over `input_types`; unary receives a single
+    /// per-position nullability checks over `input_types`. Unary receives a single
     /// column type, so it has no position to check and ignores them.
     ///
     /// The result is nullable when the function itself introduces nulls, when a

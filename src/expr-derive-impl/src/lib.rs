@@ -14,7 +14,9 @@
 //! export anything but proc macros.
 
 mod generate;
+mod modifiers;
 mod shape;
+mod signature;
 mod sqlfunc;
 
 pub use sqlfunc::sqlfunc;
