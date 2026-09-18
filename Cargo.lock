@@ -8693,7 +8693,7 @@ dependencies = [
  "mz-ore",
  "postgres-protocol",
  "serde",
- "thiserror 2.0.18",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
