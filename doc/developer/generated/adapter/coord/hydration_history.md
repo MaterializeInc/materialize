@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/hydration_history.rs
-revision: bcc5f9222d
+revision: 9297cd2060
 ---
 
 # `adapter::coord::hydration_history`
@@ -15,7 +15,7 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 ## Key Types
 
-**`ReplicaTarget`** — A replica eligible for one collection step, carrying `cluster_id`, `replica_id`, and `process_count`. The `process_count` is used by `replica_collection_sql` to gate the write on all configured processes having reported resource usage.
+**`ReplicaTarget`** — A replica eligible for one collection step, carrying `cluster_id`, `replica_id`, and `process_count`. The `process_count` is used by `replica_collection_sql` to gate the write on all configured processes having reported resource usage (each individually via `GROUP BY process_id`).
 
 **`Sweep`** — Context for one sweep run, holding the `PeekClient`, catalog reference, `object_history_id` and `replica_history_id` table IDs, metrics handle, wall time, and a `cutoff` string (RFC 3339 timestamp). The two operations are:
 - `collect` — appends one replica's completed object and replica episodes that their respective history tables are missing
@@ -31,7 +31,7 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 `object_collection_sql` builds a `SELECT` that joins `mz_compute_hydration_times_per_worker` against `mz_object_hydration_history` with an anti-join, filtering to fully-hydrated exports (all workers have a `hydrated_at`) whose episodes are not yet recorded. Introspection-index exports (IDs starting with `si`) and transient exports (IDs starting with `t`) are excluded. The cutoff and the anti-join sit outside the aggregate so they do not interfere with the per-worker completeness check.
 
-`replica_collection_sql` implements a gaps-and-islands algorithm over compute export hydration intervals to find the latest completed hydration episode that is disconnected from any still-open interval. Transient exports (those with IDs starting with `t`) are excluded from episode construction entirely. Introspection-index exports (IDs starting with `si`) participate in episode boundary and completion calculations but are excluded from the `object_count` column, so introspection-only episodes are visible with `object_count = 0`. The query also waits until every configured replica process (`process_count`) has reported resource usage before committing the episode, capturing `peak_memory_bytes` (cgroup `memory_peak`) and `peak_disk_bytes` (statvfs `fs_used_peak`, falling back to cgroup `swap_peak`).
+`replica_collection_sql` implements a gaps-and-islands algorithm over compute export hydration intervals to find the latest completed hydration episode that is disconnected from any still-open interval. Transient exports (those with IDs starting with `t`) are excluded from episode construction entirely. Introspection-index exports (IDs starting with `si`) participate in episode boundary and completion calculations but are excluded from the `object_count` column, so introspection-only episodes are visible with `object_count = 0`. The query also waits until every configured replica process has reported resource usage before committing the episode, capturing per-process `peak_memory_bytes` (cgroup `memory_peak`) and `peak_disk_bytes` (statvfs `fs_used_peak`, falling back to cgroup `swap_peak`). Resources are grouped by `process_id` so each process's peak is recorded individually rather than aggregated.
 
 ## Retention
 

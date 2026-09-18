@@ -1,6 +1,6 @@
 ---
 source: src/pgtest/src/lib.rs
-revision: f9ffa16cba
+revision: cb515b8ef6
 ---
 
 # mz-pgtest
@@ -17,13 +17,13 @@ Provides a datadriven test framework for the PostgreSQL wire protocol, used to s
 * `PgConn` (private) — a raw TCP connection to a Postgres server that speaks the wire protocol directly using `postgres-protocol`; handles the startup handshake, message framing, send/receive buffering, and a configurable read timeout.
 * `PgTest` — the public harness managing a named pool of `PgConn` connections; exposes `send` and `until` methods used by the test runner.
 * `walk` / `run_test` — integrate with the `datadriven` framework; `walk` recurses a directory of `.pt` files and `run_test` dispatches `send` and `until` directives.
-* Frontend message types (`Query`, `Parse`, `Bind`, `Execute`, `Describe`) — JSON-deserializable structs representing client messages that `send` serialises onto the wire.
+* Frontend message types (`Query`, `Parse`, `Bind`, `Execute`, `Describe`) — JSON-deserializable structs representing client messages that `send` serialises onto the wire. `Bind` supports `param_formats` (per-parameter format codes) and `binary_values` (raw byte arrays sent verbatim instead of UTF-8 text) in addition to the standard `values`, `portal`, `statement`, and `result_formats` fields.
 * Backend message types (`ReadyForQuery`, `RowDescription`, `DataRow`, `CommandComplete`, `ErrorResponse`, `ParameterStatus`, etc.) — JSON-serialisable structs used to format received server messages as human-readable test output.
 
 ## Directives
 
 Test files use two directives:
-* `send` — encodes and transmits one or more frontend messages.
+* `send` — encodes and transmits one or more frontend messages. Supported message types: `Query`, `Parse`, `Bind`, `Execute`, `Describe`, `Sync`, `CopyData`, `CopyDone`, `CopyFail`.
 * `until` — accumulates backend messages until a named message type is received; supports `conn=`, `err_field_typs=`, `no_error_fields`, `ignore=`, and `parameter_status=` arguments. `ParameterStatus` messages are skipped unless the parameter name appears in the `parameter_status=` set.
 
 ## Dependencies
