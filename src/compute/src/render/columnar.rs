@@ -25,10 +25,9 @@ use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker};
 use mz_timely_util::columnar::columnar_consolidate_exchange;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, NoopBuilder};
@@ -303,9 +302,11 @@ where
 
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
-/// A [`ColumnChunker`] sorts and consolidates the input columns and a
-/// [`ColumnMergeBatcher`] merges them, both holding their data in [`Column`], so nothing
-/// outside the exchange pact visits a record or materializes an owned [`Row`].
+/// A [`ChunkChunker`] sorts and consolidates the input columns and an
+/// [`AccountedChunkBatcher`] merges them, both holding their data in [`Column`], so
+/// nothing outside the exchange pact visits a record or materializes an owned [`Row`].
+/// The batcher's chains are chunks, so the process buffer pool spills them while the
+/// chunk spill gate is set, bounding what a consolidation holds resident.
 ///
 /// Uses [`consolidate_pact`] rather than `mz_arrange_core`: a consolidate emits a
 /// consolidated collection, so building and reading back a maintained trace would be
@@ -324,14 +325,14 @@ where
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
     let consolidated = consolidate_pact::<
-        ColumnChunker<(Row, T, Diff)>,
-        ColumnMergeBatcher<Row, T, Diff>,
+        ChunkChunker<Row, T, Diff>,
+        AccountedChunkBatcher<Row, T, Diff>,
         _,
         _,
     >(collection.inner, exchange, name);
 
-    // Flatten the sealed chain into one container per chunk, moving containers and
-    // visiting no record.
+    // Flatten the sealed chain into one container per chunk, loading a spilled body
+    // and moving a resident one, visiting no record either way.
     //
     // TODO: This ships a whole sealed snapshot in one activation, an un-fueled burst
     // hazard on large consolidations. `consolidate_named`'s unpack does the same, so a
@@ -344,8 +345,9 @@ where
                 move |input, output| {
                     input.for_each(|time, data| {
                         let mut session = output.session_with_builder(&time);
-                        for mut chunk in data.drain(..).flatten() {
-                            session.give_container(&mut chunk);
+                        for chunk in data.drain(..).flatten() {
+                            let mut column = chunk.into_column();
+                            session.give_container(&mut column);
                         }
                     });
                 }
@@ -607,5 +609,55 @@ mod tests {
             })
         });
         assert_eq!(extract_sorted(captured), expected);
+    }
+
+    /// Consolidation over a payload big enough to spill: the chunks the batcher
+    /// commits land in the pool, and flattening loads them back whole.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // the pool's mmap and madvise calls are unsupported under miri
+    fn columnar_consolidate_spills_and_round_trips() {
+        use mz_ore::pool::Pool;
+        use mz_timely_util::columnar::chunk::set_spill_override;
+
+        // Enough bytes for a committed chunk to clear the pool's 64 KiB spill
+        // floor. Every row is distinct, so consolidation cancels nothing and the
+        // whole payload has to survive the round trip through the pool.
+        let rows: Vec<Row> = (0..40_000i64)
+            .map(|i| Row::pack_slice(&[Datum::Int64(i), Datum::String("a repeated string value")]))
+            .collect();
+        let expected = rows.len();
+
+        let pool = Pool::new().expect("pool creation");
+        // The override is per-thread and `execute_directly` runs the worker on
+        // this one, so it covers the dataflow below and nothing else.
+        set_spill_override(Some(pool.clone()));
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let edge = columnar_consolidate(vec_to_columnar(collection), "Test");
+                let captured = columnar_to_vec(edge).inner.capture();
+                input.advance_to(Timestamp::from(0_u64));
+                for row in rows {
+                    input.update(row, Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(1_u64));
+                input.flush();
+                captured
+            })
+        });
+        set_spill_override(None);
+
+        assert!(
+            pool.stats().inserts > 0,
+            "the payload should have reached the pool"
+        );
+        let updates = extract_sorted(captured);
+        assert_eq!(updates.len(), expected);
+        assert!(
+            updates
+                .iter()
+                .all(|(_, time, diff)| *time == Timestamp::from(0_u64) && *diff == Diff::ONE),
+            "every row survives at its own time and multiplicity"
+        );
     }
 }
