@@ -286,6 +286,70 @@ mod test {
 
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
+    fn insta_test_unary_all_modifiers() {
+        let attr = quote! {
+            could_error = true,
+            output_type = i16,
+            inverse = None,
+            is_monotone = true,
+            preserves_uniqueness = true,
+            is_eliminable_cast = false,
+            sqlname = "unary_all_modifiers",
+        };
+        let item = quote! {
+            fn unary_all_modifiers<'a>(a: Datum<'a>) -> Datum<'a> {
+                a
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("unary_all_modifiers", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_binary_all_modifiers() {
+        let attr = quote! {
+            could_error = true,
+            output_type = i16,
+            is_infix_op = true,
+            is_monotone = (true, true),
+            is_infinity_monotone = false,
+            negate = None,
+            propagates_nulls = true,
+            sqlname = "binary_all_modifiers",
+        };
+        let item = quote! {
+            fn binary_all_modifiers<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+                a
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("binary_all_modifiers", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_all_modifiers() {
+        let attr = quote! {
+            could_error = true,
+            output_type = i16,
+            is_infix_op = true,
+            is_monotone = true,
+            is_associative = true,
+            propagates_nulls = true,
+            sqlname = "variadic_all_modifiers",
+        };
+        let item = quote! {
+            fn variadic_all_modifiers<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
+                datums.into_iter().next().unwrap_or(Datum::Null)
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_all_modifiers", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
     fn unary_rejects_negate_by_name() {
         let (output, _input) = crate::test_sqlfunc(
             quote! { negate = to_unary!(super::Foo) },
