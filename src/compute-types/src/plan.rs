@@ -38,6 +38,7 @@ use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
+pub mod pinned;
 
 pub mod interpret;
 pub mod join;
@@ -209,7 +210,7 @@ impl std::fmt::Display for LirId {
 
 /// Version of the stable LIR serialization format.
 ///
-/// Bump this when the serialized representation of [`LirRelationExpr`] or
+/// Bump this when the serialized representation of [`pinned::PinnedDataflow`] or
 /// anything it transitively contains changes, or when a scalar function's
 /// declared properties change. Two snapshot tests key off it: the schema
 /// snapshot in `tests/lir_schema.rs` against
