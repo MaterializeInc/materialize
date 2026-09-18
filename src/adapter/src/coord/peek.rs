@@ -959,6 +959,9 @@ impl crate::coord::Coordinator {
                 read_hold,
                 target_replica,
                 rows_tx,
+                // Classic coordinator-sequenced peek: the coordinator relies on
+                // the `PeekNotification` to retire its `pending_peeks` entry.
+                true,
             )
             .map_err(AdapterError::concurrent_dependency_drop_from_peek_error);
         if let Err(e) = peek_result {
@@ -1016,6 +1019,9 @@ impl crate::coord::Coordinator {
             persist_client,
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
+            // Classic coordinator-sequenced peeks are tracked in `pending_peeks`,
+            // not the shared registry, so there is nothing to clean up here.
+            None,
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
@@ -1038,17 +1044,35 @@ impl crate::coord::Coordinator {
         mut persist_client: mz_persist_client::PersistClient,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
+        completion: Option<crate::peek_client::FrontendPeekCompletion>,
     ) -> impl futures::Stream<Item = PeekResponseUnary> {
         async_stream::stream!({
+            // `Some` only for a frontend-sequenced peek, which settles its
+            // registry entry and its statement log here rather than through the
+            // coordinator. Dropping the stream before the peek responds drops
+            // this, which unregisters and logs the statement as aborted.
+            let mut completion = completion;
+
             let result = rows_rx.await;
 
             let rows = match result {
                 Ok(rows) => rows,
                 Err(e) => {
+                    if let Some(completion) = completion.take() {
+                        completion.retire_errored(e.to_string());
+                    }
                     yield PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::anyhow!(e)));
                     return;
                 }
             };
+
+            // Retire against the raw response, before the finishing runs, so
+            // that both sequencing paths record the same numbers: this is the
+            // point at which the compute controller would emit the
+            // `PeekNotification` for a coordinator-sequenced peek.
+            if let Some(completion) = completion.take() {
+                completion.retire(&rows);
+            }
 
             match rows {
                 PeekResponse::Rows(rows) => {
@@ -1249,6 +1273,17 @@ impl crate::coord::Coordinator {
     /// Cancel and remove all pending peeks that were initiated by the client with `conn_id`.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn cancel_pending_peeks(&mut self, conn_id: &ConnectionId) {
+        // Cancel fast-path peeks tracked in the shared registry, off-loaded from
+        // the coordinator's own `pending_peeks`. The session observes the
+        // `Canceled` response via its `rows_rx`, so no coordinator-side
+        // retirement is needed here.
+        for (uuid, cluster_id) in self.frontend_peek_registry.take_conn(conn_id) {
+            let _ = self
+                .controller
+                .compute
+                .cancel_peek(cluster_id, uuid, PeekResponse::Canceled);
+        }
+
         if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
             self.metrics
                 .canceled_peeks
