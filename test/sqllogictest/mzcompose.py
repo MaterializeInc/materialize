@@ -576,6 +576,9 @@ def compileFastSltConfig() -> SltRunConfig:
     }
 
     tests_without_views = {
+        # WITH (IGNORE ERRORS) is rejected on a view by design, so a query
+        # carrying it cannot be wrapped in one.
+        "test/sqllogictest/ignore_errors.slt",
         "test/sqllogictest/alter.slt",
         "test/sqllogictest/ambiguous_rename.slt",
         "test/sqllogictest/arithmetic.slt",
@@ -1085,6 +1088,9 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/replacement-materialized-views.slt",
     }
     tests_no_auto_index_selects = {
+        # WITH (IGNORE ERRORS) is rejected on a view by design, so a query
+        # carrying it cannot be wrapped in one.
+        "test/sqllogictest/ignore_errors.slt",
         # Selects from temporary objects, which cannot be wrapped in the
         # persistent indexed views that --auto-index-selects creates.
         "test/sqllogictest/rename.slt",

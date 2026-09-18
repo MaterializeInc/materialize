@@ -193,7 +193,10 @@ fn ordered_rows_answer(rows: impl IntoIterator<Item = Row>) -> PeekResponse {
     for row in &rows {
         builder.push(row.as_row_ref(), NonZeroUsize::new(1).expect("non-zero"));
     }
-    PeekResponse::Rows(vec![builder.build()])
+    PeekResponse::Rows {
+        rows: vec![builder.build()],
+        ignored_error: None,
+    }
 }
 
 /// Runs the runtime until `offloaded`'s walk answers the peek, and reports the answer.

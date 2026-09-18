@@ -105,6 +105,8 @@ impl Coordinator {
         let active_subscribe = ActiveSubscribe {
             owner,
             channel: tx,
+            // An internal subscribe the coordinator drains itself, with no session to notify.
+            notice_tx: None,
             backlog_accounting: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::active_compute_sink::SubscribeBacklogAccounting::default(),
             )),

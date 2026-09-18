@@ -821,6 +821,8 @@ impl Coordinator {
         }
 
         let max_result_size = self.catalog().system_config().max_result_size();
+        // Taken before the call, which borrows `ctx` mutably for the execution guard.
+        let notice_tx = ctx.session().retain_notice_transmitter();
 
         // Implement the peek, and capture the response.
         let resp = self
@@ -832,6 +834,8 @@ impl Coordinator {
                 target_replica,
                 max_result_size,
                 max_query_result_size,
+                plan.ignore_errors,
+                notice_tx,
             )
             .await?;
 

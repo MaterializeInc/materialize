@@ -894,6 +894,11 @@ pub struct SelectPlan {
     /// The `SELECT` statement itself. Used for explain/notices, but not otherwise
     /// load-bearing. Boxed to save stack space.
     pub select: Option<Box<SelectStatement<Aug>>>,
+    /// Whether to discard the query's errors and return its ok rows instead of failing.
+    ///
+    /// The rows carry no correctness guarantee when this is set. One discarded error is
+    /// reported to the client as a notice.
+    pub ignore_errors: bool,
     /// The plan as a HIR.
     pub source: HirRelationExpr,
     /// At what time should this select happen?
@@ -909,6 +914,7 @@ impl SelectPlan {
         let arity = typ.arity();
         SelectPlan {
             select: None,
+            ignore_errors: false,
             source: HirRelationExpr::Constant { rows, typ },
             when: QueryWhen::Immediately,
             finishing: RowSetFinishing::trivial(arity),
@@ -949,6 +955,9 @@ impl SubscribeOutput {
 #[derive(Debug, Clone)]
 pub struct SubscribePlan {
     pub from: SubscribeFrom,
+    /// Whether to discard the subscribe's errors and keep streaming rows instead of
+    /// poisoning the stream. See [`SelectPlan::ignore_errors`].
+    pub ignore_errors: bool,
     pub with_snapshot: bool,
     pub when: QueryWhen,
     pub up_to: Option<Timestamp>,

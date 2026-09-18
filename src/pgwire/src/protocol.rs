@@ -2109,6 +2109,11 @@ where
 
     #[instrument(level = "debug")]
     async fn ready(&mut self) -> Result<State, io::Error> {
+        // A statement can queue a notice while its rows stream, which is after the drain at the
+        // top of the connection loop has already run for it. Draining here keeps such a notice
+        // with the statement that raised it, rather than delivering it with the next one or
+        // losing it when the session ends.
+        self.send_pending_notices().await?;
         let txn_state = self.adapter_client.session().transaction().into();
         self.send(BackendMessage::ReadyForQuery(txn_state)).await?;
         self.flush().await

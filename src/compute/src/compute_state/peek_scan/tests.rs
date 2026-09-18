@@ -127,6 +127,7 @@ fn clean_error_scan(keys: usize) -> ErrorScan {
 /// in.
 fn scan(error_phase: ErrorPhase, keys: &[Row]) -> PeekScan<TestTrace> {
     PeekScan {
+        ignored_error: None,
         peek_timestamp: PEEK_TIMESTAMP,
         target_id: GlobalId::User(1),
         error_phase,

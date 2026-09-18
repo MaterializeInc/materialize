@@ -10,7 +10,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use mz_compute_client::protocol::command::Peek;
-use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
+use mz_compute_client::protocol::response::{PeekError, PeekResponse, StashedPeekResponse};
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::ExternalError;
 use mz_persist_client::Schemas;
@@ -176,7 +176,10 @@ impl StashUpload {
     /// builder and hands back no handle to what it holds. Only a batch whose bounds do not admit
     /// its own updates is refused, which this upload's fixed lower, upper and timestamp cannot
     /// produce.
-    pub(super) async fn finish(mut self) -> Result<PeekResponse, StashError> {
+    pub(super) async fn finish(
+        mut self,
+        ignored_error: Option<PeekError>,
+    ) -> Result<PeekResponse, StashError> {
         let delivered = self.finish_batch().await?;
         let batch = delivered.take();
 
@@ -187,6 +190,7 @@ impl StashUpload {
             shard_id: self.shard_id,
             batches: vec![batch.into_transmittable_batch()],
             inline_rows: Vec::new(),
+            ignored_error,
         };
         Ok(PeekResponse::Stashed(Box::new(stashed_response)))
     }
