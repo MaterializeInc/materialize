@@ -10,9 +10,8 @@
 //! Per-arity descriptions of the three scalar function shapes.
 //!
 //! A [`Shape`] answers the questions that differ between `EagerUnaryFunc`,
-//! `EagerBinaryFunc`, and `EagerVariadicFunc`. Everything that does not differ lives
-//! in `crate::generate`. Adding a modifier to an arity means adding a row to that
-//! arity's table here, not writing emission code.
+//! `EagerBinaryFunc`, and `EagerVariadicFunc`. Adding a modifier to an arity means
+//! adding a row to that arity's table here, not writing emission code.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -28,9 +27,9 @@ pub(crate) enum Shape {
 /// A modifier that maps directly onto one optional trait method.
 ///
 /// Modifiers that do not produce a trait method, such as `sqlname`, `output_type`,
-/// `output_type_expr`, and `test`, are absent: `crate::generate` handles those
-/// explicitly because they feed `Display`, the output-type body, or the emission
-/// decision instead.
+/// `output_type_expr`, and `test`, are absent: `crate::sqlfunc`'s generator arms
+/// handle those explicitly because they feed `Display`, the output-type body, or
+/// the emission decision instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modifier {
     CouldError,
@@ -85,10 +84,10 @@ impl ReturnTy {
     }
 }
 
-// Table order matches the `#*_fn` interpolation sequence emitted by the corresponding
-// generator arm in `sqlfunc.rs` today. A later task drives emission from these tables
-// in order, and must reproduce today's generated code byte-for-byte, so the order here
-// is load-bearing, not cosmetic.
+// `crate::generate::override_methods` walks these tables in order to emit each
+// arity's override methods. The order here therefore determines the method order
+// in the generated code, which the insta snapshots under `sqlfunc.rs` pin exactly,
+// so it is load-bearing, not cosmetic.
 const UNARY_MODIFIERS: &[(Modifier, ReturnTy)] = &[
     (Modifier::CouldError, ReturnTy::Bool),
     (Modifier::IntroducesNulls, ReturnTy::Bool),
@@ -203,9 +202,10 @@ mod tests {
 
     #[mz_ore::test]
     fn modifier_table_order_matches_todays_generated_code() {
-        // Order is load-bearing: a later task emits override methods in table order
-        // and must reproduce today's generated code byte-for-byte. This pins the
-        // sequence read from the `#*_fn` interpolations in `sqlfunc.rs`.
+        // Order is load-bearing: `crate::generate::override_methods` walks these
+        // tables to emit each arity's override methods in this order. The insta
+        // snapshots under `sqlfunc.rs` require that emitted code to stay
+        // byte-identical, so this test pins the sequence they depend on.
         let names = |shape: Shape| -> Vec<&'static str> {
             shape.modifiers().iter().map(|(m, _)| m.name()).collect()
         };
