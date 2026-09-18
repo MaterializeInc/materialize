@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import subprocess
@@ -769,6 +770,18 @@ class BalancerdNodeSelector(Modification):
         # Balancerd can take a while to start up
         retry(check, 240)
 
+
+def _minio_image() -> str:
+    """The MinIO image the current tree's manifest uses, read from the file so the
+    two cannot drift."""
+    manifest = MZ_ROOT / "misc" / "helm-charts" / "testing" / "minio.yaml"
+    for line in manifest.read_text().splitlines():
+        if line.strip().startswith("image:"):
+            return line.split("image:", 1)[1].strip()
+    raise ValueError(f"no image line in {manifest}")
+
+
+MINIO_IMAGE = _minio_image()
 
 # Must match test/orchestratord/priorityclass.yaml.
 PRIORITY_CLASS_NAME = "mz-test-priority"
@@ -2375,6 +2388,20 @@ def workflow_documentation_defaults(
                 shutil.copyfile(path, os.path.join(dir, file))
             else:
                 content = download_repo_file_at_tag(path, str(version))
+                if file == "sample-minio.yaml":
+                    # Every released tag's manifest still says `image:
+                    # minio/minio`, which resolves to docker.io, where MinIO
+                    # deleted the repository (#38802, #38824). The published
+                    # files cannot be changed, so point the downloaded copy at
+                    # the image the current tree uses. Everything else in the
+                    # manifest is exercised as published.
+                    content = re.sub(
+                        rb"^(\s*image:\s*)minio/minio\s*$",
+                        rb"\g<1>" + MINIO_IMAGE.encode(),
+                        content,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
                 with open(os.path.join(dir, file), "wb") as f:
                     f.write(content)
 
