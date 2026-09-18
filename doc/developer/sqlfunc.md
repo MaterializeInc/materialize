@@ -175,6 +175,10 @@ Generate a snapshot test for the macro expansion.
 Snapshot files are stored in `src/expr-derive-impl/src/snapshots/`.
 Update them with `cargo insta accept` after running `cargo test -p mz-expr-derive-impl`.
 
+Which modifiers apply to which arity is declared in
+`src/expr-derive-impl/src/shape.rs`, one table per arity. A modifier absent from an
+arity's table is rejected with an error naming both the modifier and the arity.
+
 ## Variadic functions
 
 ### Struct name
