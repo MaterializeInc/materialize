@@ -51,7 +51,7 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 | `mz_compute_commands_total`, `mz_compute_responses_total` | counter | Protocol volume. Doubles for one bucket during a zero-downtime upgrade. |
 | `mz_compute_command_message_bytes_total`, `mz_compute_response_message_bytes_total` | counter | Protocol bytes. Worth checking when a change touches command encoding. |
 | `mz_compute_controller_history_command_count`, `_history_dataflow_count` | gauge | Controller-side command history, which should be reduced and not grow without bound. |
-| `mz_compute_replica_history_command_count`, `_history_dataflow_count` | gauge | Replica-side equivalent, on the `cluster_environmentd_*` labels. Also carries `command_type` and `worker_id`, so any sum of it is worker-weighted and moves with worker count. |
+| `mz_compute_replica_history_command_count`, `_history_dataflow_count` | gauge | Replica-side equivalent, on the `cluster_environmentd_*` labels. Both carry `worker_id`, and the command count also carries `command_type`, so any sum is worker-weighted and moves with worker count. |
 | `mz_compute_peeks_total` | counter | Label `result`. Successes are `rows` and `rows_stashed`; anything else is an error or a cancellation. |
 | `mz_compute_peek_duration_seconds_bucket` | histogram | Quantiles need `sum by (le)` after any namespace join. |
 | `v2_mz_dataflow_elapsed_seconds_total` | counter | Compute time. Strongly workload-shaped, and often the noisiest series on the dashboard. |
@@ -73,7 +73,7 @@ Each entry states a property that holds at any fleet size, followed by the measu
 
 **`v2_mz_orphan_dataflow_count` above zero is always a bug, never a load effect.**
 
-**Working set falls at every upgrade.** In production canary us-east-1 the sum fell from about 290 GB to about 236 GB at the v26.37.0 rollout with no change in the code that mattered, purely because arrangements were rebuilt fresh. Judge memory by the slope within a release, not the step across one.
+**Working set moves at every upgrade, usually down, because arrangements are rebuilt fresh.** In production canary us-east-1 the sum fell from about 290 GB to about 236 GB at the v26.37.0 rollout with no change in the code that mattered. On swap-enabled nodes the redistribution described below can outweigh the rebuild and move it the other way. Judge memory by the slope within a release, not the step across one.
 
 **Working set and swap redistribute across a restart at a conserved total, so neither half is comparable across a boundary on its own.** On swap-enabled nodes the kernel repartitions a process's pages between resident and swapped at the restart, in either direction and by large fractions, while memory plus swap stays put. Two production canary replicas moved opposite ways across the v26.40.0-rc.3 rollout and both conserved `mz_memory_limiter_memory_usage_bytes` to within 0.1%: one went from 75.7 GB resident and 138.9 GB swap to 6.8 and 200.2 at 203.2 GB then 201.2 GB total, the other from 75.5 and 45.6 to 85.1 and 34.8 at 115.6 GB then 115.5 GB total. Either half alone therefore shows a 13% to 90% step with no change in footprint, which reads as a memory regression on the working-set panel and as an improvement on the swap panel. The direction is not predictable from the release, so a step in one half is only a finding once the total moves with it.
 
@@ -83,7 +83,7 @@ Each entry states a property that holds at any fleet size, followed by the measu
 
 **Peak resident set resets at an upgrade,** so it describes the current generation only and a level drop across the boundary is the restart rather than the release. Swap is restart-sensitive for a different reason, covered by the conserved-total entry above.
 
-**Major fault rate follows the resident/swap split, not the release.** Production canary major faults went from about 10/s to 74&#8211;106/s across the v26.40.0-rc.3 boundary, with more of the working set living in swap and additional replicas hydrating. Read it alongside whichever conserved total the selector supports, and treat a rise with a flat total as paging behaviour.
+**Major fault rate follows the resident/swap split, not the release.** Production canary major faults rose from about 10/s to between 74 and 106/s across the v26.40.0-rc.3 boundary, with more of the working set living in swap and additional replicas hydrating. Read it alongside whichever conserved total the selector supports, and treat a rise with a flat total as paging behaviour.
 
 **Arrangement maintenance ramps after a restart.** Measured at 0.020 s/s one day after an upgrade and 0.030 s/s three days later on the same release, so an apparent increase across a boundary can be nothing more than a difference in age.
 

@@ -34,6 +34,11 @@ customer environments for part of the week and a version filter loses them.
 
     $ build-range-query.py --stack staging roster.txt
     $ build-range-query.py --stack prod --namespaces environment-aaa-0,environment-bbb-0 roster.txt
+
+The staging join carries the same window as the aggregate it guards:
+
+>>> aggregate("c", "mz_x_total", "", "1d", "staging", [])
+'sum(rate(mz_x_total[1d]) and on(namespace) group by (namespace) (max_over_time(v2_mz_compute_cluster_status{mz_version=~".*-rc[.].*"}[1d])))'
 """
 
 import argparse
@@ -97,7 +102,8 @@ def main():
     parser.add_argument(
         "--window",
         default="6h",
-        help="rate and avg_over_time window, which must match the query step (default 6h)",
+        help="window for rate, avg_over_time, and the staging status join, "
+        "which must match the query step (default 6h)",
     )
     args = parser.parse_args()
 

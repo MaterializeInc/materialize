@@ -85,8 +85,10 @@ Production and staging need different selectors. In production only the canary e
 
 ```promql
 group by (namespace, mz_context_org_name)
-    (max_over_time(v2_mz_compute_cluster_status{mz_version=~"<new release>.*"}[6h]))
+    (max_over_time(v2_mz_compute_cluster_status{mz_version=~"<new release>.*"}[<analysis window>]))
 ```
+
+This derivation is a one-shot whose output is pinned for the rest of the run, so there is no step to match and the lookback spans the analysis window instead, which makes the list independent of any single 6h stretch. Widening it cannot pull in a customer environment, because in production only the canaries run an rc version and `<new release>` is an rc version by *Step 1*.
 
 Count the rows before pinning them. This list is the entire production selector for the rest of the run, and a canary region holds one or two environments, so a namespace lost to one missed scrape puts the whole prod sweep on half the fleet with nothing downstream to catch it. Expect one row per canary organization per region.
 
@@ -103,7 +105,7 @@ sum(rate(<metric>[6h]) * on(namespace) group_left()
 
 Escaping note: write `-rc[.]` rather than `-rc\\.` so the expression survives JSON encoding unchanged.
 
-**Never read `v2_mz_compute_cluster_status` at an instant. Wrap every use of it in `max_over_time` at the step size.** It comes from the promsql exporter, so one missed scrape leaves a namespace with no series at that timestamp, and each of the three places this workflow reads it then fails silently and in the direction of health: the staging join drops every pod of that namespace from the aggregate, Step 2's derivation drops it from the pinned production selector, and Step 1's boundary query reports its version as having disappeared. On the v26.40.0-rc.3 run the staging working-set sum read 161 GB instead of 229 GB and swap read 0 instead of 57 GB at one bucket, because a single customer environment had no status sample at that instant. Matching the window to the step closes all three. Dropping the staging join instead is not an option, since development environments run at roughly a quarter of staging clusterd CPU.
+**Never read `v2_mz_compute_cluster_status` at an instant. Wrap every use of it in `max_over_time` over the window it is being read across.** For the two range queries that is the step; for Step 2's one-shot derivation it is the analysis window. It comes from the promsql exporter, so one missed scrape leaves a namespace with no series at that timestamp, and each of the three places this workflow reads it then fails silently and in the direction of health: the staging join drops every pod of that namespace from the aggregate, Step 2's derivation drops it from the pinned production selector, and Step 1's boundary query reports its version as having disappeared. On the v26.40.0-rc.3 run the staging working-set sum read 161 GB instead of 229 GB and swap read 0 instead of 57 GB at one bucket, because a single customer environment had no status sample at that instant. Widening the lookback closes all three. Dropping the staging join instead is not an option, since development environments run at roughly a quarter of staging clusterd CPU.
 
 ## Step 3: Choose the time window
 
