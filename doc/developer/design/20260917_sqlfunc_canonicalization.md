@@ -30,7 +30,7 @@ The macro's own structure is what makes that fix expensive to apply. `sqlfunc.rs
 is 1627 lines, of which `unary_func`, `binary_func`, and `variadic_func` account
 for 762 across three independent code paths. The three arms build the same eleven
 optional override methods with 19 near-identical `quote!` blocks, enforce modifier
-legality with 18 separately written `unknown_field` rejections, and each repeat the
+legality with 12 separately written `unknown_field` rejections, and each repeat the
 emission of `Display`, `FuncName`, and the original function. Adding one capability
 therefore means writing it three times, which is exactly what the abandoned
 `sqlfunc-self-arena` branch did.
@@ -210,7 +210,7 @@ every one of the eleven simple overrides through the same template:
 fn #name(&self) -> #ret { #expr }
 ```
 
-That replaces 19 `quote!` blocks and all 18 hand-written rejections with one loop
+That replaces 19 `quote!` blocks and all 12 hand-written legality rejections with one loop
 and one error message shape. The five modifiers that are not simple overrides,
 `sqlname`, `output_type`, `output_type_expr`, `test`, and `skip_display`, stay
 explicit in `generate`, because they feed `Display`, the `output_sql_type` body, and
@@ -445,7 +445,7 @@ acceptance test is that 13 existing snapshot files do not change.
 into free functions and leave `unary_func`, `binary_func`, and `variadic_func`
 calling them. This is the smallest and safest diff and it would shrink the arms by
 roughly 40%. It was rejected because it does not address the stated problem: there
-would still be three code paths, still 18 separately written rejections, and PR2
+would still be three code paths, still 12 separately written legality rejections, and PR2
 would still write its capability into two arms rather than one.
 
 **One body with arity as a parameter.** Treat unary and binary as arity one and
