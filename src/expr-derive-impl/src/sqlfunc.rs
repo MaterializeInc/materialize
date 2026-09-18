@@ -26,7 +26,7 @@ pub(crate) struct Modifiers {
     /// Set `false` for multiplication and division. Applies to binary functions.
     pub(crate) is_infinity_monotone: Option<Expr>,
     /// The SQL name for the function. Applies to all functions.
-    sqlname: Option<SqlName>,
+    pub(crate) sqlname: Option<SqlName>,
     /// Whether the function preserves uniqueness. Applies to unary functions.
     pub(crate) preserves_uniqueness: Option<Expr>,
     /// The inverse of the function, if it exists. Applies to unary functions.
@@ -118,7 +118,7 @@ fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
 /// A name for the SQL function. It can be either a literal or a macro, thus we
 /// can't use `String` or `syn::Expr` directly.
 #[derive(Debug, Clone)]
-enum SqlName {
+pub(crate) enum SqlName {
     /// A literal string.
     Literal(syn::Lit),
     /// A macro expression.
@@ -1236,23 +1236,7 @@ fn unary_func(
         );
     }
 
-    let source = sqlfunc_source(
-        attr,
-        func,
-        std::slice::from_ref(&input_ty_raw),
-        output_ty_raw,
-        std::slice::from_ref(&input_ty),
-    );
-
-    let result = quote! {
-        #[derive(
-            Ord, PartialOrd, Clone,
-            Debug, Eq, PartialEq, serde::Serialize,
-            serde::Deserialize, Hash,
-        )]
-        #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
-        pub struct #struct_name;
-
+    let trait_impl = quote! {
         impl crate::func::EagerUnaryFunc for #struct_name {
             type Input<'a> = #input_ty;
             type Output<'a> = #output_ty;
@@ -1276,21 +1260,15 @@ fn unary_func(
 
             #(#override_methods)*
         }
-
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
-            }
-        }
-
-        impl crate::func::FuncName for #struct_name {
-            const NAME: &'static str = stringify!(#fn_name);
-            #source
-        }
-
-        #func
     };
-    Ok(result)
+
+    let emission = crate::generate::Emission {
+        struct_name,
+        has_self: false,
+        sqlname: name,
+        fn_name: fn_name.clone(),
+    };
+    Ok(crate::generate::emit(&emission, func, trait_impl))
 }
 
 /// Produce a `EagerBinaryFunc` implementation.
@@ -1404,15 +1382,7 @@ fn binary_func(
         );
     }
 
-    let result = quote! {
-        #[derive(
-            Ord, PartialOrd, Clone,
-            Debug, Eq, PartialEq, serde::Serialize,
-            serde::Deserialize, Hash,
-        )]
-        #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
-        pub struct #struct_name;
-
+    let trait_impl = quote! {
         impl crate::func::binary::EagerBinaryFunc for #struct_name {
             type Input<'a> = (#input1_ty, #input2_ty);
             type Output<'a> = #output_ty;
@@ -1451,22 +1421,15 @@ fn binary_func(
 
             #(#override_methods)*
         }
-
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
-            }
-        }
-
-        impl crate::func::FuncName for #struct_name {
-            const NAME: &'static str = stringify!(#fn_name);
-            #source
-        }
-
-        #func
-
     };
-    Ok(result)
+
+    let emission = crate::generate::Emission {
+        struct_name,
+        has_self: false,
+        sqlname: name,
+        fn_name: fn_name.clone(),
+    };
+    Ok(crate::generate::emit(&emission, func, trait_impl))
 }
 
 /// Produce an `EagerVariadicFunc` implementation.
@@ -1695,52 +1658,13 @@ fn variadic_func(
         }
     };
 
-    let display_impl = quote! {
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
-            }
-        }
+    let emission = crate::generate::Emission {
+        struct_name,
+        has_self,
+        sqlname: name,
+        fn_name: fn_name.clone(),
     };
-
-    let source = sqlfunc_source(attr, func, &param_types_raw, output_ty_raw, &param_types);
-    let funcname_impl = quote! {
-        impl crate::func::FuncName for #struct_name {
-            const NAME: &'static str = stringify!(#fn_name);
-            #source
-        }
-    };
-
-    let result = if has_self {
-        // External struct: generate method impl + trait impl + Display.
-        quote! {
-            impl #struct_name {
-                #func
-            }
-            #trait_impl
-            #display_impl
-            #funcname_impl
-        }
-    } else {
-        // Unit struct: generate struct + trait impl + Display + original function.
-        quote! {
-            #[derive(
-                Ord, PartialOrd, Clone,
-                Debug, Eq, PartialEq, serde::Serialize,
-                serde::Deserialize, Hash,
-            )]
-            #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
-            pub struct #struct_name;
-
-            #trait_impl
-            #display_impl
-            #funcname_impl
-
-            #func
-        }
-    };
-
-    Ok(result)
+    Ok(crate::generate::emit(&emission, func, trait_impl))
 }
 
 #[cfg(test)]
