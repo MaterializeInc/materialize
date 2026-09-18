@@ -131,19 +131,19 @@ names are `FromTime` and `IntoTime`, and in practice `IntoTime` is MZ time.
 
 #### Grouping
 
-The sink strives to write one batch per description, taking every timestamp that description covers
-into a single `BatchBuilder`. The grouping cannot be chosen before the bounds are known, and a
-`BatchBuilder` cannot be split once a description boundary lands inside it. An update goes into a
-`BatchBuilder` as it arrives. The builder is the buffer.
+The sink strives to write one batch for everything a pinned frontier accumulates, taking every
+timestamp into a single `BatchBuilder`. The grouping cannot be chosen before a bound is known, and
+a `BatchBuilder` cannot be split once a boundary lands inside it, nor finished at an upper below
+data it already holds. An update goes into a `BatchBuilder` as it arrives. The builder is the
+buffer.
 
-The data that arrives before the description covering it is the leading edge. A row in the leading
-edge is a trailblazer, ahead of its description. Rows that arrive after their builder was closed
-are stragglers. Both occur and the sink has to account for them.
+The data that arrives above the bound the sink has in hand is the leading edge. A row in the
+leading edge is a trailblazer, ahead of its bound, and writes a batch of its own timestamp.
 
 ```
-────────────────────┼───────────────┼─────→ leading edge
-stragglers      committed       committed  (trailblazers)
-                  lower           upper
+                    ┼─── one open builder ───┼─────→ leading edge
+                  lower                  committed   (trailblazers, one
+                                          ceiling     batch per timestamp)
 ```
 
 `BatchBuilder` writes a part to blob storage every `persist_blob_target_size`, and keeps at most
@@ -153,80 +153,78 @@ its description is appended, so the sink trades memory for blob writes it may th
 restart.
 
 Two kinds of builder are open at once.
-- A builder per in-flight description, taking data at timestamps in its range.
-- A builder per trailblazer timestamp, for data that arrives ahead of the current committed
-  description.
+- The one builder for everything inside the commitment, whatever its timestamp. The snapshot's rows
+  at the pinned time and the replication rows above it share it, which is what makes the
+  interleaving between them cost nothing.
+- A builder per trailblazer timestamp, for data that has outrun the committed ceiling.
 
-A description's builder closes as soon as data moves past it. This keeps the number of builders
-from following how long the frontier stays pinned, with one exception. The builder whose description
-covers the frontier's own time, which carries the snapshot data, stays open until the frontier
-advances and its description is ready.
+Nothing closes the open builder until the description that retires the commitment is ready, so the
+count of open builders does not follow how long the frontier stays pinned.
 
-Arrival order is an efficiency assumption, not a correctness one. Readiness and the
-`operator_batch_lower` declared by new data are both gated on the frontier, so a straggler opens a
-new builder under the description it would have landed in, and costs one extra batch. This is
-different from trailblazers, where the bounds are unknown and batches must be single-timestamp.
+Arrival order is an efficiency assumption, not a correctness one. A row that outruns the ceiling
+costs one extra batch rather than a bail, and a row that arrives after its description did is
+finished under that description when it becomes ready.
 
-#### Committed descriptions
+#### Committed ceilings
 
-The sink can group without waiting for the frontier if it knows where the next description boundary
-falls. So the minter commits to boundaries instead of deriving them. It emits `[a, b)` for a `b` of
-its own choosing and then honors it, so a frontier landing inside `[a, b)` is ignored and the next
-description still starts at `b`.
+The sink can group without waiting for the frontier if it knows a bound every update it is holding
+falls below. So the minter commits to a ceiling and broadcasts it to the writers on an output of
+its own, then honors it: while a ceiling is outstanding it mints no description at all, so a
+frontier landing below the ceiling produces nothing and the next description still ends at or past
+it.
 
-Committing early is safe because a description doesn't assert completeness. The sink appends only
-once `desired_frontier` reaches the upper, so a committed description waits in `in_flight_batches`
-until then.
+A ceiling is not a description. It carries the lower of the description that will eventually retire
+it, because a builder declares its lower when it opens, and it never reaches `append_batches`.
+Committing early is safe because a description does not assert completeness either: the sink appends
+only once `desired_frontier` reaches the upper.
 
-A description has to reach the writers before the rows it covers, since a builder only takes rows
-at times it was opened for. The first window `[T:c, T:c + w)` is committed the moment the frontier
-pins, before any row arrives, on the knowledge that the snapshot's rows are about to land at `T:c`.
-The minter sees the largest timestamp the data has reached and commits the next window once that
-timestamp comes within a margin of the committed upper. The margin is the initial width, so every
-description keeps a head start over the rows. Each commitment doubles the next width, up to
-`storage_persist_sink_description_window_max`, so a short snapshot commits little past its end and
-a long one costs few descriptions.
+A ceiling has to reach the writers before the rows it covers, since a builder only takes rows at
+times it was opened for and cannot be finished at an upper below a row it holds. The first is
+committed the moment the frontier pins, before any row arrives, on the knowledge that the
+snapshot's rows are about to land at `T:c`. The minter sees the largest timestamp any worker's data
+has reached and re-commits a fixed lookahead past it, so the ceiling keeps a constant head start
+over the rows. `storage_persist_sink_description_lookahead` is that lookahead, floored at the
+source's `timestamp_interval`.
 
-The minter has two rules for emitting a description.
-- Emit `[current_upper, desired_frontier)` whenever the frontier is ahead of the committed upper.
-  This is steady state and commits to nothing.
-- Emit `[current_upper, current_upper + width)` once `max_seen + margin > current_upper`, while the
-  export's snapshot is in progress.
+The minter has two rules.
+- Emit `[current_upper, desired_frontier)` whenever the frontier is ahead and no outstanding
+  ceiling sits above it. This is steady state and commits to nothing.
+- Commit `max_seen + lookahead` whenever that is past the current ceiling, while the export's
+  snapshot is in progress.
 
-Only a commitment ending past the frontier widens the window, so the doubling is driven by the
-pinned frontier, not by steady state. Committing costs the minter the coupling between the upper it
-emits and the frontier it observes. It downgrades to that upper rather than to the frontier, so
-`current_upper > desired_frontier` becomes a state it has to expect.
+Committing costs the minter the coupling between the upper it emits and the frontier it observes.
+It mints nothing while a ceiling is outstanding, so `current_upper` behind `desired_frontier`
+becomes a state it has to expect.
 
-The rules interleave in three phases. `F` is the frontier and `C` the committed upper, with the
-snapshot pinned at `c` and an initial width of `w`. While the snapshot runs, `F` does not move and
-`C` steps ahead of the data, each step on the second rule:
-
-```
-frontier     F                                      C        F pinned at c for the whole snapshot
-MZ time  ----c------c+w---------c+3w----------------c+7w-->
-             [c,c+w)[c+w,  c+3w)[c+3w,        c+7w)          C steps ahead of the data
-             on the when data   when data
-             pin    nears c+w   nears c+3w
-```
-
-When the snapshot ends, `F` jumps to wherever the source has reached. Every window below it appends
-in one pass. The window it lands in binds, and the distance from `F` to `C` is the tail:
+The rules interleave in three phases. `F` is the frontier, `M` the largest timestamp the data has
+reached and `C` the committed ceiling, with the snapshot pinned at `c` and a lookahead of `w`, so
+`C` is `M + w`. While the snapshot runs, `F` does not move, `C` tracks the data, and nothing is
+minted:
 
 ```
-frontier                                    F       C        F jumps to where the source is
-MZ time  ----c------------------c+3w----------------c+7w-->
-             [c, c+3w) appended [c+3w, c+7w) binds           shard upper waits at c+3w
-                                            |-tail->|        until F reaches c+7w
+             F                          M    C
+MZ time  ----c--------------------------+----+---→   F pinned at c, C recommitted as M moves
+             ┼─── one open builder ─────┼            nothing is minted for the whole snapshot
 ```
 
-Once `F` passes `C`, the first rule takes over and every description is derived from the frontier,
-so `C` and `F` coincide from then on:
+When the snapshot ends, `F` jumps to wherever the source has reached and then climbs to `C`. The
+distance it still has to cover is the tail, about one lookahead whatever the snapshot's length,
+because the last commitment was made a lookahead past the last row:
 
 ```
-frontier                FC        FC        FC               C rides on F
-MZ time  ----c+7w-------F1--------F2--------F3------------>
-             [c+7w, F1) [F1, F2)  [F2, F3)                   each derived from the frontier
+                                        F   M    C
+MZ time  ----c--------------------------+---+----+---→   F jumps to where the source reached
+                                        ┼────tail─┼      shard upper waits at c until F = C
+```
+
+Once `F` passes `C`, the whole snapshot and the catch-up behind it go out as one description,
+appended in one `compare_and_append`, and the first rule takes over from then on:
+
+```
+                                             F1   F2   F3
+MZ time  ----c-------------------------------+----+----+--→   one description for the whole
+             ┼──────── [c, F1) ──────────────┼                snapshot, appended in one call,
+                                             [F1, F2)         then each derived from F
 ```
 
 An export snapshots when its resume upper is the minimum from-time, and this is passed into the
@@ -234,8 +232,8 @@ persist sink. The test has to be made in the from-time domain. Reclocking a resu
 MZ time at or below the as_of back to the minimum, which keeps a restart during a snapshot reading
 as snapshotting even though its shard upper has moved past `T:min`. The frontier alone cannot tell,
 since any restart would look like a snapshot. Exports with the CDCv2 envelope are excluded, as
-their MZ times come from the data rather than from reclocking, so a wall-clock width means nothing
-there and a committed upper the data never reaches would hold the shard upper forever.
+their MZ times come from the data rather than from reclocking, so a wall-clock lookahead means
+nothing there and a ceiling the frontier never reaches would hold the shard upper forever.
 
 The frontier determines when the snapshot ends, which relies on a snapshot occupying a single MZ
 time. Sources that rewind emit theirs at `F:min`, so it reclocks to `T:c` and the frontier holds
@@ -244,30 +242,18 @@ Kafka reads real offsets and reaches the same place, see the Kafka section. The 
 first non-minimum frontier a snapshotting export takes and permits the second rule only while
 `desired_frontier` equals it, never before that frontier arrives. Timely does not order progress
 ahead of data, so a row can reach the minter under a frontier still at the minimum, and committing
-on it would anchor the window at the shard upper instead of `T:c` and mint every window between the
-two. On a fresh shard that is every window between zero and the wall clock.
+on it would anchor the ceiling at the shard upper, which on a fresh shard is the whole gap from
+zero to the wall clock.
 
-Catching up costs one append. Every committed description becomes ready in the same pass when the
-frontier advances, and `append_batches` combines them into a single `compare_and_append` over the
-whole range. Setting `persist_validate_part_bounds_on_write` or
-`persist_validate_part_bounds_on_read` gives each description an append of its own instead.
+Catching up costs one append, whatever the snapshot's length, and the snapshot's rows and the
+replication rows staged behind the pin are one batch in it. The cost is the tail: a commitment is
+binding, so the shard upper waits for the frontier to reach the ceiling rather than advancing to
+where the frontier actually is. The snapshot gate confines this to exports that are snapshotting,
+where the frontier is not advancing anyway. A collection keeping up lags the data by about one
+`timestamp_interval` and has nothing to group, so committing there would pay the tail for nothing.
 
-The commitment's cost is a tail. A commitment is binding, so while `current_upper` sits ahead of
-the frontier the first rule mints nothing, and when the snapshot ends the shard upper waits for the
-frontier to reach the last committed upper rather than advancing to where the frontier reached. The
-last window was committed when the data came within the margin of the previous upper, so the tail
-is at most the margin plus the last width, up to the snapshot's own duration and capped by
-`storage_persist_sink_description_window_max`. The snapshot gate confines this to exports that are
-snapshotting, where the frontier is not advancing anyway. A collection keeping up lags the data by
-about one `timestamp_interval` and has nothing to group, so committing there would pay the tail for
-nothing.
-
-An export whose stream is quiet during its snapshot and then receives a burst commits every window
-between the last upper and the burst in one pass, each an empty description that still has to be
-minted, broadcast, and carried to the append.
-
-Leaving the window at zero mints descriptions from the frontier alone, so the sink writes one batch
-per timestamp exactly as it does today.
+Leaving the lookahead at zero mints descriptions from the frontier alone, so the sink writes one
+batch per timestamp exactly as it does today.
 
 #### Commit timing across workers
 
@@ -277,8 +263,8 @@ trail the collection's. Every worker reports its largest timestamp to the mintin
 This makes the trigger independent of how a source distributes rows. PostgreSQL round-robins
 replication rows across all workers and MySQL reads its binlog on one, and either way the minter
 times the next commitment against the largest timestamp any worker has reached. Without those
-reports, a minter that is not the binlog worker would never see a timestamp past `T:c`, no window
-after the first would be committed, and everything that worker took in during the snapshot would
+reports, a minter that is not the binlog worker would never see a timestamp past `T:c`, no ceiling
+past the first would be committed, and everything that worker took in during the snapshot would
 degrade to one batch per timestamp.
 
 #### Concurrent ingestion
@@ -388,8 +374,10 @@ upper back to the minimum and snapshots it again even though the empty first des
 upper to `T:c`.
 
 These are notes on the newly possible states and how to test them. The cases below use a hydrated
-export `A`, a new table `B` with snapshot offset `s`, and `B`'s appended windows written as
-`[c, c+kw)`. Offsets are the source's from-time, LSNs for PostgreSQL.
+export `A` and a new table `B` with snapshot offset `s`. Offsets are the source's from-time, LSNs
+for PostgreSQL. `B`'s shard upper sits at `T:c` for the whole snapshot and the catch-up behind it,
+since the one description covering them is minted only once the frontier reaches the committed
+ceiling, so a restart before that point finds nothing of `B`'s appended.
 
 1. **Restart during the copy.** `B` snapshots again at a new snapshot offset `s' > s`, stamped
    at the same `T:c`. The resume offset is the minimum over exports and `B` contributes `P`, so
@@ -399,20 +387,21 @@ export `A`, a new table `B` with snapshot offset `s`, and `B`'s appended windows
    remap trace retained since `T:c`, one binding per probe for the snapshot's duration, in both
    `reclock_resume_uppers` and `reclock_committed_upper`. Correctness rests on the filtering of
    re-read rows below an export's upper in the persist sink and in upsert.
-2. **Restart in the tail.** The copy is complete, `B`'s frontier sits inside the last committed
-   window, and the windows below it are appended, so `B`'s shard upper is a window boundary such as
-   `c+3w`. When `s` reclocks to a time above that boundary, `B`'s resume offset is below its own
-   snapshot offset, yet `B` counts as hydrated, so no copy and no rewind request. `B`'s events
-   between the resume offset and `s` are emitted forward at times at or above `c+3w`, while their
-   negations at `T:c` are already in the appended batch. The appended prefix is `B`'s state at the
-   resume offset, so the result is correct. Correctness rests on appends being frontier gated,
-   which makes any `B` upper past `T:c` imply a complete snapshot.
+2. **Restart in the tail.** The copy is complete and `B`'s frontier is climbing toward the
+   committed ceiling. Nothing of `B`'s is appended yet, so this is case 1: `B` snapshots again.
+   Once the frontier does reach the ceiling the whole snapshot and the catch-up go in as one
+   append, which leaves `B` hydrated past every event the stream carried, so there is no state
+   where `B`'s shard upper sits between `T:c` and the snapshot offset's time. That is what a
+   single description buys over a grid of them, where a partially appended prefix had to be
+   reasoned about. Correctness rests on appends being frontier gated, which makes any `B` upper
+   past `T:c` imply a complete snapshot.
 3. **Two tables added together, one completes first.** `B1` is hydrated and advancing while `B2`
    still copies. Only `B2` snapshots again. `B1` resumes from its own upper and keeps its data, as
    does `A`. The stream still restarts at `P` because `B2` contributes it, so `B1`'s events between
    `P` and its resume offset arrive again and are dropped, and `B2`'s rewind negates `(P, s2']`.
 4. **Restart after `B`'s replication port releases but before the copy ends.** The stream has
-   passed `s`, the rewind entry is gone, and `B`'s forward events already flow into windows.
+   passed `s`, the rewind entry is gone, and `B`'s forward events already flow into the open
+   builder.
    Nothing is appended past `T:c`, so the restart is case 1, but the negations emitted for `(P, s]`
    are discarded with the batches and the new incarnation negates the wider `(P, s']`. The leaked
    batches hold that CDC volume as well as the snapshot, see Out of Scope.
@@ -438,11 +427,10 @@ The behavior change is gated by the
 `storage_source_snapshot_concurrent_replication` feature flag, default off in production and
 default on in CI so the new path is exercised by the test suites before it is enabled.
 
-`storage_persist_sink_description_window` is separate and defaults to zero, which leaves the sink
-writing one batch per timestamp. The test configuration sets it to one second with
-`storage_persist_sink_description_window_max` at five minutes. Concurrent replication is what makes
-a snapshot accumulate many timestamps, so the window has to carry a value before that flag is turned
-on.
+`storage_persist_sink_description_lookahead` is separate and defaults to zero, which leaves the
+sink writing one batch per timestamp. The test configuration sets it to five seconds, comfortably
+above the `timestamp_interval` it is floored at. Concurrent replication is what makes a snapshot
+accumulate many timestamps, so the lookahead has to carry a value before that flag is turned on.
 
 In general, a source supports independent export frontiers when it can do four things.
 1. emit each export on its own output port with its own capabilities
@@ -456,9 +444,8 @@ In general, a source supports independent export frontiers when it can do four t
 
 - **Restart interleavings.**
   - Which of the five cases under Restart semantics get a test, and in which framework (platform
-    checks, testdrive). Case 2 needs a window small enough that the first appended window closes
-    before the snapshot offset's time. Cases 1 and 4 need a replica killed while a copy runs against
-    a busy sibling.
+    checks, testdrive). Cases 1 and 4 need a replica killed while a copy runs against a busy
+    sibling.
 - **Trailblazer visibility.**
   - Whether the leading edge needs a metric for the batches it produces, so a snapshot whose
     trailblazers degrade it toward one batch per timestamp is visible rather than inferred from
@@ -477,14 +464,9 @@ In general, a source supports independent export frontiers when it can do four t
     timestamp to it, so this is a throughput question alone.
 - **Multiple concurrent hydrations.**
   - Builders spill to blob at `persist_blob_target_size`, so the resident exposure per export is one
-    unflushed part for the builder covering the frontier's time, one for the current window, and one
-    per trailblazer timestamp, summed over every export snapshotting at once. Whether that stays
-    inside a replica's memory when several large tables hydrate together.
-- **Tail after long snapshots.**
-  - A snapshot longer than the window cap ends with a tail of up to the cap plus the margin before
-    its export is readable. Whether that is acceptable, and what a policy that shortens the last
-    window as the snapshot nears its end would cost in descriptions, given the sink cannot see the
-    end coming.
+    unflushed part for the open builder and one per trailblazer timestamp, summed over every export
+    snapshotting at once. Whether that stays inside a replica's memory when several large tables
+    hydrate together.
 
 
 ## Cross-component impact (Claude discovered)
@@ -569,13 +551,13 @@ safely.
   the latest data time, rotating that builder when the frontier advances. Rejected because `L` must
   exceed the frontier's propagation delay, which is not a quantity the sink can bound, and
   a violation is only detected at rotation, where the recovery is a dataflow restart.
-- **A coalescing horizon published by the minter.**
+- **A coalescing horizon derived from the minter's frontier.**
   - Have `mint_batch_descriptions` broadcast a promise that no future description will end below
-  some time, so write operators can group updates below it before their description exists.
-  Rejected as stated, because the promise was derived from the minter's frontier, which is pinned
-  for exactly the duration of a snapshot. The committed descriptions in step 4 are the corrected
-  form. The minter commits to boundaries of its own choosing instead of promising something about a
-  frontier it cannot move, and the data it already passes through triggers the commitment.
+  some time, computed from the frontier it observes. Rejected in that form, because that frontier is
+  pinned for exactly the duration of a snapshot, so the promise never moves. The committed ceilings
+  in step 4 are the corrected form. The minter commits to a bound of its own choosing instead of
+  promising something about a frontier it cannot move, and the data it already passes through paces
+  the commitment.
 - **Source read progress as the coalescing horizon.**
   - Feed the source's reclocked read progress into the minter so the promise can advance while the
   collection's frontier is pinned. Rejected because a horizon that certifies completeness has to
