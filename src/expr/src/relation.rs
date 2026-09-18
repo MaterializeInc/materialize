@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
-use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
+use crate::relation::func::{AggregateFunc, LagLeadArgs, LagLeadType, TableFunc};
 use crate::row::{RowCollection, RowCollectionIter};
 use crate::scalar::columns::Columns;
 use crate::scalar::func::variadic::{
@@ -2675,8 +2675,8 @@ impl AggregateExpr {
                 self.on_unique_ranking_window_funcs(input_type, "?dense_rank?")
             }
 
-            // The input type for LagLead is ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
-            AggregateFunc::LagLead { lag_lead, .. } => {
+            // The input type for LagLead is ((OriginalRow, EncodedArgs?), OrderByExprs...)
+            AggregateFunc::LagLead { lag_lead, args, .. } => {
                 let tuple = self
                     .expr
                     .clone()
@@ -2696,12 +2696,19 @@ impl AggregateExpr {
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
-                // Extract the encoded args
-                let encoded_args =
-                    tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                // Extract the encoded args, where the row has any
+                let encoded_args = self
+                    .func
+                    .encodes_window_args()
+                    .then(|| tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1))));
 
-                let (result_expr, column_name) =
-                    Self::on_unique_lag_lead(lag_lead, encoded_args, lag_lead_return_type.clone());
+                let (result_expr, column_name) = Self::on_unique_lag_lead(
+                    lag_lead,
+                    args.as_ref(),
+                    original_row.clone(),
+                    encoded_args,
+                    lag_lead_return_type.clone(),
+                );
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
@@ -2808,6 +2815,7 @@ impl AggregateExpr {
                 wrapped_aggregate,
                 window_frame,
                 order_by: _,
+                order_by_values: _,
             } => {
                 // TODO: deduplicate code between the various window function cases.
 
@@ -2857,6 +2865,7 @@ impl AggregateExpr {
             AggregateFunc::FusedWindowAggregate {
                 wrapped_aggregates,
                 order_by: _,
+                order_by_values: _,
                 window_frame,
             } => {
                 // Throw away OrderByExprs
@@ -2928,6 +2937,7 @@ impl AggregateExpr {
             AggregateFunc::FusedValueWindowFunc {
                 funcs,
                 order_by: outer_order_by,
+                order_by_values: outer_order_by_values,
             } => {
                 // Throw away OrderByExprs
                 let tuple = self
@@ -2940,9 +2950,12 @@ impl AggregateExpr {
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
-                // Extract the encoded args of the fused call
-                let all_encoded_args =
-                    tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                // Extract the encoded args of the fused call, where any
+                // constituent encodes one
+                let all_encoded_args = funcs
+                    .iter()
+                    .any(AggregateFunc::encodes_window_args)
+                    .then(|| tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1))));
 
                 let return_type_with_orig_row = self
                     .typ(input_type)
@@ -2954,40 +2967,62 @@ impl AggregateExpr {
                     return_type_with_orig_row.unwrap_record_element_type()[0].clone();
                 let mut func_result_exprs = Vec::new();
                 let mut col_names = Vec::new();
+                // The argument record holds a field only for the constituents
+                // that encode one, so the field index advances separately
+                // from the constituent index.
+                let mut arg_field = 0;
                 for (idx, func) in funcs.iter().enumerate() {
-                    let args_for_func = all_encoded_args
-                        .clone()
-                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
+                    let args_for_func = func.encodes_window_args().then(|| {
+                        let expr = all_encoded_args
+                            .clone()
+                            .expect("a constituent encodes its arguments")
+                            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(arg_field)));
+                        arg_field += 1;
+                        expr
+                    });
                     let return_type_for_func =
                         all_func_return_types.unwrap_record_element_type()[idx].clone();
                     let (result, column_name) = match func {
                         AggregateFunc::LagLead {
                             lag_lead,
                             order_by,
+                            order_by_values,
                             ignore_nulls: _,
+                            args,
                         } => {
                             assert_eq!(order_by, outer_order_by);
-                            Self::on_unique_lag_lead(lag_lead, args_for_func, return_type_for_func)
+                            assert_eq!(order_by_values, outer_order_by_values);
+                            Self::on_unique_lag_lead(
+                                lag_lead,
+                                args.as_ref(),
+                                original_row.clone(),
+                                args_for_func,
+                                return_type_for_func,
+                            )
                         }
                         AggregateFunc::FirstValue {
                             window_frame,
                             order_by,
+                            order_by_values,
                         } => {
                             assert_eq!(order_by, outer_order_by);
+                            assert_eq!(order_by_values, outer_order_by_values);
                             Self::on_unique_first_value_last_value(
                                 window_frame,
-                                args_for_func,
+                                args_for_func.expect("first/last value encode their argument"),
                                 return_type_for_func,
                             )
                         }
                         AggregateFunc::LastValue {
                             window_frame,
                             order_by,
+                            order_by_values,
                         } => {
                             assert_eq!(order_by, outer_order_by);
+                            assert_eq!(order_by_values, outer_order_by_values);
                             Self::on_unique_first_value_last_value(
                                 window_frame,
-                                args_for_func,
+                                args_for_func.expect("first/last value encode their argument"),
                                 return_type_for_func,
                             )
                         }
@@ -3109,19 +3144,52 @@ impl AggregateExpr {
     }
 
     /// `on_unique` for `lag` and `lead`
+    ///
+    /// `args` says where the three arguments live, and therefore which of
+    /// `original_row` and `encoded_args` holds each of them; see
+    /// [`LagLeadArgs`].
     fn on_unique_lag_lead(
         lag_lead: &LagLeadType,
-        encoded_args: MirScalarExpr,
+        args: Option<&LagLeadArgs>,
+        original_row: MirScalarExpr,
+        encoded_args: Option<MirScalarExpr>,
         return_type: ReprScalarType,
     ) -> (MirScalarExpr, ColumnName) {
-        let expr = encoded_args
-            .clone()
-            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-        let offset = encoded_args
-            .clone()
-            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
-        let default_value =
-            encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2)));
+        let (expr, offset, default_value) = match args {
+            Some(LagLeadArgs {
+                offset,
+                default,
+                value,
+            }) => (
+                match value {
+                    Some(field) => original_row
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(*field))),
+                    None => encoded_args.expect("`value` is encoded per row"),
+                },
+                match offset {
+                    Some(offset) => {
+                        MirScalarExpr::literal_ok(Datum::Int32(*offset), ReprScalarType::Int32)
+                    }
+                    None => MirScalarExpr::literal_null(ReprScalarType::Int32),
+                },
+                MirScalarExpr::literal_from_single_element_row(
+                    default.0.clone(),
+                    return_type.clone(),
+                ),
+            ),
+            None => {
+                let encoded_args = encoded_args.expect("all arguments are encoded per row");
+                (
+                    encoded_args
+                        .clone()
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
+                    encoded_args
+                        .clone()
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1))),
+                    encoded_args.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(2))),
+                )
+            }
+        };
 
         // In this case, the window always has only one element, so if the offset is not null and
         // not zero, the default value should be returned instead.

@@ -109,6 +109,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -119,6 +122,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           },
           "window_frame": {
             "TYPENAME": "WindowFrame"
@@ -136,6 +142,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -145,6 +154,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           },
           "window_frame": {
             "TYPENAME": "WindowFrame"
@@ -176,6 +188,11 @@
       },
       "LagLead": {
         "STRUCT": {
+          "args": {
+            "OPTION": {
+              "TYPENAME": "LagLeadArgs"
+            }
+          },
           "ignore_nulls": "BOOL",
           "lag_lead": {
             "TYPENAME": "LagLeadType"
@@ -184,6 +201,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -193,6 +213,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           },
           "window_frame": {
             "TYPENAME": "WindowFrame"
@@ -260,6 +283,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -269,6 +295,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           }
         }
       },
@@ -296,6 +325,9 @@
             "SEQ": {
               "TYPENAME": "ColumnOrder"
             }
+          },
+          "order_by_values": {
+            "TYPENAME": "OrderByValues"
           },
           "window_frame": {
             "TYPENAME": "WindowFrame"
@@ -2450,6 +2482,19 @@
       }
     }
   },
+  "LagLeadArgs": {
+    "STRUCT": {
+      "default": {
+        "TYPENAME": "StableRow"
+      },
+      "offset": {
+        "OPTION": "I32"
+      },
+      "value": {
+        "OPTION": "U64"
+      }
+    }
+  },
   "LagLeadType": {
     "ENUM": {
       "Lag": "UNIT",
@@ -3044,6 +3089,16 @@
     "NEWTYPESTRUCT": "U8"
   },
   "Or": "UNITSTRUCT",
+  "OrderByValues": {
+    "ENUM": {
+      "Appended": "UNIT",
+      "OriginalRow": {
+        "NEWTYPE": {
+          "SEQ": "U64"
+        }
+      }
+    }
+  },
   "OrdinalMode": {
     "ENUM": {
       "None": "UNIT"
