@@ -1,0 +1,75 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(\n    could_error = true,\n    output_type = i16,\n    is_infix_op = true,\n    is_monotone = true,\n    is_associative = true,\n    propagates_nulls = true,\n    sqlname = \"variadic_all_modifiers\",\n)]\nfn variadic_all_modifiers<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {\n    datums.into_iter().next().unwrap_or(Datum::Null)\n}\n"
+---
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+pub struct VariadicAllModifiers;
+impl crate::func::variadic::EagerVariadicFunc for VariadicAllModifiers {
+    type Input<'a> = Variadic<Datum<'a>>;
+    type Output<'a> = Datum<'a>;
+    fn call<'a>(
+        &self,
+        datums: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        variadic_all_modifiers(datums)
+    }
+    fn output_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = <i16>::as_column_type();
+        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        output
+            .nullable(
+                nullable || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable),
+            )
+    }
+    fn could_error(&self) -> bool {
+        true
+    }
+    fn introduces_nulls(&self) -> bool {
+        <i16 as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+    fn is_monotone(&self) -> bool {
+        true
+    }
+    fn is_associative(&self) -> bool {
+        true
+    }
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for VariadicAllModifiers {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("variadic_all_modifiers")
+    }
+}
+impl crate::func::FuncName for VariadicAllModifiers {
+    const NAME: &'static str = stringify!(variadic_all_modifiers);
+}
+fn variadic_all_modifiers<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
+    datums.into_iter().next().unwrap_or(Datum::Null)
+}
