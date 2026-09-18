@@ -21,7 +21,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.42.0
-*Released to Materialize Self-Managed: 2026-09-18* <br>
+*Released to Materialize Self-Managed: 2026-09-25* <br>
 
 ### Safely drop upstream constraints in your Postgres sources {#v26.42-constraint-exclusion-for-postgres-sources}
 Materialize now allows you to `EXCLUDE CONSTRAINTS` when creating a table from a Postgres source. You can use this workflow to safely drop an upstream constraint, without causing your source to stall. Today, the Postgres source incorporates `PRIMARY KEY`, `UNIQUE` and `NOT NULL` constraints.
