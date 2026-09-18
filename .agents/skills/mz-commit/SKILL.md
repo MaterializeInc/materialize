@@ -22,6 +22,76 @@ Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
 Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 
+### LIR plan changes: regenerate the schema registry
+
+The stable LIR format lets optimized plans be stored durably and reused, so
+two snapshot tests in `mz-compute-types` pin what a stored plan looks like
+and what it means. Both key off `LIR_VERSION` in
+`src/compute-types/src/plan.rs`.
+
+`lir_schema` traces the serde schema of everything reachable from
+`LirRelationExpr` into `tests/snapshots/lir_v{LIR_VERSION}.json`. Run it
+whenever the diff touches `src/compute-types/src/plan/`, or adds, removes, or
+reshapes the payload of a `*Func` variant:
+
+```
+cargo test -p mz-compute-types --test lir_schema
+```
+
+Regenerate with `REWRITE=1 cargo test -p mz-compute-types --test lir_schema`
+and review the diff. It is the reviewable record of the format change. If
+the current `LIR_VERSION` has shipped (see below), bump it first so the old
+`lir_v{N}.json` stays in place for migration tooling and the rewrite targets
+a fresh file.
+
+### Scalar function changes: regenerate the function registry
+
+The schema registry sees a plan's shape, not what its functions compute.
+`func_registry` covers that gap for `UnaryFunc`, `BinaryFunc`, and
+`VariadicFunc`. Run it whenever the diff touches
+`src/expr/src/scalar/func.rs` or `src/expr/src/scalar/func/` (including
+`impls/` and `#[sqlfunc]` bodies):
+
+```
+cargo test -p mz-compute-types --test func_registry
+```
+
+* It fails when a function is added, removed, or has a changed property
+  (nullability, error behavior, monotonicity, output type, sqlfunc
+  signature) or a changed `#[sqlfunc]` body. Regenerate the checked-in
+  snapshots, then review the diff under `src/compute-types/tests/snapshots/`:
+
+  ```
+  REWRITE=1 cargo test -p mz-compute-types --test func_registry
+  ```
+
+  Never hand-edit `func_registry*.json`. A digest check rejects it.
+* **New function with a payload** (any variant that carries data, e.g. a
+  target type, a regex, a scale): the registry build panics naming the
+  variant. Add a representative `Sample` to `unary_samples()`,
+  `binary_samples()`, or `variadic_samples()` in
+  `src/expr/src/scalar/func/registry.rs`. If a property depends on the
+  payload (e.g. a cast only errors when it has a scale), add a second sample
+  with `.labeled("...")` covering the other branch. Payload-free variants and
+  plain `#[sqlfunc]` functions need no sample.
+* **Removed or changed function, or a body change that alters results**: if
+  the current `LIR_VERSION` has shipped in a release, bump it so stored plans
+  are replanned, then regenerate. An unshipped version is regenerated in
+  place. Treat the version as shipped when the latest release tag carries the
+  same `LIR_VERSION`:
+
+  ```
+  git show $(git tag --list 'v*' --sort=-v:refname | head -1):src/compute-types/src/plan.rs | grep 'pub const LIR_VERSION'
+  ```
+
+  A bump is a judgment call, so confirm it with the user before making it.
+  Additions never need a bump. When unsure whether a body change alters
+  results, say so in the PR description rather than deciding silently.
+
+Commit the regenerated snapshots together with the function change, and call
+out the registry diff (added, removed, changed functions) in the PR
+description.
+
 ## PR titles and commit messages
 
 Materialize uses squash merging, so the PR title becomes the commit subject on `main`.
