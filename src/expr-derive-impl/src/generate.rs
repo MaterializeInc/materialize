@@ -183,14 +183,19 @@ pub(crate) fn generate(
     let generic_params = signature::find_generic_type_params(func);
 
     // Unary and binary bind their inputs positionally, ignoring how the function
-    // spells its parameters, while variadic forwards the real names.
+    // spells its parameters, while variadic forwards the real names. A `&self`
+    // receiver occupies position 0, so it offsets where the bound arguments start.
+    let self_offset = usize::from(has_self);
     let (param_types_raw, param_names) = match shape {
         Shape::Unary => (
-            vec![signature::arg_type(func, 0)?],
+            vec![signature::arg_type(func, self_offset)?],
             vec![Ident::new("a", Span::call_site())],
         ),
         Shape::Binary => (
-            vec![signature::arg_type(func, 0)?, signature::arg_type(func, 1)?],
+            vec![
+                signature::arg_type(func, self_offset)?,
+                signature::arg_type(func, self_offset + 1)?,
+            ],
             vec![
                 Ident::new("a", Span::call_site()),
                 Ident::new("b", Span::call_site()),
@@ -283,11 +288,9 @@ pub(crate) fn generate(
 
     let methods = override_methods(shape, &mods, introduces_nulls_fn);
 
-    let arena_param = if shape.takes_arena() {
-        quote! { , temp_storage: &'a mz_repr::RowArena }
-    } else {
-        quote! {}
-    };
+    // Every arity's `call` receives the arena; only `arena` (whether the annotated
+    // function itself wants it) varies.
+    let arena_param = quote! { , temp_storage: &'a mz_repr::RowArena };
     let arena_arg = if arena {
         quote! { , temp_storage }
     } else {
