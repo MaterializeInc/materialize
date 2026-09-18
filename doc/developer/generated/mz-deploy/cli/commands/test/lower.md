@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/cli/commands/test/lower.rs
-revision: a647094cc4
+revision: c8a2857de2
 ---
 
 # mz-deploy::cli::commands::test::lower

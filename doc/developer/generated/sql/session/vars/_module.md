@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: 41e1741ca3
+revision: 05fa578c92
 ---
 
 # mz-sql::session::vars
@@ -17,3 +17,4 @@ Adding a new variant to `VarInput` or `OwnedVarInput` requires extending the `mz
 `is_timestamp_oracle_config_var` recognizes `mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT` in addition to the CRDB keepalive variables.
 `SessionVars::reset_all` durably resets all variables to their defaults immediately without staging a transaction; used by `DISCARD ALL`. System/role/startup defaults are preserved.
 `SystemVars` supports a callback mechanism via `register_callback` and `notify_all_callbacks`; callbacks are idempotent reads of `SystemVars` that fire at catalog commit boundaries when a system var was touched.
+`SystemVars::disabled_metric_sinks` returns the list of curated metric sink names that are disabled, derived from the `disabled_metric_sinks` system variable.

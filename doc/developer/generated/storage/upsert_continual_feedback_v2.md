@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/upsert_continual_feedback_v2.rs
-revision: 844b947128
+revision: 2bd37d91fd
 ---
 
 # mz-storage::upsert_continual_feedback_v2
