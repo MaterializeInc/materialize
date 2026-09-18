@@ -49,7 +49,7 @@ CREATE SINK orders_sink IN CLUSTER export_demo
 ## Created, starting, and running
 
 `created` is the default `mz_sink_statuses` reports before any status has
-been recorded for the sink, not a state a sink lingers in: creating a sink
+been recorded for the sink, not a state a sink lingers in. Creating a sink
 against a running cluster moves it to `starting` and then `running`
 essentially immediately, often within the same reporting interval:
 
@@ -86,8 +86,8 @@ external system rejected a write. See [Stalled](#stalled).
 {{% include-from-yaml data="hydration-details" name="sink" %}}
 
 Unlike a source snapshot, a sink's initial write is not separately observable
-in [`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_sink_statistics):
-the counters described in [Steady state](#steady-state) accumulate the same
+in [`mz_sink_statistics`](/sql/system-catalog/mz_internal/#mz_sink_statistics).
+The counters described in [Steady state](#steady-state) accumulate the same
 way whether the sink is still writing its snapshot or has moved on to
 incremental changes. To tell whether a sink has finished hydrating, use
 [`mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses)
@@ -109,7 +109,7 @@ WHERE o.name = 'orders_sink';
 
 A sink runs on exactly one cluster replica at a time, even on a cluster with
 several. `replica_id` in `mz_sink_statistics` and
-`mz_sink_status_history` identifies that replica; the others sit idle for
+`mz_sink_status_history` identifies that replica. The others sit idle for
 this sink.
 
 For general hydration behavior, memory impact, and strategies such as a burst
@@ -133,16 +133,15 @@ WHERE id = (SELECT id FROM mz_sinks WHERE name = 'orders_sink');
 (1 row)
 ```
 
-These counters monotonically increase, so compare them over time rather than
-reading a single snapshot: what matters is that all four keep climbing
-together. `messages_staged`/`bytes_staged` count what the sink has written but
-not necessarily committed; `messages_committed`/`bytes_committed` count what
-the external system has durably accepted, and can lag behind the staged
-counters when a write is retried. In practice, a Kafka sink's transactional
-writes land in both counters together, so the two rarely differ at query
-time. The counters reset to zero whenever the sink's dataflow restarts, for
-example after [`stalled`](#stalled) recovers, so a drop to `0` on its own does
-not mean data was lost.
+These counters monotonically increase and persist across a sink's restarts,
+including a recovery from [`stalled`](#stalled). Compare them over time
+rather than reading a single snapshot. What matters is that all four keep
+climbing together. `messages_staged`/`bytes_staged` count what the sink has
+written but not necessarily committed. `messages_committed`/`bytes_committed`
+count what the external system has durably accepted, and can lag behind the
+staged counters when a write is retried. In practice, a Kafka sink's
+transactional writes land in both counters together, so the two rarely
+differ at query time.
 
 ## Paused
 
@@ -201,14 +200,14 @@ topic being deleted out from under the sink, or an Iceberg table's schema
 changing in a way the sink cannot reconcile with what it is writing.
 Materialize restarts the sink's dataflow to retry, so `stalled` alternates
 with `starting` and `running` in
-[`mz_sink_status_history`](#reviewing-the-full-history) as it does; if the
+[`mz_sink_status_history`](#reviewing-the-full-history) as it does. If the
 underlying cause has not cleared, the retry fails and the sink stalls again.
 A cause that will not clear on its own, such as an incompatible schema change
 on the Iceberg side, needs to be fixed in the external system before the sink
 can make progress again.
 
 For Iceberg sinks specifically, an unreachable or unhealthy catalog is a
-common stall cause in practice: Iceberg tables need periodic maintenance
+common stall cause in practice. Iceberg tables need periodic maintenance
 (compacting data and delete files, expiring old snapshots) on the catalog
 side, and a table whose maintenance has fallen behind can start rejecting the
 sink's writes even though nothing changed in Materialize.
