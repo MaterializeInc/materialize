@@ -18,7 +18,11 @@ pub struct UnaryAllModifiers;
 impl crate::func::EagerUnaryFunc for UnaryAllModifiers {
     type Input<'a> = Datum<'a>;
     type Output<'a> = Datum<'a>;
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &self,
+        a: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         unary_all_modifiers(a)
     }
     fn output_sql_type(

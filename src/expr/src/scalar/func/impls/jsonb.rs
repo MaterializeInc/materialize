@@ -12,7 +12,7 @@ use std::fmt;
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{Datum, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -102,7 +102,7 @@ impl EagerUnaryFunc for CastJsonbToNumeric {
     type Input<'a> = JsonbRef<'a>;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         match a.into_datum() {
             Datum::Numeric(mut num) => match self.0 {
                 None => Ok(num.into_inner()),
