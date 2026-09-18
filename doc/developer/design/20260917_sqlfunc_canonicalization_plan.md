@@ -11,7 +11,7 @@ about each: trait path, associated-type construction, output-method name and
 signature, nullability formula, and which modifiers are legal with which return
 type. One `generate` function drives emission for all three. Modifier legality and
 override-method emission become table driven, so the 19 duplicated `quote!` blocks
-and 18 hand-written rejections collapse to one helper and one loop. Capabilities then
+and 12 hand-written legality rejections collapse to one helper and one loop. Capabilities then
 arrive as data in a `Shape`, not as code copied per arm.
 
 **Tech Stack:** Rust, `syn` 3.x, `quote`, `proc-macro2`, `darling` for attribute
@@ -390,7 +390,7 @@ EOF
 ## Task 2: Route modifier validation through the table
 
 **Files:**
-- Modify: `src/expr-derive-impl/src/sqlfunc.rs` (add `Modifiers::iter`, replace the 18 rejection blocks)
+- Modify: `src/expr-derive-impl/src/sqlfunc.rs` (add `Modifiers::iter`, replace the 12 legality rejection blocks)
 - Modify: `src/expr-derive-impl/src/shape.rs` (add `Shape::reject_inapplicable`)
 - Test: `src/expr-derive-impl/src/lib.rs` (`mod test`)
 
@@ -552,7 +552,7 @@ git add src/expr-derive-impl/src/
 git commit -m "$(cat <<'EOF'
 expr-derive-impl: Validate modifiers against the shape tables
 
-Replaces 18 separately written rejections across the three generator arms with
+Replaces 12 separately written legality rejections across the three generator arms with
 one loop over the modifiers that are present, checked against the arity's
 table.
 
@@ -1174,7 +1174,7 @@ Collapses the `#[sqlfunc]` macro's three generator arms into one
 shape-parameterized path. `unary_func`, `binary_func`, and `variadic_func` were
 762 lines across three paths that agreed on almost everything: they each built the
 same eleven optional override methods with 19 near-identical `quote!` blocks,
-enforced modifier legality with 18 separately written rejections, and each repeated
+enforced modifier legality with 12 separately written rejections, and each repeated
 the emission of the struct, `Display`, `FuncName`, and the annotated function.
 
 A `Shape` enum now answers the six questions where the arities genuinely differ.
