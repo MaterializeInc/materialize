@@ -1432,8 +1432,7 @@ fn binary_func(
     Ok(crate::generate::emit(&emission, func, trait_impl))
 }
 
-/// Produce the `EagerVariadicFunc` impl. Struct, `Display`, `FuncName`, and function
-/// emission are centralized in `generate::emit`.
+/// Produce an `EagerVariadicFunc` implementation.
 fn variadic_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
