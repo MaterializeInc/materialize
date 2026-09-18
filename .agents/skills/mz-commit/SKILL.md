@@ -58,8 +58,14 @@ cargo test -p mz-compute-types --test func_registry
 
 * It fails when a function is added, removed, or has a changed property
   (nullability, error behavior, monotonicity, output type, sqlfunc
-  signature) or a changed `#[sqlfunc]` body. Regenerate the checked-in
-  snapshots, then review the diff under `src/compute-types/tests/snapshots/`:
+  signature) or a changed `#[sqlfunc]` body. If the failure names removed or
+  changed functions, or a body change that alters results, settle the
+  `LIR_VERSION` question below **before** regenerating. A rewrite at the old
+  version overwrites that version's entry in `func_registry_digests.json`
+  instead of adding a new one, no later check catches it, and that entry is
+  the only key back into git history for what the shipped version's
+  functions meant. Once the version is settled, regenerate the checked-in
+  snapshots and review the diff under `src/compute-types/tests/snapshots/`:
 
   ```
   REWRITE=1 cargo test -p mz-compute-types --test func_registry
@@ -76,8 +82,8 @@ cargo test -p mz-compute-types --test func_registry
   plain `#[sqlfunc]` functions need no sample.
 * **Removed or changed function, or a body change that alters results**: if
   the current `LIR_VERSION` has shipped in a release, bump it so stored plans
-  are replanned, then regenerate. An unshipped version is regenerated in
-  place. Treat the version as shipped when the latest release tag carries the
+  are replanned, and only then regenerate. An unshipped version is
+  regenerated in place. Treat the version as shipped when the latest release tag carries the
   same `LIR_VERSION`:
 
   ```
