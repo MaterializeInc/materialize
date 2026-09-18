@@ -5,22 +5,22 @@
 
 //! Code for extracting a peek result out of compute state/an arrangement.
 
-use std::iter::FusedIterator;
-use std::num::NonZeroI64;
-use std::ops::Range;
-
-use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, CursorList};
+use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, CursorList, cursor_list};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
+use std::iter::FusedIterator;
+use std::num::NonZeroI64;
+use std::ops::Range;
 use timely::order::PartialOrder;
+use timely::progress::Antichain;
 
 use crate::compute_state::PeekRowIterationTracker;
 
-/// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
-/// [`CursorList`] over the per-batch cursors.
+/// The merged cursor over all of a trace's batches: a [`CursorList`] over the per-batch
+/// cursors that [`TraceReader::batches_through`] hands out.
 pub(super) type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
 pub(super) type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
@@ -193,7 +193,11 @@ where
         row_iteration_limit: Option<usize>,
         rows_iterated: usize,
     ) -> Self {
-        let (cursor, storage) = trace_reader.cursor();
+        // `TraceReader` no longer builds cursors; take the batches and assemble one.
+        let batches = trace_reader
+            .batches_through(Antichain::new().borrow())
+            .expect("trace is not compacted beyond the empty frontier");
+        let (cursor, storage) = cursor_list(batches);
         Self::from_cursor(
             target_id,
             map_filter_project,

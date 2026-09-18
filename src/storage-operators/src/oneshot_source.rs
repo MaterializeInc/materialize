@@ -335,7 +335,7 @@ pub fn render_split_work<'scope, T, S, F>(
     PressOnDropButton,
 )
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + timely::order::TotalOrder,
     S: OneshotSource + Send + Sync + 'static,
     F: OneshotFormat + Send + Sync + 'static,
 {
@@ -407,7 +407,7 @@ pub fn render_fetch_work<'scope, T, S, F>(
     PressOnDropButton,
 )
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + timely::order::TotalOrder,
     S: OneshotSource + Sync + 'static,
     F: OneshotFormat + Sync + 'static,
 {
@@ -474,7 +474,7 @@ pub fn render_decode_chunk<'scope, T, F>(
     PressOnDropButton,
 )
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + timely::order::TotalOrder,
     F: OneshotFormat + 'static,
 {
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-decode_chunk".to_string(), scope.clone());
@@ -556,7 +556,7 @@ pub fn render_stage_batches_operator<'scope, T>(
     PressOnDropButton,
 )
 where
-    T: timely::progress::Timestamp,
+    T: timely::progress::Timestamp + timely::order::TotalOrder,
 {
     let persist_location = collection_meta.persist_location.clone();
     let shard_id = collection_meta.data_shard;

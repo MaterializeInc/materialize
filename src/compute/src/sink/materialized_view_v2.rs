@@ -769,7 +769,10 @@ mod write {
 
                 // Accept batch descriptions.
                 descs_input.for_each(|cap, data| {
-                    let cap = cap.retain(0);
+                    // The `mint` operator above emits one `cap_set.delayed(..)` per message.
+                    let cap = cap
+                        .retain_least(0)
+                        .expect("message stamped with no capabilities");
                     for desc in data.drain(..) {
                         state.absorb_batch_description(desc, cap.clone());
                     }
