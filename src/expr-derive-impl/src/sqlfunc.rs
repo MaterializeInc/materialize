@@ -32,7 +32,7 @@ pub fn sqlfunc(
 ) -> darling::Result<TokenStream> {
     let mut attr_args = darling::ast::NestedMeta::parse_meta_list(attr.clone())?;
 
-    // Check if the first attribute arg is a bare Path (struct name for variadic).
+    // Check if the first attribute arg is a bare Path (struct name).
     let struct_ty = match attr_args.first() {
         Some(darling::ast::NestedMeta::Meta(syn::Meta::Path(_))) => {
             let darling::ast::NestedMeta::Meta(syn::Meta::Path(path)) = attr_args.remove(0) else {
