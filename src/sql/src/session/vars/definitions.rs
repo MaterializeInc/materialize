@@ -2203,12 +2203,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_storage_introspection_logs,
-        desc: "forward storage timely logging events into compute's introspection dataflow",
-        default: false,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_session_timelines,
         desc: "strong session serializable isolation levels",
         default: false,
