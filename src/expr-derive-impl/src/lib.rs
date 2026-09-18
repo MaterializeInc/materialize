@@ -431,7 +431,7 @@ mod test {
         };
         let (output, input) = crate::test_sqlfunc(attr, item);
         assert!(
-            !output.contains("impl std :: fmt :: Display"),
+            !output.contains("impl std::fmt::Display"),
             "skip_display must suppress the Display impl, got:\n{output}"
         );
         insta::assert_snapshot!("skip_display", output, &input);
