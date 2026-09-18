@@ -33,6 +33,25 @@ Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.
 
+### Scalar function registry
+
+`cargo test -p mz-compute-types --test func_registry` snapshots every
+`UnaryFunc`, `BinaryFunc`, and `VariadicFunc` variant's properties and
+`#[sqlfunc]` body fingerprint into `src/compute-types/tests/snapshots/`. It
+fails whenever a scalar function is added, removed, or changed (anything under
+`src/expr/src/scalar/func*`). Regenerate with
+`REWRITE=1 cargo test -p mz-compute-types --test func_registry` and review the
+JSON diff. Never edit those files by hand. A new variant whose payload carries
+data needs a `Sample` in `src/expr/src/scalar/func/registry.rs`, and the panic
+names the function to add it to. Removals and property changes to a shipped
+`LIR_VERSION` require a bump, see the mz-commit skill for the decision
+procedure.
+
+The sibling `--test lir_schema` snapshots the serde schema of the whole LIR
+plan into `lir_v{LIR_VERSION}.json` and fails on shape changes anywhere under
+`src/compute-types/src/plan`, including `*Func` payloads. Regenerate with
+`REWRITE=1 cargo test -p mz-compute-types --test lir_schema`.
+
 Some tests require access to a metadata store.
 Set environment variables to `COCKROACH_URL=postgres://root@localhost:26257 METADATA_BACKEND_URL=postgres://root@localhost:26257`.
 
