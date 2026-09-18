@@ -49,8 +49,12 @@ pub fn sqlfunc(
 
     let tokens = match determine_arity(&func) {
         Arity::Nullary => Err(darling::Error::custom("Nullary functions not supported")),
-        Arity::Unary => generate(Shape::Unary, &func, modifiers, None, false, &attr),
-        Arity::Binary => generate(Shape::Binary, &func, modifiers, None, false, &attr),
+        Arity::Unary { has_self } => {
+            generate(Shape::Unary, &func, modifiers, struct_ty, has_self, &attr)
+        }
+        Arity::Binary { has_self } => {
+            generate(Shape::Binary, &func, modifiers, struct_ty, has_self, &attr)
+        }
         Arity::Variadic { has_self } => generate(
             Shape::Variadic,
             &func,
@@ -95,8 +99,8 @@ fn generate_test(_attr: TokenStream, _item: TokenStream, _name: &Ident) -> Token
 /// Arity classification for a function annotated with `#[sqlfunc]`.
 enum Arity {
     Nullary,
-    Unary,
-    Binary,
+    Unary { has_self: bool },
+    Binary { has_self: bool },
     Variadic { has_self: bool },
 }
 
@@ -152,8 +156,8 @@ fn determine_arity(func: &syn::ItemFn) -> Arity {
     } else {
         match effective_count {
             0 => Arity::Nullary,
-            1 => Arity::Unary,
-            2 => Arity::Binary,
+            1 => Arity::Unary { has_self },
+            2 => Arity::Binary { has_self },
             _ => unreachable!(),
         }
     }
