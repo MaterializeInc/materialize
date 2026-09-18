@@ -103,6 +103,7 @@ use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
 use crate::plan::statement::{StatementContext, StatementDesc, show};
 use crate::plan::typeconv::{self, CastContext, plan_hypothetical_cast};
+use crate::plan::with_options::WindowBucketWidth;
 use crate::plan::{
     Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation, WebhookValidationSecret,
     literal, transform_ast,
@@ -2270,7 +2271,11 @@ generate_extracted_config!(
     (ExpectedGroupSize, u64),
     (AggregateInputGroupSize, u64),
     (DistinctOnInputGroupSize, u64),
-    (LimitInputGroupSize, u64)
+    (LimitInputGroupSize, u64),
+    (
+        WindowBucketWidth,
+        crate::plan::with_options::WindowBucketWidth
+    )
 );
 
 /// Plans a SELECT query. The SELECT query may contain an intrusive ORDER BY clause.
@@ -2302,6 +2307,7 @@ fn plan_select_from_where(
 
     // Extract query options.
     let select_option_extracted = SelectOptionExtracted::try_from(s.options.clone())?;
+    let window_bucket_width = select_option_extracted.window_bucket_width.clone();
     let group_size_hints = GroupSizeHints::try_from(select_option_extracted)?;
 
     // Step 1. Handle FROM clause, including joins.
@@ -2856,12 +2862,38 @@ fn plan_select_from_where(
     // associated with any table.
     let scope = Scope::from_source(None, projection.into_iter().map(|(_expr, name)| name));
 
+    if let Some(width) = window_bucket_width {
+        stamp_window_bucket_width(&mut relation_expr, width);
+    }
+
     Ok(SelectPlan {
         expr: relation_expr,
         scope,
         order_by,
         project: project_key,
     })
+}
+
+/// Records the `WINDOW BUCKET WIDTH` hint on the window functions of one
+/// `SELECT`.
+///
+/// Only calls that do not already carry a value are stamped. A subquery is
+/// planned before the query containing it reaches here and has already stamped
+/// its own calls, so this leaves the innermost hint in place, which is the one
+/// the user wrote closest to the window.
+fn stamp_window_bucket_width(expr: &mut HirRelationExpr, width: WindowBucketWidth) {
+    #[allow(deprecated)]
+    let _ = expr.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _depth| {
+        let _ = e.visit_recursively_mut(0, &mut |_depth, e: &mut HirScalarExpr| {
+            if let HirScalarExpr::Windowing(window, _name) = e {
+                if window.bucket_width.is_none() {
+                    window.bucket_width = Some(width.clone());
+                }
+            }
+            Ok::<(), mz_ore::stack::RecursionLimitError>(())
+        });
+        Ok::<(), mz_ore::stack::RecursionLimitError>(())
+    });
 }
 
 fn plan_scalar_table_funcs(
@@ -3487,6 +3519,7 @@ fn plan_table_function_internal(
                                 }),
                                 partition_by: vec![],
                                 order_by: vec![],
+                                bucket_width: None,
                             })])
                         } else {
                             bail_unsupported!(format!(
@@ -5606,6 +5639,7 @@ fn plan_function<'a>(
                 }),
                 partition_by,
                 order_by: order_by_exprs,
+                bucket_width: None,
             }));
         }
         Func::ValueWindow(impls) => {
@@ -5633,6 +5667,7 @@ fn plan_function<'a>(
                 }),
                 partition_by,
                 order_by: order_by_exprs,
+                bucket_width: None,
             }));
         }
         Func::Aggregate(_) => {
@@ -5701,6 +5736,7 @@ fn plan_function<'a>(
                     }),
                     partition_by,
                     order_by: order_by_exprs,
+                    bucket_width: None,
                 }));
             }
         }
