@@ -282,4 +282,34 @@ mod test {
         let (output, input) = super::test_sqlfunc(attr, item);
         insta::assert_snapshot!("binary_multi_generic", output, &input);
     }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn unary_rejects_negate_by_name() {
+        let (output, _input) = crate::test_sqlfunc(
+            quote! { negate = to_unary!(super::Foo) },
+            quote! {
+                fn some_unary<'a>(a: i32) -> i32 { a }
+            },
+        );
+        assert!(
+            output.contains("negate") && output.contains("unary"),
+            "expected an error naming the modifier and the arity, got:\n{output}"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn unary_rejects_is_infinity_monotone() {
+        let (output, _input) = crate::test_sqlfunc(
+            quote! { is_infinity_monotone = false },
+            quote! {
+                fn some_unary<'a>(a: i32) -> i32 { a }
+            },
+        );
+        assert!(
+            output.contains("is_infinity_monotone"),
+            "is_infinity_monotone must be rejected on unary rather than ignored, got:\n{output}"
+        );
+    }
 }
