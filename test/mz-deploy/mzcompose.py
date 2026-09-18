@@ -3022,3 +3022,26 @@ def workflow_source_references_mysql(
             assert (
                 expected in result.stderr
             ), f"error missing {expected!r}:\n{result.stderr}"
+
+
+def workflow_version_check(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """A server on the same version as the CLI draws no version-skew notice.
+
+    The mz-deploy image and the materialized service are built from the same
+    tree, so their major and minor versions always agree here. That makes this a
+    regression test for the case that would otherwise be noise on every command
+    for every user: a false mismatch, whether from a parse failure on the
+    `mz_version` ParameterStatus or from the comparison taking patch or
+    pre-release into account.
+
+    A true mismatch is covered by unit tests in `client::version_skew`, which
+    can exercise both directions without a second server."""
+    setup_base(c)
+
+    with c.test_case("mz-deploy-version-check"):
+        result = run_mz_deploy(c, "basic/v1", "debug")
+        assert result.returncode == 0, f"debug failed: {result.stderr}"
+        combined = result.stdout + result.stderr
+        assert (
+            "than the server" not in combined
+        ), f"matching versions must not draw a skew notice:\n{combined}"
