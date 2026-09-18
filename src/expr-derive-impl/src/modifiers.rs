@@ -64,9 +64,7 @@ impl Modifiers {
     pub(crate) fn generates_test(&self) -> bool {
         self.test.unwrap_or(false)
     }
-}
 
-impl Modifiers {
     /// The method-producing modifiers that are present, in this method's own fixed
     /// order, which does not match any of the three per-arity tables in
     /// `crate::shape`. A caller that needs table order joins against
