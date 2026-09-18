@@ -26,8 +26,8 @@ pub(crate) enum Shape {
 /// A modifier that maps directly onto one optional trait method.
 ///
 /// Modifiers that do not produce a trait method, such as `sqlname`, `output_type`,
-/// `output_type_expr`, and `test`, are absent: `crate::generate::generate` handles
-/// those explicitly because they feed `Display`, the output-type body, or the
+/// `output_type_expr`, `test`, and `skip_display`, are absent: `crate::generate::generate`
+/// handles those explicitly because they feed `Display`, the output-type body, or the
 /// expansion decision instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modifier {

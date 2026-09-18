@@ -419,4 +419,21 @@ mod test {
         let (output, input) = crate::test_sqlfunc(attr, item);
         insta::assert_snapshot!("binary_self", output, &input);
     }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_skip_display() {
+        let attr = quote! { ExtractThing, skip_display = true, test = true };
+        let item = quote! {
+            fn extract_thing<'a>(&self, a: i64) -> i64 {
+                a + self.offset
+            }
+        };
+        let (output, input) = crate::test_sqlfunc(attr, item);
+        assert!(
+            !output.contains("impl std :: fmt :: Display"),
+            "skip_display must suppress the Display impl, got:\n{output}"
+        );
+        insta::assert_snapshot!("skip_display", output, &input);
+    }
 }

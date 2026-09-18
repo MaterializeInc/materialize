@@ -61,11 +61,14 @@ struct Codegen {
     /// The registry's record of this function's source, generated as members of the
     /// `FuncName` impl.
     source: TokenStream,
+    /// Suppresses the generated `Display` impl, so a call site whose SQL name
+    /// depends on struct state can supply its own.
+    skip_display: bool,
 }
 
 /// Wraps an arity's trait impl with the parts every arity shares: the unit-struct
-/// definition (unless `has_self`), the `Display` impl, the `FuncName` impl, and the
-/// annotated function itself.
+/// definition (unless `has_self`), the `Display` impl (unless `skip_display`), the
+/// `FuncName` impl, and the annotated function itself.
 fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStream {
     let func_name = &func.sig.ident;
     let Codegen {
@@ -73,12 +76,17 @@ fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStre
         has_self,
         sqlname,
         source,
+        skip_display,
     } = e;
 
-    let display_impl = quote! {
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#sqlname)
+    let display_impl = if *skip_display {
+        quote! {}
+    } else {
+        quote! {
+            impl std::fmt::Display for #struct_name {
+                fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str(#sqlname)
+                }
             }
         }
     };
@@ -343,6 +351,7 @@ pub(crate) fn generate(
         has_self,
         sqlname,
         source: sqlfunc_source(attr, func, &param_types_raw, output_ty_raw, &param_types),
+        skip_display: mods.skip_display(),
     };
     Ok(expand(&codegen, func, trait_impl))
 }
