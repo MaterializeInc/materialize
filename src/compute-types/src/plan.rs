@@ -214,8 +214,9 @@ impl std::fmt::Display for LirId {
 /// declared properties change. Two snapshot tests key off it: the schema
 /// snapshot in `tests/lir_schema.rs` against
 /// `tests/snapshots/lir_v{LIR_VERSION}.json`, and the function property
-/// registry in `tests/func_registry.rs` against
-/// `tests/snapshots/func_registry_v{LIR_VERSION}.json`.
+/// registry in `tests/func_registry.rs`, which records a digest of
+/// `tests/snapshots/func_registry.json` per version in
+/// `tests/snapshots/func_registry_digests.json`.
 pub const LIR_VERSION: u64 = 1;
 
 pub use constant_rows_serde::ConstantRows;

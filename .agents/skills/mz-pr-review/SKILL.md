@@ -35,6 +35,37 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 - Red flag: behavior change with no test changes.
 - For more testing guidelines, read `doc/developer/guide-testing.md`
 
+### LIR schema registry
+Applies when the diff touches `src/compute-types/src/plan/**` or the shape of
+a `*Func` variant's payload.
+- `src/compute-types/tests/snapshots/lir_v{N}.json` is regenerated in the
+  same PR, and the diff matches the intended format change. Red flag: a
+  serde-visible change to a plan type with no snapshot diff.
+- If `LIR_VERSION` in `src/compute-types/src/plan.rs` had shipped, it is
+  bumped and the old `lir_v{N}.json` is left untouched rather than rewritten.
+- `Row` and `EvalError` never appear directly in plan types, only as
+  `StableRow` / `StableEvalError`.
+
+### Scalar function registry
+Applies when the diff touches `UnaryFunc`, `BinaryFunc`, or `VariadicFunc`
+(`src/expr/src/scalar/func.rs`, `src/expr/src/scalar/func/**`, `#[sqlfunc]`
+bodies).
+- The registry snapshots under `src/compute-types/tests/snapshots/` are
+  regenerated in the same PR (`func_registry.json`,
+  `func_registry_source.json`, `func_registry_digests.json`). Red flag: a
+  function change with no snapshot diff, or a snapshot diff that was clearly
+  hand-edited.
+- Every new variant with a payload has a `Sample` in
+  `src/expr/src/scalar/func/registry.rs`, with a labeled second sample when a
+  property depends on the payload.
+- A removed function, a changed property, or a `body_fingerprint` change that
+  alters results for some input bumps `LIR_VERSION` in
+  `src/compute-types/src/plan.rs` if that version has shipped, and leaves the
+  old digest in `func_registry_digests.json` untouched. Additions need no
+  bump.
+- The PR description names the added, removed, and changed functions and,
+  for body changes, states whether results change.
+
 ### Code style (Rust)
 - **Imports:** `std` → external crates → `crate::`; one `use` per module; prefer `crate::` over `super::` in non-test code.
 - **Errors:** Structured with `thiserror`; no bare `anyhow!("...")`. `Display` should not print full error chain.
