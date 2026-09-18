@@ -79,7 +79,7 @@ impl DockerRuntime {
         let profile = Self::make_profile();
         // The ephemeral Docker container has no `_mz_deploy_server` cluster,
         // so bypass the usual session-cluster pin and use the server default.
-        let client = match Client::connect_with_profile_no_pin(profile).await {
+        let client = match Client::connect_sandbox(profile).await {
             Ok(client) => {
                 verbose!("Fast-path connect succeeded");
                 client
@@ -89,7 +89,7 @@ impl DockerRuntime {
                 self.ensure_container().await?;
                 let profile = Self::make_profile();
                 verbose!("Connecting to Materialize...");
-                let client = Client::connect_with_profile_no_pin(profile).await?;
+                let client = Client::connect_sandbox(profile).await?;
                 verbose!("Connected");
                 client
             }
@@ -146,9 +146,7 @@ impl DockerRuntime {
     }
 
     async fn container_is_healthy(&self) -> bool {
-        Client::connect_with_profile_no_pin(Self::make_profile())
-            .await
-            .is_ok()
+        Client::connect_sandbox(Self::make_profile()).await.is_ok()
     }
 
     async fn remove_container(&self) -> Result<(), DockerRuntimeError> {

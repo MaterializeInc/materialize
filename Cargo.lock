@@ -7181,6 +7181,7 @@ dependencies = [
  "reqwest 0.13.5",
  "ropey",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",
