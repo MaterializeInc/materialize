@@ -20,6 +20,21 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.43.0
+*Released to Materialize Cloud: 2026-09-24* <br>
+*Released to Materialize Self-Managed: 2026-09-25* <br>
+
+### Improvements {#v26.43-improvements}
+- **Vended credentials for Azure Data Lake Storage Iceberg catalogs**: Iceberg catalog connections using `STORAGE PROVIDER = 'adls'` with `ACCESS DELEGATION = 'vended-credentials'` now refresh the Azure Data Lake Storage credentials the catalog vends, so a sink no longer fails once the credentials it was given at startup expire.
+- **Swap usage in replica metrics**: `mz_internal.mz_cluster_replica_metrics` and `mz_cluster_replica_metrics_history` now report `swap_bytes` for each replica process, and `mz_internal.mz_cluster_replica_utilization` and `mz_cluster_replica_utilization_history` expose `swap_percent` as a share of the replica's heap allocation, so you can see how much of a replica's memory has spilled to swap.
+- **Per-process peaks in replica hydration history**: `mz_internal.mz_replica_hydration_history` now records one row per replica process, carrying that process's own memory and disk peaks, so resource skew across the processes of a multi-process replica is visible.
+
+### Bug Fixes {#v26.43-bug-fixes}
+- Fixed `DEALLOCATE`, `CLOSE`, `EXECUTE`, and `FETCH` failing with a "does not exist" error and aborting the surrounding transaction when the prepared statement or cursor name was given in double quotes; a name created over the extended wire protocol is stored exactly as it arrives, but these statements re-quoted it before looking it up, so drivers such as psqlODBC that prepare statements over the protocol and later deallocate them by quoted name could not release them.
+- Fixed an abort that dropped every session in the environment when a cursor declared over a `CLOSE` statement naming that same cursor was fetched from.
+- Fixed Iceberg sinks applying a commit's changes on top of newer table state when retrying, which could duplicate written data if an earlier attempt had in fact succeeded or another writer had taken over; the sink now inspects the catalog's table state before applying the commit.
+- Fixed `object_count` in `mz_internal.mz_replica_hydration_history` counting a replica's built-in introspection dataflows, which made it disagree with the rows recorded in `mz_internal.mz_object_hydration_history` for the same episode; introspection-only episodes are still recorded, with `object_count = 0`.
+
 ## v26.42.0
 *Released to Materialize Self-Managed: 2026-09-18* <br>
 
