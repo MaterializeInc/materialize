@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import distutils.core  # pyright: ignore
 import os
 import sys
 import tarfile
@@ -16,6 +15,7 @@ from email.parser import Parser
 from pathlib import Path
 from typing import Literal
 
+import distutils.core  # pyright: ignore
 import requests
 
 from materialize import spawn

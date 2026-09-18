@@ -8,25 +8,37 @@
 # by the Apache License, Version 2.0.
 
 [tool.black]
-target_version = ["py310"]
+target_version = ["py313"]
 # DEFAULT_EXCLUDES from https://github.com/psf/black/blob/main/src/black/const.py but without "build" directory since we use it in our source code. Instead exclude target and target-xcompile. The alternation is anchored on path components so file names containing an excluded word are not skipped.
 exclude = "/(\\.direnv|\\.eggs|\\.git|\\.hg|\\.ipynb_checkpoints|\\.mypy_cache|\\.nox|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.svn|\\.venv|\\.vscode|__pypackages__|_build|buck-out|dist|venv|target|target-xcompile|\\.terraform)/"
 
 [tool.ruff]
-target-version = "py310"
-select = [
-    "F",
-    "I",
-    "UP", # e.g. PEP585 (Python 3.10+) type annotations
-    "E711", # comparisons to none
-]
+# Keep in sync with the minimum version enforced by `bin/pyactivate`.
+target-version = "py313"
 extend-exclude = [
     "venv", "target",
     # This dbt adapter may be published elsewhere, so doesn't follow the same compatibility rules as our internal code.
     "misc/dbt-materialize",
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint]
+select = [
+    "F",
+    "I",
+    "UP", # e.g. PEP585 built-in generic type annotations
+    "E711", # comparisons to none
+    "RUF100", # `noqa` that suppresses nothing, including for unselected rules
+]
+ignore = [
+    # PEP 695 type parameters are scoped to the signature that declares them, so
+    # they are absent from module globals. `bin/pydoc` resolves annotations by
+    # name against those globals and runs under `-Werror`, so adopting the
+    # syntax fails the Doctests job on every generic it rewrites.
+    "UP046", # non-pep695-generic-class
+    "UP047", # non-pep695-generic-function
+]
+
+[tool.ruff.lint.isort]
 known-first-party = ["materialize"]
 
 [tool.pyright]
