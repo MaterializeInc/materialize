@@ -538,7 +538,7 @@ Expected: all tests pass, including both new ones.
 Run: `git status --short src/expr-derive-impl/src/snapshots/`
 
 Expected: no output. The error text changed from darling's `unknown_field` wording to
-the new `custom` wording, so if any of the 13 snapshots records a rejection message
+the new `custom` wording, so if any of the 16 snapshots records a rejection message
 this step will catch it. `mz_expr_derive_impl__test__unary_arena_fn.snap` records a
 `compile_error!`, but from `Error::custom` in the arity dispatch, which this task does
 not touch.
@@ -1081,7 +1081,7 @@ cargo check -p mz-expr 2>&1 | tail -5
 ```
 
 Expected: no snapshot output, and `mz-expr` checks clean. `mz-expr` is the real test
-of this task: it expands `#[sqlfunc]` 535 times, so a shape mismatch the 13 snapshots
+of this task: it expands `#[sqlfunc]` 535 times, so a shape mismatch the 16 snapshots
 miss will surface here.
 
 - [ ] **Step 6: Confirm the tripwire snapshot is intact**
@@ -1113,7 +1113,7 @@ The name is a real divergence rather than a wart to paper over.
 so `Shape::output_method` returns the name alongside the signature and emission
 uses whichever it gets.
 
-Generated output is unchanged. All 13 snapshots are byte identical, including the
+Generated output is unchanged. All 16 snapshots are byte identical, including the
 one asserting that unary functions still reject a `RowArena`.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
@@ -1182,7 +1182,7 @@ One of those is a naming divergence rather than a signature difference:
 `EagerVariadicFunc` has no `output_sql_type`, its core method is `output_type`, so
 `Shape::output_method` carries the name alongside the parameter list.
 
-No capability is added and no generated output changes. All 13 snapshots are byte
+No capability is added and no generated output changes. All 16 snapshots are byte
 identical, including the one asserting that unary functions still reject a
 `RowArena`, which is the tripwire proving this PR smuggled nothing in.
 
@@ -1982,7 +1982,7 @@ referenced nowhere else. `Shape::takes_arena` is introduced in Task 5 and flippe
 unary in Task 7.
 
 **Known risk the plan cannot remove.** Tasks 3, 4, and 5 each depend on reproducing
-the current emission order exactly, and the 13 snapshots are the only check. Each of
+the current emission order exactly, and the snapshots are the only check. Each of
 those tasks carries an explicit instruction to adjust the new code to match the
 snapshot rather than accepting a moved snapshot. If a snapshot moves and the diff is
 not pure ordering, that is a signal the refactor changed semantics, and the task

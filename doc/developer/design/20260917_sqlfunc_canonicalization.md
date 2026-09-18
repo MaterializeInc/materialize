@@ -220,9 +220,13 @@ Emission is shape independent and is written once: the choice between defining a
 unit struct and attaching to an external struct, the `Display` implementation or its
 suppression, `FuncName`, and re-emitting the annotated function.
 
-The expected result is that the 770 lines of arm code become roughly 180 lines of
-`generate`, 120 lines of `impl Shape`, and three entry points of about five lines
-each.
+The win is structural rather than a reduction in line count. The three arms collapse
+to one `generate`, three thin entry points, and a `Shape` that declares the six
+divergences as data, so a capability is added in one place. Total lines across the
+crate's modules go up slightly, because the descriptor machinery, the tests pinning
+it, and the doc comments stating the new contracts all cost lines that three
+copy-pasted arms did not. Measure the refactor by how many places a new capability
+has to touch, which goes from three to one, not by the diff's sign.
 
 One behavior change falls out of the table. Today `is_infinity_monotone` passed to a
 unary or variadic function is silently discarded, because both arms destructure it
@@ -270,7 +274,7 @@ graph TD
 ```
 
 **PR1, the refactor.** Introduces `Shape`, `Modifier`, and `generate`, and rewrites
-the three entry points to call it. No capability is added. All 13 existing snapshots
+the three entry points to call it. No capability is added. All 16 snapshots
 stay byte identical, including
 `mz_expr_derive_impl__test__unary_arena_fn.snap`, which today asserts
 `compile_error!("Unary functions do not yet support RowArena.")`. That snapshot is
