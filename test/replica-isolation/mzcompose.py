@@ -482,14 +482,24 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         if any(
             isinstance(check, ArrangedIntro) for check in disruption.compaction_checks
         ):
-            # Replica-targeted introspection readers hold back compaction of
-            # logging indexes across the cluster if their target cannot advance.
-            # Disable both subscribes and curated metric sinks so ArrangedIntro
-            # can check compaction on healthy replicas when another is failing.
-            # This must happen before cluster creation, since disabling metric
-            # sinks does not remove sinks that are already installed.
+            # Replica-targeted introspection readers (introspection subscribes
+            # and curated metric sinks) break the `ArrangedIntro` check when a
+            # replica is failing. A reader targeted at replica X is installed
+            # on X alone, but it holds a dependency read hold on the log
+            # collection it reads, and log collections have a single
+            # `GlobalId` shared by every replica in the cluster. The controller
+            # sends `AllowCompaction` for a log collection as one frontier
+            # broadcast to every replica, and only X can advance the targeted
+            # reader's write frontier to relax the hold. If X is failing, the
+            # hold pins the log collection's read frontier for every replica,
+            # so the healthy replicas never receive the `AllowCompaction`
+            # commands this check waits for. Disable both kinds of reader
+            # before cluster creation, since disabling metric sinks does not
+            # remove sinks that are already installed.
             #
-            # TODO(database-issues#8091): Isolate introspection read holds per replica.
+            # TODO(CPU-255, database-issues#8091): Give log collections a per-replica read hold so a
+            #                                      failing target doesn't pin compaction on healthy
+            #                                      replicas.
             c.sql(
                 """
                 ALTER SYSTEM SET enable_introspection_subscribes = false;
