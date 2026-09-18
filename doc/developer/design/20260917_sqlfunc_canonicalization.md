@@ -263,9 +263,9 @@ See Open questions.
 graph TD
     main["upstream/main"]
     P1["PR1 sqlfunc: unify the arms behind a shape descriptor<br/>snapshots byte-identical"]
-    P2["PR2 expr: EagerUnaryFunc::call takes and self and RowArena,<br/>struct_ty and has_self for unary and binary, skip_display"]
+    P2["PR2 expr: EagerUnaryFunc::call takes a RowArena,<br/>struct_ty and has_self for unary and binary, skip_display"]
     P3["PR3 expr: direct-unwrap LazyBinaryFunc"]
-    P4["PR4..N conversions"]
+    P4["PR4..PR23 conversions, one per source file"]
     main --> P1 --> P2 --> P3 --> P4
 ```
 
@@ -297,9 +297,24 @@ reduction in `cargo llvm-lines -p mz-expr` (1,289,072 to 1,232,567), elimination
 in per-variant binary dispatch assembly (949 instructions to 726). Those numbers
 were taken against a May 2026 tree and must be re-measured.
 
-**PR4 onward, the conversions.** Each converts hand-written implementations to
-`#[sqlfunc]` and deletes the originals. The convertible functions span 20 files, so
-the cut is discussed under Open questions.
+**PR4 through PR23, the conversions.** One pull request per source file, converting
+every convertible implementation in that file to `#[sqlfunc]`, deleting the
+hand-written originals, and removing the corresponding `func_name!` entries. The
+convertible functions span 20 files, so there are 20 conversion pull requests.
+
+One file is the cut rule, applied without exception. No file is subdivided and no
+two files are combined, including the twelve files that hold a single function each.
+The alternative considered was grouping by function family, which would have reduced
+the count to eight, but it mixes two cut rules: some units would be a file and
+others a family spanning several files. A single rule makes each unit's boundary
+predictable from its name and makes the stack's shape obvious without consulting a
+table.
+
+Order within the twenty is by ascending risk, so the pattern is established on the
+cheapest reviews first. The twelve single-function files come first, then
+`impls/list.rs`, `impls/map.rs`, `impls/record.rs`, `impls/date.rs`, and
+`impls/time.rs`, then `impls/string.rs` at eleven functions, and `impls/timestamp.rs`
+at sixteen last.
 
 ### The conversion PRs share one file
 
@@ -314,13 +329,18 @@ trait implementation.
 Fifty-two of the 53 conversions delete a line from that block. `RangeCreate` is the
 exception: it has no entry today and gains a generated one.
 
-The practical consequence is that every conversion PR touches
-`src/expr/src/scalar/func.rs`, so the stack needs a restack of every branch above a
-landing rather than a clean rebase of independent branches. The entries are sorted
-alphabetically and the proposed groupings do not map onto contiguous runs, for
-example the ten numeric-scale casts are interleaved with `CastList*` and `CastMap*`,
-so adjacent-line conflicts should be expected rather than hoped against. This argues
-for fewer and larger conversion PRs than the file-granular default.
+The practical consequence is that all 20 conversion pull requests touch
+`src/expr/src/scalar/func.rs`, so each landing requires restacking every branch above
+it rather than rebasing independent branches. The entries are sorted alphabetically
+and a file's functions are not a contiguous run, for example `impls/int32.rs`
+contributes `CastInt32ToNumeric` while the neighbouring entries come from other
+files, so adjacent-line conflicts should be expected rather than hoped against.
+
+This is the accepted cost of the one-file cut rule. The conflicts are mechanical,
+since every conversion only ever deletes lines from this block and no two pull
+requests delete the same line. Resolving them means keeping both sides' deletions.
+The stack is landed sequentially, which the repository requires anyway because it
+squashes on merge.
 
 ### Conversion inventory
 
@@ -460,20 +480,6 @@ gain: the hand-written bodies are already correct and readable, and suppression 
 one flag.
 
 ## Open questions
-
-**How should the 53 conversions be cut into pull requests?** The agreed granularity
-was one PR per source file, on the expectation of 12 files. The convertible
-functions actually span 20 files, and 12 of those contain a single function, mostly
-the near-identical `Cast*ToNumeric` family. Twenty pull requests for 53 functions is
-a large number of CI builds for changes that are individually trivial. A grouping
-that preserves file-level reviewability while cutting the build count to eight would
-be: the ten numeric-scale casts as one PR, `date.rs`, `time.rs`, the eight
-compound-type functions across `array.rs`, `list.rs`, `map.rs`, `range.rs`, and
-`record.rs` as one PR, `char.rs`, the six `CastStringTo*` functions, the five
-regular expression functions, and `timestamp.rs`. The shared `func_name!` block
-strengthens the case for the smaller number, since every additional conversion PR is
-another branch to restack through the same file. This needs a decision before the
-plan is written, and until it is made PR4 onward have no defined boundaries.
 
 **Does `EagerBinaryFunc::call` also need `&'a self`?** PR2 gives the unary trait an
 arena but leaves all three receivers as plain `&self`. If a stateful binary function
