@@ -1,0 +1,63 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(\n    could_error = true,\n    output_type = i16,\n    inverse = None,\n    is_monotone = true,\n    preserves_uniqueness = true,\n    is_eliminable_cast = false,\n    sqlname = \"unary_all_modifiers\",\n)]\nfn unary_all_modifiers<'a>(a: Datum<'a>) -> Datum<'a> {\n    a\n}\n"
+---
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+pub struct UnaryAllModifiers;
+impl crate::func::EagerUnaryFunc for UnaryAllModifiers {
+    type Input<'a> = Datum<'a>;
+    type Output<'a> = Datum<'a>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+        unary_all_modifiers(a)
+    }
+    fn output_sql_type(
+        &self,
+        input_type: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = <i16>::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+    fn could_error(&self) -> bool {
+        true
+    }
+    fn introduces_nulls(&self) -> bool {
+        <i16 as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
+    }
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+    fn is_monotone(&self) -> bool {
+        true
+    }
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
+}
+impl std::fmt::Display for UnaryAllModifiers {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("unary_all_modifiers")
+    }
+}
+impl crate::func::FuncName for UnaryAllModifiers {
+    const NAME: &'static str = stringify!(unary_all_modifiers);
+}
+fn unary_all_modifiers<'a>(a: Datum<'a>) -> Datum<'a> {
+    a
+}
