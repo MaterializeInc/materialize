@@ -439,6 +439,15 @@ pub(super) async fn purify_source_exports(
 
     super::validate_source_export_names(&requested_exports)?;
 
+    if (!exclude_constraints.is_empty() || exclude_all_constraints) && requested_exports.len() != 1
+    {
+        sql_bail!(
+            "EXCLUDE CONSTRAINTS and EXCLUDE ALL CONSTRAINTS apply to exactly one table, \
+             but {} tables were referenced",
+            requested_exports.len()
+        );
+    }
+
     let table_oids: Vec<_> = requested_exports
         .iter()
         .map(|r| r.meta.postgres_desc().expect("is postgres").oid)
