@@ -93,6 +93,13 @@ pub async fn system_parameter_sync(
             backend.push(&mut params).await;
         }
 
+        // The environment-wide values this tick read are now in the catalog, so
+        // the same read's rules can be resolved against them. This is what makes
+        // the file a create-time fold evaluates and the baseline it judges that
+        // file against the same file's; see
+        // `SystemParameterFrontend::published_config_file`.
+        frontend.publish_config_file();
+
         // Reconcile the scoped (per-cluster and per-replica) parameters. We do
         // this every tick (independent of whether the environment-wide values
         // changed) so the overrides track the current set of live objects.
@@ -108,6 +115,16 @@ async fn sync_scoped_params(
     frontend: &SystemParameterFrontend,
     params: &SynchronizedParameters,
 ) {
+    // The desired state below is complete: every override absent from it is
+    // pruned. A frontend with no information about the scoped parameters (a
+    // config-sync file that is missing, unreadable, or not a JSON object) would
+    // therefore have this reconcile durably drop every override, and restore it
+    // once the file is readable again. Skip instead, leaving the current overrides
+    // in place.
+    if !frontend.has_scoped_desired_state() {
+        return;
+    }
+
     let catalog = client.catalog_snapshot_expensive().await;
 
     // Push the desired state to the coordinator, which holds the working copy
