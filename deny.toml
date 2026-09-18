@@ -21,9 +21,15 @@ skip = [
     # One-time exception for base64 due to its prevalence in the crate graph.
     { name = "base64", version = "0.13.1" },
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
-    # transitively depends on. They just released v2.0 which not all crates have
-    # migrated to yet.
+    # transitively depends on, so major versions linger for years. We are on v3;
+    # roughly 60 transitive dependencies still pull v2, among them `prost-build`,
+    # `tonic-build`, `kube-derive`, `zerocopy-derive`, and `tracing-attributes`.
+    # A few stragglers still pull v1.
     { name = "syn", version = "1.0.107" },
+    { name = "syn", version = "2.0.119" },
+    # `prettyplease` exposes `syn` types in its API, so `prost-build` holds the
+    # v2-based release back until it moves to `syn` v3.
+    { name = "prettyplease", version = "0.2.37" },
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
     { name = "ordered-float", version = "2.10.1" },
     { name = "ordered-float", version = "4.6.0" },
@@ -113,6 +119,10 @@ skip = [
     { name = "darling_macro", version = "0.21.2" },
     { name = "darling_core", version = "0.21.2" },
     { name = "darling", version = "0.21.2" },
+    # `kube-derive` and `serde_with_macros` are still on the `syn` v2 release.
+    { name = "darling_macro", version = "0.23.0" },
+    { name = "darling_core", version = "0.23.0" },
+    { name = "darling", version = "0.23.0" },
     { name = "typed-builder", version = "0.20.1" },
     { name = "typed-builder-macro", version = "0.20.1" },
     # chrono-tz

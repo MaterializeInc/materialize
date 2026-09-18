@@ -1384,6 +1384,15 @@ no-longer-warranted
 
 > DROP TABLE cc_burst_e2e_t
 
+# NOTE: The next section covers a singleton source riding a hydration burst,
+# which requires the two-cluster replica topology: on a unified cluster the
+# blocking mz_sleep gate starves co-hosted sources and their command
+# processing outright, rather than merely delaying hydration. The topology is
+# baked in at replica provisioning, so pinning the parameter here pins it for
+# all clusters created in this section.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_unified_cluster = false
+
 # ----- Hydration burst: a single-replica source runs on the burst -----
 #
 # Keep both replicas unhydrated with a slow compute dataflow, then force a
@@ -1523,6 +1532,9 @@ DROP TABLE public.cc_burst_source_t;
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET enable_unified_cluster
 
 # ----- Direct-path invariants on scheduled clusters -----
 

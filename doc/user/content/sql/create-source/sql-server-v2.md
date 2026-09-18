@@ -99,6 +99,10 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 {{% upstream-schema-change-behavior connector="sql-server" %}}
 
+## Source failure states and recovery
+
+{{% include-headless "/headless/sql-server-failure-states" %}}
+
 ## Example
 
 {{< important >}}

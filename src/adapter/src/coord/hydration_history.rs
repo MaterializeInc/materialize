@@ -510,11 +510,10 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             ORDER BY e.started_at DESC
             LIMIT 1
         ),
-        -- Process-lifetime resource high-water marks, and how many processes
-        -- have reported them.
+        -- Process-lifetime resource high-water marks for each process.
         resources AS (
             SELECT
-                count(DISTINCT process_id) AS process_count,
+                process_id,
                 max(value) FILTER (
                     WHERE source = 'cgroup' AND metric = 'memory_peak'
                 ) AS peak_memory_bytes,
@@ -527,8 +526,9 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                     )
                 ) AS peak_disk_bytes
             FROM mz_introspection.mz_cluster_replica_resource_usage
+            GROUP BY process_id
         ),
-        -- The history row to write, held back until every configured process
+        -- The history rows to write, held back until every configured process
         -- has reported resource usage and dropped once the episode has aged
         -- past the retention cutoff.
         candidate AS (
@@ -540,10 +540,11 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                 e.object_count,
                 r.peak_memory_bytes,
                 r.peak_disk_bytes,
-                'hydrated'::text AS status
+                'hydrated'::text AS status,
+                r.process_id
             FROM episode AS e
             CROSS JOIN resources AS r
-            WHERE r.process_count = {process_count}::uint8
+            WHERE (SELECT count(*) FROM resources) = {process_count}::uint8
               AND e.finished_at >= TIMESTAMPTZ '{cutoff}'
         )
         -- Skip episodes the history already covers: a recorded row finishing
@@ -588,7 +589,7 @@ fn replica_retention_sql(cutoff: &str) -> String {
         "SELECT * FROM (
             SELECT
                 replica_id, cluster_id, started_at, finished_at, object_count,
-                peak_memory_bytes, peak_disk_bytes, status
+                peak_memory_bytes, peak_disk_bytes, status, process_id
             FROM mz_internal.mz_replica_hydration_history
             WHERE finished_at < TIMESTAMPTZ '{cutoff}'
             ORDER BY finished_at
@@ -993,7 +994,10 @@ mod tests {
             normalized_sql.contains("ORDER BY e.started_at DESC LIMIT 1"),
             "{sql}"
         );
-        assert!(sql.contains("r.process_count = 3::uint8"), "{sql}");
+        assert!(
+            sql.contains("(SELECT count(*) FROM resources) = 3::uint8"),
+            "{sql}"
+        );
         assert!(sql.contains("WHERE t.export_id NOT LIKE 't%'"), "{sql}");
         assert!(!sql.contains("WHERE t.export_id LIKE 'u%'"), "{sql}");
         assert!(!sql.contains("mz_object_global_ids"), "{sql}");

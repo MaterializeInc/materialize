@@ -780,8 +780,11 @@ dataflow has hydrated.
 By default, rows are retained for 30 days while collection is enabled. Recording
 is best effort, and only the latest completed episode visible in each collection
 is recorded. Resource peaks cover the replica processes' lifetimes through
-collection, not only the hydration episode. On a multi-process replica, the
-table records the largest peak reported by any process.
+collection, not only the hydration episode. Each episode has one row per process,
+so memory and disk peaks can be compared across processes to identify skew.
+Episode timing and object count describe the whole replica, not each process.
+Do not sum object counts across process rows. Summing process peaks does not
+give a simultaneous replica-wide peak, since they can occur at different times.
 
 {{< note >}}
 **Multi-process replicas.** `peak_memory_bytes` is a single process's
@@ -806,9 +809,10 @@ columns to choose a cluster size, see [Optimize cluster size](/clusters/sizing/)
 | `started_at`        | [`timestamp with time zone`] | The earliest maintained compute dataflow installation in the hydration episode.                                         |
 | `finished_at`       | [`timestamp with time zone`] | The latest maintained compute dataflow hydration in the hydration episode.                                               |
 | `object_count`      | [`uint8`]                    | The number of maintained compute dataflows in the hydration episode. Includes the replica's system introspection dataflows, so it exceeds the number of indexes and materialized views you created. |
-| `peak_memory_bytes` | [`uint8`]                    | The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
-| `peak_disk_bytes`   | [`uint8`]                    | The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
+| `peak_memory_bytes` | [`uint8`]                    | The process-lifetime cgroup memory high-water mark when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
+| `peak_disk_bytes`   | [`uint8`]                    | The process-lifetime scratch-filesystem or swap high-water mark when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
 | `status`            | [`text`]                     | The hydration episode's status. Currently always `hydrated`.                                                             |
+| `process_id`        | [`uint8`]                    | The ID of a process within the replica. Episode timing and object_count are replica-wide and repeated for each process. |
 
 ## `mz_object_transitive_dependencies`
 
