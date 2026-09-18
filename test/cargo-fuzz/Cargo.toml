@@ -14,8 +14,9 @@
 # the fuzz crates' dependency graph actually uses (root entries with no consumer
 # here, currently `duckdb` and `postgres_array`, are omitted to avoid cargo's
 # "patch was not used in the crate graph" warnings). Every entry that IS present
-# must match the root's rev/version verbatim. If a fuzz crate gains a dependency
-# that needs another patched crate, copy that entry from the root.
+# must match the root's rev/version verbatim, which `bin/lint-cargo` enforces.
+# If a fuzz crate gains a dependency that needs another patched crate, copy that
+# entry from the root.
 
 [workspace]
 resolver = "2"
@@ -51,9 +52,6 @@ postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 
-# Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
-
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
@@ -69,7 +67,7 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `mz_v0.9.0` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+# All changes should go to the `mz_v0.10.x` branch.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }

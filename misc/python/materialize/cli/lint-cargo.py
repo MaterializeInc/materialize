@@ -146,6 +146,51 @@ def check_fuzz_versions_mirror_root(workspace: Workspace) -> bool:
     return success
 
 
+def check_fuzz_patches_mirror_root(workspace: Workspace) -> bool:
+    """Checks that the `[patch.crates-io]` entries of the cargo-fuzz workspace
+    (test/cargo-fuzz) match the root workspace's.
+
+    A patch that does not apply is not an error to cargo: it lands in
+    `[[patch.unused]]` and the crate resolves from crates.io instead, with only
+    a warning. So a fork revision that drifts from the root here silently builds
+    the fuzz targets against a different crate than production, and fails
+    whenever the fork carries API the published crate lacks.
+
+    The fuzz workspace may omit a root entry that nothing in its graph depends
+    on, since cargo warns about patches it cannot apply, but it may not carry an
+    entry the root does not have, and every entry it shares with the root must
+    be identical."""
+
+    with open(MZ_ROOT / "Cargo.toml") as f:
+        root_patches = toml.load(f).get("patch", {}).get("crates-io", {})
+    with open(MZ_ROOT / "test" / "cargo-fuzz" / "Cargo.toml") as f:
+        fuzz_patches = toml.load(f).get("patch", {}).get("crates-io", {})
+
+    success = True
+    for name, spec in sorted(fuzz_patches.items()):
+        if name not in root_patches:
+            print(
+                f"test/cargo-fuzz/Cargo.toml: {name} is patched here but not in "
+                f"the root Cargo.toml",
+                file=sys.stderr,
+            )
+            success = False
+        elif spec != root_patches[name]:
+            print(
+                f"test/cargo-fuzz/Cargo.toml: {name} = {spec} must match the "
+                f"root Cargo.toml's {name} = {root_patches[name]}",
+                file=sys.stderr,
+            )
+            success = False
+    if not success:
+        print(
+            "\nhint: copy the entry from the root `[patch.crates-io]` verbatim, "
+            "or drop it here if the root no longer patches that crate.",
+            file=sys.stderr,
+        )
+    return success
+
+
 def main() -> None:
     workspace = Workspace(MZ_ROOT)
     lints = [
@@ -153,6 +198,7 @@ def main() -> None:
         check_default_members,
         check_workspace_dependencies,
         check_fuzz_versions_mirror_root,
+        check_fuzz_patches_mirror_root,
     ]
     # Run every lint, then combine. `success and lint(...)` would short-circuit
     # and skip the remaining lints after the first failure, under-reporting.
