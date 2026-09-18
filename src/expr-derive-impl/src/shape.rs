@@ -13,7 +13,7 @@
 //! `EagerBinaryFunc`, and `EagerVariadicFunc`. Adding a modifier to an arity means
 //! adding a row to that arity's table here, not writing expansion code.
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
 /// The three scalar function arities the macro generates for.
@@ -27,9 +27,9 @@ pub(crate) enum Shape {
 /// A modifier that maps directly onto one optional trait method.
 ///
 /// Modifiers that do not produce a trait method, such as `sqlname`, `output_type`,
-/// `output_type_expr`, and `test`, are absent: `crate::sqlfunc`'s generator arms
-/// handle those explicitly because they feed `Display`, the output-type body, or
-/// the expansion decision instead.
+/// `output_type_expr`, and `test`, are absent: `crate::generate::generate` handles
+/// those explicitly because they feed `Display`, the output-type body, or the
+/// expansion decision instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modifier {
     CouldError,
@@ -134,6 +134,85 @@ impl Shape {
             Shape::Variadic => "variadic",
         }
     }
+
+    /// The trait the generated impl implements.
+    pub(crate) fn trait_path(&self) -> TokenStream {
+        match self {
+            Shape::Unary => quote! { crate::func::EagerUnaryFunc },
+            Shape::Binary => quote! { crate::func::binary::EagerBinaryFunc },
+            Shape::Variadic => quote! { crate::func::variadic::EagerVariadicFunc },
+        }
+    }
+
+    /// The name and sole parameter of the trait method that computes the output
+    /// `SqlColumnType`.
+    ///
+    /// `EagerVariadicFunc` declares no `output_sql_type`. Its core method is named
+    /// `output_type` and takes the SQL column types directly, where the unary and
+    /// binary traits declare `output_sql_type` and keep `output_type` as a wrapper
+    /// over `ReprColumnType`.
+    pub(crate) fn output_method(&self) -> (Ident, TokenStream) {
+        let span = Span::call_site();
+        match self {
+            Shape::Unary => (
+                Ident::new("output_sql_type", span),
+                quote! { input_type: mz_repr::SqlColumnType },
+            ),
+            Shape::Binary => (
+                Ident::new("output_sql_type", span),
+                quote! { input_types: &[mz_repr::SqlColumnType] },
+            ),
+            Shape::Variadic => (
+                Ident::new("output_type", span),
+                quote! { input_types: &[mz_repr::SqlColumnType] },
+            ),
+        }
+    }
+
+    /// Whether the trait's `call` receives a `&'a RowArena`.
+    pub(crate) fn takes_arena(&self) -> bool {
+        match self {
+            Shape::Unary => false,
+            Shape::Binary | Shape::Variadic => true,
+        }
+    }
+
+    /// The tail of the output-type method: the nullability decision and the
+    /// `SqlColumnType` the method returns.
+    ///
+    /// The caller binds `output`, `nullable`, and `propagates_nulls`, and names the
+    /// input parameter as [`Shape::output_method`] spells it. `checks` are
+    /// per-position nullability checks over `input_types`; unary receives a single
+    /// column type, so it has no position to check and ignores them.
+    ///
+    /// The result is nullable when the function itself introduces nulls, when a
+    /// parameter that rejects NULL is handed a nullable input, because the runtime
+    /// conversion then rejects the NULL, or when the function propagates nulls and
+    /// some input is nullable, because the optimizer short-circuits an all-NULL call.
+    pub(crate) fn nullability(&self, checks: &[TokenStream]) -> TokenStream {
+        match self {
+            Shape::Unary => quote! {
+                output.nullable(nullable || (propagates_nulls && input_type.nullable))
+            },
+            Shape::Binary => quote! {
+                let non_nullable_input_is_nullable = false #(#checks)*;
+                let inputs_nullable = input_types.iter().any(|it| it.nullable);
+                let is_null = nullable
+                    || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable);
+                output.nullable(is_null)
+            },
+            Shape::Variadic => quote! {
+                let non_nullable_input_is_nullable = false #(#checks)*;
+                let inputs_nullable = input_types.iter().any(|it| it.nullable);
+                output.nullable(
+                    nullable
+                    || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable)
+                )
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -198,6 +277,32 @@ mod tests {
         assert_eq!(ret(Shape::Unary), ReturnTy::Bool);
         assert_eq!(ret(Shape::Binary), ReturnTy::BoolPair);
         assert_eq!(ret(Shape::Variadic), ReturnTy::Bool);
+    }
+
+    #[mz_ore::test]
+    fn variadic_output_method_is_named_output_type() {
+        let (unary, _) = Shape::Unary.output_method();
+        let (binary, _) = Shape::Binary.output_method();
+        let (variadic, _) = Shape::Variadic.output_method();
+        assert_eq!(unary.to_string(), "output_sql_type");
+        assert_eq!(binary.to_string(), "output_sql_type");
+        assert_eq!(variadic.to_string(), "output_type");
+    }
+
+    #[mz_ore::test]
+    fn only_unary_takes_a_single_column_type() {
+        let (_, unary) = Shape::Unary.output_method();
+        let (_, binary) = Shape::Binary.output_method();
+        assert!(unary.to_string().contains("SqlColumnType"));
+        assert!(!unary.to_string().contains("["));
+        assert!(binary.to_string().contains("["));
+    }
+
+    #[mz_ore::test]
+    fn unary_is_the_only_shape_without_an_arena() {
+        assert!(!Shape::Unary.takes_arena());
+        assert!(Shape::Binary.takes_arena());
+        assert!(Shape::Variadic.takes_arena());
     }
 
     #[mz_ore::test]
