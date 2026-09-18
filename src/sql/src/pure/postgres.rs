@@ -371,10 +371,10 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     mut exclude_columns: Vec<UnresolvedItemName>,
-    // NOTE: `exclude_constraints` and `exclude_all_constraints` are only ever
-    // non-empty/true for `CREATE TABLE .. FROM SOURCE`, which purifies exactly
-    // one export, so constraint names are validated against that single
-    // table's constraints.
+    // NOTE: at most one of `exclude_constraints` and `exclude_all_constraints`
+    // may be set, and only when exactly one export is purified, as `CREATE
+    // TABLE .. FROM SOURCE` does, since constraint names are validated against
+    // that single table's constraints. Both invariants are enforced below.
     exclude_constraints: &BTreeSet<String>,
     exclude_all_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
@@ -429,6 +429,18 @@ pub(super) async fn purify_source_exports(
     }
 
     super::validate_source_export_names(&requested_exports)?;
+
+    if !exclude_constraints.is_empty() && exclude_all_constraints {
+        sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
+    }
+    if (!exclude_constraints.is_empty() || exclude_all_constraints) && requested_exports.len() != 1
+    {
+        sql_bail!(
+            "EXCLUDE CONSTRAINTS and EXCLUDE ALL CONSTRAINTS apply to exactly one table, \
+             but {} tables were referenced",
+            requested_exports.len()
+        );
+    }
 
     let table_oids: Vec<_> = requested_exports
         .iter()
