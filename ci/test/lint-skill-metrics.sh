@@ -15,6 +15,10 @@
 # the product no longer exports is worse than no reference, because a release
 # verifier reads the resulting empty query as a healthy zero.
 #
+# Also runs the doctests in the skill's query builder, which pin the shape of
+# the expressions it emits. Both failure modes are the same one: an expression
+# that looks right and silently measures the wrong fleet.
+#
 # Names the catalog structurally cannot see are exempted one at a time in
 # .agents/skills/mz-release-signoff/scripts/metrics-allowlist.txt, with a reason.
 #
@@ -29,5 +33,7 @@ set -euo pipefail
 ci_uncollapsed_heading "Linting mz-release-signoff metric names"
 
 try python3 .agents/skills/mz-release-signoff/scripts/lint_metrics.py
+
+try python3 -m doctest .agents/skills/mz-release-signoff/scripts/build-range-query.py
 
 try_status_report
