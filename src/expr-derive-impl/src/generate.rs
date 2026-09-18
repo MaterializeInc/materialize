@@ -157,9 +157,9 @@ fn variadic_params(
 /// Generates the trait impl for one `#[sqlfunc]`-annotated function, together with the
 /// items [`expand`] wraps around it.
 ///
-/// `struct_ty` names the generated struct when the call site spells one, which only
-/// the variadic arity accepts. `has_self` says the annotated function takes a
-/// receiver, so the trait's `call` dispatches through it.
+/// `struct_ty` names the generated struct when the call site spells one. `has_self`
+/// says the annotated function takes a receiver, so the trait's `call` dispatches
+/// through it.
 pub(crate) fn generate(
     shape: Shape,
     func: &syn::ItemFn,
