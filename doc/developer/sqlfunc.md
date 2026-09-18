@@ -101,6 +101,14 @@ Monotone functions map ranges to ranges: given a range of possible inputs, the r
 * **Default:** `false` for unary and variadic; `(false, false)` for binary
 * **Applies to:** all arities
 
+### `is_infinity_monotone`
+
+Whether `is_monotone`'s endpoint-sampling guarantee still holds when an operand may be infinite.
+
+* **Type:** boolean expression
+* **Default:** `true`
+* **Applies to:** binary only
+
 ### `preserves_uniqueness`
 
 Whether the function is injective: if `f(x) = f(y)` then `x = y`.
