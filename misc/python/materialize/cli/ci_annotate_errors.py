@@ -83,6 +83,12 @@ ERROR_RE = re.compile(
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
     | fatal\ runtime\ error: # stack overflow
+    # glibc heap-consistency aborts: the process dies with SIGABRT and no
+    # Rust panic, so these lines are the only trace
+    | (malloc|free|realloc|munmap_chunk)\(\):
+    | double\ free\ or\ corruption
+    | corrupted\ (size\ vs\.\ prev_size|double-linked\ list)
+    | stack\ smashing\ detected
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
     | \[SQLancer\+\+\] # Unknown errors are logged
