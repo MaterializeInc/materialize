@@ -16,7 +16,7 @@ use syn::{Expr, Lifetime, Lit};
 use crate::shape::{Modifier, Shape};
 
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
-#[derive(Debug, Clone, Default, darling::FromMeta)]
+#[derive(Debug, Default, darling::FromMeta)]
 pub(crate) struct Modifiers {
     /// An optional expression that evaluates to a boolean indicating whether the function is
     /// monotone with respect to its arguments. Defined for unary and binary functions.
@@ -37,9 +37,9 @@ pub(crate) struct Modifiers {
     /// be specified.
     pub(crate) is_infix_op: Option<Expr>,
     /// The output type of the function, if it cannot be inferred. Applies to all functions.
-    output_type: Option<syn::Path>,
+    pub(crate) output_type: Option<syn::Path>,
     /// The output type of the function as an expression. Applies to binary and variadic functions.
-    output_type_expr: Option<Expr>,
+    pub(crate) output_type_expr: Option<Expr>,
     /// Optional expression evaluating to a boolean indicating whether the function could error.
     /// Applies to all functions.
     pub(crate) could_error: Option<Expr>,
@@ -62,7 +62,7 @@ impl Modifiers {
     /// `Shape::modifiers()` by `Modifier` instead.
     ///
     /// Modifiers that do not produce a trait method are excluded, because
-    /// `crate::sqlfunc`'s generator arms consume those by name.
+    /// `crate::generate::generate` consumes those by name.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Modifier, &Expr)> + '_ {
         [
             (Modifier::CouldError, self.could_error.as_ref()),
@@ -98,7 +98,7 @@ impl Modifiers {
 }
 
 /// Errors if `mods` carries a method-producing modifier `shape` does not accept.
-fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
+pub(crate) fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
     for (modifier, _) in mods.iter() {
         let accepted = shape
             .modifiers()
@@ -117,7 +117,7 @@ fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
 /// can't use `String` or `syn::Expr` directly.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum SqlName {
     /// A literal string.
     Literal(syn::Lit),
@@ -184,10 +184,8 @@ pub fn sqlfunc(
         Arity::Unary { arena: true } => Err(darling::Error::custom(
             "Unary functions do not yet support RowArena.",
         )),
-        Arity::Binary { arena } => binary_func(&func, modifiers, arena),
-        Arity::Variadic { arena, has_self } => {
-            variadic_func(&func, modifiers, struct_ty, arena, has_self)
-        }
+        Arity::Binary => binary_func(&func, modifiers),
+        Arity::Variadic { has_self } => variadic_func(&func, modifiers, struct_ty, has_self),
     }?;
 
     let test = (generate_tests && include_test).then(|| generate_test(attr, item, &func.sig.ident));
@@ -222,7 +220,7 @@ fn generate_test(_attr: TokenStream, _item: TokenStream, _name: &Ident) -> Token
 }
 
 /// Checks if the last parameter of the function is a `&RowArena`.
-fn last_is_arena(func: &syn::ItemFn) -> bool {
+pub(crate) fn last_is_arena(func: &syn::ItemFn) -> bool {
     func.sig.inputs.last().map_or(false, |last| {
         if let syn::FnArg::Typed(pat) = last {
             if let syn::Type::Reference(reference) = &*pat.ty {
@@ -238,9 +236,15 @@ fn last_is_arena(func: &syn::ItemFn) -> bool {
 /// Arity classification for a function annotated with `#[sqlfunc]`.
 enum Arity {
     Nullary,
-    Unary { arena: bool },
-    Binary { arena: bool },
-    Variadic { arena: bool, has_self: bool },
+    Unary {
+        /// Whether a trailing `&RowArena` parameter is present, which
+        /// `EagerUnaryFunc::call` has no place for.
+        arena: bool,
+    },
+    Binary,
+    Variadic {
+        has_self: bool,
+    },
 }
 
 /// Checks whether a parameter's type is `Variadic<...>` or `OptionalArg<...>`,
@@ -291,12 +295,12 @@ fn determine_arity(func: &syn::ItemFn) -> Arity {
         .any(is_variadic_arg);
 
     if has_variadic_param || effective_count >= 3 {
-        Arity::Variadic { arena, has_self }
+        Arity::Variadic { has_self }
     } else {
         match effective_count {
             0 => Arity::Nullary,
             1 => Arity::Unary { arena },
-            2 => Arity::Binary { arena },
+            2 => Arity::Binary,
             _ => unreachable!(),
         }
     }
@@ -358,7 +362,7 @@ fn variadic_element_is_nullable(ty: &syn::Type) -> bool {
 /// For each parameter that rejects NULL (not `Option`, not `OptionalArg<Option<..>>`),
 /// generates a check that the corresponding input position is nullable. For `Variadic<T>`
 /// with non-nullable `T`, generates a check over all remaining input positions.
-fn non_nullable_position_checks(param_types: &[syn::Type]) -> Vec<TokenStream> {
+pub(crate) fn non_nullable_position_checks(param_types: &[syn::Type]) -> Vec<TokenStream> {
     let mut checks = Vec::new();
     for (i, ty) in param_types.iter().enumerate() {
         if is_variadic_type(ty) {
@@ -372,7 +376,7 @@ fn non_nullable_position_checks(param_types: &[syn::Type]) -> Vec<TokenStream> {
     checks
 }
 
-fn camel_case(ident: &Ident) -> Ident {
+pub(crate) fn camel_case(ident: &Ident) -> Ident {
     let mut result = String::new();
     let mut capitalize_next = true;
     for c in ident.to_string().chars() {
@@ -390,7 +394,7 @@ fn camel_case(ident: &Ident) -> Ident {
 
 /// Extracts generic type parameters from a function signature.
 /// Returns an empty Vec if there are no type parameters.
-fn find_generic_type_params(func: &syn::ItemFn) -> Vec<Ident> {
+pub(crate) fn find_generic_type_params(func: &syn::ItemFn) -> Vec<Ident> {
     func.sig
         .generics
         .params
@@ -548,7 +552,7 @@ fn type_contains_ident(ty: &syn::Type, ident: &Ident) -> bool {
 }
 
 /// Returns whether the outermost wrapper of a type is `Option`.
-fn is_option_wrapped(ty: &syn::Type) -> bool {
+pub(crate) fn is_option_wrapped(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         if let Some(last) = type_path.path.segments.last() {
             return last.ident == "Option";
@@ -568,7 +572,7 @@ fn is_option_wrapped(ty: &syn::Type) -> bool {
 /// (singular, for unary functions) or `input_types[i]` (indexed, for binary/variadic).
 ///
 /// Returns `None` if no generic parameter appears in the output type.
-fn derive_output_type_for_generics(
+pub(crate) fn derive_output_type_for_generics(
     input_types: &[syn::Type],
     output_ty: &syn::Type,
     generic_names: &[Ident],
@@ -831,7 +835,7 @@ fn erase_generic_param(ty: &syn::Type, generic_name: &Ident) -> syn::Type {
 }
 
 /// Erases all generic type parameters from a type, replacing each with `Datum<'a>`.
-fn erase_all_generic_params(ty: &syn::Type, generic_names: &[Ident]) -> syn::Type {
+pub(crate) fn erase_all_generic_params(ty: &syn::Type, generic_names: &[Ident]) -> syn::Type {
     let mut ty = ty.clone();
     for gn in generic_names {
         ty = erase_generic_param(&ty, gn);
@@ -845,7 +849,7 @@ fn erase_all_generic_params(ty: &syn::Type, generic_names: &[Ident]) -> syn::Typ
 ///
 /// Panics if the function has fewer than `nth` arguments. Returns an error if
 /// the parameter is a `self` receiver.
-fn arg_type(arg: &syn::ItemFn, nth: usize) -> Result<syn::Type, syn::Error> {
+pub(crate) fn arg_type(arg: &syn::ItemFn, nth: usize) -> Result<syn::Type, syn::Error> {
     match &arg.sig.inputs[nth] {
         syn::FnArg::Typed(pat) => {
             // Patch lifetimes to be 'a if reference
@@ -869,7 +873,7 @@ fn arg_type(arg: &syn::ItemFn, nth: usize) -> Result<syn::Type, syn::Error> {
 
 /// Recursively patches lifetimes in a type, adding `'a` to references without a lifetime
 /// and recursing into generic arguments and tuples.
-fn patch_lifetimes(ty: &syn::Type) -> syn::Type {
+pub(crate) fn patch_lifetimes(ty: &syn::Type) -> syn::Type {
     match ty {
         syn::Type::Reference(r) => {
             let elem = Box::new(patch_lifetimes(&r.elem));
@@ -906,7 +910,7 @@ fn patch_lifetimes(ty: &syn::Type) -> syn::Type {
 
 /// Determine the output type for a function. Returns an error if the function
 /// does not return a value.
-fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
+pub(crate) fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
     match &arg.sig.output {
         syn::ReturnType::Type(_, ty) => Ok(&*ty),
         syn::ReturnType::Default => Err(syn::Error::new(
@@ -915,294 +919,14 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
         )),
     }
 }
-
-/// Produce a `EagerUnaryFunc` implementation.
+/// Produce an `EagerUnaryFunc` implementation.
 fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
-    let fn_name = &func.sig.ident;
-    let struct_name = camel_case(&func.sig.ident);
-    let input_ty_raw = arg_type(func, 0)?;
-    let output_ty_raw = output_type(func)?;
-    let generic_params = find_generic_type_params(func);
-    // Erase generic type params → Datum<'a> for use in the trait impl's associated types.
-    let input_ty = erase_all_generic_params(&input_ty_raw, &generic_params);
-    let output_ty = erase_all_generic_params(output_ty_raw, &generic_params);
-
-    reject_inapplicable(Shape::Unary, &modifiers)?;
-
-    let mut override_mods = modifiers.clone();
-    // See `generate::insert_introduces_nulls`'s doc for why this is cleared.
-    override_mods.introduces_nulls = None;
-
-    let Modifiers {
-        sqlname,
-        output_type,
-        mut output_type_expr,
-        mut introduces_nulls,
-        ..
-    } = modifiers;
-
-    // If generic type parameters are present and no explicit output_type_expr,
-    // auto-derive one from the structural relationship between input and output types.
-    // Use raw (pre-erasure) types so we can see the generic parameters.
-    if !generic_params.is_empty() {
-        if output_type_expr.is_none() && output_type.is_none() {
-            if let Some(derived) = derive_output_type_for_generics(
-                &[input_ty_raw],
-                output_ty_raw,
-                &generic_params,
-                true,
-            )? {
-                output_type_expr = Some(syn::parse2(derived)?);
-                if introduces_nulls.is_none() {
-                    let nullable = is_option_wrapped(output_ty_raw);
-                    introduces_nulls = Some(syn::parse_quote!(#nullable));
-                }
-            }
-        }
-    }
-
-    if output_type.is_some() && output_type_expr.is_some() {
-        return Err(darling::Error::unknown_field(
-            "output_type and output_type_expr cannot be used together",
-        ));
-    }
-    if output_type_expr.is_some() && introduces_nulls.is_none() {
-        return Err(darling::Error::unknown_field(
-            "output_type_expr requires introduces_nulls",
-        ));
-    }
-
-    let name = sqlname
-        .as_ref()
-        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
-
-    let (mut output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
-        let introduces_nulls_fn = quote! {
-            fn introduces_nulls(&self) -> bool {
-                <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
-            }
-        };
-        let output_type = quote! { <#output_type>::as_column_type() };
-        (output_type, Some(introduces_nulls_fn))
-    } else {
-        (quote! { Self::Output::as_column_type() }, None)
-    };
-
-    if let Some(output_type_expr) = output_type_expr {
-        output_type = quote! { #output_type_expr };
-    }
-
-    if let Some(introduces_nulls) = introduces_nulls {
-        introduces_nulls_fn = Some(quote! {
-            fn introduces_nulls(&self) -> bool {
-                #introduces_nulls
-            }
-        });
-    }
-
-    let mut override_methods = crate::generate::override_methods(Shape::Unary, &override_mods);
-    if let Some(introduces_nulls_fn) = introduces_nulls_fn {
-        crate::generate::insert_introduces_nulls(
-            &mut override_methods,
-            Shape::Unary,
-            &override_mods,
-            introduces_nulls_fn,
-        );
-    }
-
-    let trait_impl = quote! {
-        impl crate::func::EagerUnaryFunc for #struct_name {
-            type Input<'a> = #input_ty;
-            type Output<'a> = #output_ty;
-
-            fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
-                #fn_name(a)
-            }
-
-            fn output_sql_type(
-                &self,
-                input_type: mz_repr::SqlColumnType
-            ) -> mz_repr::SqlColumnType {
-                use mz_repr::AsColumnType;
-                let output = #output_type;
-                let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-                let nullable = output.nullable;
-                // The output is nullable if it is nullable by itself or the input is nullable
-                // and this function propagates nulls
-                output.nullable(nullable || (propagates_nulls && input_type.nullable))
-            }
-
-            #(#override_methods)*
-        }
-    };
-
-    let emission = crate::generate::Emission {
-        struct_name,
-        has_self: false,
-        sqlname: name,
-        fn_name: fn_name.clone(),
-    };
-    Ok(crate::generate::emit(&emission, func, trait_impl))
+    crate::generate::generate(Shape::Unary, func, modifiers, None, false)
 }
 
-/// Produce a `EagerBinaryFunc` implementation.
-fn binary_func(
-    func: &syn::ItemFn,
-    modifiers: Modifiers,
-    arena: bool,
-) -> darling::Result<TokenStream> {
-    let fn_name = &func.sig.ident;
-    let struct_name = camel_case(&func.sig.ident);
-    let input1_ty_raw = arg_type(func, 0)?;
-    let input2_ty_raw = arg_type(func, 1)?;
-    let output_ty_raw = output_type(func)?;
-    let generic_params = find_generic_type_params(func);
-    // Erase generic type params → Datum<'a> for use in the trait impl's associated types.
-    let input1_ty = erase_all_generic_params(&input1_ty_raw, &generic_params);
-    let input2_ty = erase_all_generic_params(&input2_ty_raw, &generic_params);
-    let output_ty = erase_all_generic_params(output_ty_raw, &generic_params);
-
-    reject_inapplicable(Shape::Binary, &modifiers)?;
-
-    let mut override_mods = modifiers.clone();
-    // See `generate::insert_introduces_nulls`'s doc for why this is cleared.
-    override_mods.introduces_nulls = None;
-
-    let Modifiers {
-        sqlname,
-        output_type,
-        mut output_type_expr,
-        mut introduces_nulls,
-        ..
-    } = modifiers;
-
-    // Auto-derive output_type_expr from generic parameters, if applicable.
-    // Use raw (pre-erasure) types so we can see the generic parameters.
-    if !generic_params.is_empty() {
-        if output_type_expr.is_none() && output_type.is_none() {
-            if let Some(derived) = derive_output_type_for_generics(
-                &[input1_ty_raw, input2_ty_raw],
-                output_ty_raw,
-                &generic_params,
-                false,
-            )? {
-                output_type_expr = Some(syn::parse2(derived)?);
-                if introduces_nulls.is_none() {
-                    let nullable = is_option_wrapped(output_ty_raw);
-                    introduces_nulls = Some(syn::parse_quote!(#nullable));
-                }
-            }
-        }
-    }
-
-    if output_type.is_some() && output_type_expr.is_some() {
-        return Err(darling::Error::unknown_field(
-            "output_type and output_type_expr cannot be used together",
-        ));
-    }
-    if output_type_expr.is_some() && introduces_nulls.is_none() {
-        return Err(darling::Error::unknown_field(
-            "output_type_expr requires introduces_nulls",
-        ));
-    }
-
-    let name = sqlname
-        .as_ref()
-        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
-
-    let (mut output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
-        let introduces_nulls_fn = quote! {
-            fn introduces_nulls(&self) -> bool {
-                <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
-            }
-        };
-        let output_type = quote! { <#output_type>::as_column_type() };
-        (output_type, Some(introduces_nulls_fn))
-    } else {
-        (quote! { Self::Output::as_column_type() }, None)
-    };
-
-    if let Some(output_type_expr) = output_type_expr {
-        output_type = quote! { #output_type_expr };
-    }
-
-    if let Some(introduces_nulls) = introduces_nulls {
-        introduces_nulls_fn = Some(quote! {
-            fn introduces_nulls(&self) -> bool {
-                #introduces_nulls
-            }
-        });
-    }
-
-    let arena = if arena {
-        quote! { , temp_storage }
-    } else {
-        quote! {}
-    };
-
-    // Per-position checks: for each non-nullable parameter, check if
-    // the corresponding input column is nullable.
-    let binary_non_nullable_checks =
-        non_nullable_position_checks(&[input1_ty.clone(), input2_ty.clone()]);
-
-    let mut override_methods = crate::generate::override_methods(Shape::Binary, &override_mods);
-    if let Some(introduces_nulls_fn) = introduces_nulls_fn {
-        crate::generate::insert_introduces_nulls(
-            &mut override_methods,
-            Shape::Binary,
-            &override_mods,
-            introduces_nulls_fn,
-        );
-    }
-
-    let trait_impl = quote! {
-        impl crate::func::binary::EagerBinaryFunc for #struct_name {
-            type Input<'a> = (#input1_ty, #input2_ty);
-            type Output<'a> = #output_ty;
-
-            fn call<'a>(
-                &self,
-                (a, b): Self::Input<'a>,
-                temp_storage: &'a mz_repr::RowArena
-            ) -> Self::Output<'a> {
-                #fn_name(a, b #arena)
-            }
-
-            fn output_sql_type(
-                &self,
-                input_types: &[mz_repr::SqlColumnType],
-            ) -> mz_repr::SqlColumnType {
-                use mz_repr::AsColumnType;
-                let output = #output_type;
-                let propagates_nulls =
-                    crate::func::binary::EagerBinaryFunc::propagates_nulls(self);
-                let nullable = output.nullable;
-                // The output is nullable if:
-                // 1. The function introduces nulls (output.nullable), or
-                // 2. A non-nullable parameter's input is nullable (will reject
-                //    NULL at runtime via try_from_iter), or
-                // 3. propagates_nulls is true and any input is nullable
-                //    (optimizer short-circuits all-NULL inputs)
-                let non_nullable_input_is_nullable =
-                    false #(#binary_non_nullable_checks)*;
-                let inputs_nullable = input_types.iter().any(|it| it.nullable);
-                let is_null = nullable
-                    || non_nullable_input_is_nullable
-                    || (propagates_nulls && inputs_nullable);
-                output.nullable(is_null)
-            }
-
-            #(#override_methods)*
-        }
-    };
-
-    let emission = crate::generate::Emission {
-        struct_name,
-        has_self: false,
-        sqlname: name,
-        fn_name: fn_name.clone(),
-    };
-    Ok(crate::generate::emit(&emission, func, trait_impl))
+/// Produce an `EagerBinaryFunc` implementation.
+fn binary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
+    crate::generate::generate(Shape::Binary, func, modifiers, None, false)
 }
 
 /// Produce an `EagerVariadicFunc` implementation.
@@ -1210,226 +934,7 @@ fn variadic_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
     struct_ty: Option<syn::Path>,
-    arena: bool,
     has_self: bool,
 ) -> darling::Result<TokenStream> {
-    let fn_name = &func.sig.ident;
-    let output_ty_raw = output_type(func)?;
-    let generic_params = find_generic_type_params(func);
-    let output_ty = erase_all_generic_params(output_ty_raw, &generic_params);
-    let struct_name = struct_ty
-        .as_ref()
-        .and_then(|ty| ty.segments.last())
-        .map_or_else(|| camel_case(fn_name), |seg| seg.ident.clone());
-
-    reject_inapplicable(Shape::Variadic, &modifiers)?;
-
-    let mut override_mods = modifiers.clone();
-    // See `generate::insert_introduces_nulls`'s doc for why this is cleared.
-    override_mods.introduces_nulls = None;
-
-    let Modifiers {
-        sqlname,
-        output_type,
-        mut output_type_expr,
-        mut introduces_nulls,
-        ..
-    } = modifiers;
-
-    if output_type.is_some() && output_type_expr.is_some() {
-        return Err(darling::Error::unknown_field(
-            "output_type and output_type_expr cannot be used together",
-        ));
-    }
-    if output_type_expr.is_some() && introduces_nulls.is_none() {
-        return Err(darling::Error::unknown_field(
-            "output_type_expr requires introduces_nulls",
-        ));
-    }
-
-    // Collect input parameters (skip &self, skip &RowArena).
-    let start = if has_self { 1 } else { 0 };
-    let end = if arena {
-        func.sig.inputs.len() - 1
-    } else {
-        func.sig.inputs.len()
-    };
-    let input_params: Vec<&syn::FnArg> = func
-        .sig
-        .inputs
-        .iter()
-        .skip(start)
-        .take(end - start)
-        .collect();
-
-    if input_params.is_empty() {
-        return Err(darling::Error::custom(
-            "variadic function must have at least one input parameter",
-        ));
-    }
-
-    // Extract parameter names and types.
-    let mut param_names = Vec::new();
-    let mut param_types = Vec::new();
-    for param in &input_params {
-        match param {
-            syn::FnArg::Typed(pat) => {
-                if let syn::Pat::Ident(ident) = &*pat.pat {
-                    param_names.push(ident.ident.clone());
-                } else {
-                    return Err(
-                        darling::Error::custom("unsupported parameter pattern").with_span(&pat.pat)
-                    );
-                }
-                param_types.push(patch_lifetimes(&pat.ty));
-            }
-            syn::FnArg::Receiver(_) => {
-                return Err(darling::Error::custom("unexpected self parameter"));
-            }
-        }
-    }
-
-    // Auto-derive output_type_expr from generic parameters, if applicable.
-    // Use raw (pre-erasure) types so we can see the generic parameters.
-    if !generic_params.is_empty() {
-        if output_type_expr.is_none() && output_type.is_none() {
-            if let Some(derived) = derive_output_type_for_generics(
-                &param_types,
-                output_ty_raw,
-                &generic_params,
-                false,
-            )? {
-                output_type_expr = Some(syn::parse2(derived)?);
-                if introduces_nulls.is_none() {
-                    let nullable = is_option_wrapped(output_ty_raw);
-                    introduces_nulls = Some(syn::parse_quote!(#nullable));
-                }
-            }
-        }
-    }
-
-    // Erase generic type params → Datum<'a> in param types for the trait impl's associated types.
-    for ty in &mut param_types {
-        *ty = erase_all_generic_params(ty, &generic_params);
-    }
-
-    // Build input type: single param = bare type, multiple = tuple.
-    let input_type: syn::Type = if param_types.len() == 1 {
-        param_types[0].clone()
-    } else {
-        syn::parse_quote! { (#(#param_types),*) }
-    };
-
-    // Build destructure pattern for call.
-    let destructure = if param_names.len() == 1 {
-        let name = &param_names[0];
-        quote! { #name }
-    } else {
-        quote! { (#(#param_names),*) }
-    };
-
-    let arena_arg = if arena {
-        quote! { , temp_storage }
-    } else {
-        quote! {}
-    };
-
-    let call_expr = if has_self {
-        quote! { self.#fn_name(#(#param_names),* #arena_arg) }
-    } else {
-        quote! { #fn_name(#(#param_names),* #arena_arg) }
-    };
-
-    // Build modifier functions.
-    let name = sqlname
-        .as_ref()
-        .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
-
-    let (mut output_type_code, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
-        let introduces_nulls_fn = quote! {
-            fn introduces_nulls(&self) -> bool {
-                <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
-            }
-        };
-        let output_type_code = quote! { <#output_type>::as_column_type() };
-        (output_type_code, Some(introduces_nulls_fn))
-    } else {
-        (quote! { Self::Output::as_column_type() }, None)
-    };
-
-    if let Some(output_type_expr) = output_type_expr {
-        output_type_code = quote! { #output_type_expr };
-    }
-
-    if let Some(introduces_nulls) = introduces_nulls {
-        introduces_nulls_fn = Some(quote! {
-            fn introduces_nulls(&self) -> bool {
-                #introduces_nulls
-            }
-        });
-    }
-
-    // Per-position checks: for each non-nullable parameter, check if
-    // the corresponding input column is nullable.
-    let non_nullable_checks = non_nullable_position_checks(&param_types);
-
-    let mut override_methods = crate::generate::override_methods(Shape::Variadic, &override_mods);
-    if let Some(introduces_nulls_fn) = introduces_nulls_fn {
-        crate::generate::insert_introduces_nulls(
-            &mut override_methods,
-            Shape::Variadic,
-            &override_mods,
-            introduces_nulls_fn,
-        );
-    }
-
-    let trait_impl = quote! {
-        impl crate::func::variadic::EagerVariadicFunc for #struct_name {
-            type Input<'a> = #input_type;
-            type Output<'a> = #output_ty;
-
-            fn call<'a>(
-                &self,
-                #destructure: Self::Input<'a>,
-                temp_storage: &'a mz_repr::RowArena,
-            ) -> Self::Output<'a> {
-                #call_expr
-            }
-
-            fn output_type(
-                &self,
-                input_types: &[mz_repr::SqlColumnType],
-            ) -> mz_repr::SqlColumnType {
-                use mz_repr::AsColumnType;
-                let output = #output_type_code;
-                let propagates_nulls =
-                    crate::func::variadic::EagerVariadicFunc::propagates_nulls(self);
-                let nullable = output.nullable;
-                // The output is nullable if:
-                // 1. The function introduces nulls (output.nullable), or
-                // 2. A non-nullable parameter's input is nullable (will reject
-                //    NULL at runtime via try_from_iter), or
-                // 3. propagates_nulls is true and any input is nullable
-                //    (optimizer short-circuits all-NULL inputs)
-                let non_nullable_input_is_nullable =
-                    false #(#non_nullable_checks)*;
-                let inputs_nullable = input_types.iter().any(|it| it.nullable);
-                output.nullable(
-                    nullable
-                    || non_nullable_input_is_nullable
-                    || (propagates_nulls && inputs_nullable)
-                )
-            }
-
-            #(#override_methods)*
-        }
-    };
-
-    let emission = crate::generate::Emission {
-        struct_name,
-        has_self,
-        sqlname: name,
-        fn_name: fn_name.clone(),
-    };
-    Ok(crate::generate::emit(&emission, func, trait_impl))
+    crate::generate::generate(Shape::Variadic, func, modifiers, struct_ty, has_self)
 }
