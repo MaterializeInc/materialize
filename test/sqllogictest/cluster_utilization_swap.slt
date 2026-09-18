@@ -1,0 +1,186 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Swap reporting in the Console's cluster utilization views.
+#
+# The views read `mz_cluster_replica_metrics_history`, an introspection source
+# that cannot be populated deterministically from a test. So this file checks
+# the two things that can be pinned down: that the views expose the swap
+# columns, and that the arithmetic they apply to swap behaves as intended,
+# exercised over a table shaped like the source.
+
+mode cockroach
+
+# ----------------------------------------------------------------------------
+# The swap columns are present on all three views the Console reads.
+#
+# They do not share an implementation: `_overview` and `_24h` are binned with a
+# top-k per bucket, while `_3h` is un-binned and returns one row per sample.
+# Swap had to be added to both code paths, so all three are asserted here.
+# ----------------------------------------------------------------------------
+
+query TTT
+SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'mz_internal'
+  AND table_name LIKE 'mz_console_cluster_utilization%'
+  AND column_name LIKE 'swap%'
+ORDER BY table_name, column_name
+----
+mz_console_cluster_utilization_overview  swap_bytes  double␠precision
+mz_console_cluster_utilization_overview  swap_percent  double␠precision
+mz_console_cluster_utilization_overview_24h  swap_bytes  double␠precision
+mz_console_cluster_utilization_overview_24h  swap_percent  double␠precision
+mz_console_cluster_utilization_overview_3h  swap_bytes  double␠precision
+mz_console_cluster_utilization_overview_3h  swap_percent  double␠precision
+
+# Each view runs with the new columns projected. The sample count is not under
+# this test's control, so this asserts that the query plans and executes, not
+# how many rows come back.
+query T
+SELECT count(*) >= 0 FROM (
+  SELECT swap_bytes, swap_percent, heap_limit
+  FROM mz_internal.mz_console_cluster_utilization_overview_3h
+)
+----
+true
+
+query T
+SELECT count(*) >= 0 FROM (
+  SELECT swap_bytes, swap_percent, heap_limit
+  FROM mz_internal.mz_console_cluster_utilization_overview_24h
+)
+----
+true
+
+query T
+SELECT count(*) >= 0 FROM (
+  SELECT swap_bytes, swap_percent, heap_limit
+  FROM mz_internal.mz_console_cluster_utilization_overview
+)
+----
+true
+
+# `heap_limit` is the ceiling swap and heap are measured against: the point at
+# which the memory limiter terminates the process. The views divided by it but
+# never emitted it, so a consumer could read `heap_percent` without being able
+# to say what it was a percent of.
+#
+# In the binned views it is taken from the peak-heap sample, the same row the
+# heap and swap figures come from, so a bucket's usage and the ceiling it was
+# measured against always describe the same instant.
+
+query TTT
+SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'mz_internal'
+  AND table_name LIKE 'mz_console_cluster_utilization%'
+  AND column_name = 'heap_limit'
+ORDER BY table_name
+----
+mz_console_cluster_utilization_overview  heap_limit  double␠precision
+mz_console_cluster_utilization_overview_24h  heap_limit  double␠precision
+mz_console_cluster_utilization_overview_3h  heap_limit  double␠precision
+
+# ----------------------------------------------------------------------------
+# The arithmetic, over a table shaped like the metrics source.
+# ----------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE fake_metrics (
+    replica_id text,
+    process_id uint8,
+    occurred_at timestamptz,
+    memory_bytes uint8,
+    heap_bytes uint8,
+    heap_limit uint8,
+    swap_bytes uint8
+)
+
+# u1 is single-process. u2 has two processes at the same instant, so its swap
+# must sum across them while its fraction is taken per process. u3 reports no
+# `heap_limit`, which is what a replica whose clusterd was launched without
+# `--heap-limit` looks like.
+statement ok
+INSERT INTO fake_metrics VALUES
+    ('u1', 0, '2026-01-01 00:00:00+00', 8000, 10000, 20000, 2000),
+    ('u2', 0, '2026-01-01 00:00:00+00', 4000, 5000, 20000, 1000),
+    ('u2', 1, '2026-01-01 00:00:00+00', 4000, 7000, 20000, 3000),
+    ('u3', 0, '2026-01-01 00:00:00+00', 8000, 10000, NULL, 2000)
+
+# This mirrors the projection added to the views:
+#   SUM(swap_bytes::float8)                          AS swap_bytes
+#   MAX(swap_bytes::float8 / NULLIF(heap_limit, 0))  AS swap_percent
+#
+# Note `swap_percent` is a fraction, not a percentage, matching every other
+# `*_percent` column in these views.
+query TRR
+SELECT
+    replica_id,
+    SUM(swap_bytes::float8) AS swap_bytes,
+    MAX(swap_bytes::float8 / NULLIF(heap_limit, 0)) AS swap_percent
+FROM fake_metrics
+GROUP BY replica_id, occurred_at
+ORDER BY replica_id
+----
+u1  2000  0.1
+u2  4000  0.15
+u3  2000  NULL
+
+# A replica that never swaps reports zero, not NULL. The distinction matters:
+# NULL means "not measurable here", zero means "measured, and nothing is paged
+# out", and a chart should render those differently.
+statement ok
+INSERT INTO fake_metrics VALUES
+    ('u4', 0, '2026-01-01 00:00:00+00', 8000, 8000, 20000, 0)
+
+query TRR
+SELECT
+    replica_id,
+    SUM(swap_bytes::float8),
+    MAX(swap_bytes::float8 / NULLIF(heap_limit, 0))
+FROM fake_metrics
+WHERE replica_id = 'u4'
+GROUP BY replica_id, occurred_at
+----
+u4  0  0
+
+# Guard the denominator. `heap_limit` of zero must not raise a division error;
+# NULLIF turns it into the same NULL that a missing limit produces.
+statement ok
+INSERT INTO fake_metrics VALUES
+    ('u5', 0, '2026-01-01 00:00:00+00', 8000, 10000, 0, 2000)
+
+query TR
+SELECT
+    replica_id,
+    MAX(swap_bytes::float8 / NULLIF(heap_limit, 0))
+FROM fake_metrics
+WHERE replica_id = 'u5'
+GROUP BY replica_id, occurred_at
+----
+u5  NULL
+
+# ----------------------------------------------------------------------------
+# Why `swap_bytes` is exposed and not just the fraction.
+#
+# Every other metric in these views divides by a property of the replica size,
+# so a consumer holding `size` can recover bytes from the fraction. Swap
+# divides by `heap_limit`, which is measured per process and is not in
+# `mz_cluster_replica_sizes`, so that recovery is impossible.
+# ----------------------------------------------------------------------------
+
+query T
+SELECT count(*) = 0
+FROM information_schema.columns
+WHERE table_schema = 'mz_catalog'
+  AND table_name = 'mz_cluster_replica_sizes'
+  AND column_name LIKE '%swap%'
+----
+true
