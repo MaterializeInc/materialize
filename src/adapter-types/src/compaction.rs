@@ -43,6 +43,9 @@ pub enum CompactionWindow {
     DisableCompaction,
     /// Create a compaction window for a specified duration.
     Duration(Timestamp),
+    /// Retain history from the given time onward: the since never advances past it, and
+    /// otherwise follows the default compaction lag.
+    PinAt(Timestamp),
 }
 
 impl CompactionWindow {
@@ -51,8 +54,22 @@ impl CompactionWindow {
             CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
             CompactionWindow::DisableCompaction => return Timestamp::minimum(),
             CompactionWindow::Duration(d) => *d,
+            CompactionWindow::PinAt(t) => {
+                return std::cmp::min(
+                    from.saturating_sub(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    *t,
+                );
+            }
         };
         from.saturating_sub(lag)
+    }
+
+    /// The time from which history is pinned, if this is a `PinAt` window.
+    pub fn pinned_from(&self) -> Option<Timestamp> {
+        match self {
+            CompactionWindow::PinAt(t) => Some(*t),
+            _ => None,
+        }
     }
 
     /// Returns self as a Timestamp that can be used for comparisons.
@@ -61,6 +78,7 @@ impl CompactionWindow {
             CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
             CompactionWindow::DisableCompaction => Timestamp::maximum(),
             CompactionWindow::Duration(d) => *d,
+            CompactionWindow::PinAt(t) => *t,
         }
     }
 }
@@ -72,6 +90,15 @@ impl From<CompactionWindow> for ReadPolicy {
             CompactionWindow::Duration(time) => time,
             CompactionWindow::DisableCompaction => {
                 return ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum()));
+            }
+            CompactionWindow::PinAt(t) => {
+                return ReadPolicy::Multiple(vec![
+                    ReadPolicy::lag_writes_by(
+                        DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+                        SINCE_GRANULARITY,
+                    ),
+                    ReadPolicy::ValidFrom(Antichain::from_elem(t)),
+                ]);
             }
         };
         ReadPolicy::lag_writes_by(time, SINCE_GRANULARITY)

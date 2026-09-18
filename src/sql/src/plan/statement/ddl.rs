@@ -21,6 +21,8 @@ use std::time::Duration;
 use chrono::DateTime;
 use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
+
+use crate::plan::with_options::RetainHistoryValue;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_auth::password::Password;
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
@@ -537,7 +539,7 @@ pub fn describe_create_subsource(
 generate_extracted_config!(
     CreateSourceOption,
     (TimestampInterval, Duration),
-    (RetainHistory, OptionalDuration)
+    (RetainHistory, RetainHistoryValue)
 );
 
 generate_extracted_config!(
@@ -1586,7 +1588,7 @@ generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
     (ExternalReference, UnresolvedItemName),
-    (RetainHistory, OptionalDuration),
+    (RetainHistory, RetainHistoryValue),
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (Details, String)
@@ -1751,7 +1753,7 @@ generate_extracted_config!(
     (ExcludeConstraints, Vec::<String>, Default(vec![])),
     (ExcludeAllConstraints, bool, Default(false)),
     (PartitionBy, Vec<Ident>),
-    (RetainHistory, OptionalDuration),
+    (RetainHistory, RetainHistoryValue),
     (Details, String)
 );
 
@@ -3212,7 +3214,7 @@ generate_extracted_config!(
     MaterializedViewOption,
     (AssertNotNull, Ident, AllowMultiple),
     (PartitionBy, Vec<Ident>),
-    (RetainHistory, OptionalDuration),
+    (RetainHistory, RetainHistoryValue),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
 
@@ -6512,12 +6514,17 @@ pub fn plan_drop_owned(
 
 fn plan_retain_history_option(
     scx: &StatementContext,
-    retain_history: Option<OptionalDuration>,
+    retain_history: Option<RetainHistoryValue>,
 ) -> Result<Option<CompactionWindow>, PlanError> {
-    if let Some(OptionalDuration(lcw)) = retain_history {
-        Ok(Some(plan_retain_history(scx, lcw)?))
-    } else {
-        Ok(None)
+    match retain_history {
+        Some(RetainHistoryValue::For(OptionalDuration(lcw))) => {
+            Ok(Some(plan_retain_history(scx, lcw)?))
+        }
+        Some(RetainHistoryValue::PinAt(ts)) => {
+            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
+            Ok(Some(CompactionWindow::PinAt(ts)))
+        }
+        None => Ok(None),
     }
 }
 
@@ -6571,7 +6578,7 @@ fn plan_retain_history(
     }
 }
 
-generate_extracted_config!(IndexOption, (RetainHistory, OptionalDuration));
+generate_extracted_config!(IndexOption, (RetainHistory, RetainHistoryValue));
 
 fn plan_index_options(
     scx: &StatementContext,
@@ -6594,7 +6601,7 @@ fn plan_index_options(
 generate_extracted_config!(
     TableOption,
     (PartitionBy, Vec<Ident>),
-    (RetainHistory, OptionalDuration),
+    (RetainHistory, RetainHistoryValue),
     (RedactedTest, String)
 );
 
@@ -7557,16 +7564,28 @@ fn alter_retain_history(
             }
 
             // Save the original value so we can write it back down in the create_sql catalog item.
-            let (value, lcw) = match &history {
+            let (value, window) = match &history {
                 Some(WithOptionValue::RetainHistoryFor(value)) => {
                     let window = OptionalDuration::try_from_value(value.clone())?;
-                    (Some(value.clone()), window.0)
+                    (Some(value.clone()), plan_retain_history(scx, window.0)?)
+                }
+                Some(WithOptionValue::RetainHistoryPinAt(value)) => {
+                    let RetainHistoryValue::PinAt(ts) = RetainHistoryValue::try_from_value(
+                        WithOptionValue::<Aug>::RetainHistoryPinAt(value.clone()),
+                    )?
+                    else {
+                        unreachable!("PIN AT values plan to RetainHistoryValue::PinAt")
+                    };
+                    scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
+                    (Some(value.clone()), CompactionWindow::PinAt(ts))
                 }
                 // None is RESET, so use the default CW.
-                None => (None, Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION)),
+                None => (
+                    None,
+                    plan_retain_history(scx, Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION))?,
+                ),
                 _ => sql_bail!("unexpected value type for RETAIN HISTORY"),
             };
-            let window = plan_retain_history(scx, lcw)?;
 
             Ok(Plan::AlterRetainHistory(AlterRetainHistoryPlan {
                 id: entry.id(),
