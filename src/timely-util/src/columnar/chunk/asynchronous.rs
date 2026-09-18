@@ -83,13 +83,26 @@ where
         // publication. The spine holds sealed batches as pending until its
         // current maintenance completes.
         loop {
-            tokio::select! {
-                biased;
-                _ = input.ready(), if !upper.is_empty() => {},
-                _ = notify.notified() => {},
+            // Shape backpressure: while readers face more open batches than the
+            // spine's bound, input stays queued upstream and the turn goes to
+            // maintenance, the way the synchronous operator's input blocks on
+            // its merge work. Publication resumes once the bound is restored.
+            let over_bound = state.borrow().over_shape_bound();
+            if over_bound {
+                if state.borrow().maintenance_pending() {
+                    notify.notified().await;
+                } else {
+                    tokio::task::yield_now().await;
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = input.ready(), if !upper.is_empty() => {},
+                    _ = notify.notified() => {},
+                }
             }
             let mut next_upper = None;
-            while let Some(event) = input.next_sync() {
+            while !over_bound && let Some(event) = input.next_sync() {
                 match event {
                     Event::Data(time, mut data) => {
                         super::metrics::record(
@@ -150,7 +163,10 @@ where
                 let mut spine = state.borrow_mut();
                 if spine.maintenance_pending() {
                     spine.resume_maintenance();
-                } else {
+                }
+                // Maintenance that completed within this turn hands the turn to
+                // policy, as the synchronous operator's single activation does.
+                if !spine.maintenance_pending() {
                     spine.exert(exertion);
                 }
             }

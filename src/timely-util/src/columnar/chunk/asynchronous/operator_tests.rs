@@ -49,6 +49,8 @@ struct Observed {
     rows: Option<Vec<Update>>,
     traces: Vec<Box<dyn Fn() -> (usize, usize)>>,
     wake_traces: Vec<Box<dyn Fn()>>,
+    /// Async spines' layer shapes, for `MZ_BENCH_DUMP_SHAPE`.
+    shapes: Vec<Box<dyn Fn() -> String>>,
 }
 
 fn observe<'scope, Tr>(
@@ -103,10 +105,15 @@ fn install(
     let token = if asynchronous {
         let (arranged, token) = super::arrange(stream, budget, "Async");
         let notify = Arc::clone(&arranged.trace.trace_box_unstable().borrow().trace().notify);
+        let state = Rc::clone(&arranged.trace.trace_box_unstable().borrow().trace().state);
         observed
             .borrow_mut()
             .wake_traces
             .push(Box::new(move || notify.notify_one()));
+        observed.borrow_mut().shapes.push(Box::new(move || {
+            let (layers, pending) = state.borrow().shape();
+            format!("pending={pending} layers={layers:?}")
+        }));
         observe(arranged, observed, probe);
         Some(token)
     } else {
@@ -487,6 +494,11 @@ fn run(config: Config) -> Measurement {
                     check_timeout(start, timeout, &budget, &observed.borrow(), &pool);
                 }
                 let hydrated = start.elapsed();
+                if parameter("MZ_BENCH_DUMP_SHAPE", 0) != 0 {
+                    for shape in &observed.borrow().shapes {
+                        eprintln!("SHAPE at hydration: {}", shape());
+                    }
+                }
                 let (hydrated_batches, hydrated_rows) = observed
                     .borrow()
                     .traces

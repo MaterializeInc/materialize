@@ -117,6 +117,23 @@ const CONSOLIDATION_GRANTS_PER_PROGRESS: usize = 8;
 /// does not bank a burst of forced consolidation for the moment input returns.
 const MAX_BANKED_PROGRESS_GRANTS: usize = 8 * CONSOLIDATION_GRANTS_PER_PROGRESS;
 
+/// Non-empty batches a reader may have to probe before funding stops mattering.
+///
+/// Funding bounds consolidation work, not trace shape: an open input that
+/// never earns enough credit lets batches accumulate, and every lookup then
+/// pays for each of them. Above this many open batches a policy request is
+/// granted as if the input were idle, so lookup cost has a fixed ceiling while
+/// the work to reach it stays the cost of tidying the excess, not of lifting
+/// every published batch. Sixteen matches the reach of the storage exertion
+/// policy at proportionality 16 and the batch count the synchronous operator
+/// holds under the same load.
+const MAX_OPEN_BATCHES: usize = 16;
+
+/// Fuel granted per turn while over [`MAX_OPEN_BATCHES`] if the policy asks
+/// for none, in units of the spine's effort multiplier. Matches the grant the
+/// storage exertion policy makes when it does ask.
+const SHAPE_EFFORT_PER_TURN: usize = 1000;
+
 /// How much policy-requested maintenance an exertion turn may start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exertion {
@@ -343,14 +360,20 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
             return false;
         }
         self.tidy_layers();
-        let Some(effort) = self.exert_effort() else {
+        let active_merge = self.merging.iter().any(|b| b.is_double());
+        // Shape bound: readers already pay for the excess on every lookup, so
+        // tidying it is not optional work, whatever the policy or the credit say.
+        let over_bound = self.open_batches() > MAX_OPEN_BATCHES;
+        let shape_effort = (over_bound && exertion != Exertion::Merges)
+            .then_some(SHAPE_EFFORT_PER_TURN * self.effort);
+        let Some(effort) = self.exert_effort().or(shape_effort) else {
             return false;
         };
-        let active_merge = self.merging.iter().any(|b| b.is_double());
         match exertion {
             Exertion::Merges if !active_merge => return true,
             Exertion::Funded => {
-                if self.consolidation_credit >= effort {
+                if over_bound {
+                } else if self.consolidation_credit >= effort {
                     self.consolidation_credit -= effort;
                 } else if self.progress_grants > 0 {
                     self.progress_grants -= 1;
@@ -394,6 +417,41 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
     /// Whether an earlier maintenance continuation still needs to finish.
     pub fn maintenance_pending(&self) -> bool {
         !self.maintenance.is_empty()
+    }
+
+    /// Occupied layers as `(level, batches, updates)`, plus the pending span count.
+    pub fn shape(&self) -> (Vec<(usize, usize, usize)>, usize) {
+        let layers = self
+            .merging
+            .iter()
+            .enumerate()
+            .filter_map(|(level, batch)| match batch {
+                MergeState::Vacant => None,
+                MergeState::Single(_) => Some((level, 1, batch.len())),
+                MergeState::Double(_) => Some((level, 2, batch.len())),
+            })
+            .collect();
+        (layers, self.pending.len())
+    }
+
+    /// Whether readers face more than [`MAX_OPEN_BATCHES`] batches, so the
+    /// owner should hold input until maintenance restores the bound.
+    pub fn over_shape_bound(&self) -> bool {
+        self.open_batches() > MAX_OPEN_BATCHES
+    }
+
+    /// Non-empty batches a reader must probe: layer occupants, both inputs of an
+    /// in-progress merge, and spans not yet introduced.
+    fn open_batches(&self) -> usize {
+        self.merging
+            .iter()
+            .map(|batch| match batch {
+                MergeState::Vacant => 0,
+                MergeState::Single(_) => usize::from(batch.len() > 0),
+                MergeState::Double(_) => 2,
+            })
+            .sum::<usize>()
+            + self.pending.len()
     }
 
     /// Credit the optional consolidation one input frontier advance funds.
