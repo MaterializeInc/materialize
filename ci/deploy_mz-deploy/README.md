@@ -1,75 +1,57 @@
 # Deploy mz-deploy
 
-The CI process will build the mz-deploy CLI and upload release tarballs to the
-materialize-binaries S3 bucket, served at <https://binaries.materialize.com>.
+mz-deploy ships on the Materialize release train. It carries the same version as
+`environmentd` (`src/mz-deploy/Cargo.toml` is bumped by `bin/bump-version`), and
+its release tarballs are built and uploaded by the `deploy` pipeline
+(`ci/deploy/pipeline.template.yml`) whenever a `vX.Y.Z` tag is pushed.
 
-## Deploy through Buildkite
+**There is nothing to do to cut an mz-deploy release.** It goes out with the
+database.
 
-To deploy a new version through Buildkite:
+Tarballs land in the materialize-binaries S3 bucket, served at
+<https://binaries.materialize.com>:
 
-1. Update the version number in the `mz-deploy` Cargo.toml:
-   - For new features: increment the minor version (0.X.0)
-   - For bug fixes: increment the patch version (0.0.X)
-   - For breaking changes: increment the major version
+- Release candidate tags (`vX.Y.Z-rc.N`) publish
+  `mz-deploy-vX.Y.Z-rc.N-<target>.tar.gz` but leave the `mz-deploy-latest-*`
+  redirect alone. Our install docs point users at that redirect, so it only ever
+  names a GA build.
+- Final tags publish the versioned tarball and move `mz-deploy-latest-*`, unless
+  the tag is a back-ported patch older than the newest release.
 
-2. Run `cargo check` once to update `Cargo.lock`, then open a PR with the
-   bump and get it merged to `main`.
+The Linux targets extract the binary from the `mz-deploy` Docker image the
+release build already produced. macOS has no such image and builds from source.
 
-3. Create and push a git tag in the format `mz-deploy-vX.Y.Z` on the merged
-   commit:
-
-   ```bash
-   git checkout MERGED-SHA
-   git tag -am mz-deploy-vX.Y.Z mz-deploy-vX.Y.Z
-   git push upstream mz-deploy-vX.Y.Z
-   ```
-
-4. Navigate to the Buildkite pipelines page and trigger a new build:
-   - Set the `BUILDKITE_TAG` environment variable to match your git tag
-   - Start the build to deploy the new version
-
-5. Once it completes, verify the tarballs are available:
-
-   ```bash
-   curl -fL "https://binaries.materialize.com/mz-deploy-latest-$(uname -m)-apple-darwin.tar.gz" | tar -tz
-   ```
-
-## Deploy manually
-
-You can manually deploy by following steps 1-3 above and running the
-following commands:
+Verify a release:
 
 ```bash
-# Set a tag version.
-export BUILDKITE_TAG=mz-deploy-vX.Y.Z
+curl -fL "https://binaries.materialize.com/mz-deploy-latest-$(uname -m)-apple-darwin.tar.gz" | tar -tz
+```
 
-# macOS
+## Debugging a failed deploy
+
+Run a target by hand from a checkout of the tag. The version assertion fails
+unless `src/mz-deploy/Cargo.toml` agrees with `BUILDKITE_TAG`:
+
+```bash
+export BUILDKITE_TAG=vX.Y.Z
+
 bin/pyactivate -m ci.deploy_mz-deploy.macos
-
-# Linux
 bin/pyactivate -m ci.deploy_mz-deploy.linux
 ```
 
-**Important Notes:**
-
-- When running on macOS, modify `linux.py` to use `target` instead of
-  `target-xcompile`
-- For any new changes, regardless of how small, create a new version (patch
-  if small) instead of overwriting the current git tag. Otherwise, local
-  `git fetch --tag`s may error due to stale references of the old git tag.
-
 ## Homebrew
 
-After the tarballs are live, update the
-[Homebrew tap](https://github.com/MaterializeInc/homebrew-materialize)
-following its CONTRIBUTING.md. The formula installs the prebuilt binaries
-(tarballs contain the binary at `mz/bin/mz-deploy`):
+A GA-only step, run after the tarballs are live. Update the
+[Homebrew tap](https://github.com/MaterializeInc/homebrew-materialize) following
+its CONTRIBUTING.md. Homebrew needs a stable URL and checksum, so the formula
+pins an exact version rather than using the `latest` redirect. Never point it at
+a release candidate. The tarballs contain the binary at `mz/bin/mz-deploy`:
 
 ```ruby
 class MzDeploy < Formula
   desc "Declarative SQL project tooling for Materialize"
   homepage "https://materialize.com"
-  version "X.Y.Z"
+  version "26.X.Y"
   license "BUSL-1.1"
 
   on_macos do
