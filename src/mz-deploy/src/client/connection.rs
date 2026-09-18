@@ -36,6 +36,7 @@
 //! table and migration notes.
 
 use crate::client::errors::ConnectionError;
+use crate::client::version_skew;
 use crate::config::{Profile, SslMode};
 use crate::info;
 use mz_postgres_util::Sql;
@@ -94,6 +95,26 @@ pub struct DevOverlaysClient<'a> {
 
 const APPLICATION_NAME: &str = "mz-deploy";
 
+/// Whether a new connection pins its session to [`SERVER_CLUSTER_NAME`].
+///
+/// [`SERVER_CLUSTER_NAME`]: crate::client::SERVER_CLUSTER_NAME
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ServerCluster {
+    /// Pin the session, overriding any `cluster` in the profile options.
+    Pinned,
+    /// Use whatever cluster the profile or the server default selects.
+    Unpinned,
+}
+
+/// Whether a new connection compares this build's version against the server's.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VersionCheck {
+    Enabled,
+    /// The local sandbox runs an image tag this CLI chose, so any skew there is
+    /// a property of that tag rather than of the user's deployment target.
+    Skipped,
+}
+
 impl Client {
     /// Connect to the database using a Profile directly.
     ///
@@ -104,31 +125,39 @@ impl Client {
     ///
     /// Every connection is pinned to `_mz_deploy_server` via libpq options;
     /// any user-supplied `cluster` in profile.options is silently overridden.
-    /// The unit-test runtime uses `connect_with_profile_no_pin` instead —
-    /// its ephemeral Docker container has no `_mz_deploy_server` cluster.
+    /// The Docker sandbox uses `connect_sandbox` instead, because its
+    /// ephemeral container has no `_mz_deploy_server` cluster.
     pub async fn connect_with_profile(profile: Profile) -> Result<Self, ConnectionError> {
-        Self::connect_with_profile_inner(profile, /* pin_server_cluster */ true).await
+        Self::connect_with_profile_inner(profile, ServerCluster::Pinned, VersionCheck::Enabled)
+            .await
     }
 
     /// Connect without pinning the session cluster to `_mz_deploy_server`.
     ///
-    /// Used in two places where `_mz_deploy_server` is not yet (or never)
-    /// present:
-    /// - The ephemeral Docker container used by unit-test execution.
-    /// - `setup::run`, which is the command that creates the cluster.
-    ///
-    /// Uses whatever cluster the profile or server default selects.
-    /// Deliberately `pub(crate)` so nothing outside the crate can bypass
-    /// the production session-cluster pin.
+    /// Used by `setup::run`, which is the command that creates that cluster and
+    /// so cannot select it. Uses whatever cluster the profile or server default
+    /// selects. Deliberately `pub(crate)` so nothing outside the crate can
+    /// bypass the production session-cluster pin.
     pub(crate) async fn connect_with_profile_no_pin(
         profile: Profile,
     ) -> Result<Self, ConnectionError> {
-        Self::connect_with_profile_inner(profile, /* pin_server_cluster */ false).await
+        Self::connect_with_profile_inner(profile, ServerCluster::Unpinned, VersionCheck::Enabled)
+            .await
+    }
+
+    /// Connect to the ephemeral Docker sandbox used by `test` and `explain`.
+    ///
+    /// Skips the version check, and skips the session-cluster pin because the
+    /// sandbox has no `_mz_deploy_server` cluster.
+    pub(crate) async fn connect_sandbox(profile: Profile) -> Result<Self, ConnectionError> {
+        Self::connect_with_profile_inner(profile, ServerCluster::Unpinned, VersionCheck::Skipped)
+            .await
     }
 
     async fn connect_with_profile_inner(
         profile: Profile,
-        pin_server_cluster: bool,
+        server_cluster: ServerCluster,
+        version_check: VersionCheck,
     ) -> Result<Self, ConnectionError> {
         let host = profile.require_host()?;
         let mut config = tokio_postgres::Config::new();
@@ -142,7 +171,7 @@ impl Client {
         config.application_name(APPLICATION_NAME);
 
         let mut effective_options = profile.options.clone();
-        if pin_server_cluster {
+        if server_cluster == ServerCluster::Pinned {
             effective_options.insert(
                 "cluster".to_string(),
                 crate::client::SERVER_CLUSTER_NAME.to_string(),
@@ -167,28 +196,42 @@ impl Client {
         // both to a common `dyn Future` so there's a single spawn site below.
         type BoxConnection =
             Box<dyn Future<Output = Result<(), tokio_postgres::Error>> + Send + Unpin>;
-        let (client, connection): (PgClient, BoxConnection) = match connector {
-            Connector::NoTls => {
-                let (client, connection) = config
-                    .connect(NoTls)
-                    .await
-                    .map_err(|source| classify_connect_error(source, &profile, mode))?;
-                (client, Box::new(connection))
-            }
-            Connector::Tls(tls) => {
-                let (client, connection) = config
-                    .connect(tls)
-                    .await
-                    .map_err(|source| classify_connect_error(source, &profile, mode))?;
-                (client, Box::new(connection))
-            }
-        };
+        // The server version has to be read off the `Connection` before the spawn
+        // below moves it, and is available as soon as `connect` resolves because
+        // the startup handshake carries it.
+        let (client, server_version, connection): (PgClient, Option<String>, BoxConnection) =
+            match connector {
+                Connector::NoTls => {
+                    let (client, connection) = config
+                        .connect(NoTls)
+                        .await
+                        .map_err(|source| classify_connect_error(source, &profile, mode))?;
+                    let server_version = connection
+                        .parameter(version_skew::MZ_VERSION_PARAMETER)
+                        .map(str::to_string);
+                    (client, server_version, Box::new(connection))
+                }
+                Connector::Tls(tls) => {
+                    let (client, connection) = config
+                        .connect(tls)
+                        .await
+                        .map_err(|source| classify_connect_error(source, &profile, mode))?;
+                    let server_version = connection
+                        .parameter(version_skew::MZ_VERSION_PARAMETER)
+                        .map(str::to_string);
+                    (client, server_version, Box::new(connection))
+                }
+            };
 
         mz_ore::task::spawn(|| "mz-deploy-connection", async move {
             if let Err(e) = connection.await {
                 info!("connection error: {}", e);
             }
         });
+
+        if version_check == VersionCheck::Enabled {
+            version_skew::report(server_version.as_deref());
+        }
 
         Ok(Client {
             client,

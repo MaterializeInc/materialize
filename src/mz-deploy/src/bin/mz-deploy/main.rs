@@ -14,7 +14,6 @@
 
 use clap::CommandFactory;
 use clap::{Parser, Subcommand};
-use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
 use mz_deploy::cli::CliError;
 use mz_deploy::cli::commands::delete;
@@ -22,7 +21,6 @@ use mz_deploy::cli::commands::new_project::ScaffoldOpts;
 use mz_deploy::config::Settings;
 use mz_deploy::log;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
 /// Output format for command results.
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
@@ -31,9 +29,6 @@ enum OutputFormat {
     Text,
     Json,
 }
-
-const BUILD_INFO: BuildInfo = build_info!();
-static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
 // Clap 4's derive API doesn't support subcommand grouping natively.
 // We work around this by hiding all subcommands from the auto-generated flat
@@ -77,7 +72,7 @@ See 'mz-deploy help <command>' for detailed usage guides.";
 
 /// Materialize deployment tool
 #[derive(Parser, Debug)]
-#[command(name = "mz-deploy", version = VERSION.as_str())]
+#[command(name = "mz-deploy", version = mz_deploy::VERSION.as_str())]
 #[command(about = "Safe, testable deployments for Materialize")]
 #[command(disable_help_subcommand = true)]
 #[command(override_usage = "mz-deploy [OPTIONS] <COMMAND>")]
