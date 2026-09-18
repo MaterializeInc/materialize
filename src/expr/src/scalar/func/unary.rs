@@ -422,6 +422,7 @@ derive_unary!(
     CastMapToString,
     CastInt2VectorToString,
     CastRangeToString,
+    TryCast(E),
     CeilFloat32,
     CeilFloat64,
     CeilNumeric,
@@ -572,11 +573,14 @@ mod test {
 
     #[mz_ore::test]
     fn test_could_error() {
-        let funcs: [UnaryFunc; 4] = [
+        let funcs: [UnaryFunc; 5] = [
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::CastVarCharToString(CastVarCharToString),
             UnaryFunc::Not(Not),
             UnaryFunc::IsLikeMatch(IsLikeMatch(like_pattern::compile("%hi%", false).unwrap())),
+            UnaryFunc::TryCast(TryCast {
+                inner: Box::new(UnaryFunc::CastStringToInt32(CastStringToInt32)),
+            }),
         ];
         for func in funcs {
             assert!(!func.could_error())

@@ -20,6 +20,17 @@
       description: |
         The return value's [type](/sql/types/).
 
+- name: "syntax-try-cast"
+  code: |
+    TRY_CAST ( <val> AS <type> )
+  syntax_elements:
+    - name: "`<val>`"
+      description: |
+        Any value you want to convert.
+    - name: "**AS** `<type>`"
+      description: |
+        The return value's [type](/sql/types/).
+
 - name: "syntax-literal"
   code: |
     <type> '<val>'

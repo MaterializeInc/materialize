@@ -1688,8 +1688,40 @@ mod tests {
             Not(_) => arg.scalar_type == ReprScalarType::Bool,
             IsNull(_) => true,
             TryParseMonotonicIso8601Timestamp(_) => arg.scalar_type == ReprScalarType::String,
+            TryCast(f) => unary_typecheck(&f.inner, arg),
             _ => false,
         }
+    }
+
+    /// Fallible casts to wrap in `TryCast`, as the planner does for `TRY_CAST`:
+    /// narrowing integer casts, float to integer, numeric to integer, and the
+    /// jsonb casts that reject the wrong kind of value.
+    const TRY_CAST_INNER_FUNCS: &[UnaryFunc] = &[
+        UnaryFunc::CastInt64ToInt32(CastInt64ToInt32),
+        UnaryFunc::CastInt32ToInt16(CastInt32ToInt16),
+        UnaryFunc::CastInt64ToUint64(CastInt64ToUint64),
+        UnaryFunc::CastFloat64ToInt64(CastFloat64ToInt64),
+        UnaryFunc::CastFloat64ToFloat32(CastFloat64ToFloat32),
+        UnaryFunc::CastNumericToInt32(CastNumericToInt32),
+        UnaryFunc::CastNumericToMzTimestamp(CastNumericToMzTimestamp),
+        UnaryFunc::CastJsonbToNumeric(CastJsonbToNumeric(None)),
+        UnaryFunc::CastJsonbToBool(CastJsonbToBool),
+        UnaryFunc::CastTimestampToMzTimestamp(CastTimestampToMzTimestamp),
+    ];
+
+    /// The declared unary functions, plus `TryCast` around each fallible cast
+    /// in `TRY_CAST_INNER_FUNCS`, so the interpreter's properties are checked
+    /// over the null-fallback wrapper as well.
+    fn interesting_unary_funcs() -> Vec<UnaryFunc> {
+        let mut funcs = INTERESTING_UNARY_FUNCS.to_vec();
+        funcs.extend(TRY_CAST_INNER_FUNCS.iter().map(|cast| {
+            assert!(
+                cast.could_error(),
+                "{cast} never errors, so wrapping it is pointless"
+            );
+            UnaryFunc::try_cast(cast.clone())
+        }));
+        funcs
     }
 
     fn interesting_binary_funcs() -> Vec<BinaryFunc> {
@@ -1965,7 +1997,7 @@ mod tests {
         column_gen
             .prop_union(literal_gen)
             .prop_recursive(4, 64, 8, |self_gen| {
-                let unary_gen = (select(INTERESTING_UNARY_FUNCS), self_gen.clone())
+                let unary_gen = (select(interesting_unary_funcs()), self_gen.clone())
                     .prop_filter_map("unary func", |(func, (expr_in, type_in))| {
                         if !unary_typecheck(&func, &type_in) {
                             return None;
