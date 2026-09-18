@@ -363,7 +363,7 @@ pub enum DefiniteError {
         "old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?"
     )]
     DefaultReplicaIdentity,
-    #[error("{0}")]
+    #[error(transparent)]
     IncompatibleSchema(SchemaChangeError),
     #[error("invalid UTF8 string: {0:?}")]
     InvalidUTF8(Vec<u8>),
