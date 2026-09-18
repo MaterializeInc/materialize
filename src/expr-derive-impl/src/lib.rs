@@ -393,4 +393,30 @@ mod test {
             "is_infinity_monotone must be rejected on unary rather than ignored, got:\n{output}"
         );
     }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_unary_self() {
+        let attr = quote! { PadTo, sqlname = "pad_to", test = true };
+        let item = quote! {
+            fn pad_to<'a>(&self, a: &'a str, temp_storage: &'a RowArena) -> &'a str {
+                temp_storage.push_string(format!("{a:width$}", width = self.width))
+            }
+        };
+        let (output, input) = crate::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("unary_self", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_binary_self() {
+        let attr = quote! { ClampAt, sqlname = "clamp_at", is_infix_op = false, test = true };
+        let item = quote! {
+            fn clamp_at<'a>(&self, a: i64, b: i64) -> i64 {
+                a.clamp(self.lower, b)
+            }
+        };
+        let (output, input) = crate::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("binary_self", output, &input);
+    }
 }
