@@ -1432,11 +1432,8 @@ fn binary_func(
     Ok(crate::generate::emit(&emission, func, trait_impl))
 }
 
-/// Produce an `EagerVariadicFunc` implementation.
-///
-/// Two modes based on whether the function has a `&self` receiver:
-/// * `&self` present: struct defined externally, generates method impl + trait impl + Display
-/// * No `&self`: generates unit struct + trait impl + Display + preserves original function
+/// Produce the `EagerVariadicFunc` impl. Struct, `Display`, `FuncName`, and function
+/// emission are centralized in `generate::emit`.
 fn variadic_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
