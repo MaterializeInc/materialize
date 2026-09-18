@@ -439,6 +439,9 @@ pub(super) async fn purify_source_exports(
 
     super::validate_source_export_names(&requested_exports)?;
 
+    if !exclude_constraints.is_empty() && exclude_all_constraints {
+        sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
+    }
     if (!exclude_constraints.is_empty() || exclude_all_constraints) && requested_exports.len() != 1
     {
         sql_bail!(
