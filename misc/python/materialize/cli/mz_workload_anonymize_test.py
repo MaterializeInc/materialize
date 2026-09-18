@@ -465,7 +465,7 @@ def cross_schema_cdc_workload() -> dict[str, Any]:
     schema. The child key is built in pass 1 while processing the source's
     schema (`aaa_src`), before the child's schema (`zzz_upstream`) is mapped, so
     a stale key leaks the original schema name unless rebuilt in pass 2."""
-    empty = lambda: {  # noqa: E731
+    empty = lambda: {
         "tables": {},
         "views": {},
         "materialized_views": {},

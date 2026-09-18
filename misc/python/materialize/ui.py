@@ -82,7 +82,7 @@ def progress(msg: str = "", prefix: str | None = None, *, finish: bool = False) 
     print(msg, file=sys.stderr, flush=True, end=end)
 
 
-def timeout_loop(timeout: int, tick: float = 1.0) -> Generator[float, None, None]:
+def timeout_loop(timeout: int, tick: float = 1.0) -> Generator[float]:
     """Loop until timeout, optionally sleeping until tick
 
     Always iterates at least once
@@ -105,9 +105,7 @@ def timeout_loop(timeout: int, tick: float = 1.0) -> Generator[float, None, None
                 time.sleep(tick - (after - before))
 
 
-async def async_timeout_loop(
-    timeout: int, tick: float = 1.0
-) -> AsyncGenerator[float, None]:
+async def async_timeout_loop(timeout: int, tick: float = 1.0) -> AsyncGenerator[float]:
     """Loop until timeout, asynchronously sleeping until tick
 
     Always iterates at least once
@@ -134,7 +132,7 @@ def log_in_automation(msg: str) -> None:
     """Log to a file, if we're running in automation"""
     if env_is_truthy("MZ_IN_AUTOMATION"):
         with open("/tmp/mzcompose.log", "a") as fh:
-            now = datetime.datetime.now().isoformat()
+            now = datetime.datetime.now(datetime.UTC).isoformat()
             print(f"[{now}] {msg}", file=fh)
 
 

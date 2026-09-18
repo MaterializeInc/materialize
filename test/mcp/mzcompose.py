@@ -1023,7 +1023,7 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
         """Run `sql`; return ``"ok:<nrows>"`` or the error message string."""
         try:
             cur.execute(sql.encode())
-        except Exception as e:  # noqa: BLE001 — the message is the assertion
+        except Exception as e:
             return str(e)
         if cur.description is None:
             return "ok:0"

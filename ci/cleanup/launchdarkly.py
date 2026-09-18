@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from os import environ
 
 import launchdarkly_api  # type: ignore
@@ -29,7 +29,7 @@ def clean_up_test_features() -> None:
         api = feature_flags_api.FeatureFlagsApi(api_client)
 
         project_key = "default"
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         flags = api.get_feature_flags(
             project_key,
@@ -40,7 +40,7 @@ def clean_up_test_features() -> None:
 
         for flag in flags["items"]:
             key = flag["key"]
-            age = now - datetime.fromtimestamp(flag["creation_date"] / 1000)
+            age = now - datetime.fromtimestamp(flag["creation_date"] / 1000, UTC)
             if age <= MAX_AGE:
                 print(f"Skipping flag {key} (age={age}) whose age is beneath threshold")
             else:
