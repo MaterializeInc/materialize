@@ -259,6 +259,18 @@ metrics:
   - version
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_pre_resolved_connection_active
+  help: Count of open network connections that have not yet resolved a backend.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_pre_resolved_timeout_total
+  help: Count of connections closed for not resolving a backend within the pre-resolved timeout.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_tenant_connection_active
   help: Count of opened network connections by tenant.
   labels:
