@@ -16,7 +16,7 @@ use syn::{Expr, Lifetime, Lit};
 use crate::shape::{Modifier, Shape};
 
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
-#[derive(Debug, Default, darling::FromMeta)]
+#[derive(Debug, Clone, Default, darling::FromMeta)]
 pub(crate) struct Modifiers {
     /// An optional expression that evaluates to a boolean indicating whether the function is
     /// monotone with respect to its arguments. Defined for unary and binary functions.
@@ -56,10 +56,14 @@ pub(crate) struct Modifiers {
 }
 
 impl Modifiers {
-    /// The method-producing modifiers that are present, in table order.
+    /// The method-producing modifiers that are present, in this method's own fixed
+    /// order, which does not match any of the three per-arity tables in
+    /// `crate::shape`.
     ///
     /// Modifiers that do not produce a trait method are excluded, because
-    /// `crate::generate` consumes those by name.
+    /// `crate::generate` consumes those by name. A caller that needs table order,
+    /// such as `crate::generate::override_methods`, joins this iterator against
+    /// `Shape::modifiers()` by `Modifier` rather than relying on this order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Modifier, &Expr)> + '_ {
         [
             (Modifier::CouldError, self.could_error.as_ref()),
@@ -85,6 +89,15 @@ impl Modifiers {
     }
 }
 
+#[cfg(test)]
+impl Modifiers {
+    /// Parses modifiers from attribute tokens. Test helper for `crate::generate`.
+    pub(crate) fn from_tokens(tokens: TokenStream) -> darling::Result<Self> {
+        let args = darling::ast::NestedMeta::parse_meta_list(tokens)?;
+        <Self as FromMeta>::from_list(&args)
+    }
+}
+
 /// Errors if `mods` carries a method-producing modifier `shape` does not accept.
 fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
     for (modifier, _) in mods.iter() {
@@ -105,7 +118,7 @@ fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
 /// can't use `String` or `syn::Expr` directly.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum SqlName {
     /// A literal string.
     Literal(syn::Lit),
@@ -917,16 +930,17 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
 
     reject_inapplicable(Shape::Unary, &modifiers)?;
 
+    let mut override_mods = modifiers.clone();
+    // The arm below always resolves `introduces_nulls` itself, from `output_type` when
+    // the modifier is absent or from the modifier directly otherwise, so exclude it
+    // here to avoid `override_methods` emitting a duplicate method.
+    override_mods.introduces_nulls = None;
+
     let Modifiers {
-        is_monotone,
         sqlname,
-        preserves_uniqueness,
-        inverse,
         output_type,
         mut output_type_expr,
-        could_error,
         mut introduces_nulls,
-        is_eliminable_cast,
         ..
     } = modifiers;
 
@@ -961,30 +975,6 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         ));
     }
 
-    let preserves_uniqueness_fn = preserves_uniqueness.map(|preserves_uniqueness| {
-        quote! {
-            fn preserves_uniqueness(&self) -> bool {
-                #preserves_uniqueness
-            }
-        }
-    });
-
-    let inverse_fn = inverse.as_ref().map(|inverse| {
-        quote! {
-            fn inverse(&self) -> Option<crate::UnaryFunc> {
-                #inverse
-            }
-        }
-    });
-
-    let is_monotone_fn = is_monotone.map(|is_monotone| {
-        quote! {
-            fn is_monotone(&self) -> bool {
-                #is_monotone
-            }
-        }
-    });
-
     let name = sqlname
         .as_ref()
         .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
@@ -1013,21 +1003,15 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         });
     }
 
-    let could_error_fn = could_error.map(|could_error| {
-        quote! {
-            fn could_error(&self) -> bool {
-                #could_error
-            }
-        }
-    });
-
-    let is_eliminable_cast_fn = is_eliminable_cast.map(|is_eliminable_cast| {
-        quote! {
-            fn is_eliminable_cast(&self) -> bool {
-                #is_eliminable_cast
-            }
-        }
-    });
+    let mut override_methods = crate::generate::override_methods(Shape::Unary, &override_mods);
+    if let Some(introduces_nulls_fn) = introduces_nulls_fn {
+        crate::generate::insert_introduces_nulls(
+            &mut override_methods,
+            Shape::Unary,
+            &override_mods,
+            introduces_nulls_fn,
+        );
+    }
 
     let result = quote! {
         #[derive(
@@ -1059,12 +1043,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
                 output.nullable(nullable || (propagates_nulls && input_type.nullable))
             }
 
-            #could_error_fn
-            #introduces_nulls_fn
-            #inverse_fn
-            #is_monotone_fn
-            #preserves_uniqueness_fn
-            #is_eliminable_cast_fn
+            #(#override_methods)*
         }
 
         impl std::fmt::Display for #struct_name {
@@ -1101,17 +1080,17 @@ fn binary_func(
 
     reject_inapplicable(Shape::Binary, &modifiers)?;
 
+    let mut override_mods = modifiers.clone();
+    // The arm below always resolves `introduces_nulls` itself, from `output_type` when
+    // the modifier is absent or from the modifier directly otherwise, so exclude it
+    // here to avoid `override_methods` emitting a duplicate method.
+    override_mods.introduces_nulls = None;
+
     let Modifiers {
-        is_monotone,
         sqlname,
-        is_infix_op,
         output_type,
         mut output_type_expr,
-        negate,
-        could_error,
-        propagates_nulls,
         mut introduces_nulls,
-        is_infinity_monotone,
         ..
     } = modifiers;
 
@@ -1144,30 +1123,6 @@ fn binary_func(
             "output_type_expr requires introduces_nulls",
         ));
     }
-
-    let negate_fn = negate.map(|negate| {
-        quote! {
-            fn negate(&self) -> Option<crate::BinaryFunc> {
-                #negate
-            }
-        }
-    });
-
-    let is_monotone_fn = is_monotone.map(|is_monotone| {
-        quote! {
-            fn is_monotone(&self) -> (bool, bool) {
-                #is_monotone
-            }
-        }
-    });
-
-    let is_infinity_monotone_fn = is_infinity_monotone.map(|is_infinity_monotone| {
-        quote! {
-            fn is_infinity_monotone(&self) -> bool {
-                #is_infinity_monotone
-            }
-        }
-    });
 
     let name = sqlname
         .as_ref()
@@ -1203,34 +1158,20 @@ fn binary_func(
         quote! {}
     };
 
-    let could_error_fn = could_error.map(|could_error| {
-        quote! {
-            fn could_error(&self) -> bool {
-                #could_error
-            }
-        }
-    });
-
-    let is_infix_op_fn = is_infix_op.map(|is_infix_op| {
-        quote! {
-            fn is_infix_op(&self) -> bool {
-                #is_infix_op
-            }
-        }
-    });
-
-    let propagates_nulls_fn = propagates_nulls.map(|propagates_nulls| {
-        quote! {
-            fn propagates_nulls(&self) -> bool {
-                #propagates_nulls
-            }
-        }
-    });
-
     // Per-position checks: for each non-nullable parameter, check if
     // the corresponding input column is nullable.
     let binary_non_nullable_checks =
         non_nullable_position_checks(&[input1_ty.clone(), input2_ty.clone()]);
+
+    let mut override_methods = crate::generate::override_methods(Shape::Binary, &override_mods);
+    if let Some(introduces_nulls_fn) = introduces_nulls_fn {
+        crate::generate::insert_introduces_nulls(
+            &mut override_methods,
+            Shape::Binary,
+            &override_mods,
+            introduces_nulls_fn,
+        );
+    }
 
     let result = quote! {
         #[derive(
@@ -1277,13 +1218,7 @@ fn binary_func(
                 output.nullable(is_null)
             }
 
-            #could_error_fn
-            #introduces_nulls_fn
-            #is_infix_op_fn
-            #is_monotone_fn
-            #is_infinity_monotone_fn
-            #negate_fn
-            #propagates_nulls_fn
+            #(#override_methods)*
         }
 
         impl std::fmt::Display for #struct_name {
@@ -1325,16 +1260,17 @@ fn variadic_func(
 
     reject_inapplicable(Shape::Variadic, &modifiers)?;
 
+    let mut override_mods = modifiers.clone();
+    // The arm below always resolves `introduces_nulls` itself, from `output_type` when
+    // the modifier is absent or from the modifier directly otherwise, so exclude it
+    // here to avoid `override_methods` emitting a duplicate method.
+    override_mods.introduces_nulls = None;
+
     let Modifiers {
-        is_monotone,
         sqlname,
-        is_infix_op,
         output_type,
         mut output_type_expr,
-        could_error,
-        propagates_nulls,
         mut introduces_nulls,
-        is_associative,
         ..
     } = modifiers;
 
@@ -1471,49 +1407,19 @@ fn variadic_func(
         });
     }
 
-    let could_error_fn = could_error.map(|could_error| {
-        quote! {
-            fn could_error(&self) -> bool {
-                #could_error
-            }
-        }
-    });
-
-    let is_monotone_fn = is_monotone.map(|is_monotone| {
-        quote! {
-            fn is_monotone(&self) -> bool {
-                #is_monotone
-            }
-        }
-    });
-
-    let is_associative_fn = is_associative.map(|is_associative| {
-        quote! {
-            fn is_associative(&self) -> bool {
-                #is_associative
-            }
-        }
-    });
-
-    let is_infix_op_fn = is_infix_op.map(|is_infix_op| {
-        quote! {
-            fn is_infix_op(&self) -> bool {
-                #is_infix_op
-            }
-        }
-    });
-
-    let propagates_nulls_fn = propagates_nulls.map(|propagates_nulls| {
-        quote! {
-            fn propagates_nulls(&self) -> bool {
-                #propagates_nulls
-            }
-        }
-    });
-
     // Per-position checks: for each non-nullable parameter, check if
     // the corresponding input column is nullable.
     let non_nullable_checks = non_nullable_position_checks(&param_types);
+
+    let mut override_methods = crate::generate::override_methods(Shape::Variadic, &override_mods);
+    if let Some(introduces_nulls_fn) = introduces_nulls_fn {
+        crate::generate::insert_introduces_nulls(
+            &mut override_methods,
+            Shape::Variadic,
+            &override_mods,
+            introduces_nulls_fn,
+        );
+    }
 
     let trait_impl = quote! {
         impl crate::func::variadic::EagerVariadicFunc for #struct_name {
@@ -1553,12 +1459,7 @@ fn variadic_func(
                 )
             }
 
-            #could_error_fn
-            #introduces_nulls_fn
-            #is_infix_op_fn
-            #is_monotone_fn
-            #is_associative_fn
-            #propagates_nulls_fn
+            #(#override_methods)*
         }
     };
 

@@ -14,10 +14,6 @@
 //! in `crate::generate`. Adding a modifier to an arity means adding a row to that
 //! arity's table here, not writing emission code.
 
-// Only the tests exercise `ReturnTy::to_tokens` and several `Modifier`/`ReturnTy`
-// variants so far; nothing in `crate::generate` consumes this module yet.
-#![allow(dead_code)]
-
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -32,9 +28,9 @@ pub(crate) enum Shape {
 /// A modifier that maps directly onto one optional trait method.
 ///
 /// Modifiers that do not produce a trait method, such as `sqlname`, `output_type`,
-/// `output_type_expr`, `test`, and `skip_display`, are absent: `crate::generate`
-/// handles those explicitly because they feed `Display`, the output-type body, or the
-/// emission decision instead.
+/// `output_type_expr`, and `test`, are absent: `crate::generate` handles those
+/// explicitly because they feed `Display`, the output-type body, or the emission
+/// decision instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modifier {
     CouldError,
