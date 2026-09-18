@@ -771,13 +771,17 @@ class BalancerdNodeSelector(Modification):
         retry(check, 240)
 
 
-# The MinIO image the current tree's misc/helm-charts/testing/minio.yaml uses,
-# read from the file so the two cannot drift.
-MINIO_IMAGE = next(
-    line.split("image:", 1)[1].strip()
-    for line in open("misc/helm-charts/testing/minio.yaml")
-    if line.strip().startswith("image:")
-)
+def _minio_image() -> str:
+    """The MinIO image the current tree's manifest uses, read from the file so the
+    two cannot drift."""
+    manifest = MZ_ROOT / "misc" / "helm-charts" / "testing" / "minio.yaml"
+    for line in manifest.read_text().splitlines():
+        if line.strip().startswith("image:"):
+            return line.split("image:", 1)[1].strip()
+    raise ValueError(f"no image line in {manifest}")
+
+
+MINIO_IMAGE = _minio_image()
 
 # Must match test/orchestratord/priorityclass.yaml.
 PRIORITY_CLASS_NAME = "mz-test-priority"
