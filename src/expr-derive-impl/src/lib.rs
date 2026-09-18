@@ -13,6 +13,7 @@
 //! function defining the proc macro itself. Proc macro crates cannot
 //! export anything but proc macros.
 
+mod shape;
 mod sqlfunc;
 
 pub use sqlfunc::sqlfunc;
