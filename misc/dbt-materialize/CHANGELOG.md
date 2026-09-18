@@ -32,6 +32,13 @@
     `mz_version` (for example, through a proxy that strips it) now get a
     clear error instead of a crash on the missing version string.
 
+* Fix the cluster and schema ownership checks in `deploy_init`. Both subtracted
+  the wrong way around, so the set of objects missing ownership was always
+  empty and a role that did not own the production clusters or schemas got no
+  warning until the deployment failed later on. The checks also count
+  membership in the owning role as ownership, matching how Materialize decides
+  who may run the swap in `deploy_promote`.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)
