@@ -184,12 +184,12 @@ from one function.
 enum Shape { Unary, Binary, Variadic }
 
 impl Shape {
-    fn trait_path(&self) -> TokenStream;
-    fn input_assoc(&self, tys: &[syn::Type]) -> TokenStream;
-    fn call_params(&self) -> TokenStream;
-    fn output_method(&self) -> (syn::Ident, TokenStream); // name and signature
-    fn nullability(&self, checks: &[TokenStream]) -> TokenStream;
     fn modifiers(&self) -> &'static [(Modifier, ReturnTy)];
+    fn label(&self) -> &'static str;
+    fn trait_path(&self) -> TokenStream;
+    fn output_method(&self) -> (proc_macro2::Ident, TokenStream); // name and parameter
+    fn takes_arena(&self) -> bool;
+    fn nullability(&self, checks: &[TokenStream]) -> TokenStream;
 }
 
 fn generate(
@@ -211,10 +211,12 @@ fn #name(&self) -> #ret { #expr }
 ```
 
 That replaces 19 `quote!` blocks and all 12 hand-written legality rejections with one loop
-and one error message shape. The five modifiers that are not simple overrides,
-`sqlname`, `output_type`, `output_type_expr`, `test`, and `skip_display`, stay
-explicit in `generate`, because they feed `Display`, the `output_sql_type` body, and
-the emission decision rather than producing a trait method.
+and one error message shape. Four of the modifiers that are not simple overrides,
+`sqlname`, `output_type`, `output_type_expr`, and `skip_display`, stay explicit in
+`generate`, because they feed `Display`, the `output_sql_type` body, and the emission
+decision rather than producing a trait method. `test` is not read by `generate` at
+all: `sqlfunc.rs` consumes it through `Modifiers::generates_test` to decide whether to
+emit a snapshot test alongside the trait impl.
 
 Emission is shape independent and is written once: the choice between defining a
 unit struct and attaching to an external struct, the `Display` implementation or its
@@ -233,6 +235,27 @@ unary or variadic function is silently discarded, because both arms destructure 
 as `is_infinity_monotone: _`. Under the table it becomes an error. All six uses in
 the tree are `mul_*` and `div_*` in `src/expr/src/scalar/func.rs`, all binary, so
 nothing in the tree is affected.
+
+### Module layout
+
+`sqlfunc.rs` splits into five modules with an acyclic dependency graph:
+
+* `shape.rs` and `signature.rs` are leaves. `shape.rs` holds the per-arity data:
+  `Shape`, `Modifier`, `ReturnTy`, and the three modifier tables. `signature.rs` holds
+  the `syn` signature analysis, reading a function's parameters, generics, and return
+  type, and references none of the macro's own types.
+* `modifiers.rs` depends on `shape` only, for the `Modifier` and `Shape` types that
+  `Modifiers::iter` and `reject_inapplicable` check against.
+* `generate.rs` depends on `shape`, `signature`, and `modifiers`, since emission needs
+  the per-arity data, the signature analysis, and the parsed modifiers together.
+* `sqlfunc.rs` is the entry point and depends on all four: it parses the attribute
+  into `Modifiers`, classifies the annotated function's arity into a `Shape`, and
+  hands both to `generate::generate`.
+
+The graph is acyclic, so each capability is declared in one leaf rather than
+negotiated between peers. `shape.rs` does not need to know how a modifier is parsed
+and `signature.rs` does not need to know what a modifier is, which keeps a change to
+one from forcing a change to the other.
 
 ### Decisions carried over from the superseded drafts
 
@@ -376,8 +399,11 @@ Each PR runs `cargo test -p mz-expr-derive-impl` for the snapshot suite,
 `cargo test -p mz-expr`, `bin/sqllogictest --optimized`, and the optimizer goldens,
 plus `bin/lint` and `bin/fmt` before commit.
 
-PR1 additionally requires that no snapshot file changes at all, which is a stronger
-statement than the suite passing.
+PR1 additionally requires that no pre-existing snapshot file changes, which is a
+stronger statement than the suite passing. The branch does add new
+`*_all_modifiers.snap` files as part of exercising the collapsed generator, which is
+consistent with this: the requirement is stability of what already existed, not a
+frozen snapshot count.
 
 The conversion PRs carry a residual risk that the existing suite does not fully
 close. When a modifier is absent the macro falls back to a default derived from the
