@@ -187,7 +187,6 @@ func_name! {
     ListLengthMax => "list_length_max",
     MapBuildFromRecordList => "map_build_from_record_list",
     PadChar => "pad_char",
-    variadic::RangeCreate => "range_create",
     RecordGet => "record_get",
     RegexpMatch => "regexp_match",
     RegexpReplace => "regexp_replace",

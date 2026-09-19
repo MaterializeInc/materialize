@@ -31,8 +31,8 @@ The macro determines function arity from parameter count and types, after exclud
 | Effective params | Dispatches to | Notes |
 |---|---|---|
 | 0 | Error | Nullary functions are not supported. |
-| 1 | `EagerUnaryFunc` | Does not support `&RowArena`. |
-| 2 | `EagerBinaryFunc` | Supports `&RowArena`. |
+| 1 | `EagerUnaryFunc` | Supports `&RowArena` and `&self`. |
+| 2 | `EagerBinaryFunc` | Supports `&RowArena` and `&self`. |
 | 3+ | `EagerVariadicFunc` | Supports `&RowArena` and `&self`. |
 
 **Exception:** If any parameter uses `Variadic<T>` or `OptionalArg<T>`, the function is always treated as variadic, regardless of parameter count.
@@ -184,6 +184,18 @@ Generate a snapshot test for the macro expansion.
 Snapshot files are stored in `src/expr-derive-impl/src/snapshots/`.
 Update them with `cargo insta accept` after running `cargo test -p mz-expr-derive-impl`.
 
+### `skip_display`
+
+Suppresses the generated `Display` impl. Use this when the struct's `sqlname` depends
+on its own state rather than being a fixed string, so the call site keeps a
+hand-written `Display` impl. `RangeCreate` is an example: it picks between
+`int4range`, `int8range`, `daterange`, `numrange`, `tsrange`, and `tstzrange` based on
+its `elem_type` field.
+
+* **Type:** `bool`
+* **Default:** `false`
+* **Applies to:** all arities
+
 Which modifiers apply to which arity is declared in
 `src/expr-derive-impl/src/shape.rs`, one table per arity. A modifier absent from an
 arity's table is rejected with an error naming both the modifier and the arity.
@@ -253,9 +265,7 @@ Both are defined in `src/repr/src/scalar.rs`.
 
 A trailing `&RowArena` parameter gives the function access to temporary storage for allocating return values that borrow from the arena.
 It is excluded from arity detection and from the generated `Input` type.
-The arena is always passed to binary and variadic `call` implementations (the trait requires it); for functions that don't use it, the parameter is simply unused.
-
-Unary functions do not support `&RowArena`.
+The arena is always passed to unary, binary, and variadic `call` implementations (the trait requires it); for functions that don't use it, the parameter is simply unused.
 
 ### Input type
 
@@ -348,3 +358,16 @@ fn array_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowAre
     // output_type_expr: output type depends on runtime struct fields
 }
 ```
+
+## Shapes the macro does not cover
+
+Two shapes stay hand-written by design.
+
+* Functions generic over an `Eval` implementor, which hold sub-expressions in
+  `Box<E>` and evaluate them per element. The macro would need to emit an
+  implementation generic over a struct type parameter with a trait bound, which is a
+  different mechanism from the type-parameter erasure it applies today. The nine
+  compound-type casts under `src/expr/src/scalar/func/impls/` are these.
+* Functions that do not evaluate every operand. The macro emits `Eager*`
+  implementations, which evaluate all arguments before dispatch. `And`, `Or`,
+  `Coalesce`, `Greatest`, `Least`, `ErrorIfNull`, and `CaseLiteral` are these.
