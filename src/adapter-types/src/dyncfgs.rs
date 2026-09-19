@@ -469,10 +469,10 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
 /// Whether a replica must be caught up, not merely hydrated, before a graceful
 /// reconfiguration cuts over to it.
 ///
-/// Break-glass: with this off the cut-over gate is hydration alone.
+/// Disabled by default for rollout. With this off the cut-over gate is hydration alone.
 pub const ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE: Config<bool> = Config::new(
     "enable_cluster_reconfiguration_lag_gate",
-    true,
+    false,
     "Whether a graceful reconfiguration requires its target replicas to be within \
     cluster_reconfiguration_allowed_lag of the replicas they replace, on top of being hydrated.",
     ParameterScope::Environment,
