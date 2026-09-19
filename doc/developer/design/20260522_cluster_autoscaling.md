@@ -96,7 +96,7 @@ Initial strategies. The implicit baseline is always present; the rest engage per
 
   Compute readiness requires each target replica to be hydrated and, for every collection, no more than `cluster_reconfiguration_allowed_lag` behind the furthest output frontier among the outgoing replicas that cut-over will drop. Replicas that survive cut-over, such as a hydration-burst replica, do not contribute to this reference. Output frontiers measure each compute replica's progress; write frontiers do not. Storage readiness remains hydration-only, and hydration-burst behavior is unchanged.
 
-  The default lag allowance is 60 seconds. This bounds, rather than eliminates, lag at cut-over. `enable_cluster_reconfiguration_lag_gate` is an operator opt-out that reduces compute readiness to hydration alone.
+  The default lag allowance is 60 seconds. This bounds, rather than eliminates, lag at cut-over. `enable_cluster_reconfiguration_lag_gate` defaults off in production for rollout and on in test harnesses. With the gate off, compute readiness requires hydration alone.
 
   When the required targets are ready, `update_state` updates the realized cluster configuration and marks the record `Finalized`. Readiness takes precedence if it is observed on a tick after the deadline. Otherwise, at the deadline, `ROLLBACK` marks the record `TimedOut`, preserves the outgoing set, and stops desiring the targets. `COMMIT` replaces the outgoing set once the complete target set exists, even if it is not ready. A target that cannot get within the allowance therefore waits until the deadline and follows the configured timeout action.
 

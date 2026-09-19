@@ -170,10 +170,11 @@ During a graceful resize, Materialize:
 
 {{< warn-if-unreleased "v26.44" >}}
 
-Starting in v26.44, Materialize also waits for each required new replica's
-compute collections to catch up to the replicas the resize will retire, with
-a default allowance of 60 seconds per collection. This bounds lag at cutover;
-it does not guarantee zero lag. Source ingestion still waits for hydration only.
+Starting in v26.44, deployments with the catch-up check enabled also wait for
+each required new replica's compute collections to catch up to the replicas
+the resize will retire, with a default allowance of 60 seconds per collection.
+This bounds lag at cutover, but does not guarantee zero lag. Source ingestion
+still waits for hydration only. The check is disabled by default during rollout.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
 then from both sets as the new replicas come up, so the resize incurs no
