@@ -56,7 +56,7 @@ use mz_ore::soft_assert_or_log;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
-use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Row, Timestamp, frontier_within_lag};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
@@ -94,6 +94,41 @@ pub use instance_client::InstanceClient;
 
 pub(crate) type StorageCollections =
     Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
+
+/// A collection's hydration and catch-up status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionReadiness {
+    /// Hydrated and within the requested lag allowance.
+    Ready,
+    /// Hydrated, but behind the requested frontier.
+    Lagging,
+    /// Not yet hydrated.
+    Unhydrated,
+}
+
+impl CollectionReadiness {
+    /// Classifies progress against an optional reference and lag allowance.
+    ///
+    /// The caller selects comparable frontiers: graceful replacement uses
+    /// per-replica output frontiers, whereas 0dt uses collection write frontiers.
+    /// No lag requirement means hydration alone. An empty reference requires
+    /// an empty frontier, since completion cannot be matched by finite progress.
+    pub fn classify(
+        hydrated: bool,
+        frontier: &Antichain<Timestamp>,
+        lag_requirement: Option<(&Antichain<Timestamp>, Timestamp)>,
+    ) -> Self {
+        if !hydrated {
+            Self::Unhydrated
+        } else if lag_requirement
+            .is_some_and(|(reference, lag)| !frontier_within_lag(frontier, reference, lag))
+        {
+            Self::Lagging
+        } else {
+            Self::Ready
+        }
+    }
+}
 
 /// Responses from the compute controller.
 #[derive(Debug)]

@@ -37,7 +37,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_types::PersistLocation;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp, frontier_within_lag};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -54,8 +54,8 @@ use crate::controller::error::{
 use crate::controller::instance_client::PeekError;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
-    ComputeControllerResponse, IntrospectionUpdates, PeekNotification, ReplicaId,
-    StorageCollections,
+    CollectionReadiness, ComputeControllerResponse, IntrospectionUpdates, PeekNotification,
+    ReplicaId, StorageCollections,
 };
 use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
@@ -3484,22 +3484,6 @@ impl Drop for ReplicaCollectionIntrospection {
     }
 }
 
-/// The readiness of one collection across the replicas a caller is asking about.
-///
-/// See [`classify_collection_readiness`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CollectionReadiness {
-    /// At least one target replica has the collection hydrated and, if a lag
-    /// gate was given, within the allowance of the reference frontier.
-    Ready,
-    /// At least one target replica has the collection hydrated, but none of
-    /// those is within the allowance. This is the state a cut-over must not
-    /// fire in.
-    Lagging,
-    /// No target replica has the collection hydrated.
-    Unhydrated,
-}
-
 /// One replica's view of one collection, as [`classify_collection_readiness`]
 /// needs it.
 #[derive(Debug, Clone, Copy)]
@@ -3550,29 +3534,19 @@ fn classify_collection_readiness<'a>(
         Some((reference, allowed_lag))
     });
 
-    let mut any_hydrated = false;
+    let mut result = CollectionReadiness::Unhydrated;
     for replica in replicas.iter().filter(|r| r.target) {
-        if !replica.hydrated {
-            continue;
-        }
-        any_hydrated = true;
-
-        let within_lag = match &lag {
-            Some((reference, allowed_lag)) => {
-                frontier_within_lag(replica.output_frontier, reference, *allowed_lag)
-            }
-            None => true,
-        };
-        if within_lag {
-            return CollectionReadiness::Ready;
+        match CollectionReadiness::classify(
+            replica.hydrated,
+            replica.output_frontier,
+            lag.as_ref().map(|(reference, lag)| (reference, *lag)),
+        ) {
+            CollectionReadiness::Ready => return CollectionReadiness::Ready,
+            CollectionReadiness::Lagging => result = CollectionReadiness::Lagging,
+            CollectionReadiness::Unhydrated => {}
         }
     }
-
-    if any_hydrated {
-        CollectionReadiness::Lagging
-    } else {
-        CollectionReadiness::Unhydrated
-    }
+    result
 }
 
 #[cfg(test)]
