@@ -598,48 +598,40 @@ impl fmt::Display for RangeCreate {
     }
 }
 
-impl EagerVariadicFunc for RangeCreate {
-    type Input<'a> = (Datum<'a>, Datum<'a>, Datum<'a>);
-    type Output<'a> = Result<Datum<'a>, EvalError>;
-
-    fn call<'a>(
-        &self,
-        (lower, upper, flags_datum): Self::Input<'a>,
-        temp_storage: &'a RowArena,
-    ) -> Self::Output<'a> {
-        let flags = match flags_datum {
-            Datum::Null => {
-                return Err(EvalError::InvalidRange(
-                    InvalidRangeError::NullRangeBoundFlags,
-                ));
-            }
-            o => o.unwrap_str(),
-        };
-
-        let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
-
-        let mut range = Range::new(Some((
-            RangeBound::new(lower, lower_inclusive),
-            RangeBound::new(upper, upper_inclusive),
-        )));
-
-        range.canonicalize()?;
-
-        Ok(temp_storage.make_datum(|row| {
-            row.push_range(range).expect("errors already handled");
-        }))
-    }
-
-    fn output_type(&self, _input_types: &[SqlColumnType]) -> SqlColumnType {
-        SqlScalarType::Range {
-            element_type: Box::new(self.elem_type.clone()),
+#[sqlfunc(
+    RangeCreate,
+    skip_display = true,
+    output_type_expr = "SqlScalarType::Range { element_type: Box::new(self.elem_type.clone()) }.nullable(false)",
+    introduces_nulls = false
+)]
+fn range_create<'a>(
+    &self,
+    lower: Datum<'a>,
+    upper: Datum<'a>,
+    flags_datum: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let flags = match flags_datum {
+        Datum::Null => {
+            return Err(EvalError::InvalidRange(
+                InvalidRangeError::NullRangeBoundFlags,
+            ));
         }
-        .nullable(false)
-    }
+        o => o.unwrap_str(),
+    };
 
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
+    let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
+
+    let mut range = Range::new(Some((
+        RangeBound::new(lower, lower_inclusive),
+        RangeBound::new(upper, upper_inclusive),
+    )));
+
+    range.canonicalize()?;
+
+    Ok(temp_storage.make_datum(|row| {
+        row.push_range(range).expect("errors already handled");
+    }))
 }
 
 #[sqlfunc(sqlname = "datediff")]
