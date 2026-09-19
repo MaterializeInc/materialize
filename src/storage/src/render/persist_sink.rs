@@ -31,11 +31,15 @@
 //!                                    /      |
 //!                                   /       |
 //!                                  /        |
-//!                                 /         |
-//!                                /          |
-//!                               /     ,-+-----------------------.
-//!                              /      | mint_batch_descriptions |
-//!                             /       | one arbitrary worker    |
+//!                                 /   ,-+-----------------------.
+//!                                /    | capture max_seen_time   |
+//!                               /     | one arbitrary worker    |
+//!                              /      +-,--,--------+----+------+
+//!                             /             |
+//!                            |              |
+//!                            |        ,-+-----------------------.
+//!                            |        | mint_batch_descriptions |
+//!                            |        | one arbitrary worker    |
 //!                            |        +-,--,--------+----+------+
 //!                           ,----------´.-´         |     \
 //!                       _.-´ |       .-´            |      \
@@ -56,6 +60,11 @@
 //!                                     | one arbitrary worker |
 //!                                     +------+---------------+
 //!```
+//!
+//! Ahead of `mint_batch_descriptions` sits `max_seen_timestamps`, which passes the source
+//! collection through and reports each worker's largest timestamp to the minting worker. The
+//! minter also broadcasts a committed ceiling to the writers, which `append_batches` does not see.
+//! Both are left out of the diagram above to keep the shape of the three main operators readable.
 //!
 //! ## Similarities with `mz_compute::sink::persist_sink`
 //!
@@ -259,6 +268,21 @@ struct FinishedBatch {
 /// The batch builder the source sink writes with.
 type SourceBatchBuilder = BatchBuilderAndMetadata<SourceData, (), mz_repr::Timestamp, StorageDiff>;
 
+/// How far past the data the minter commits its ceiling while a snapshot pins the frontier, in
+/// milliseconds, the unit of `mz_repr::Timestamp`. `None` turns committing ahead off.
+///
+/// Floored at `timestamp_interval`, since a ceiling that does not clear a timestamp tick is behind
+/// the data by the time it reaches a writer.
+fn description_lookahead(lookahead: Duration, timestamp_interval: Duration) -> Option<u64> {
+    let to_millis = |d: Duration| {
+        u64::try_from(d.as_millis()).unwrap_or_else(|_| panic!("{:?} cannot fit in u64", d))
+    };
+    let lookahead = to_millis(lookahead);
+    // The floor is applied past the zero test, which is the only value that turns committing
+    // ahead off.
+    (lookahead > 0).then(|| lookahead.max(to_millis(timestamp_interval)))
+}
+
 /// Adds one update to `builder`, keeping the batch metrics in step.
 async fn stage_update(
     builder: &mut SourceBatchBuilder,
@@ -308,6 +332,10 @@ async fn stage_update(
 /// `desired_collection`, and passes the data through to `write_batches`.
 /// This is done to avoid a clone of the underlying data so that both
 /// operators can have the collection as input.
+///
+/// `snapshotting` says whether this incarnation will snapshot the collection, which is what lets
+/// the sink group updates behind the pinned frontier a snapshot holds. See
+/// [`mint_batch_descriptions`].
 pub(crate) fn render<'scope>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     collection_id: GlobalId,
@@ -316,6 +344,8 @@ pub(crate) fn render<'scope>(
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
+    snapshotting: bool,
+    timestamp_interval: Duration,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, ()>,
     StreamVec<'scope, mz_repr::Timestamp, Rc<anyhow::Error>>,
@@ -325,20 +355,33 @@ pub(crate) fn render<'scope>(
 
     let operator_name = format!("persist_sink({})", collection_id);
 
+    let config_set = storage_state.storage_configuration.config_set();
+    let lookahead = description_lookahead(
+        dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD.get(config_set),
+        timestamp_interval,
+    );
+
+    let (desired_stream, max_seen_stream, max_seen_token) =
+        max_seen_timestamps(desired_collection.inner, &operator_name);
+
+    let (batch_descriptions, commitments, passthrough_desired_stream, mint_token) =
+        mint_batch_descriptions(
+            scope,
+            collection_id,
+            &operator_name,
+            &target,
+            desired_stream.as_collection(),
+            max_seen_stream,
+            Arc::clone(&persist_clients),
+            lookahead,
+            snapshotting,
+        );
+
     let source_statistics = storage_state
         .aggregated_statistics
         .get_source(&collection_id)
         .expect("statistics initialized")
         .clone();
-
-    let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
-        scope,
-        collection_id,
-        &operator_name,
-        &target,
-        desired_collection,
-        Arc::clone(&persist_clients),
-    );
 
     let (written_batches, write_token) = write_batches(
         scope,
@@ -346,6 +389,7 @@ pub(crate) fn render<'scope>(
         &operator_name,
         &target,
         batch_descriptions.clone(),
+        commitments,
         passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
         source_statistics,
@@ -368,31 +412,99 @@ pub(crate) fn render<'scope>(
     (
         upper_stream,
         append_errors,
-        vec![mint_token, write_token, append_token],
+        vec![max_seen_token, mint_token, write_token, append_token],
     )
+}
+
+/// Passes `desired` through, and on a second output reports the largest timestamp this worker's
+/// share has reached.
+///
+/// `desired` is pre-sharded, so any one worker sees a share of it. The batch description minter
+/// establishes the committed based the data timestamps, which has to account for every share.
+/// Not every source round-robins messages, and a lack of visibility (e.g. data on one worker,
+/// minter on another) would result in steady state behavior (batch-per-timestamp).
+///
+/// Reported only when the largest timestamp grows, so this carries one timestamp per worker per
+/// distinct time rather than one per batch.
+fn max_seen_timestamps<'scope>(
+    desired: StreamVec<
+        'scope,
+        mz_repr::Timestamp,
+        (Result<Row, DataflowError>, mz_repr::Timestamp, Diff),
+    >,
+    operator_name: &str,
+) -> (
+    StreamVec<'scope, mz_repr::Timestamp, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
+    StreamVec<'scope, mz_repr::Timestamp, mz_repr::Timestamp>,
+    PressOnDropButton,
+) {
+    let mut op = AsyncOperatorBuilder::new(
+        format!("{} max_seen_timestamps", operator_name),
+        desired.scope(),
+    );
+
+    let (data_output, data_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (max_output, max_stream) = op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let mut input = op.new_input_for_many(desired, Pipeline, [&data_output, &max_output]);
+
+    let button = op.build(move |capabilities| async move {
+        // Both outputs are driven by the input, so they use its data capabilities.
+        drop(capabilities);
+
+        let mut max_seen: Option<mz_repr::Timestamp> = None;
+        while let Some(event) = input.next().await {
+            let Event::Data([data_cap, max_cap], mut data) = event else {
+                continue;
+            };
+            if let Some(next_max) = data.iter().map(|(_, ts, _)| *ts).max()
+                && max_seen < Some(next_max)
+            {
+                max_seen = Some(next_max);
+                max_output.give(&max_cap, next_max);
+            }
+            data_output.give_container(&data_cap, &mut data);
+        }
+    });
+
+    (data_stream, max_stream, button.press_on_drop())
 }
 
 /// Whenever the frontier advances, this mints a new batch description (lower
 /// and upper) that writers should use for writing the next set of batches to
 /// persist.
 ///
+/// With a `lookahead`, and while a `snapshotting` export holds the frontier pinned, it also commits
+/// to a ceiling that far past the data and broadcasts it on the second output. A ceiling is not a
+/// description: it gives the writers a bound to group updates under before the frontier certifies
+/// anything, and it binds this operator, which mints nothing below an outstanding ceiling. So the
+/// whole snapshot and the catch-up behind it become one description, emitted when the frontier
+/// reaches the ceiling. See [`next_mint`].
+///
 /// Only one of the workers does this, meaning there will only be one
 /// description in the stream, even in case of multiple timely workers. Use
 /// `broadcast()` to, ahem, broadcast, the one description to all downstream
 /// write operators/workers.
+///
+/// `max_seen` carries every worker's largest timestamp, which paces the commitments. It is routed
+/// here from [`max_seen_timestamps`], so it is the same collection `desired_collection` is a share
+/// of.
 fn mint_batch_descriptions<'scope>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
     desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
+    max_seen: StreamVec<'scope, mz_repr::Timestamp, mz_repr::Timestamp>,
     persist_clients: Arc<PersistClientCache>,
+    lookahead: Option<u64>,
+    snapshotting: bool,
 ) -> (
     StreamVec<
         'scope,
         mz_repr::Timestamp,
         (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>),
     >,
+    StreamVec<'scope, mz_repr::Timestamp, Commitment>,
     StreamVec<'scope, mz_repr::Timestamp, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
     PressOnDropButton,
 ) {
@@ -417,24 +529,34 @@ fn mint_batch_descriptions<'scope>(
     );
 
     let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (ceiling_output, ceiling_output_stream) =
+        mint_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let (data_output, data_output_stream) =
         mint_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
-    // The description and the data-passthrough outputs are both driven by this input, so
+    // The description, ceiling and data-passthrough outputs are all driven by this input, so
     // they use a standard input connection.
-    let mut desired_input =
-        mint_op.new_input_for_many(desired_collection.inner, Pipeline, [&output, &data_output]);
+    let mut desired_input = mint_op.new_input_for_many(
+        desired_collection.inner,
+        Pipeline,
+        [&output, &ceiling_output, &data_output],
+    );
+
+    // Every worker's share of the data reports its largest timestamp here. This is a disconnected
+    // input because it doesn't drive the outputs, it only influences the bounds of descriptions.
+    let mut max_seen_input =
+        mint_op.new_disconnected_input(max_seen, Exchange::new(move |_| hashed_id));
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
         if !active_worker {
-            // The description output is entirely driven by the active worker, so we drop
-            // its capability here. The data-passthrough output just uses the data
+            // The description and ceiling outputs are entirely driven by the active worker, so we
+            // drop their capabilities here. The data-passthrough output just uses the data
             // capabilities.
             drop(capabilities);
             while let Some(event) = desired_input.next().await {
                 match event {
-                    Event::Data([_output_cap, data_output_cap], mut data) => {
+                    Event::Data([_output_cap, _ceiling_cap, data_output_cap], mut data) => {
                         data_output.give_container(&data_output_cap, &mut data);
                     }
                     Event::Progress(_) => {}
@@ -444,8 +566,10 @@ fn mint_batch_descriptions<'scope>(
         }
         // The data-passthrough output should will use the data capabilities, so we drop
         // its capability here.
-        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+        let [desc_cap, ceiling_cap, _]: [_; 3] =
+            capabilities.try_into().expect("one capability per output");
         let mut cap_set = CapabilitySet::from_elem(desc_cap);
+        let mut ceiling_cap_set = CapabilitySet::from_elem(ceiling_cap);
 
         // Initialize this operators's `upper` to the `upper` of the persist shard we are writing
         // to. Data from the source not beyond this time will be dropped, as it has already
@@ -485,32 +609,90 @@ fn mint_batch_descriptions<'scope>(
             upper
         };
 
-        // The current input frontiers.
-        let mut desired_frontier;
+        // The current input frontier.
+        let mut desired_frontier = Antichain::from_elem(mz_repr::Timestamp::minimum());
+
+        // The largest timestamp any worker's share of the data has reached, which is what the next
+        // commitment is timed against. See [`max_seen_timestamps`].
+        let mut max_seen_ts: Option<mz_repr::Timestamp> = None;
+
+        // The first non-minimum frontier the collection takes, tracked only while `snapshotting`.
+        // A source emits its snapshot at the minimum from-time, so the whole snapshot occupies the
+        // single time that reclocks to, and the frontier moving off that value is the snapshot
+        // ending. Frontiers only advance, so this can never re-arm. Nothing is committed before it
+        // arms: timely does not order progress ahead of data, and a row seen under the minimum
+        // frontier would otherwise anchor the ceiling at the shard upper, which on a fresh shard
+        // is the whole gap from zero to the wall clock.
+        let mut first_frontier: Option<Antichain<mz_repr::Timestamp>> = None;
+
+        // The outstanding ceiling, if any. While one is held nothing below it is minted, which is
+        // what makes it binding.
+        let mut committed: Option<mz_repr::Timestamp> = None;
 
         loop {
-            if let Some(event) = desired_input.next().await {
-                match event {
-                    Event::Data([_output_cap, data_output_cap], mut data) => {
+            tokio::select! {
+                event = desired_input.next() => match event {
+                    Some(Event::Data([_output_cap, _ceiling_cap, data_output_cap], mut data)) => {
                         // Just passthrough the data.
                         data_output.give_container(&data_output_cap, &mut data);
-                        continue;
                     }
-                    Event::Progress(frontier) => {
+                    Some(Event::Progress(frontier)) => {
+                        if snapshotting
+                            && first_frontier.is_none()
+                            && frontier != Antichain::from_elem(mz_repr::Timestamp::minimum())
+                        {
+                            first_frontier = Some(frontier.clone());
+                        }
                         desired_frontier = frontier;
                     }
+                    // Input is exhausted, so we can shut down.
+                    None => return,
+                },
+                // Reports arrive on their own edge, so one can trail the data it summarizes by a
+                // round. That only delays a commitment, and the first one is timed against the
+                // frontier rather than the data.
+                Some(event) = max_seen_input.next() => {
+                    if let Event::Data(_cap, data) = event {
+                        max_seen_ts = std::cmp::max(max_seen_ts, data.into_iter().max());
+                    }
                 }
-            } else {
-                // Input is exhausted, so we can shut down.
-                return;
-            };
+            }
 
-            // If the new frontier for the data input has progressed, produce a batch description.
-            if PartialOrder::less_than(&current_upper, &desired_frontier) {
-                // The maximal description range we can produce.
-                let batch_description = (current_upper.to_owned(), desired_frontier.to_owned());
+            let snapshot_in_progress = snapshotting
+                && first_frontier
+                    .as_ref()
+                    .is_some_and(|first| *first == desired_frontier);
 
-                let lower = batch_description.0.as_option().copied().unwrap();
+            while let Some(mint) = next_mint(
+                &current_upper,
+                &desired_frontier,
+                max_seen_ts,
+                committed,
+                lookahead.filter(|_| snapshot_in_progress),
+            ) {
+                let lower = current_upper
+                    .as_option()
+                    .copied()
+                    .expect("a non-empty current upper, or nothing is minted");
+
+                let upper = match mint {
+                    Mint::Ceiling(ceiling) => {
+                        let cap = ceiling_cap_set
+                            .try_delayed(&lower)
+                            .expect("ceiling capability holds the current upper");
+                        trace!(
+                            "persist_sink {collection_id}/{shard_id}: \
+                                committing ceiling: {:?}",
+                            ceiling
+                        );
+                        ceiling_output.give(&cap, Commitment { lower, ceiling });
+                        committed = Some(ceiling);
+                        continue;
+                    }
+                    Mint::Description(upper) => upper,
+                };
+
+                let batch_description = (current_upper.to_owned(), upper.to_owned());
 
                 let cap = cap_set
                     .try_delayed(&lower)
@@ -538,28 +720,99 @@ fn mint_batch_descriptions<'scope>(
                 trace!(
                     "persist_sink {collection_id}/{shard_id}: \
                         downgrading to {:?}",
-                    desired_frontier
+                    upper
                 );
-                cap_set.downgrade(desired_frontier.iter());
+                cap_set.downgrade(upper.iter());
+                ceiling_cap_set.downgrade(upper.iter());
 
-                // After successfully emitting a new description, we can update the upper for the
-                // operator.
-                current_upper.clone_from(&desired_frontier);
+                // The description that retires a ceiling covers everything the writers grouped
+                // under it, so the next one starts fresh.
+                committed = None;
+                current_upper = upper;
             }
         }
     });
 
     (
         output_stream,
+        ceiling_output_stream,
         data_output_stream,
         shutdown_button.press_on_drop(),
     )
+}
+
+/// A bound the minter commits ahead of the frontier, broadcast to the writers.
+///
+/// `lower` is the lower of the description that will end at or past `ceiling`, which the writers
+/// need before that description exists, since a builder declares its lower when it opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+struct Commitment {
+    lower: mz_repr::Timestamp,
+    ceiling: mz_repr::Timestamp,
+}
+
+/// What [`mint_batch_descriptions`] does with the frontier and the data it has seen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Mint {
+    /// Emit a description ending here, the unit `append_batches` appends.
+    Description(Antichain<mz_repr::Timestamp>),
+    /// Commit to this ceiling and broadcast it to the writers. Not a description: it gives them a
+    /// bound to group under, and binds the minter to mint nothing below it.
+    Ceiling(mz_repr::Timestamp),
+}
+
+/// The next thing the minter emits, or `None` when there is nothing to do.
+///
+/// A description is derived from the frontier, which certifies that everything below it has
+/// arrived. An outstanding `committed` ceiling suppresses that until the frontier reaches the
+/// ceiling, which is what collapses a whole snapshot and the catch-up behind it into one
+/// description.
+///
+/// A `lookahead` is given only while a snapshot pins the frontier, and commits a ceiling that far
+/// past the largest timestamp the data has reached. The lead is what lets the ceiling reach the
+/// writers before the updates it covers, since a builder only takes updates at times it was opened
+/// for. Before any data the snapshot's rows are about to land at the pinned time itself, so that
+/// stands in for the data.
+///
+/// Committing is confined to a snapshot because a ceiling is binding. While it is outstanding no
+/// description is derived from the frontier either, so once the snapshot ends the shard upper waits
+/// for the frontier to reach the ceiling rather than advancing to where the frontier actually is. A
+/// collection that is keeping up lags the data by about one timestamp and so has nothing to group,
+/// and would pay that wait for nothing.
+fn next_mint(
+    current_upper: &Antichain<mz_repr::Timestamp>,
+    desired_frontier: &Antichain<mz_repr::Timestamp>,
+    max_seen_ts: Option<mz_repr::Timestamp>,
+    committed: Option<mz_repr::Timestamp>,
+    lookahead: Option<u64>,
+) -> Option<Mint> {
+    let frontier_reached = |ts: mz_repr::Timestamp| {
+        PartialOrder::less_equal(&Antichain::from_elem(ts), desired_frontier)
+    };
+    if committed.is_none_or(frontier_reached)
+        && PartialOrder::less_than(current_upper, desired_frontier)
+    {
+        return Some(Mint::Description(desired_frontier.clone()));
+    }
+
+    let lookahead = lookahead?;
+    let lower = *current_upper.as_option()?;
+    // Before any data the snapshot's rows are about to land at the pinned time itself, so that
+    // stands in for the data.
+    let ceiling = max_seen_ts.unwrap_or(lower).checked_add(lookahead)?;
+    (lower < ceiling && committed.is_none_or(|c| c < ceiling)).then_some(Mint::Ceiling(ceiling))
 }
 
 /// Writes `desired_collection` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` (with additional metadata)
 /// for any batch of updates that was written.
+///
+/// Every update below the ceiling `mint_batch_descriptions` commits goes into one open builder,
+/// whatever its timestamp, so a pinned frontier costs one batch rather than one per timestamp. An
+/// update that outruns the ceiling, or arrives while none is committed, has no bound to be grouped
+/// under and writes a batch of its own timestamp, which is what the sink does for every update when
+/// nothing is ever committed ahead of the frontier.
 ///
 /// This operator assumes that the `desired_collection` comes pre-sharded.
 ///
@@ -574,6 +827,7 @@ fn write_batches<'scope>(
         mz_repr::Timestamp,
         Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     >,
+    commitments: StreamVec<'scope, mz_repr::Timestamp, Commitment>,
     desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     source_statistics: SourceStatistics,
@@ -595,6 +849,9 @@ fn write_batches<'scope>(
 
     let mut descriptions_input =
         write_op.new_input_for(batch_descriptions.broadcast(), Pipeline, &output);
+    // Commitments only route updates into builders, so this input is disconnected: holding the
+    // output back on it would stall every batch behind the minter's own progress.
+    let mut commitments_input = write_op.new_disconnected_input(commitments.broadcast(), Pipeline);
     let mut desired_input = write_op.new_disconnected_input(desired_collection.inner, Pipeline);
 
     // This operator accepts the current and desired update streams for a `persist` shard.
@@ -603,8 +860,37 @@ fn write_batches<'scope>(
     // upper_.
 
     let shutdown_button = write_op.build(move |_capabilities| async move {
-        // In-progress batches of data, keyed by timestamp.
-        let mut stashed_batches = BTreeMap::new();
+        // Builders for timestamps no ceiling covers, keyed by timestamp.
+        //
+        // A batch builder cannot be split, so an update may only join updates at other timestamps
+        // once a bound they all fall below is known. Until then a timestamp gets a builder to
+        // itself, which is safe without knowing the descriptions because a description covers a
+        // timestamp entirely or not at all. Such a builder stays below `persist_blob_target_size`
+        // and so holds its rows in memory, so it is finished as soon as a description covers it
+        // rather than held until that description is ready.
+        let mut uncovered_builders: BTreeMap<mz_repr::Timestamp, SourceBatchBuilder> =
+            BTreeMap::new();
+
+        // The outstanding commitment: the bounds the open builder takes updates in, and the lower
+        // it declares. The ceiling is raised to the description's own upper once that arrives, so
+        // rows landing between arrival and readiness still join. `None` until the first commitment,
+        // which leaves every timestamp writing its own batch.
+        let mut commitment: Option<Commitment> = None;
+
+        // The one open builder, holding every update inside the commitment regardless of
+        // timestamp. It reaches `persist_blob_target_size` and spills its parts to blob, so what it
+        // holds resident is one unflushed part however long the frontier stays pinned. Only ever
+        // one, because the minter mints nothing below an outstanding ceiling, so there is exactly
+        // one description in flight for it to be finished under.
+        let mut open_builder: Option<SourceBatchBuilder> = None;
+
+        // Batches finished before their description became ready, keyed by the description's
+        // lower. A description can take any number of batches, so an uncovered builder is closed
+        // as soon as a description covers it rather than held open.
+        let mut description_batches: BTreeMap<
+            mz_repr::Timestamp,
+            Vec<HollowBatchAndMetadata<mz_repr::Timestamp>>,
+        > = BTreeMap::new();
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -655,11 +941,44 @@ fn write_batches<'scope>(
             // Wait for either inputs to become ready
             tokio::select! {
                 _ = descriptions_input.ready() => {},
+                _ = commitments_input.ready() => {},
                 _ = desired_input.ready() => {},
             }
 
-            // Collect ready work from both inputs
-            while let Some(event) = descriptions_input.next_sync() {
+            // Collect ready work from all three inputs. Commitments and descriptions are processed
+            // before the data of the same round so that an update whose bound arrived alongside it
+            // can go straight into the open builder instead of writing a batch of its own.
+            let ready_commitments =
+                std::iter::from_fn(|| commitments_input.next_sync()).collect_vec();
+            let ready_descriptions =
+                std::iter::from_fn(|| descriptions_input.next_sync()).collect_vec();
+            let ready_events = std::iter::from_fn(|| desired_input.next_sync()).collect_vec();
+
+            // We now start the async work for the input we received. Until we finish the dataflow
+            // should be marked as busy.
+            let permit = busy_signal.acquire().await;
+
+            for event in ready_commitments {
+                let Event::Data(_cap, data) = event else {
+                    continue;
+                };
+                for next in data {
+                    // A commitment for a different lower belongs to a later description, so it
+                    // cannot widen the open builder, which is finished under its own.
+                    match commitment {
+                        Some(held) if held.lower == next.lower => {
+                            commitment = Some(Commitment {
+                                ceiling: held.ceiling.max(next.ceiling),
+                                ..held
+                            })
+                        }
+                        Some(_) => {}
+                        None => commitment = Some(next),
+                    }
+                }
+            }
+
+            for event in ready_descriptions {
                 match event {
                     Event::Data(cap, data) => {
                         // Ingest new batch descriptions.
@@ -674,6 +993,42 @@ fn write_batches<'scope>(
                                     description, desired_frontier, batch_descriptions_frontier,
                                 );
                             }
+
+                            let (lower, upper) = (&description.0, &description.1);
+                            let lower_ts = *lower
+                                .as_option()
+                                .expect("minted descriptions have a single-element lower");
+
+                            // The description that retires a commitment ends at or past its
+                            // ceiling, so rows landing between its arrival and its readiness can
+                            // still join the builder it will be finished under.
+                            if let Some(held) = commitment.filter(|held| held.lower == lower_ts)
+                                && let Some(upper_ts) = upper.as_option()
+                            {
+                                commitment = Some(Commitment {
+                                    ceiling: held.ceiling.max(*upper_ts),
+                                    ..held
+                                });
+                            }
+
+                            // Finish any per-timestamp builders when a description arrives to avoid
+                            // keeping things in memory. This isn't ideal as we're creating a batch
+                            // with a potentially small number of rows, but it should be rare. This
+                            // can happen when data arrives ahead of the description, so if this
+                            // becomes a problem, we should look to get descriptions to this
+                            // operator sooner.
+                            let uncovered_timestamps: Vec<_> = uncovered_builders
+                                .keys()
+                                .filter(|ts| lower.less_equal(ts) && !upper.less_equal(ts))
+                                .copied()
+                                .collect();
+                            for ts in uncovered_timestamps {
+                                let builder =
+                                    uncovered_builders.remove(&ts).expect("just looked up");
+                                let batch = builder.finish(lower.clone(), upper.clone()).await;
+                                description_batches.entry(lower_ts).or_default().push(batch);
+                            }
+
                             match in_flight_batches.entry(description) {
                                 std::collections::hash_map::Entry::Vacant(v) => {
                                     // This _should_ be `.retain`, but rust
@@ -699,12 +1054,6 @@ fn write_batches<'scope>(
                 }
             }
 
-            let ready_events = std::iter::from_fn(|| desired_input.next_sync()).collect_vec();
-
-            // We know start the async work for the input we received. Until we finish the dataflow
-            // should be marked as busy.
-            let permit = busy_signal.acquire().await;
-
             for event in ready_events {
                 match event {
                     Event::Data(_cap, data) => {
@@ -725,11 +1074,43 @@ fn write_batches<'scope>(
 
                         for (row, ts, diff) in data {
                             if write.upper().less_equal(&ts) {
-                                let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                    BatchBuilderAndMetadata::new(
-                                        write.builder(operator_batch_lower.clone()),
-                                    )
-                                });
+                                // Every description this operator has emitted was covered by the
+                                // desired frontier at the time, so no update below
+                                // `operator_batch_lower` can still be in flight. An update that
+                                // arrives anyway belongs to a description that is already gone: it
+                                // matches no later description, so its batch would never be
+                                // appended and the update would be lost unnoticed. Not a
+                                // `debug_assert!`, which compiles out of the optimized and release
+                                // profiles and would leave the loss silent everywhere it matters.
+                                assert!(
+                                    operator_batch_lower.less_equal(&ts),
+                                    "persist_sink {collection_id}/{shard_id}: update at {ts:?} \
+                                    arrived below the emitted batch lower {operator_batch_lower:?}",
+                                );
+
+                                let inside =
+                                    commitment.filter(|held| held.lower <= ts && ts < held.ceiling);
+                                let builder = if let Some(held) = inside {
+                                    // The description retiring the commitment is known to contain
+                                    // it, so the update joins the one open builder whatever its
+                                    // timestamp.
+                                    open_builder.get_or_insert_with(|| {
+                                        BatchBuilderAndMetadata::new(
+                                            write.builder(Antichain::from_elem(held.lower)),
+                                        )
+                                    })
+                                } else {
+                                    // Nothing to group under, so the only lower this builder can
+                                    // declare is the operator's own, the one lower at or below
+                                    // every description that could come to cover it. That
+                                    // declaration is what registers the batch truncated once it is
+                                    // appended under a description's narrower bounds.
+                                    uncovered_builders.entry(ts).or_insert_with(|| {
+                                        BatchBuilderAndMetadata::new(
+                                            write.builder(operator_batch_lower.clone()),
+                                        )
+                                    })
+                                };
                                 stage_update(builder, row, ts, diff).await;
                                 source_statistics.inc_updates_staged_by(1);
                             }
@@ -740,6 +1121,7 @@ fn write_batches<'scope>(
                     }
                 }
             }
+
             // We may have the opportunity to commit updates, if either frontier
             // has moved
             if PartialOrder::less_equal(&processed_desired_frontier, &desired_frontier)
@@ -800,45 +1182,58 @@ fn write_batches<'scope>(
                     }
 
                     let (batch_lower, batch_upper) = batch_description;
+                    let lower = *batch_lower
+                        .as_option()
+                        .expect("minted descriptions have a single-element lower");
 
-                    let finalized_timestamps: Vec<_> = stashed_batches
+                    let mut batch_tokens = description_batches.remove(&lower).unwrap_or_default();
+
+                    // Updates that arrived after this description did, with no commitment to group
+                    // them, are still in builders of their own.
+                    let covered: Vec<_> = uncovered_builders
                         .keys()
-                        .filter(|time| {
-                            batch_lower.less_equal(time) && !batch_upper.less_equal(time)
-                        })
                         .copied()
+                        .filter(|ts| batch_lower.less_equal(ts) && !batch_upper.less_equal(ts))
                         .collect();
+                    for ts in covered {
+                        let builder = uncovered_builders.remove(&ts).expect("just looked up");
+                        batch_tokens.push(
+                            builder
+                                .finish(batch_lower.clone(), batch_upper.clone())
+                                .await,
+                        );
+                    }
 
-                    let mut batch_tokens = vec![];
-                    for ts in finalized_timestamps {
-                        let batch_builder = stashed_batches.remove(&ts).unwrap();
-
+                    if commitment.is_some_and(|held| held.lower == lower)
+                        && let Some(builder) = open_builder.take()
+                    {
+                        commitment = None;
                         if collection_id.is_user() {
                             trace!(
                                 "persist_sink {collection_id}/{shard_id}: \
-                                    wrote batch from worker {}: ({:?}, {:?}),
-                                    containing {:?}",
-                                worker_index, batch_lower, batch_upper, batch_builder.metrics
+                                    wrote batch from worker {}: ({:?}, {:?}), containing {:?}",
+                                worker_index, batch_lower, batch_upper, builder.metrics
                             );
                         }
 
-                        let batch = batch_builder
-                            .finish(batch_lower.clone(), batch_upper.clone())
-                            .await;
-
-                        // The next "safe" lower for batches is the meet (max) of all the emitted
-                        // batches. These uppers all are not beyond the `desired_frontier`, which
-                        // means all updates received by this operator will be beyond this lower.
-                        // Additionally, the `mint_batch_descriptions` operator ensures that
-                        // later-received batch descriptions will start beyond these uppers as
-                        // well.
-                        //
-                        // It is impossible to emit a batch description that is
-                        // beyond a not-yet emitted description in `in_flight_batches`, as
-                        // a that description would also have been chosen as ready above.
-                        operator_batch_lower = operator_batch_lower.join(&batch_upper);
-                        batch_tokens.push(batch);
+                        batch_tokens.push(
+                            builder
+                                .finish(batch_lower.clone(), batch_upper.clone())
+                                .await,
+                        );
                     }
+
+                    // The next "safe" lower for batches is the meet (max) of all the emitted
+                    // batches. These uppers all are not beyond the `desired_frontier`, which
+                    // means all updates received by this operator will be beyond this lower.
+                    // Additionally, the `mint_batch_descriptions` operator ensures that
+                    // later-received batch descriptions will start beyond these uppers as
+                    // well.
+                    //
+                    // It is impossible to emit a batch description that is
+                    // beyond a not-yet emitted description in `in_flight_batches`, as
+                    // a that description would also have been chosen as ready above.
+                    operator_batch_lower = operator_batch_lower.join(&batch_upper);
 
                     output.give_container(&cap, &mut batch_tokens);
 
@@ -1464,6 +1859,8 @@ mod tests {
     enum Step {
         /// Deliver a batch description, as `mint_batch_descriptions` would.
         Description(u64, u64),
+        /// Deliver a commitment, as `mint_batch_descriptions` would.
+        Commit(u64, u64),
         /// Deliver `count` updates at time `at`.
         Updates(u64, usize),
         /// Advance both input frontiers.
@@ -1508,9 +1905,10 @@ mod tests {
             // rather than going through `Capture`.
             let emitted = Rc::new(RefCell::new(Vec::new()));
 
-            let (mut descs_input, mut data_input, button) = worker
-                .dataflow::<mz_repr::Timestamp, _, _>(|scope| {
+            let (mut descs_input, mut ceilings_input, mut data_input, button) =
+                worker.dataflow::<mz_repr::Timestamp, _, _>(|scope| {
                     let (descs_input, descs) = scope.new_input();
+                    let (ceilings_input, ceilings) = scope.new_input();
                     let (data_input, data) = scope.new_input();
 
                     let source_id = GlobalId::User(0);
@@ -1535,6 +1933,7 @@ mod tests {
                         "test",
                         &target,
                         descs,
+                        ceilings,
                         data.as_collection(),
                         persist_clients,
                         source_statistics,
@@ -1557,7 +1956,7 @@ mod tests {
                         }
                     });
 
-                    (descs_input, data_input, button)
+                    (descs_input, ceilings_input, data_input, button)
                 });
 
             // The operator waits on persist off the timely scheduler, so a plain `step` can find
@@ -1580,6 +1979,10 @@ mod tests {
                     Step::Description(lower, upper) => {
                         descs_input.send((frontier(lower), frontier(upper)));
                     }
+                    Step::Commit(lower, ceiling) => ceilings_input.send(Commitment {
+                        lower: ts(lower),
+                        ceiling: ts(ceiling),
+                    }),
                     Step::Updates(at, count) => {
                         for i in 0..i64::try_from(count).expect("small count") {
                             let row = Row::pack_slice(&[Datum::Int64(i)]);
@@ -1588,6 +1991,7 @@ mod tests {
                     }
                     Step::AdvanceTo(t) => {
                         descs_input.advance_to(ts(t));
+                        ceilings_input.advance_to(ts(t));
                         data_input.advance_to(ts(t));
                     }
                 }
@@ -1595,6 +1999,7 @@ mod tests {
             }
 
             descs_input.close();
+            ceilings_input.close();
             data_input.close();
             for _ in 0..1_000 {
                 if !worker.step_or_park(Some(Duration::from_millis(1))) {
@@ -1902,6 +2307,75 @@ mod tests {
             i64::try_from(SNAPSHOT_ROWS).expect("small")
                 + i64::try_from(PINNED_TIMES).expect("small"),
             "the same updates should be readable however they were batched"
+        );
+    }
+
+    /// The same snapshot with a ceiling committed first, which is what the minter does behind a
+    /// frontier that is not moving. The description itself only arrives once the frontier reaches
+    /// the ceiling, which is what ends the script.
+    fn committed_ceiling_script(snapshot_rows: usize, pinned_times: u64, done: u64) -> Vec<Step> {
+        let mut script = vec![
+            Step::Commit(0, done),
+            Step::AdvanceTo(1),
+            Step::Updates(1, snapshot_rows),
+        ];
+        for t in 2..=pinned_times + 1 {
+            script.push(Step::Updates(t, 1));
+        }
+        script.push(Step::Description(0, done));
+        script.push(Step::AdvanceTo(done));
+        script
+    }
+
+    /// A ceiling committed ahead of the frontier gives arriving updates a bound, so a pinned
+    /// frontier writes one batch rather than one per timestamp, and the rows sit in a builder that
+    /// fills to the blob target instead of many single-timestamp builders that each stay under it
+    /// and hold their rows in memory.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_routes_updates_below_the_ceiling_into_one_builder() {
+        const SNAPSHOT_ROWS: usize = 4;
+        const PINNED_TIMES: u64 = 16;
+        const DONE: u64 = PINNED_TIMES + 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            committed_ceiling_script(SNAPSHOT_ROWS, PINNED_TIMES, DONE),
+        )
+        .await;
+
+        assert_eq!(
+            emitted.len(),
+            1,
+            "the whole snapshot should share the one open builder, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            emitted[0].0,
+            EmittedBatch {
+                lower: 0,
+                upper: DONE,
+                data_max_ts: PINNED_TIMES + 1,
+                inserts: u64::cast_from(SNAPSHOT_ROWS) + PINNED_TIMES,
+            }
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(SNAPSHOT_ROWS).expect("small")
+                + i64::try_from(PINNED_TIMES).expect("small"),
+            "grouping must not change what the shard ends up holding"
         );
     }
 }
