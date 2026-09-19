@@ -165,6 +165,21 @@ Materialize console.
 
 <img width="1440" alt="Screenshot 2023-12-28 at 18 45 11" src="https://github.com/MaterializeInc/materialize/assets/23521087/c530769e-3445-49c8-8f36-9f7166352ac4">
 
+### LibreDB Studio
+
+{{< tip >}}
+The object browser lists Materialize's tables, views, and materialized views
+along with their columns, and the SQL editor supports Materialize-specific
+statements like `SHOW MATERIALIZED VIEWS` and `SHOW SOURCES`.
+{{< /tip >}}
+
+To connect to Materialize using [LibreDB Studio](https://github.com/libredb/libredb-studio),
+an open-source, browser-based SQL IDE, choose the **PostgreSQL** driver in the
+connection dialog and use the credentials from the Materialize console (host,
+port **6875**, your app password, SSL mode **Require**).
+
+<img width="1440" alt="Connect using the credentials provided in the Materialize console" src="https://github.com/user-attachments/assets/55212af8-66e0-4add-a7df-ea6eeb13d190">
+
 ### `psql`
 
 {{< warning >}}
