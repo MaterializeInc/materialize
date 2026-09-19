@@ -126,6 +126,9 @@ def get_minimal_system_parameters(
         "enable_background_alter_cluster": (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         ),
+        "enable_cluster_reconfiguration_lag_gate": (
+            "true" if version >= MzVersion.parse_mz("v26.44.0-dev") else "false"
+        ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         # Introspection goldens depend on the replica topology, so tests need
@@ -899,6 +902,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "read_then_write_max_dependencies",
     "enable_hydration_burst",
     "default_hydration_burst_linger",
+    "cluster_reconfiguration_allowed_lag",
 ]
 
 

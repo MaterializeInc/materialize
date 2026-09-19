@@ -41,13 +41,13 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
 use mz_catalog::memory::objects::Cluster;
+use mz_compute_client::controller::CollectionReadiness;
 use mz_controller::clusters::{ClusterStatus, ProcessId};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, Timestamp};
-use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp as _};
 
 use crate::coord::{ClusterReplicaStatuses, Coordinator};
@@ -649,27 +649,21 @@ impl Coordinator {
                     // NOTE: there is deliberately no `cutoff` escape hatch here. A frontier frozen
                     // at the minimum is exactly what this gate must catch, so a collection stuck
                     // here blocks promotion until `with_0dt_deployment_max_wait` elapses.
-                    let write_frontier_plus_allowed_lag = Antichain::from_iter(
-                        write_frontier
-                            .iter()
-                            .map(|t| t.step_forward_by(&allowed_lag)),
-                    );
-                    let within_lag = PartialOrder::less_equal(
-                        &Antichain::from_elem(now),
-                        &write_frontier_plus_allowed_lag,
+                    let readiness = CollectionReadiness::classify(
+                        collection_hydrated,
+                        &write_frontier,
+                        Some((&Antichain::from_elem(now), allowed_lag)),
                     );
 
                     tracing::info!(
                         ?write_frontier,
-                        %collection_hydrated,
-                        %within_lag,
+                        ?readiness,
                         ?allowed_lag,
                         ?now,
                         "collection {id} not in live frontiers"
                     );
                     if write_frontier.less_equal(&Timestamp::minimum())
-                        || !collection_hydrated
-                        || !within_lag
+                        || readiness != CollectionReadiness::Ready
                     {
                         all_caught_up = false;
                     }
@@ -713,18 +707,6 @@ impl Coordinator {
                 continue;
             }
 
-            // We can't do easy comparisons and subtractions, so we bump up the
-            // write frontier by the allowed lag, and then compare that against
-            // the write frontier.
-            let write_frontier_plus_allowed_lag = write_frontier
-                .iter()
-                .map(|t| t.step_forward_by(&allowed_lag));
-            let bumped_write_plus_allowed_lag =
-                Antichain::from_iter(write_frontier_plus_allowed_lag);
-
-            let within_lag =
-                PartialOrder::less_equal(live_write_frontier, &bumped_write_plus_allowed_lag);
-
             // This call is on the expensive side, because we have to do a call
             // across a task/channel boundary, and our work competes with other
             // things the compute/instance controller might be doing. But it's
@@ -740,17 +722,25 @@ impl Coordinator {
                 CollectionType::Storage => self.controller.storage.collection_hydrated(id)?,
             };
 
+            // The leader reports write frontiers, including REFRESH jumps. Comparing
+            // those with local output frontiers would wait for computation through
+            // the next refresh time even when the deployments are equally caught up.
+            let readiness = CollectionReadiness::classify(
+                collection_hydrated,
+                &write_frontier,
+                Some((live_write_frontier, allowed_lag)),
+            );
+
             // We don't expect collections to get hydrated, ingestions to be
             // started, etc. when they are already at the empty write frontier.
-            if live_write_frontier.is_empty() || (within_lag && collection_hydrated) {
+            if live_write_frontier.is_empty() || readiness == CollectionReadiness::Ready {
                 // This is a bit spammy, but log caught-up collections while we
                 // investigate why environments are cutting over but then a lot
                 // of compute collections are _not_ in fact hydrated on
                 // clusters.
                 tracing::info!(
                     %id,
-                    %within_lag,
-                    %collection_hydrated,
+                    ?readiness,
                     ?write_frontier,
                     ?live_write_frontier,
                     ?allowed_lag,
@@ -763,8 +753,7 @@ impl Coordinator {
                 // that we log all non-caught-up replicas.
                 tracing::info!(
                     %id,
-                    %within_lag,
-                    %collection_hydrated,
+                    ?readiness,
                     ?write_frontier,
                     ?live_write_frontier,
                     ?allowed_lag,
