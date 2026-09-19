@@ -3525,10 +3525,9 @@ struct ReplicaCollectionView<'a> {
 /// `reference`: the furthest any of them has progressed. A target replica is
 /// ready when it is hydrated and, if `allowed_lag` is `Some`, its output frontier
 /// is within that allowance of the reference. `None` checks hydration only. The
-/// allowance is also not applied when the reference frontier is empty, which
-/// happens when no replica is flagged `reference` (nothing is being dropped, so
-/// nothing can be lost) or when a reference replica reports the collection
-/// complete (there is nothing to be behind).
+/// allowance is not applied when no replica is flagged `reference`. An empty
+/// reference frontier, however, means a reference replica has completed the
+/// collection and requires the target to complete it too.
 ///
 /// This is the whole decision, kept free of `Instance` so it can be tested over
 /// plain frontiers. [`Instance::collections_ready_on_replicas`] supplies the
@@ -3548,7 +3547,7 @@ fn classify_collection_readiness<'a>(
         for replica in reference_replicas {
             reference.join_assign(replica.output_frontier);
         }
-        (!reference.is_empty()).then_some((reference, allowed_lag))
+        Some((reference, allowed_lag))
     });
 
     let mut any_hydrated = false;
@@ -3740,15 +3739,21 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn complete_collection_has_nothing_to_lag_behind() {
-        // One replica reporting the collection complete (empty output frontier)
-        // makes the join empty. The allowance does not apply; a hydrated target
-        // at any frontier is ready.
+    fn completed_reference_requires_completed_target() {
+        // Completion on the outgoing replica does not imply that a hydrated
+        // replacement has finished replaying the collection.
         let complete = Antichain::new();
         let behind = ac(1_000);
         assert_eq!(
             classify_collection_readiness(
                 [outgoing(&complete), pending(true, &behind)],
+                Some(Timestamp::new(0))
+            ),
+            CollectionReadiness::Lagging,
+        );
+        assert_eq!(
+            classify_collection_readiness(
+                [outgoing(&complete), pending(true, &complete)],
                 Some(Timestamp::new(0))
             ),
             CollectionReadiness::Ready,
