@@ -143,6 +143,7 @@ pub(crate) async fn migrate(
     );
 
     rewrite_ast_items(tx, |tx, _id, stmt| {
+        let catalog_version = catalog_version.clone();
         // Add per-item AST migrations below.
         //
         // Each migration should be a function that takes `stmt` (the AST
@@ -158,6 +159,9 @@ pub(crate) async fn migrate(
         ast_rewrite_kafka_metadata_refresh_intervals(stmt)?;
         ast_rewrite_small_commit_intervals(stmt)?;
         ast_rewrite_strip_builtin_version_pins(stmt)?;
+        if catalog_version < Version::new(26, 44, 0) {
+            ast_rewrite_char_column_defaults_via_text(stmt)?;
+        }
         Ok(())
     })?;
 
@@ -1285,6 +1289,82 @@ fn rewrite_interval_option_floor_1s(
     Ok(())
 }
 
+/// Wraps the `DEFAULT` expression of every `"char"` table column in an
+/// explicit cast to `text`.
+///
+/// Assignment casts to `"char"` used to route every source type through
+/// `text`, so `DEFAULT 97` planned and stored `'9'`. Integer sources now use
+/// the direct byte cast, which is explicit only, so the same default no longer
+/// plans in assignment context. Casting through `text` first keeps the
+/// persisted statement plannable and keeps the value it always produced.
+///
+/// Only catalogs last migrated by a binary older than 26.44.0 can hold such
+/// a default, so the caller gates on that version.
+fn ast_rewrite_char_column_defaults_via_text(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{ColumnOption, Expr, Value};
+
+    let Statement::CreateTable(stmt) = stmt else {
+        return Ok(());
+    };
+    for column in &mut stmt.columns {
+        if !is_pg_catalog_type(&column.data_type, "char") {
+            continue;
+        }
+        for option in &mut column.options {
+            let ColumnOption::Default(expr) = &mut option.option else {
+                continue;
+            };
+            // String literals coerce straight to `"char"`, and casts to
+            // `"char"` or `text` already plan. Skipping casts to `text` also
+            // makes this rewrite idempotent.
+            match expr {
+                Expr::Value(Value::String(_) | Value::Null) => continue,
+                Expr::Cast { data_type, .. }
+                    if is_pg_catalog_type(data_type, "char")
+                        || is_pg_catalog_type(data_type, "text") =>
+                {
+                    continue;
+                }
+                _ => {}
+            }
+            let inner = std::mem::replace(expr, Expr::Value(Value::Null));
+            *expr = Expr::Cast {
+                expr: Box::new(inner),
+                data_type: pg_catalog_type("text"),
+            };
+        }
+    }
+    Ok(())
+}
+
+/// Reports whether `data_type` names the `pg_catalog` type `name`, in either
+/// the resolved `[s1 AS pg_catalog.name]` or the plain `pg_catalog.name` form.
+fn is_pg_catalog_type(data_type: &mz_sql::ast::RawDataType, name: &str) -> bool {
+    use mz_sql::ast::RawDataType;
+
+    let RawDataType::Other { name: item, .. } = data_type else {
+        return false;
+    };
+    match item.name().0.as_slice() {
+        [schema, ident] => schema.as_str() == "pg_catalog" && ident.as_str() == name,
+        _ => false,
+    }
+}
+
+fn pg_catalog_type(name: &str) -> mz_sql::ast::RawDataType {
+    use mz_sql::ast::{Ident, RawDataType, RawItemName, UnresolvedItemName};
+
+    RawDataType::Other {
+        name: RawItemName::Name(UnresolvedItemName(vec![
+            Ident::new_unchecked("pg_catalog"),
+            Ident::new_unchecked(name),
+        ])),
+        typ_mod: vec![],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1296,6 +1376,72 @@ mod tests {
             .ast;
         ast_rewrite_strip_builtin_version_pins(&mut stmt).expect("rewrite succeeds");
         stmt.to_ast_string_stable()
+    }
+
+    fn rewrite_char_defaults(sql: &str) -> String {
+        let mut stmt = mz_sql::parse::parse(sql)
+            .expect("test sql parses")
+            .into_element()
+            .ast;
+        ast_rewrite_char_column_defaults_via_text(&mut stmt).expect("rewrite succeeds");
+        stmt.to_ast_string_stable()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn char_default_int_literal_is_cast_to_text() {
+        let out = rewrite_char_defaults(
+            r#"CREATE TABLE "materialize"."public"."t" ("c" [s1 AS "pg_catalog"."char"] DEFAULT 97)"#,
+        );
+        assert!(
+            out.contains(r#"DEFAULT 97::"pg_catalog"."text""#),
+            "default not wrapped: {out}"
+        );
+        // Re-running the migration must not nest another cast.
+        assert_eq!(rewrite_char_defaults(&out), out);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn char_default_int_expression_is_cast_to_text() {
+        let out = rewrite_char_defaults(
+            r#"CREATE TABLE "materialize"."public"."t" ("c" [s1 AS "pg_catalog"."char"] DEFAULT 90 + 7)"#,
+        );
+        assert!(
+            out.contains(r#"DEFAULT (90 + 7)::"pg_catalog"."text""#),
+            "default not wrapped: {out}"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn char_defaults_that_already_plan_are_untouched() {
+        for sql in [
+            r#"CREATE TABLE "materialize"."public"."t" ("c" [s1 AS "pg_catalog"."char"] DEFAULT 'a')"#,
+            r#"CREATE TABLE "materialize"."public"."t" ("c" [s1 AS "pg_catalog"."char"] DEFAULT NULL)"#,
+            r#"CREATE TABLE "materialize"."public"."t" ("c" [s1 AS "pg_catalog"."char"] DEFAULT CAST(97 AS [s1 AS "pg_catalog"."char"]))"#,
+            r#"CREATE TABLE "materialize"."public"."t" ("c" [s1 AS "pg_catalog"."char"] DEFAULT CAST(97 AS [s2 AS "pg_catalog"."text"]))"#,
+            r#"CREATE TABLE "materialize"."public"."t" ("c" [s1 AS "pg_catalog"."char"])"#,
+        ] {
+            let expected = mz_sql::parse::parse(sql)
+                .expect("test sql parses")
+                .into_element()
+                .ast
+                .to_ast_string_stable();
+            assert_eq!(rewrite_char_defaults(sql), expected);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn non_char_column_defaults_are_untouched() {
+        let sql = r#"CREATE TABLE "materialize"."public"."t" ("i" [s2 AS "pg_catalog"."int4"] DEFAULT 97, "b" [s3 AS "pg_catalog"."bpchar"] DEFAULT 97, "u" [u1 AS "materialize"."public"."char"] DEFAULT 97)"#;
+        let expected = mz_sql::parse::parse(sql)
+            .expect("test sql parses")
+            .into_element()
+            .ast
+            .to_ast_string_stable();
+        assert_eq!(rewrite_char_defaults(sql), expected);
     }
 
     #[mz_ore::test]
