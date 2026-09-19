@@ -1,7 +1,8 @@
 # The `#[sqlfunc]` macro
 
 The `#[sqlfunc]` attribute macro generates boilerplate for SQL scalar functions.
-It creates a unit struct, a trait implementation (`EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc`), and a `Display` impl from a plain Rust function.
+From a plain Rust function it creates a trait implementation (`EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc`), a `FuncName` implementation, and, unless the function takes a `&self` receiver, the struct itself.
+It also creates a `Display` implementation unless `skip_display` suppresses it.
 
 The macro lives in `src/expr-derive-impl/src/sqlfunc.rs`.
 The generated trait implementations live in `src/expr/src/scalar/func/{unary,binary,variadic}.rs`.
@@ -186,8 +187,8 @@ Update them with `cargo insta accept` after running `cargo test -p mz-expr-deriv
 
 ### `skip_display`
 
-Suppresses the generated `Display` impl. Use this when the struct's `sqlname` depends
-on its own state rather than being a fixed string, so the call site keeps a
+Suppresses the generated `Display` impl. Use this when the displayed name depends on the
+struct's own state rather than being a fixed string, so the call site keeps a
 hand-written `Display` impl. `RangeCreate` is an example: it picks between
 `int4range`, `int8range`, `daterange`, `numrange`, `tsrange`, and `tstzrange` based on
 its `elem_type` field.
@@ -200,11 +201,11 @@ Which modifiers apply to which arity is declared in
 `src/expr-derive-impl/src/shape.rs`, one table per arity. A modifier absent from an
 arity's table is rejected with an error naming both the modifier and the arity.
 
-## Variadic functions
+## Generated items
 
 ### Struct name
 
-For variadic functions, the struct name can be specified as the first positional argument.
+The struct name can be specified as the first positional argument, at any arity.
 This is required when a `&self` receiver is present (the struct is defined externally):
 
 ```rust
@@ -229,10 +230,18 @@ fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
 When a `&self` receiver is present, the macro assumes the struct is defined externally and generates:
 
 * A method `impl StructName { fn ... }` containing the function body.
-* An `EagerVariadicFunc` trait implementation that delegates to the method.
-* A `Display` implementation.
+* The `Eager*Func` trait implementation for the function's arity, delegating to the method.
+* A `Display` implementation, unless `skip_display` suppresses it.
 
 Without `&self`, the macro generates the struct itself (with standard derives) in addition to the trait and display implementations.
+
+### `&RowArena`
+
+A trailing `&RowArena` parameter gives the function access to temporary storage for allocating return values that borrow from the arena.
+It is excluded from arity detection and from the generated `Input` type.
+The arena is always passed to unary, binary, and variadic `call` implementations (the trait requires it); for functions that don't use it, the parameter is simply unused.
+
+## Variadic functions
 
 ### `Variadic<T>` and `OptionalArg<T>`
 
@@ -261,12 +270,6 @@ fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<Str
 
 Both are defined in `src/repr/src/scalar.rs`.
 
-### `&RowArena`
-
-A trailing `&RowArena` parameter gives the function access to temporary storage for allocating return values that borrow from the arena.
-It is excluded from arity detection and from the generated `Input` type.
-The arena is always passed to unary, binary, and variadic `call` implementations (the trait requires it); for functions that don't use it, the parameter is simply unused.
-
 ### Input type
 
 For variadic functions, the generated `Input` type depends on parameter count:
@@ -281,11 +284,14 @@ The interplay between `propagates_nulls`, `introduces_nulls`, and input/output t
 The `output_type` method on each generated struct computes the output `SqlColumnType` as:
 
 ```
-output.nullable = output.nullable || (propagates_nulls && any_input_nullable)
+output.nullable = output.nullable
+    || non_nullable_input_is_nullable
+    || (propagates_nulls && any_input_nullable)
 ```
 
 Where:
 * `output.nullable` comes from `introduces_nulls` (or is inferred from the output type).
+* `non_nullable_input_is_nullable` is true if a nullable input column lands in a parameter position whose Rust type cannot represent NULL. Such a position makes the evaluation layer short-circuit to NULL, so the output is nullable no matter what `propagates_nulls` says. Unary functions have no such term, because a unary function's single position is the one `propagates_nulls` already describes.
 * `propagates_nulls` indicates whether NULL passes through.
 * `any_input_nullable` is true if any input column is nullable.
 
@@ -363,8 +369,8 @@ fn array_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowAre
 
 Two shapes stay hand-written by design.
 
-* Functions generic over an `Eval` implementor, which hold sub-expressions in
-  `Box<E>` and evaluate them per element. The macro would need to emit an
+* Functions generic over an `Eval` implementor, which hold sub-expressions in a `Box<E>`
+  or a `Box<[E]>` and evaluate them per element. The macro would need to emit an
   implementation generic over a struct type parameter with a trait bound, which is a
   different mechanism from the type-parameter erasure it applies today. The nine
   compound-type casts under `src/expr/src/scalar/func/impls/` are these.

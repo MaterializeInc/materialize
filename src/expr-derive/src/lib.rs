@@ -16,9 +16,12 @@
 /// appropriate traits: `EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc`.
 ///
 /// The macro takes the following arguments:
-/// * `is_monotone`: An expression indicating whether the function is monotone. For unary functions,
-///   it should be an expression that evaluates to a boolean. For binary functions, it should be a
-///   tuple of two expressions, each evaluating to a boolean. See `LazyBinaryFunc` for details.
+/// * `is_monotone`: An expression indicating whether the function is monotone. For unary and
+///   variadic functions, it should be an expression that evaluates to a boolean. For binary
+///   functions, it should be a tuple of two expressions, each evaluating to a boolean. See
+///   `LazyBinaryFunc` for details.
+/// * `is_infinity_monotone`: A boolean indicating whether `is_monotone`'s endpoint-sampling
+///   guarantee still holds when an operand may be infinite. Applies to binary functions only.
 /// * `sqlname`: The SQL name of the function.
 /// * `preserves_uniqueness`: A boolean indicating whether the function preserves uniqueness.
 ///   Unary functions only.
@@ -27,7 +30,11 @@
 ///   the `!=` operator is the negation of the `=` operator, and we'd mark the `Eq` function with
 ///   `negate = Some(BinaryFunc::NotEq)`.
 /// * `is_infix_op`: A boolean indicating whether the function is an infix operator. Applies to
-///   binary functions only.
+///   binary and variadic functions.
+/// * `is_associative`: A boolean indicating whether the function is associative. Applies to
+///   variadic functions only.
+/// * `is_eliminable_cast`: A boolean indicating whether the function is a cast that the
+///   optimizer may remove. Applies to unary functions only.
 /// * `output_type`: The output type of the function.
 /// * `output_type_expr`: An expression that evaluates to the output type. Applies to unary,
 ///   binary, and variadic functions. For unary functions, the expression has access to
