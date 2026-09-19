@@ -633,9 +633,8 @@ impl columnation::Columnation for Timestamp {
 /// themselves rather than inherit:
 ///
 ///  * An empty `reference` is the maximum antichain, so the result is `true`
-///    only when `frontier` is empty too. A caller that reads an empty reference
-///    as "this collection is complete, nothing can be behind it" must say so at
-///    its own call site.
+///    only when `frontier` is empty too. It denotes completion, which a finite
+///    `frontier` cannot satisfy, regardless of the allowance.
 ///  * An empty `frontier` is likewise the maximum, so the result is `true` for
 ///    every `reference`.
 pub fn frontier_within_lag(

@@ -734,41 +734,18 @@ impl Instance {
     /// Returns `true` if each non-transient, non-excluded collection is *ready* on at
     /// least one of the target replicas.
     ///
-    /// A collection is ready on a replica when both hold:
+    /// A target must be hydrated and, when `allowed_lag` is `Some`, its output
+    /// frontier must be within that allowance of the furthest output frontier
+    /// among the collection's hosting `reference_replica_ids`. No reference
+    /// replicas means hydration suffices. An empty reference frontier requires
+    /// the target to complete too. `None` checks only hydration.
     ///
-    ///  1. The replica reports it hydrated, i.e. the dataflow has produced output
-    ///     past the as-of it was installed with.
-    ///  2. When `allowed_lag` is `Some`, the replica's output frontier for the
-    ///     collection is at most that far behind the furthest output frontier any
-    ///     of the `reference_replica_ids` reports for it.
+    /// Hydration alone only guarantees output past the installation as-of, not
+    /// that the replica has replayed subsequent updates. Output frontiers measure
+    /// that replay. MV write frontiers can instead reflect another replica's
+    /// writes to the shared shard, or jump ahead to the next `REFRESH` time.
     ///
-    /// Condition 1 alone is not a readiness signal for a cut-over. The as-of is
-    /// pinned when the replica is added and never moves, so a dataflow that spends
-    /// a long time on its initial snapshot reports hydrated the moment that
-    /// snapshot lands, with everything since the as-of still to replay. Condition 2
-    /// is what says the replica has caught up with the replicas it is replacing.
-    /// The caller names those as the reference: the replicas the cut-over will
-    /// drop, whose frontier progress is what a premature cut-over loses. Replicas
-    /// that survive the cut-over do not belong in the reference; they cannot
-    /// regress the cluster's frontier, so measuring against them would only hold
-    /// the bar higher than the property requires. An empty reference means nothing
-    /// is dropped and every hydrated target is ready.
-    ///
-    /// Both sides of condition 2 are *output* frontiers, not write frontiers. For a
-    /// materialized view the replica-reported write frontier is the persist shard's
-    /// upper, which every replica writing the shard shares, and for a `REFRESH`
-    /// materialized view it jumps to the next refresh time. The output frontier is
-    /// the meet of the write frontier and the dataflow's compute probe, so it is
-    /// the replica's own progress in both cases. For an index the two coincide.
-    /// See [`ReplicaCollectionState::hydrated`], which is defined over the output
-    /// frontier for the same reason.
-    ///
-    /// Passing `None` for `allowed_lag` checks condition 1 only, which is the
-    /// break-glass behavior for callers whose config disables the lag gate, and
-    /// what callers that genuinely only want to observe hydration pass.
-    ///
-    /// This also returns `true` in case this cluster does not have any
-    /// replicas.
+    /// Zero-replica clusters return `true`.
     #[mz_ore::instrument(level = "debug")]
     pub fn collections_ready_on_replicas(
         &self,
@@ -3481,13 +3458,9 @@ impl Drop for ReplicaCollectionIntrospection {
 
 /// Classifies one collection's readiness over every replica hosting it.
 ///
-/// The lag reference is the join of `output_frontier` over the replicas flagged
-/// by `reference_replica_ids`: the furthest any of them has progressed. A target replica is
-/// ready when it is hydrated and, if `allowed_lag` is `Some`, its output frontier
-/// is within that allowance of the reference. `None` checks hydration only. With
-/// no reference replica the reference is `Timestamp::MIN`. An empty
-/// reference frontier, however, means a reference replica has completed the
-/// collection and requires the target to complete it too.
+/// Hydration and sufficient progress must belong to the same target replica.
+/// No reference replicas yields `MIN`, while a completed reference yields the
+/// empty frontier. Those cases must remain distinct.
 fn classify_collection_readiness<'a, I>(
     replicas: I,
     target_replica_ids: &BTreeSet<ReplicaId>,

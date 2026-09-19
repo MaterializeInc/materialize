@@ -107,12 +107,8 @@ pub struct SignalRequest {
     /// hydrated, and within the configured lag of the *reference* replicas
     /// named here, the ones the cut-over will drop. `None` does not probe.
     ///
-    /// The reference is chosen by the requesting strategy because only it knows
-    /// which replicas a cut-over retires. Measuring against every replica would
-    /// let a bystander that survives the cut-over, such as a hydration-burst
-    /// replica at a larger size, hold the bar above what the target can reach,
-    /// while protecting nothing: a surviving replica cannot cause the frontier
-    /// regression this gate exists to prevent.
+    /// Surviving replicas must not raise the reference, since cut-over cannot
+    /// lose their progress.
     pub readiness: Option<BTreeSet<ReplicaId>>,
     /// Check whether the cluster has at least one hydratable object bound to
     /// it. See `ClusterControllerCtx::has_hydratable_objects` for what counts.
@@ -173,8 +169,8 @@ pub struct LiveSignals {
     pub hydrated_replicas: BTreeSet<ReplicaId>,
     /// The replicas observed this tick to be ready to cut over to: hydrated, and
     /// within the configured lag of the reference replicas the request named,
-    /// the ones the cut-over will drop. A subset of `hydrated_replicas`. Empty
-    /// when not requested.
+    /// the ones the cut-over will drop. Empty when not requested. The hydration
+    /// signal is populated independently, only when requested.
     pub ready_replicas: BTreeSet<ReplicaId>,
     /// Whether the cluster has at least one hydratable object. `false` when not
     /// requested.
@@ -281,19 +277,11 @@ impl GracefulReconfigurationStrategy {
     /// Whether the cut-over precondition holds: at least
     /// `target.replication_factor` replicas of the target shape report ready.
     ///
-    /// Ready, not merely hydrated: a hydrated replica has produced output past
-    /// the as-of it was installed with, which for a slow-hydrating collection
-    /// can be hours behind the replicas being replaced. See
-    /// [`ClusterControllerCtx::ready_replicas`].
-    ///
     /// Requiring rf-many ready replicas (not just one) preserves the
     /// high-availability guarantee of `replication_factor > 1` across the
     /// cut-over. Extra target-shape replicas beyond the rf do not block: the
     /// post-cut-over reconcile retires them anyway, so waiting for them to
     /// become ready would only delay the cut-over.
-    ///
-    /// [`ClusterControllerCtx::ready_replicas`]:
-    ///     crate::ctx::ClusterControllerCtx::ready_replicas
     fn target_ready(
         &self,
         state: &ClusterState,
@@ -333,12 +321,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         if !in_progress {
             return SignalRequest::default();
         }
-        // The lag reference is the set the cut-over retires: the realized-shape
-        // replicas. Target-shape replicas are what is being judged, and any
-        // other owned replica (a hydration burst) survives the cut-over, so it
-        // can neither regress the frontier nor belong in the bar. When the
-        // target shape equals the realized shape the targets are their own
-        // reference, which is trivially satisfied.
+        // Only the realized-shape replicas are retired by this strategy.
         let realized = state.realized_shape();
         let reference = state
             .replicas

@@ -430,33 +430,15 @@ pub trait ClusterControllerCtx: Send {
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId>;
 
-    /// Of `replicas` on `cluster`, which are online, have *all* current
-    /// (non-transient) collections on the cluster hydrated, *and* for each
-    /// collection are no further than the configured allowance behind the
-    /// furthest output frontier any of the `reference` replicas reports for it.
-    /// The returned set is a subset of `replicas`, and of
-    /// [`Self::hydrated_replicas`].
+    /// Returns the subset of `replicas` that satisfy [`Self::hydrated_replicas`]
+    /// and the configured compute lag allowance. Each compute collection's
+    /// output frontier must be within that allowance of the furthest output
+    /// frontier among its hosting `reference` replicas. Storage remains
+    /// hydration-only. Disabling the lag gate checks only hydration.
     ///
-    /// `reference` is the set the cut-over will drop, so that the gate measures
-    /// exactly the regression it prevents: after the cut-over the cluster's
-    /// frontier is the furthest surviving replica, and only a dropped replica
-    /// can take frontier progress with it. An empty `reference` means nothing
-    /// is dropped and every hydrated replica is ready.
-    ///
-    /// This is the signal for deciding whether to cut over to a replica.
-    /// Hydration alone is not: a dataflow's as-of is pinned when its replica is
-    /// added and never moves, so a long-hydrating collection reports hydrated
-    /// the moment its initial snapshot lands, with everything since the as-of
-    /// still to replay. Cutting over on hydration alone drops the caught-up
-    /// replicas and leaves the cluster's frontiers frozen until the new ones
-    /// catch up.
-    ///
-    /// [`Self::hydrated_replicas`] remains the right signal for observing that
-    /// dataflows have started producing output, which is what the burst
-    /// strategy's durable `steady_hydrated_at` stamp records.
-    ///
-    /// Callers should request only replicas their strategy currently needs. This
-    /// keeps live-signal dependencies local to the strategies that consume them.
+    /// Callers supply the replicas cut-over will retire as `reference`.
+    /// An empty reference set means nothing can regress, so hydration suffices.
+    /// Hydration-burst timing uses [`Self::hydrated_replicas`] instead.
     async fn ready_replicas(
         &mut self,
         cluster_id: ClusterId,

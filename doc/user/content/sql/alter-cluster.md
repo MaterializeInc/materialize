@@ -165,22 +165,29 @@ immediately.
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
-   [hydrate](/fundamentals/concepts/hydration/) and catch up to the current replicas.
+   [hydrate](/fundamentals/concepts/hydration/).
 3. Retires the old replicas.
+
+{{< warn-if-unreleased "v26.44" >}}
+
+Starting in v26.44, Materialize also waits for each required new replica's
+compute collections to catch up to the replicas the resize will retire, with
+a default allowance of 60 seconds per collection. This bounds lag at cutover;
+it does not guarantee zero lag. Source ingestion still waits for hydration only.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
 then from both sets as the new replicas come up, so the resize incurs no
 downtime.
 
-If the new replicas do not hydrate and catch up within the reconfiguration
+If the new replicas do not become ready within the reconfiguration
 timeout (24 hours by default), Materialize rolls back the resize and the cluster
 keeps its current size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options.
 The resize still proceeds in the background.
 
 - `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
   resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
-  replicas and proceed with the new ones even if they have not yet hydrated or
-  caught up, which can cause downtime or stale results) or `ROLLBACK` (keep the
+  replicas and proceed with the new ones even if they are not ready, which can
+  cause downtime or stale results) or `ROLLBACK` (keep the
   current size). Default: `ROLLBACK`.
 
   ```mzsql
@@ -190,9 +197,9 @@ The resize still proceeds in the background.
 
 - `WAIT FOR '<duration>'` is equivalent to `WAIT UNTIL READY (TIMEOUT =
   '<duration>', ON TIMEOUT = 'ROLLBACK')`. Materialize cuts over once the target
-  replicas hydrate and catch up. When Materialize processes an expired timeout,
+  replicas are ready. When Materialize processes an expired timeout,
   it rolls back the resize and keeps the current size if the target replicas
-  have not yet hydrated and caught up.
+  are not ready.
 
 See [Monitoring a resize](#monitoring-a-resize) to track progress and
 [cancel](#monitoring-a-resize) an in-flight resize.
@@ -228,7 +235,7 @@ configuration.
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,
 which incurs **no downtime**. Instead of restarting the cluster, this approach
 spins up an additional cluster replica under the covers with the desired new
-size, waits for the replica to be hydrated and caught up, and then replaces the
+size, waits for the replica to be hydrated, and then replaces the
 original replica.
 
 ```sql

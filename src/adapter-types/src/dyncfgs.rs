@@ -469,8 +469,7 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
 /// Whether a replica must be caught up, not merely hydrated, before a graceful
 /// reconfiguration cuts over to it.
 ///
-/// Break-glass: with this off the cut-over gate is hydration alone, which is the
-/// behavior from before the lag term existed.
+/// Break-glass: with this off the cut-over gate is hydration alone.
 pub const ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE: Config<bool> = Config::new(
     "enable_cluster_reconfiguration_lag_gate",
     true,
