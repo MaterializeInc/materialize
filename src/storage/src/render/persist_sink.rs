@@ -1863,6 +1863,9 @@ mod tests {
         Commit(u64, u64),
         /// Deliver `count` updates at time `at`.
         Updates(u64, usize),
+        /// Deliver `count` updates at time `at` with negated diffs, as the rewind of a snapshot
+        /// does for rows the replication stream redelivers at their true offset.
+        Retractions(u64, usize),
         /// Advance both input frontiers.
         AdvanceTo(u64),
     }
@@ -1989,6 +1992,12 @@ mod tests {
                             data_input.send((Ok(row), ts(at), Diff::ONE));
                         }
                     }
+                    Step::Retractions(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), -Diff::ONE));
+                        }
+                    }
                     Step::AdvanceTo(t) => {
                         descs_input.advance_to(ts(t));
                         ceilings_input.advance_to(ts(t));
@@ -2015,6 +2024,370 @@ mod tests {
             emitted
         })
         .await
+    }
+
+    /// What `mint_batch_descriptions` put on each of its two outputs.
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct Minted {
+        descriptions: Vec<(u64, u64)>,
+        commitments: Vec<(u64, u64)>,
+    }
+
+    /// Drives `mint_batch_descriptions` through `script` and returns what it emitted.
+    ///
+    /// Closing the input mints a final description with an empty upper, which is dropped here so a
+    /// script only sees what it drove.
+    async fn run_mint_batch_descriptions(
+        target: CollectionMetadata,
+        persist_clients: Arc<PersistClientCache>,
+        lookahead: Option<u64>,
+        snapshotting: bool,
+        script: Vec<Step>,
+    ) -> Minted {
+        run_worker(move |worker| {
+            let emitted = Rc::new(RefCell::new(Minted::default()));
+
+            let (mut data_input, button) = worker.dataflow::<mz_repr::Timestamp, _, _>(|scope| {
+                let (data_input, data) = scope.new_input();
+
+                let (desired, max_seen, max_seen_button) = max_seen_timestamps(data, "test");
+                let (descriptions, ceilings, _passthrough, mint_button) = mint_batch_descriptions(
+                    scope,
+                    GlobalId::User(0),
+                    "test",
+                    &target,
+                    desired.as_collection(),
+                    max_seen,
+                    persist_clients,
+                    lookahead,
+                    snapshotting,
+                );
+                let buttons = [max_seen_button, mint_button];
+
+                let sink = Rc::clone(&emitted);
+                InspectCore::inspect_container(descriptions, move |event| {
+                    if let Ok((_, data)) = event {
+                        for (lower, upper) in data {
+                            let (Some(lower), Some(upper)) = (lower.as_option(), upper.as_option())
+                            else {
+                                continue;
+                            };
+                            sink.borrow_mut()
+                                .descriptions
+                                .push((lower.into(), upper.into()));
+                        }
+                    }
+                });
+
+                let sink = Rc::clone(&emitted);
+                InspectCore::inspect_container(ceilings, move |event| {
+                    if let Ok((_, data)) = event {
+                        for Commitment { lower, ceiling } in data {
+                            sink.borrow_mut()
+                                .commitments
+                                .push(((*lower).into(), (*ceiling).into()));
+                        }
+                    }
+                });
+
+                (data_input, buttons)
+            });
+
+            // The operator waits on persist off the timely scheduler, so a plain `step` can find
+            // the worker idle while the operator is still starting up.
+            fn pump(worker: &mut timely::worker::Worker) {
+                for _ in 0..32 {
+                    worker.step_or_park(Some(Duration::from_millis(1)));
+                }
+            }
+
+            // Twice, so the operator has fetched the shard upper before the script runs.
+            pump(worker);
+            pump(worker);
+
+            for step in script {
+                match step {
+                    Step::Description(..) | Step::Commit(..) => {
+                        panic!("the minter emits these rather than taking them")
+                    }
+                    Step::Updates(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), Diff::ONE));
+                        }
+                    }
+                    Step::Retractions(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), -Diff::ONE));
+                        }
+                    }
+                    Step::AdvanceTo(t) => data_input.advance_to(ts(t)),
+                }
+                // Sends are buffered until the handle is flushed or its time advances, and these
+                // scripts deliver data at times a pinned frontier never reaches.
+                data_input.flush();
+                pump(worker);
+            }
+
+            data_input.close();
+            for _ in 0..1_000 {
+                if !worker.step_or_park(Some(Duration::from_millis(1))) {
+                    break;
+                }
+            }
+
+            drop(button);
+            while worker.step() {}
+
+            emitted.take()
+        })
+        .await
+    }
+
+    /// Drives the real `mint_batch_descriptions` into the real `write_batches`, so the ordering
+    /// between a committed ceiling and the data it covers is the operators' own rather than the
+    /// script's.
+    async fn run_sink_pipeline(
+        target: CollectionMetadata,
+        persist_clients: Arc<PersistClientCache>,
+        lookahead: Option<u64>,
+        snapshotting: bool,
+        script: Vec<Step>,
+    ) -> Vec<EmittedBatch> {
+        run_worker(move |worker| {
+            let emitted = Rc::new(RefCell::new(Vec::new()));
+
+            let (mut data_input, buttons) = worker.dataflow::<mz_repr::Timestamp, _, _>(|scope| {
+                let (data_input, data) = scope.new_input();
+
+                let source_id = GlobalId::User(0);
+                let (desired, max_seen, max_seen_button) = max_seen_timestamps(data, "test");
+                let (descriptions, ceilings, passthrough, mint_button) = mint_batch_descriptions(
+                    scope,
+                    source_id,
+                    "test",
+                    &target,
+                    desired.as_collection(),
+                    max_seen,
+                    Arc::clone(&persist_clients),
+                    lookahead,
+                    snapshotting,
+                );
+
+                let stats_defs = SourceStatisticsMetricDefs::register_with(&MetricsRegistry::new());
+                let source_statistics = SourceStatistics::new(
+                    source_id,
+                    0,
+                    &stats_defs,
+                    source_id,
+                    &target.data_shard,
+                    SourceEnvelope::None(NoneEnvelope {
+                        key_envelope: KeyEnvelope::None,
+                        key_arity: 0,
+                    }),
+                    Antichain::from_elem(Timestamp::minimum()),
+                );
+
+                let (batches, write_button) = write_batches(
+                    scope,
+                    source_id,
+                    "test",
+                    &target,
+                    descriptions,
+                    ceilings,
+                    passthrough.as_collection(),
+                    persist_clients,
+                    source_statistics,
+                    Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
+                );
+
+                let sink = Rc::clone(&emitted);
+                InspectCore::inspect_container(batches, move |event| {
+                    if let Ok((_, data)) = event {
+                        for b in data {
+                            sink.borrow_mut().push(EmittedBatch {
+                                lower: b.lower.as_option().expect("single lower").into(),
+                                upper: b.upper.as_option().expect("single upper").into(),
+                                data_max_ts: b.data_max_ts.into(),
+                                inserts: b.metrics.inserts,
+                            });
+                        }
+                    }
+                });
+
+                (data_input, [max_seen_button, mint_button, write_button])
+            });
+
+            fn pump(worker: &mut timely::worker::Worker) {
+                for _ in 0..32 {
+                    worker.step_or_park(Some(Duration::from_millis(1)));
+                }
+            }
+
+            // Twice, so both operators are past opening their persist handles before the script.
+            pump(worker);
+            pump(worker);
+
+            for step in script {
+                match step {
+                    Step::Description(..) | Step::Commit(..) => {
+                        panic!("the minter emits these")
+                    }
+                    Step::Updates(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), Diff::ONE));
+                        }
+                    }
+                    Step::Retractions(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), -Diff::ONE));
+                        }
+                    }
+                    Step::AdvanceTo(t) => data_input.advance_to(ts(t)),
+                }
+                data_input.flush();
+                pump(worker);
+            }
+
+            // Closing makes every outstanding description ready, and finishing their builders is
+            // persist work off the timely scheduler, so wait until the worker has sat idle for a
+            // while rather than until it first reports idle.
+            data_input.close();
+            let mut idle = 0;
+            for _ in 0..20_000 {
+                if worker.step_or_park(Some(Duration::from_millis(1))) {
+                    idle = 0;
+                } else {
+                    idle += 1;
+                    if idle > 1_000 {
+                        break;
+                    }
+                }
+            }
+
+            drop(buttons);
+            while worker.step() {}
+
+            let mut emitted = emitted.borrow().clone();
+            emitted.sort();
+            emitted
+        })
+        .await
+    }
+
+    const PIPELINE_SNAPSHOT_ROWS: u64 = 200;
+    const PIPELINE_PER_TIME: u64 = 3;
+    const PIPELINE_PINNED_TIMES: u64 = 40;
+    const PIPELINE_LOOKAHEAD: u64 = 8;
+    /// The last data time is `PIPELINE_PINNED_TIMES + 1`, so the ceiling ends a lookahead past
+    /// that. The frontier has to reach it for the one description to be minted, which is the tail
+    /// the lookahead costs.
+    const PIPELINE_DONE: u64 = PIPELINE_PINNED_TIMES + 1 + PIPELINE_LOOKAHEAD;
+
+    /// A snapshot at the pinned time, then thin replication data at each later time, then the
+    /// frontier advance that ends the snapshot.
+    fn pinned_snapshot_script() -> Vec<Step> {
+        let mut script = vec![
+            Step::AdvanceTo(1),
+            Step::Updates(1, usize::cast_from(PIPELINE_SNAPSHOT_ROWS)),
+        ];
+        for t in 2..=PIPELINE_PINNED_TIMES + 1 {
+            script.push(Step::Updates(t, usize::cast_from(PIPELINE_PER_TIME)));
+        }
+        script.push(Step::AdvanceTo(PIPELINE_DONE));
+        script
+    }
+
+    /// The same rows as `pinned_snapshot_script`, but the snapshot's rows keep landing at the
+    /// pinned time for as long as the snapshot runs, interleaved with the replication rows at
+    /// later times.
+    fn interleaved_snapshot_script() -> Vec<Step> {
+        let per_round = usize::cast_from(PIPELINE_SNAPSHOT_ROWS / PIPELINE_PINNED_TIMES);
+        let mut script = vec![Step::AdvanceTo(1)];
+        for t in 2..=PIPELINE_PINNED_TIMES + 1 {
+            script.push(Step::Updates(1, per_round));
+            script.push(Step::Updates(t, usize::cast_from(PIPELINE_PER_TIME)));
+        }
+        script.push(Step::AdvanceTo(PIPELINE_DONE));
+        script
+    }
+
+    /// Either pinned script writes one batch, under the one description the minter emits when the
+    /// frontier reaches its ceiling. Every row is in it, whatever its timestamp.
+    fn one_batch() -> Vec<EmittedBatch> {
+        vec![EmittedBatch {
+            lower: 1,
+            upper: PIPELINE_DONE,
+            data_max_ts: PIPELINE_PINNED_TIMES + 1,
+            inserts: PIPELINE_SNAPSHOT_ROWS + PIPELINE_PINNED_TIMES * PIPELINE_PER_TIME,
+        }]
+    }
+
+    /// The ceiling reaches the writer ahead of the updates it covers, so a pinned frontier groups
+    /// every timestamp it accumulates into one batch.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn sink_pipeline_groups_a_pinned_frontier_into_one_batch() {
+        let emitted = run_sink_pipeline(
+            test_target(),
+            test_persist_clients(),
+            Some(PIPELINE_LOOKAHEAD),
+            true,
+            pinned_snapshot_script(),
+        )
+        .await;
+        assert_eq!(emitted, one_batch());
+    }
+
+    /// The pinned time is the one time that stays incomplete for the whole snapshot, so rows at
+    /// it arrive after rows at every later time. Grouping must not depend on data leaving a
+    /// timestamp for good.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn sink_pipeline_keeps_one_batch_while_snapshot_rows_interleave() {
+        let emitted = run_sink_pipeline(
+            test_target(),
+            test_persist_clients(),
+            Some(PIPELINE_LOOKAHEAD),
+            true,
+            interleaved_snapshot_script(),
+        )
+        .await;
+        assert_eq!(emitted, one_batch());
+    }
+
+    /// Without a lookahead the only description a pinned frontier gets is the one its release
+    /// derives, which arrives behind every update, so each timestamp writes its own batch.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn sink_pipeline_writes_one_batch_per_timestamp_without_a_lookahead() {
+        let emitted = run_sink_pipeline(
+            test_target(),
+            test_persist_clients(),
+            None,
+            true,
+            pinned_snapshot_script(),
+        )
+        .await;
+
+        assert_eq!(
+            emitted.len(),
+            usize::cast_from(PIPELINE_PINNED_TIMES + 1),
+            "{emitted:?}"
+        );
+        assert!(
+            emitted
+                .iter()
+                .all(|b| (b.lower, b.upper) == (1, PIPELINE_DONE)),
+            "all finished under the one description the frontier's advance derives: {emitted:?}"
+        );
+        assert_eq!(
+            emitted.iter().map(|b| b.inserts).sum::<u64>(),
+            PIPELINE_SNAPSHOT_ROWS + PIPELINE_PINNED_TIMES * PIPELINE_PER_TIME,
+        );
     }
 
     fn test_target() -> CollectionMetadata {
@@ -2208,6 +2581,137 @@ mod tests {
         );
     }
 
+    /// Advances the shard upper to `upper` without writing data, standing in for a concurrent
+    /// writer that reached part of the range first.
+    async fn advance_shard_upper(
+        target: &CollectionMetadata,
+        persist_clients: &PersistClientCache,
+        upper: u64,
+    ) {
+        let persist_client = persist_clients
+            .open(target.persist_location.clone())
+            .await
+            .expect("could not open persist client");
+        let mut write = persist_client
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                target.data_shard,
+                Arc::new(target.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("could not open persist shard");
+
+        let empty: Vec<((SourceData, ()), mz_repr::Timestamp, StorageDiff)> = Vec::new();
+        write
+            .compare_and_append(
+                &empty,
+                Antichain::from_elem(Timestamp::minimum()),
+                frontier(upper),
+            )
+            .await
+            .expect("invalid usage")
+            .expect("upper mismatch");
+
+        // Otherwise the handle's heartbeat task outlives the test and nextest reports a leak.
+        write.expire().await;
+    }
+
+    /// A batch spanning many timestamps stays usable when a concurrent writer has raised the shard
+    /// upper into the middle of it. Persist registers the batch under the narrowed description and
+    /// filters the updates outside those bounds on read, so the sink can hand a straddling batch
+    /// over as is rather than discarding it and rebuilding from the new upper.
+    ///
+    /// This is the property that lets `write_batches` coalesce a pinned frontier into one batch
+    /// without giving up the ability to recover from a concurrent append.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn a_straddling_batch_is_usable_under_a_raised_lower() {
+        const TIMES: u64 = 10;
+        const DONE: u64 = TIMES + 1;
+        // Inside the batch's data range, so the batch holds updates on both sides of it.
+        const RAISED_LOWER: u64 = 5;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // One update at each of times 1..=TIMES, all going into the builder of a description
+        // already in hand, so they coalesce into one batch whose data spans the whole range.
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            committed_ceiling_script(1, TIMES - 1, DONE),
+        )
+        .await;
+        assert_eq!(
+            emitted.len(),
+            1,
+            "expected one coalesced batch, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+
+        advance_shard_upper(&target, &persist_clients, RAISED_LOWER).await;
+
+        // Append the straddling batch under the raised lower, as the sink does after an
+        // `UpperMismatch` cuts the description down.
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, RAISED_LOWER, DONE),
+            DONE - 1,
+        )
+        .await;
+
+        assert_eq!(
+            total,
+            i64::try_from(TIMES - RAISED_LOWER + 1).expect("small"),
+            "only the updates at or above the raised lower should be readable, and all of them"
+        );
+    }
+
+    /// The rewind mechanism retracts the snapshot's copy of every row the replication stream
+    /// redelivers at its true offset, and both land at the pinned timestamp. They share the
+    /// covering description's builder, so the batch carries both signs and they net out on read.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_carries_rewind_retractions_into_the_covering_batch() {
+        const ROWS: usize = 512;
+        const DONE: u64 = 4;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            vec![
+                Step::Commit(0, DONE),
+                Step::Description(0, DONE),
+                Step::AdvanceTo(1),
+                Step::Updates(1, ROWS),
+                Step::Retractions(1, ROWS - 1),
+                Step::AdvanceTo(DONE),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            emitted.len(),
+            1,
+            "both signs belong to the one description, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(total, 1, "the shard should hold exactly the surviving row");
+    }
+
     /// A description that covers no updates must emit no batch, rather than open a builder that
     /// has no data bounds to register.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
@@ -2242,7 +2746,8 @@ mod tests {
 
     /// A snapshot at time 1 pinning the frontier while replication delivers one update at each of
     /// times 2..=`pinned_times`+1, with the description that covers the whole snapshot arriving
-    /// only at the end.
+    /// only at the end. This is the sink without a budget: nothing is committed ahead of the
+    /// frontier, so no update ever has bounds to be grouped under while it is staged.
     fn pinned_frontier_script(snapshot_rows: usize, pinned_times: u64, done: u64) -> Vec<Step> {
         let mut script = vec![Step::Updates(1, snapshot_rows)];
         for t in 2..=pinned_times + 1 {
@@ -2255,12 +2760,30 @@ mod tests {
         script
     }
 
+    /// The same snapshot with a ceiling committed first, which is what the minter does behind a
+    /// frontier that is not moving. The description itself only arrives once the frontier reaches
+    /// the ceiling, which is what ends the script.
+    fn committed_ceiling_script(snapshot_rows: usize, pinned_times: u64, done: u64) -> Vec<Step> {
+        let mut script = vec![
+            Step::Commit(0, done),
+            Step::AdvanceTo(1),
+            Step::Updates(1, snapshot_rows),
+        ];
+        for t in 2..=pinned_times + 1 {
+            script.push(Step::Updates(t, 1));
+        }
+        script.push(Step::Description(0, done));
+        script.push(Step::AdvanceTo(done));
+        script
+    }
+
     /// A snapshot pins the export's frontier at its as_of while concurrent replication keeps
-    /// delivering updates at later times. Each timestamp writes a batch of its own, all finished
-    /// under the one description that arrives when the snapshot finishes.
+    /// delivering updates at later times. Without a description in hand there are no bounds to
+    /// group under, so each timestamp writes a batch of its own, all finished under the one
+    /// description that arrives when the snapshot finishes.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
-    async fn write_batches_writes_one_batch_per_timestamp() {
+    async fn write_batches_writes_one_batch_per_timestamp_before_a_description_covers_them() {
         const SNAPSHOT_ROWS: usize = 4;
         const PINNED_TIMES: u64 = 16;
         const DONE: u64 = PINNED_TIMES + 2;
@@ -2276,7 +2799,9 @@ mod tests {
         .await;
 
         // Every batch carries the description's bounds, since that is what they are finished
-        // under, and holds a single timestamp's updates.
+        // under, and holds a single timestamp's updates. One timestamp per batch is what makes
+        // writing before the covering description is known safe, since a single-timestamp batch
+        // cannot span a description boundary.
         let expected: Vec<_> = std::iter::once(EmittedBatch {
             lower: 0,
             upper: DONE,
@@ -2310,21 +2835,409 @@ mod tests {
         );
     }
 
-    /// The same snapshot with a ceiling committed first, which is what the minter does behind a
-    /// frontier that is not moving. The description itself only arrives once the frontier reaches
-    /// the ceiling, which is what ends the script.
-    fn committed_ceiling_script(snapshot_rows: usize, pinned_times: u64, done: u64) -> Vec<Step> {
-        let mut script = vec![
-            Step::Commit(0, done),
+    /// Only a growing largest timestamp is reported, so a share that runs backwards or repeats a
+    /// time costs nothing on the wire.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn max_seen_timestamps_reports_a_growing_max() {
+        let reported = run_worker(move |worker| {
+            let reported = Rc::new(RefCell::new(Vec::new()));
+
+            let (mut data_input, button) = worker.dataflow::<mz_repr::Timestamp, _, _>(|scope| {
+                let (data_input, data) = scope.new_input();
+                let (_passthrough, max_seen, button) = max_seen_timestamps(data, "test");
+
+                let sink = Rc::clone(&reported);
+                InspectCore::inspect_container(max_seen, move |event| {
+                    if let Ok((_, data)) = event {
+                        sink.borrow_mut()
+                            .extend(data.iter().map(|ts| u64::from(*ts)));
+                    }
+                });
+
+                (data_input, button)
+            });
+
+            // Each flush is a round, so the operator sees these as separate batches.
+            for at in [4, 7, 7, 2, 9] {
+                let row = Row::pack_slice(&[Datum::Int64(0)]);
+                data_input.send((Ok(row), ts(at), Diff::ONE));
+                data_input.flush();
+                worker.step();
+            }
+
+            data_input.close();
+            while worker.step() {}
+            drop(button);
+            while worker.step() {}
+
+            let reported = reported.borrow().clone();
+            reported
+        })
+        .await;
+
+        assert_eq!(reported, vec![4, 7, 9]);
+    }
+
+    /// The collection is pre-sharded, so the minting worker sees only its own share. Every row here
+    /// goes to the worker that does not mint, so the ceilings past the first are committed only if
+    /// that worker's largest timestamp reaches the minter. Without the exchange the minter falls
+    /// back to the pinned frontier and stops at `5`.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn mint_batch_descriptions_paces_on_the_max_across_workers() {
+        const PEERS: usize = 2;
+
+        let source_id = GlobalId::User(0);
+        let minting_worker = usize::cast_from(source_id.hashed()) % PEERS;
+        let target = test_target();
+        let persist_clients = test_persist_clients();
+        let emitted = Arc::new(std::sync::Mutex::new(Vec::new()));
+        // `timely::execute` runs each worker on a thread of its own, which is outside the test's
+        // runtime, and the operators drive persist there.
+        let runtime = tokio::runtime::Handle::current();
+
+        let collected = Arc::clone(&emitted);
+        mz_ore::task::spawn_blocking(
+            || "persist_sink_test_workers",
+            move || {
+                timely::execute::execute(timely::Config::process(PEERS), move |worker| {
+                    let _guard = runtime.enter();
+                    let worker_index = worker.index();
+                    let emitted = Arc::clone(&emitted);
+                    let target = target.clone();
+                    let persist_clients = Arc::clone(&persist_clients);
+
+                    let (mut data_input, buttons) =
+                        worker.dataflow::<mz_repr::Timestamp, _, _>(|scope| {
+                            let (data_input, data) = scope.new_input();
+                            let (desired, max_seen, max_seen_button) =
+                                max_seen_timestamps(data, "test");
+                            let (_descriptions, ceilings, _passthrough, mint_button) =
+                                mint_batch_descriptions(
+                                    scope,
+                                    source_id,
+                                    "test",
+                                    &target,
+                                    desired.as_collection(),
+                                    max_seen,
+                                    persist_clients,
+                                    Some(4),
+                                    true,
+                                );
+                            let buttons = [max_seen_button, mint_button];
+
+                            InspectCore::inspect_container(ceilings, move |event| {
+                                if let Ok((_, data)) = event {
+                                    let mut emitted = emitted.lock().expect("not poisoned");
+                                    for commitment in data {
+                                        emitted.push(u64::from(commitment.ceiling));
+                                    }
+                                }
+                            });
+
+                            (data_input, buttons)
+                        });
+
+                    fn pump(worker: &mut timely::worker::Worker) {
+                        for _ in 0..64 {
+                            worker.step_or_park(Some(Duration::from_millis(1)));
+                        }
+                    }
+
+                    pump(worker);
+                    pump(worker);
+
+                    // Every worker advances the frontier, since it is global, but only one holds
+                    // the data. The frontier pins at 1 for the rest of the script.
+                    data_input.advance_to(ts(1));
+                    data_input.flush();
+                    pump(worker);
+
+                    for (at, count) in [(5, 4), (9, 4), (11, 2)] {
+                        if worker_index != minting_worker {
+                            for i in 0..count {
+                                let row = Row::pack_slice(&[Datum::Int64(i)]);
+                                data_input.send((Ok(row), ts(at), Diff::ONE));
+                            }
+                        }
+                        data_input.flush();
+                        pump(worker);
+                    }
+
+                    data_input.close();
+                    for _ in 0..2_000 {
+                        if !worker.step_or_park(Some(Duration::from_millis(1))) {
+                            break;
+                        }
+                    }
+
+                    drop(buttons);
+                    while worker.step() {}
+                })
+                .expect("timely configuration")
+                .join();
+            },
+        )
+        .await;
+
+        let collected = collected.lock().expect("not poisoned").clone();
+        assert_eq!(
+            collected,
+            // Committed on the pin, then a lookahead past each timestamp the other worker reached.
+            vec![5, 9, 13, 15],
+        );
+    }
+
+    #[mz_ore::test]
+    fn description_lookahead_disables_at_zero_and_floors_at_the_timestamp_interval() {
+        let secs = Duration::from_secs;
+
+        assert_eq!(
+            description_lookahead(Duration::ZERO, secs(1)),
+            None,
+            "zero is what turns committing ahead off"
+        );
+        // A lookahead shorter than the step `max_seen_ts` moves in never clears the data.
+        assert_eq!(
+            description_lookahead(Duration::from_millis(1), Duration::from_millis(250)),
+            Some(250),
+            "a fine interval floors low, so a source that ticks fast is not forced to over-commit"
+        );
+        assert_eq!(
+            description_lookahead(Duration::from_millis(1), secs(10)),
+            Some(10_000),
+            "a coarse interval floors high, or the data jumps the lookahead in one step"
+        );
+        assert_eq!(
+            description_lookahead(secs(5), Duration::from_millis(250)),
+            Some(5_000),
+            "a configured lookahead above the floor stands"
+        );
+    }
+
+    /// The ceiling is committed the moment the frontier pins, before any data, and re-committed as
+    /// the data advances, all under the one description's lower. Without a lookahead a pinned
+    /// frontier commits nothing.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn mint_batch_descriptions_commits_a_ceiling_ahead_of_the_data() {
+        let script = vec![
+            // Data arrives at times the frontier never reaches, which is a pinned frontier.
             Step::AdvanceTo(1),
-            Step::Updates(1, snapshot_rows),
+            Step::Updates(5, 4),
+            Step::Updates(9, 4),
+            Step::Updates(11, 2),
         ];
-        for t in 2..=pinned_times + 1 {
-            script.push(Step::Updates(t, 1));
-        }
-        script.push(Step::Description(0, done));
-        script.push(Step::AdvanceTo(done));
-        script
+
+        assert_eq!(
+            run_mint_batch_descriptions(
+                test_target(),
+                test_persist_clients(),
+                Some(4),
+                true,
+                script.clone(),
+            )
+            .await,
+            Minted {
+                // Only the one the first frontier advance derives. The description spanning the
+                // snapshot needs the frontier to reach the ceiling, which this script never does.
+                descriptions: vec![(0, 1)],
+                // On the pin, then a lookahead past each timestamp the data reached.
+                commitments: vec![(1, 5), (1, 9), (1, 13), (1, 15)],
+            },
+        );
+
+        assert_eq!(
+            run_mint_batch_descriptions(test_target(), test_persist_clients(), None, true, script)
+                .await,
+            Minted {
+                descriptions: vec![(0, 1)],
+                commitments: vec![],
+            },
+            "without a lookahead a pinned frontier commits nothing",
+        );
+    }
+
+    /// Committing is gated on hydration, which the minter reads off the frontier holding the first
+    /// non-minimum value it took. A second advance ends it for the life of the dataflow, and the
+    /// outstanding ceiling is honored until the frontier passes it, which is what makes the whole
+    /// snapshot and the catch-up behind it one description.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn mint_batch_descriptions_honors_its_commitment_once_the_frontier_moves_again() {
+        let emitted = run_mint_batch_descriptions(
+            test_target(),
+            test_persist_clients(),
+            Some(4),
+            true,
+            vec![
+                Step::AdvanceTo(1),
+                // Below the ceiling committed on the pin, so this mints nothing.
+                Step::AdvanceTo(2),
+                // The snapshot is over, so this commits nothing either.
+                Step::Updates(9, 8),
+                Step::AdvanceTo(6),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            emitted,
+            Minted {
+                descriptions: vec![(0, 1), (1, 6)],
+                commitments: vec![(1, 5)],
+            },
+            "past hydration the minter should wait for the frontier to pass its ceiling and \
+            derive from the frontier alone after that",
+        );
+    }
+
+    /// An export that is not snapshotting in this incarnation never commits ahead of its frontier,
+    /// so a restart of a caught up source has no window where it might.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn mint_batch_descriptions_does_not_commit_for_an_export_that_is_not_snapshotting() {
+        // The shape of a restart: the frontier leaves the minimum once, and data runs past it
+        // before it moves again.
+        let script = vec![Step::AdvanceTo(1), Step::Updates(9, 8)];
+
+        assert_eq!(
+            run_mint_batch_descriptions(
+                test_target(),
+                test_persist_clients(),
+                Some(4),
+                false,
+                script.clone(),
+            )
+            .await,
+            Minted {
+                descriptions: vec![(0, 1)],
+                commitments: vec![],
+            },
+        );
+
+        assert_eq!(
+            run_mint_batch_descriptions(
+                test_target(),
+                test_persist_clients(),
+                Some(4),
+                true,
+                script,
+            )
+            .await,
+            Minted {
+                descriptions: vec![(0, 1)],
+                commitments: vec![(1, 5), (1, 13)],
+            },
+            "the same script commits when the export is snapshotting",
+        );
+    }
+
+    /// A source may send rows at the snapshot time under a delayed capability before it has
+    /// downgraded its own, so rows can reach the minter while the frontier still sits at the
+    /// minimum. The ceiling is anchored at the frontier the snapshot pins, not at the shard upper.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn mint_batch_descriptions_waits_for_the_frontier_to_arm_before_committing() {
+        let emitted = run_mint_batch_descriptions(
+            test_target(),
+            test_persist_clients(),
+            Some(4),
+            true,
+            vec![
+                Step::Updates(1, 1),
+                Step::AdvanceTo(1),
+                Step::Updates(2, 3),
+                Step::AdvanceTo(6),
+            ],
+        )
+        .await;
+        assert_eq!(
+            emitted,
+            Minted {
+                descriptions: vec![(0, 1), (1, 6)],
+                // Anchored at the pinned frontier, not at the shard upper the row was seen under,
+                // then re-committed a lookahead past the row at 2.
+                commitments: vec![(1, 5), (1, 6)],
+            },
+        );
+    }
+
+    #[mz_ore::test]
+    fn next_mint_derives_from_the_frontier_or_commits_a_ceiling_ahead() {
+        // Everything below the frontier has arrived, so that is the description, lookahead or not.
+        assert_eq!(
+            next_mint(&frontier(5), &frontier(7), Some(ts(100)), None, Some(8)),
+            Some(Mint::Description(frontier(7)))
+        );
+        assert_eq!(
+            next_mint(&frontier(5), &frontier(7), None, None, None),
+            Some(Mint::Description(frontier(7)))
+        );
+
+        // A pinned frontier with no lookahead has nothing to commit.
+        assert_eq!(
+            next_mint(&frontier(5), &frontier(5), Some(ts(14)), None, None),
+            None
+        );
+        // Pinned with nothing committed yet: the ceiling goes out ahead of any data.
+        assert_eq!(
+            next_mint(&frontier(5), &frontier(5), None, None, Some(8)),
+            Some(Mint::Ceiling(ts(13)))
+        );
+        // A ceiling already past the data stands, so the minter does not re-commit every round.
+        assert_eq!(
+            next_mint(
+                &frontier(5),
+                &frontier(5),
+                Some(ts(6)),
+                Some(ts(14)),
+                Some(8)
+            ),
+            None
+        );
+        // Data that moved re-commits, a lookahead past where it reached.
+        assert_eq!(
+            next_mint(
+                &frontier(5),
+                &frontier(5),
+                Some(ts(7)),
+                Some(ts(14)),
+                Some(8)
+            ),
+            Some(Mint::Ceiling(ts(15)))
+        );
+
+        // An outstanding ceiling the frontier has not reached suppresses the description that
+        // would otherwise be derived from it, which is what binds the commitment.
+        assert_eq!(
+            next_mint(&frontier(5), &frontier(9), Some(ts(9)), Some(ts(20)), None),
+            None
+        );
+        // Once the frontier reaches it, the one description covering the whole ceiling goes out.
+        assert_eq!(
+            next_mint(&frontier(5), &frontier(20), Some(ts(9)), Some(ts(20)), None),
+            Some(Mint::Description(frontier(20)))
+        );
+
+        // A fresh shard's minimum upper pins like any other time, which is what gives a snapshot's
+        // rows a bound before they land.
+        assert_eq!(
+            next_mint(&frontier(0), &frontier(0), None, None, Some(8)),
+            Some(Mint::Ceiling(ts(8)))
+        );
+        // A collection that is done has no next description.
+        assert_eq!(
+            next_mint(
+                &Antichain::new(),
+                &frontier(7),
+                Some(ts(100)),
+                None,
+                Some(8)
+            ),
+            None
+        );
     }
 
     /// A ceiling committed ahead of the frontier gives arriving updates a bound, so a pinned
@@ -2376,6 +3289,129 @@ mod tests {
             i64::try_from(SNAPSHOT_ROWS).expect("small")
                 + i64::try_from(PINNED_TIMES).expect("small"),
             "grouping must not change what the shard ends up holding"
+        );
+    }
+
+    /// A builder for an uncovered timestamp is finished as soon as a description covers it,
+    /// rather than kept open for later updates at that timestamp. It holds its rows in memory
+    /// until it is finished, and while the frontier is pinned the readiness that would finish it is
+    /// exactly what is not happening. Updates arriving at that timestamp afterwards go to the open
+    /// builder, which spills its parts to blob.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_finishes_an_uncovered_batch_when_its_description_arrives() {
+        const PINNED: u64 = 2;
+        const BEFORE: usize = 4;
+        const AFTER: usize = 6;
+        const DONE: u64 = 8;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // The advances are what flush each input, so they order the description against the data
+        // around it. Both stop short of `PINNED` + 1, which keeps the pinned timestamp writable.
+        let script = vec![
+            Step::Updates(PINNED, BEFORE),
+            Step::AdvanceTo(1),
+            Step::Commit(0, DONE),
+            Step::Description(0, DONE),
+            Step::AdvanceTo(PINNED),
+            Step::Updates(PINNED, AFTER),
+            Step::AdvanceTo(DONE),
+        ];
+
+        let emitted = run_write_batches(target.clone(), Arc::clone(&persist_clients), script).await;
+
+        assert_eq!(
+            emitted.iter().map(|(b, _)| b.clone()).collect::<Vec<_>>(),
+            vec![
+                EmittedBatch {
+                    lower: 0,
+                    upper: DONE,
+                    data_max_ts: PINNED,
+                    inserts: u64::cast_from(BEFORE),
+                },
+                EmittedBatch {
+                    lower: 0,
+                    upper: DONE,
+                    data_max_ts: PINNED,
+                    inserts: u64::cast_from(AFTER),
+                },
+            ],
+            "the uncovered batch should be closed at the description, leaving the later updates \
+            to the open builder"
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(BEFORE + AFTER).expect("small"),
+            "closing early must not change what the shard ends up holding"
+        );
+    }
+
+    /// The ceiling is a bound, not a promise about the data: an update that outruns it has nothing
+    /// to be grouped under and writes a batch of its own timestamp, which costs a batch rather
+    /// than correctness. The description that arrives later covers both.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_writes_a_trailblazer_past_the_ceiling_its_own_batch() {
+        const CEILING: u64 = 9;
+        const PINNED_TIMES: u64 = 16;
+        const DONE: u64 = PINNED_TIMES + 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        let mut script = vec![Step::Commit(0, CEILING), Step::AdvanceTo(1)];
+        for t in 1..=PINNED_TIMES {
+            script.push(Step::Updates(t, 1));
+        }
+        script.push(Step::Description(0, DONE));
+        script.push(Step::AdvanceTo(DONE));
+
+        let emitted = run_write_batches(target.clone(), Arc::clone(&persist_clients), script).await;
+
+        assert_eq!(
+            emitted.len(),
+            // One for everything below the ceiling, then one per timestamp past it.
+            usize::cast_from(PINNED_TIMES - CEILING + 2),
+            "got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        assert!(
+            emitted.iter().all(|(b, _)| (b.lower, b.upper) == (0, DONE)),
+            "all finished under the one description, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            emitted[0].0,
+            EmittedBatch {
+                lower: 0,
+                upper: DONE,
+                data_max_ts: CEILING - 1,
+                inserts: CEILING - 1,
+            },
+            "the grouped batch holds every timestamp below the ceiling"
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(PINNED_TIMES).expect("small"),
+            "outrunning the ceiling must not change what the shard holds"
         );
     }
 }
