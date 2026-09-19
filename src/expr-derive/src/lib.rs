@@ -29,13 +29,13 @@
 /// * `is_infix_op`: A boolean indicating whether the function is an infix operator. Applies to
 ///   binary functions only.
 /// * `output_type`: The output type of the function.
-/// * `output_type_expr`: An expression that evaluates to the output type. Applies to binary
-///   and variadic functions. For binary functions, the expression has access to `input_type_a`
-///   and `input_type_b`; for variadic functions, it has access to `input_types: &[SqlColumnType]`.
-///   Should evaluate to a `SqlColumnType` value. This expression determines the *base* output
-///   type; the macro separately computes nullability by combining `introduces_nulls`,
-///   `propagates_nulls`, and input nullability. Requires `introduces_nulls`, and conflicts
-///   with `output_type`.
+/// * `output_type_expr`: An expression that evaluates to the output type. Applies to unary,
+///   binary, and variadic functions. For unary functions, the expression has access to
+///   `input_type: SqlColumnType`; for binary and variadic functions,
+///   `input_types: &[SqlColumnType]`. Should evaluate to a `SqlColumnType` value. This
+///   expression determines the *base* output type; the macro separately computes
+///   nullability by combining `introduces_nulls`, `propagates_nulls`, and input nullability.
+///   Requires `introduces_nulls`, and conflicts with `output_type`.
 /// * `could_error`: A boolean indicating whether the function could error.
 /// * `propagates_nulls`: A boolean indicating whether the function propagates nulls. Applies to
 ///   binary and variadic functions. If not specified, use the default implementation from the
@@ -45,10 +45,12 @@
 ///   The default is to return the `nullable` property of the output type.
 /// * `test`: A boolean indicating whether to generate a snapshot test for the function.
 ///   Defaults to `false`.
+/// * `skip_display`: A boolean suppressing the generated `fmt::Display` impl. Set this
+///   when the struct's name depends on its state, so the call site keeps a hand-written
+///   `Display` impl instead.
 ///
 /// # Limitations
 /// * The input and output types can contain lifetime parameters, as long as they are `'a`.
-/// * Unary functions cannot yet receive a `&RowArena` as an argument.
 ///
 /// # Examples
 /// ```ignore
