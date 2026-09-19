@@ -54,7 +54,8 @@
 ///   Defaults to `false`.
 /// * `skip_display`: A boolean suppressing the generated `fmt::Display` impl. Set this
 ///   when the struct's name depends on its state, so the call site keeps a hand-written
-///   `Display` impl instead.
+///   `Display` impl instead. Setting it to `true` rejects `sqlname`, whose only reader
+///   is the suppressed impl.
 ///
 /// # Limitations
 /// * The input and output types can contain lifetime parameters, as long as they are `'a`.
