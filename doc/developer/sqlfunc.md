@@ -57,6 +57,9 @@ The SQL-visible name of the function.
 * **Default:** the Rust function name (via `stringify!`)
 * **Applies to:** all arities
 
+The generated `Display` impl is the only reader, so `skip_display = true` rejects
+`sqlname`.
+
 ### `propagates_nulls`
 
 Whether a NULL input produces a NULL output, skipping the function body entirely.
@@ -191,7 +194,8 @@ Suppresses the generated `Display` impl. Use this when the displayed name depend
 struct's own state rather than being a fixed string, so the call site keeps a
 hand-written `Display` impl. `RangeCreate` is an example: it picks between
 `int4range`, `int8range`, `daterange`, `numrange`, `tsrange`, and `tstzrange` based on
-its `elem_type` field.
+its `elem_type` field. Setting it to `true` rejects `sqlname`, whose only reader is the
+suppressed impl.
 
 * **Type:** `bool`
 * **Default:** `false`
@@ -209,8 +213,18 @@ The struct name can be specified as the first positional argument, at any arity.
 This is required when a `&self` receiver is present (the struct is defined externally):
 
 ```rust
-#[sqlfunc(ArrayFill, sqlname = "array_fill")]
-fn array_fill_variadic<'a>(&self, fill: Datum<'a>, dims: Datum<'a>, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(
+    ArrayFill,
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
+    introduces_nulls = false
+)]
+fn array_fill<'a>(
+    &self,
+    fill: Datum<'a>,
+    dims: Option<Array<'a>>,
+    lower_bounds: OptionalArg<Option<Array<'a>>>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
     // ...
 }
 ```
@@ -373,7 +387,14 @@ Two shapes stay hand-written by design.
   or a `Box<[E]>` and evaluate them per element. The macro would need to emit an
   implementation generic over a struct type parameter with a trait bound, which is a
   different mechanism from the type-parameter erasure it applies today. The nine
-  compound-type casts under `src/expr/src/scalar/func/impls/` are these.
+  `impl<E: Eval> LazyUnaryFunc` blocks under `src/expr/src/scalar/func/impls/` are these.
 * Functions that do not evaluate every operand. The macro emits `Eager*`
   implementations, which evaluate all arguments before dispatch. `And`, `Or`,
   `Coalesce`, `Greatest`, `Least`, `ErrorIfNull`, and `CaseLiteral` are these.
+
+The ten remaining hand-written `LazyUnaryFunc` implementations under
+`src/expr/src/scalar/func/impls/` are in neither category, and all ten are convertible.
+Nine allocate their output into a `RowArena`, which `EagerUnaryFunc::call` now supplies.
+`RecordGet` returns a field borrowed from its input, so it needs no arena, only an
+`output_type_expr` reading `input_type` and the `introduces_nulls` that expression
+requires.
