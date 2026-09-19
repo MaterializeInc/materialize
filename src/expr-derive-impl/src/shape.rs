@@ -182,6 +182,14 @@ impl Shape {
     /// some input is nullable, because the optimizer short-circuits an all-NULL call.
     pub(crate) fn nullability(&self, checks: &[TokenStream]) -> TokenStream {
         match self {
+            // NOTE: unary omits the non-nullable-position term the other two arities
+            // carry. That is sound only because `PropagatesNulls` is absent from
+            // `UNARY_MODIFIERS`, so a unary `propagates_nulls` is always
+            // `!Input::nullable()`, which is what the position check tests for every
+            // parameter type in the tree.
+            // Adding `PropagatesNulls` to the unary table without also adding the term
+            // here lets `propagates_nulls = false` report a non-nullable output for an
+            // input the evaluation layer short-circuits to NULL.
             Shape::Unary => quote! {
                 output.nullable(nullable || (propagates_nulls && input_type.nullable))
             },
@@ -224,7 +232,11 @@ mod tests {
         assert!(has(Shape::Unary, Modifier::IsEliminableCast));
         assert!(!has(Shape::Unary, Modifier::Negate));
         assert!(!has(Shape::Unary, Modifier::IsInfixOp));
-        assert!(!has(Shape::Unary, Modifier::PropagatesNulls));
+        assert!(
+            !has(Shape::Unary, Modifier::PropagatesNulls),
+            "Shape::nullability omits unary's non-nullable-position term on the strength of \
+             this absence"
+        );
         assert!(!has(Shape::Unary, Modifier::IsAssociative));
     }
 }

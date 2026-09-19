@@ -233,13 +233,17 @@ pub(crate) fn generate(
         }
     }
 
-    // TODO: these two conflict checks construct their error with `unknown_field`,
+    // TODO: the conflict checks below construct their error with `unknown_field`,
     // which renders as "Unknown field: <message>", while every other modifier
-    // legality error in the crate uses `Error::custom`. The message text is pinned
-    // by a snapshot, so changing the constructor requires updating that snapshot.
+    // legality error in the crate uses `Error::custom`.
     if output_type.is_some() && output_type_expr.is_some() {
         return Err(darling::Error::unknown_field(
             "output_type and output_type_expr cannot be used together",
+        ));
+    }
+    if mods.skip_display() && mods.sqlname.is_some() {
+        return Err(darling::Error::unknown_field(
+            "sqlname has no effect with skip_display, which suppresses the only impl that reads it",
         ));
     }
     if output_type_expr.is_some() && introduces_nulls.is_none() {
