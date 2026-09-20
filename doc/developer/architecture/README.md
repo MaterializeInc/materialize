@@ -30,15 +30,18 @@ execution, applied at the scale of a distributed system rather than of a row.
 
 ## Definite collections
 
-A definite collection is an explicitly timestamped changelog of a data collection, recorded durably.
-Its defining property is that any two independent readers of a definite collection, reading as of the
-same timestamp, see the same contents. They agree because they read the same record, not because
-they received the same messages or ran the same code.
+A definite collection is an explicitly timestamped changelog of a data collection. Its defining
+property is that any two independent readers, reading as of the same timestamp, see the same
+contents. What definiteness rules out is agreement reached by exchanging messages or by
+coordinating: readers agree without talking to each other or to the writer.
+
+There are two routes to it. A **recorded** collection is definite because its readers read the same
+record. A **computed** collection is definite because it is a deterministic function of definite
+inputs, so its readers agree whether or not anybody wrote the result down. Both routes give the same
+property, and a collection's route is not visible to its readers.
 
 Definiteness is what makes a collection safe to share without coordinating. A reader needs no
-channel to the writer and no knowledge of other readers. It is also what makes a computation over
-definite collections replayable: given the same inputs as of the same times, a program produces the
-same output, so running it twice is not a correctness problem.
+channel to the writer and no knowledge of other readers.
 
 Every guarantee in this document ultimately rests on definiteness, and every mechanism is either
 what supplies it or what consumes it.
@@ -235,21 +238,27 @@ Compute maintains definite collections derived from definite collections.
   as of each time.
 * **Non-guarantees.** No bound on how far behind its inputs an output may be.
 * **Isolation and scaling.** Contract per output collection. Isolation per cluster.
-* **Durable state.** The output collections. Internal arrangements are rebuilt from the inputs.
+* **Durable state.** None required. Recording an output is a cache of a value the inputs already
+  determine, so everything compute holds is recoverable from what is durable beneath it.
 * **Enforcement.** Runs as a principal that may read its inputs and write its outputs, and no more.
 
 An output written back to durability is not an egress. It is compute's output, and the fact that
 some outputs are consumed by users and others by further computation is not an architectural
 distinction.
 
-**Indexes are the exception to definiteness by record.** An index is an arrangement held in a
-container's memory and never recorded durably. Two readers of an index agree because they read the
-same arrangement, or because two arrangements were computed deterministically from the same inputs,
-and neither reason is that they read the same record. That is a weaker basis than everything else in
-this document rests on, and it is why a read of an index is answered by a particular container rather
-than by the collection. It also means the container contract's tolerance for a program running twice
-buys nothing here, because there is no durable record against which two renditions of an index could
-be reconciled.
+**Compute's durable output is an optimization, not a requirement.** A computed collection takes the
+second route to definiteness, so its contents are determined by its inputs whether or not they are
+written down. An index is the same kind of object with the cache omitted, and a materialized view is
+the same kind of object with the cache kept. This is also why a compute container may run twice
+without harm: two renditions of a deterministic computation over the same definite inputs as of the
+same times are equal, so reconciling them is a choice between identical values.
+
+Two features strain this. A collection with retained history holds times its inputs have already
+compacted away, so its recorded output stops being a cache and becomes the only copy. `REFRESH EVERY`
+produces output that depends on when it refreshed, which is determined only once the clock it reads
+is itself a definite collection, which is one of the arguments for the [clock](#clock) being one.
+Both are deterministic in principle, both may fail to be in the current implementation, and both are
+candidates for reconsideration.
 
 ### Transactions
 
@@ -338,9 +347,10 @@ less room, in exchange for the caller being able to reason without reading the i
 
 ## Open questions
 
-* Whether an index is a collection at all. It carries no durable record, so its readers agree by
-  determinism rather than by definiteness, which is a different and weaker guarantee than the one the
-  rest of this document is built on.
+* Whether retained history and `REFRESH EVERY` survive the claim that a computed collection's
+  recorded output is only a cache. Retained history makes that output the only copy of times the
+  inputs have dropped, which is a different kind of object, and both features are candidates for
+  reconsideration rather than for enshrining.
 * Whether recording an external system's raw stream is a performance optimization or a structural use
   of append-only durability. It determines whether the durability and communication split carries
   weight beyond out-of-band payloads.
