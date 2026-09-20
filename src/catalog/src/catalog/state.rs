@@ -3152,6 +3152,46 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
+    async fn committed_updates_apply_in_timestamp_order() {
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+
+        let mut state = CatalogState::empty_test();
+        let original = crate::durable::Database {
+            id: DatabaseId::User(1),
+            oid: 1,
+            name: "materialize".into(),
+            owner_id: RoleId::System(1),
+            privileges: Vec::new(),
+        };
+        let mut changed = original.clone();
+        changed.owner_id = RoleId::System(2);
+        let updates = [
+            (original.clone(), 1, StateDiff::Addition),
+            (original.clone(), 2, StateDiff::Retraction),
+            (changed.clone(), 2, StateDiff::Addition),
+            (changed, 3, StateDiff::Retraction),
+            (original.clone(), 3, StateDiff::Addition),
+        ]
+        .into_iter()
+        .map(|(database, ts, diff)| StateUpdate {
+            kind: StateUpdateKind::Database(database),
+            ts: Timestamp::new(ts),
+            diff,
+        })
+        .collect();
+        let _ = state
+            .apply_updates(updates, &mut LocalExpressionCache::Closed)
+            .await;
+        assert_eq!(
+            state
+                .resolve_database("materialize")
+                .expect("database")
+                .owner_id,
+            original.owner_id
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn written_plan_selection_emits_notice_implications_without_installation() {
         use crate::durable::objects::WrittenPlan;
         use crate::memory::implications::ParsedStateUpdateKind;

@@ -115,9 +115,15 @@ impl CatalogState {
 
         // First, consolidate updates. The code that applies parsed state
         // updates _requires_ that the given updates are consolidated. There
-        // must be at most one addition and/or one retraction for a given item,
-        // as identified by that items ID type.
-        let updates = Self::consolidate_updates(updates);
+        // must be at most one addition and/or one retraction per timestamp for
+        // a given item, as identified by that item's ID type.
+        let mut updates = Self::consolidate_updates(updates);
+
+        // Consolidation sorts by value before timestamp. A subscriber can receive
+        // several transactions touching the same item, so restore timestamp order
+        // before grouping. Each complete transaction then gets its own retractions
+        // and pseudo-topological application order.
+        updates.sort_by_key(|update| update.ts);
 
         // Apply updates in groups, according to their timestamps.
         let mut groups: Vec<Vec<_>> = Vec::new();

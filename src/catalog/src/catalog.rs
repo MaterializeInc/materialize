@@ -1710,7 +1710,8 @@ impl Catalog {
         }
     }
 
-    /// See [`CatalogState::deserialize_plan_with_enable_for_item_parsing`].
+    /// Reconstructs a stored statement with catalog-item parsing features enabled.
+    /// Temporary feature overrides are restored before returning.
     pub fn deserialize_plan_with_enable_for_item_parsing(
         &mut self,
         create_sql: &str,
