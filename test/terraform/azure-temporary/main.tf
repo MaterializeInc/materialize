@@ -301,7 +301,7 @@ module "operator" {
 
 # 8. Deploy Materialize instance
 module "materialize_instance" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=v13.10.0"
 
   instance_name        = local.materialize_instance_name
   instance_namespace   = local.materialize_instance_namespace
