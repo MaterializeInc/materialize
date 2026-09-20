@@ -255,56 +255,73 @@ impl Coordinator {
                 "incarnation is closed",
             ));
         }
-        let prepared = client
+        let mut prepared = client
             .prepare_read(self.client_read_catalog(), &bundle, timestamp)
             .await?;
-        if let Some(holds) = client
-            .protection
-            .try_acquire(
-                &prepared.bundle,
-                &prepared.frontiers,
-                &prepared.index_inputs,
-            )
-            .map_err(|error| AdapterError::Unstructured(error.into()))?
-        {
-            return Ok((holds, prepared.upper));
+        // Timestamp selection is FnOnce. Contention may change the obtainable
+        // floor, but must not change the request or the upper that selected it.
+        let upper = prepared.upper.clone();
+        loop {
+            if let Some(holds) = client
+                .protection
+                .try_acquire(
+                    &prepared.bundle,
+                    &prepared.frontiers,
+                    &prepared.index_inputs,
+                )
+                .map_err(|error| AdapterError::Unstructured(error.into()))?
+            {
+                return Ok((holds, upper));
+            }
+            let extra = self
+                .client_read_catalog()
+                .state()
+                .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
+            let requirements = client.protection.prepare_publication(extra);
+            let result = self
+                .transact_client_protection(Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements,
+                })
+                .await;
+            // Catalog transaction errors are definitive. Indeterminate commit errors
+            // terminate before this point rather than releasing a publication barrier.
+            client.protection.finish_publication(result.is_ok());
+            if !self
+                .client_read_catalog()
+                .state()
+                .client_incarnations()
+                .contains_key(&incarnation)
+            {
+                client.protection.mark_closed();
+            }
+            if let Err(error) = result {
+                if let Some(fresh) = prepared
+                    .retry_publication(&client, self.client_read_catalog(), &error)
+                    .await?
+                {
+                    prepared = fresh;
+                    continue;
+                }
+                return Err(error);
+            }
+            client.published();
+            let holds = client
+                .protection
+                .try_acquire(
+                    &prepared.bundle,
+                    &prepared.frontiers,
+                    &prepared.index_inputs,
+                )
+                .map_err(|error| AdapterError::Unstructured(error.into()))?
+                .ok_or_else(|| {
+                    AdapterError::internal(
+                        "query read protection",
+                        "published scope was not acquired",
+                    )
+                })?;
+            return Ok((holds, upper));
         }
-        let extra = self
-            .client_read_catalog()
-            .state()
-            .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
-        let requirements = client.protection.prepare_publication(extra);
-        let result = self
-            .transact_client_protection(Op::PublishClientReadRequirements {
-                incarnation,
-                requirements,
-            })
-            .await;
-        // Catalog transaction errors are definitive. Indeterminate commit errors
-        // terminate before this point rather than releasing a publication barrier.
-        client.protection.finish_publication(result.is_ok());
-        if !self
-            .client_read_catalog()
-            .state()
-            .client_incarnations()
-            .contains_key(&incarnation)
-        {
-            client.protection.mark_closed();
-        }
-        result?;
-        client.published();
-        let holds = client
-            .protection
-            .try_acquire(
-                &prepared.bundle,
-                &prepared.frontiers,
-                &prepared.index_inputs,
-            )
-            .map_err(|error| AdapterError::Unstructured(error.into()))?
-            .ok_or_else(|| {
-                AdapterError::internal("query read protection", "published scope was not acquired")
-            })?;
-        Ok((holds, prepared.upper))
     }
 
     /// Publishes the client aggregate and heartbeat through the same transaction path.
