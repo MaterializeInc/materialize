@@ -102,7 +102,7 @@ resource "azurerm_resource_group" "materialize" {
 
 # 2. Create networking infrastructure
 module "networking" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/networking?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/networking?ref=v13.10.0"
 
   resource_group_name                = azurerm_resource_group.materialize.name
   location                           = var.location
