@@ -1,3 +1,3 @@
-operator_helm_chart_version: v26.41.0
-orchestratord_version: v26.41.0
-environmentd_version: v26.41.0
+operator_helm_chart_version: v26.42.0
+orchestratord_version: v26.42.0
+environmentd_version: v26.42.0

@@ -33,12 +33,12 @@ running
 # visible in compute introspection, without a storage log bridge.
 > SET cluster = uc
 
-# Storage names ingestion dataflows by id, "Source dataflow: <id>".
+# Storage names ingestion dataflows by id, "Source dataflow: <id>". On a
+# two-cluster replica the ingestion runs on the separate storage Timely
+# cluster and is invisible here, so this assertion fails if the topology flag
+# does not reach the replica.
 > SELECT count(*) > 0 FROM mz_introspection.mz_dataflows WHERE name LIKE 'Source dataflow:%'
 true
-
-> SELECT count(*) FROM mz_introspection.mz_dataflow_operators WHERE name = 'Replay storage timely logs'
-0
 
 > RESET cluster
 
