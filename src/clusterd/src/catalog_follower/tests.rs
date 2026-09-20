@@ -18,13 +18,14 @@ use mz_persist_client::{PersistClient, ShardId};
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, ReprRelationType, VersionedRelationDesc};
 use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds};
+use mz_storage_client::controller::StorageTxn;
 
 pub(super) const BUILD: &str = "1.0.0";
 
-pub(super) async fn debug_catalog(persist: &PersistClient) -> Catalog {
+pub(super) async fn debug_catalog(persist: &PersistClient, wal: Option<ShardId>) -> Catalog {
     let organization = Uuid::new_v4();
     let bootstrap = test_bootstrap_args();
-    let storage = TestCatalogStateBuilder::new(persist.clone())
+    let mut storage = TestCatalogStateBuilder::new(persist.clone())
         .with_organization_id(organization)
         .with_default_deploy_generation()
         .unwrap_build()
@@ -32,6 +33,33 @@ pub(super) async fn debug_catalog(persist: &PersistClient) -> Catalog {
         .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
         .await
         .expect("initialize durable catalog");
+    // Native catalog bootstrap freezes the WAL identity, including its absence.
+    if let Some(wal) = wal {
+        storage
+            .sync_to_current_updates()
+            .await
+            .expect("consume raw bootstrap before WAL initialization");
+        let mut tx = storage.transaction().await.expect("WAL transaction");
+        tx.write_txn_wal_shard(wal).expect("WAL");
+        // Protection is a birth-time choice, not a startup default that can
+        // adopt an existing catalog on the subsequent open.
+        tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+            .expect("initialize protected environment");
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("initialize WAL identity");
+        storage.expire().await;
+        // Native loading consumes a complete initial stream, not the suffix
+        // remaining after the raw bootstrap transaction.
+        storage = TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("open initialized bootstrap prefix");
+    }
     Box::pin(Catalog::open_debug_catalog_inner(
         persist.clone(),
         storage,
@@ -42,7 +70,7 @@ pub(super) async fn debug_catalog(persist: &PersistClient) -> Catalog {
                 .expect("environment"),
         ),
         &mz_build_info::DUMMY_BUILD_INFO,
-        BTreeMap::new(),
+        BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
         &bootstrap,
         None,
         None,
@@ -160,7 +188,7 @@ fn index_plan(id: GlobalId, on: GlobalId) -> GlobalExpressions {
 async fn native_bootstrap_updates_and_selection_retry() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
-    let mut writer = debug_catalog(&persist).await;
+    let mut writer = debug_catalog(&persist, None).await;
     let cluster = writer.user_clusters().next().expect("user cluster").id;
     let replica = ReplicaId::User(1);
     let builtin =
@@ -178,7 +206,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
     index.global_id = global_id;
     index.cluster_id = cluster;
     index.create_sql = format!(
-        "CREATE INDEX materialize.public.follower_index IN CLUSTER [{cluster}] ON mz_catalog.mz_tables (schema_id)"
+        "CREATE INDEX follower_index IN CLUSTER [{cluster}] ON mz_catalog.mz_tables (schema_id)"
     );
     let op = Op::CreateItem {
         id,

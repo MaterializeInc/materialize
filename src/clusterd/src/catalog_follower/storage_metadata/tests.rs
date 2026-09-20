@@ -20,8 +20,8 @@ use mz_repr::SqlScalarType;
 use mz_repr::role_id::RoleId;
 use mz_storage_client::controller::StorageTxn;
 
-// Fixtures may mutate the singleton before opening their read projection.
-// Production obtains this immutable identity from OpenCommittedCatalog.
+// Read the fixture's bootstrap identity from durable storage. Production obtains
+// the same immutable identity from OpenCommittedCatalog.
 async fn resolve(
     catalog: &Catalog,
     wanted: &BTreeSet<GlobalId>,
@@ -30,7 +30,6 @@ async fn resolve(
     persist: &PersistClient,
     location: &PersistLocation,
 ) -> anyhow::Result<Resolution> {
-    use mz_storage_client::controller::StorageTxn;
     let wal = catalog
         .storage()
         .await
@@ -68,7 +67,8 @@ async fn register(persist: &PersistClient, shard: ShardId, desc: &RelationDesc) 
 async fn table_aliases_use_exact_schema_versions_and_wal_upper() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
-    let mut catalog = debug_catalog(&persist).await;
+    let wal = ShardId::new();
+    let mut catalog = debug_catalog(&persist, Some(wal)).await;
     let (item, root) = create_table(&mut catalog, "versioned_table").await;
     let mut aliases = vec![root];
     for column in ["a", "b"] {
@@ -93,8 +93,6 @@ async fn table_aliases_use_exact_schema_versions_and_wal_upper() {
             shard
         );
     }
-    let wal = ShardId::new();
-    durable(&catalog, |tx| tx.write_txn_wal_shard(wal).expect("WAL")).await;
     let old = RelationDesc::empty();
     let new = RelationDesc::builder()
         .with_column("a", SqlScalarType::Int64.nullable(true))
@@ -172,7 +170,7 @@ async fn table_aliases_use_exact_schema_versions_and_wal_upper() {
 async fn mv_alias_uses_selected_cross_cluster_writer_not_persist_schema() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
-    let writer_catalog = debug_catalog(&persist).await;
+    let writer_catalog = debug_catalog(&persist, None).await;
     let (item, alias) = writer_catalog
         .allocate_user_id_for_test()
         .await
@@ -219,6 +217,25 @@ async fn mv_alias_uses_selected_cross_cluster_writer_not_persist_schema() {
     };
     assert_eq!(mv.cluster_id, producer_cluster);
     assert_eq!(mv.global_id_writes(), writer);
+    let mut producer = super::super::ReplicaEffects::default();
+    super::super::absorb_updates(
+        &mut producer,
+        &catalog,
+        producer_cluster,
+        BUILD,
+        initial.clone(),
+    );
+    producer
+        .observe_plans(
+            &catalog,
+            producer_cluster,
+            mz_controller_types::ReplicaId::User(1),
+            &store,
+            BUILD,
+        )
+        .await
+        .expect("producer inventory");
+    assert!(producer.pending.contains(&item));
     let mut consumer = super::super::ReplicaEffects::default();
     super::super::absorb_updates(&mut consumer, &catalog, consumer_cluster, BUILD, initial);
     consumer
@@ -291,6 +308,21 @@ async fn mv_alias_uses_selected_cross_cluster_writer_not_persist_schema() {
         .write_plans(vec![(writer, revision, plan)])
         .await
         .expect("writer bytes");
+    producer
+        .observe_plans(
+            &catalog,
+            producer_cluster,
+            mz_controller_types::ReplicaId::User(1),
+            &store,
+            BUILD,
+        )
+        .await
+        .expect("observe selected producer");
+    assert!(!producer.pending.contains(&item));
+    let (selected_id, selected_revision, selected_plan) = &producer.selected[&item];
+    assert_eq!(*selected_id, writer);
+    assert_eq!(*selected_revision, revision);
+    assert_eq!(selected_plan.item_version, version);
     let result = resolve(&catalog, &wanted, &store, BUILD, &persist, &location)
         .await
         .expect("resolve alias");
@@ -316,11 +348,10 @@ async fn mv_alias_uses_selected_cross_cluster_writer_not_persist_schema() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn missing_definitions_mappings_and_schemas_remain_pending() {
+async fn missing_wal_identity_remains_pending() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
-    let mut writer = debug_catalog(&persist).await;
-    let (_, unmapped) = create_table(&mut writer, "unmapped").await;
+    let mut writer = debug_catalog(&persist, None).await;
     let (_, no_schema) = create_table(&mut writer, "no_schema").await;
     let result = resolve(
         &writer,
@@ -338,12 +369,21 @@ async fn missing_definitions_mappings_and_schemas_remain_pending() {
     );
     assert!(result.metadata.is_empty());
     assert!(result.uppers.is_empty());
+    writer.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn missing_definitions_mappings_and_schemas_remain_pending() {
+    let persist = PersistClient::new_for_tests().await;
+    let store = store(&persist).await;
+    let mut writer = debug_catalog(&persist, Some(ShardId::new())).await;
+    let (_, unmapped) = create_table(&mut writer, "unmapped").await;
+    let (_, no_schema) = create_table(&mut writer, "no_schema").await;
     let (_, orphan) = writer.allocate_user_id_for_test().await.expect("orphan ID");
     durable(&writer, |tx| {
         tx.delete_collection_metadata(BTreeSet::from([unmapped]));
         tx.insert_collection_metadata(BTreeMap::from([(orphan, ShardId::new())]))
             .expect("orphan mapping");
-        tx.write_txn_wal_shard(ShardId::new()).expect("WAL");
     })
     .await;
     let (catalog, _) = committed(&writer, &persist).await;
@@ -378,14 +418,14 @@ async fn missing_definitions_mappings_and_schemas_remain_pending() {
 async fn builtin_descriptors_and_wal_ownership_come_from_native_catalog() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
-    let writer = debug_catalog(&persist).await;
+    let wal = ShardId::new();
+    let writer = debug_catalog(&persist, Some(wal)).await;
     let table = BUILTINS::iter()
         .find(|b| matches!(b, Builtin::Table(_)))
         .expect("builtin table");
     let source = BUILTINS::iter()
         .find(|b| matches!(b, Builtin::Source(_)))
         .expect("builtin source");
-    let wal = ShardId::new();
     let location = PersistLocation::new_in_mem();
     let mut expected = BTreeMap::new();
     let mut mappings = BTreeMap::new();
@@ -423,7 +463,6 @@ async fn builtin_descriptors_and_wal_ownership_come_from_native_catalog() {
     durable(&writer, |tx| {
         tx.insert_collection_metadata(mappings)
             .expect("builtin mappings");
-        tx.write_txn_wal_shard(wal).expect("WAL");
     })
     .await;
     let (catalog, _) = committed(&writer, &persist).await;

@@ -64,8 +64,15 @@ impl ReplicaEffects {
                 .filter_map(|id| catalog.try_resolve_item_id(&id)),
         );
         if effects.clusters.contains_key(&cluster) {
-            if let Some(cluster) = catalog.try_get_cluster(cluster) {
-                self.pending.extend(cluster.bound_objects.iter().copied());
+            if catalog.try_get_cluster(cluster).is_some() {
+                // Cluster bound_objects contains user objects only. Bootstrap
+                // also needs the build-defined objects in the native catalog.
+                self.pending.extend(
+                    catalog
+                        .entries()
+                        .filter(|entry| entry.item().cluster_id() == Some(cluster))
+                        .map(|entry| entry.id()),
+                );
             } else {
                 self.selected.clear();
             }
@@ -84,17 +91,26 @@ impl ReplicaEffects {
     ) -> anyhow::Result<()> {
         let mut revisions = Vec::new();
         let mut candidates = BTreeMap::new();
+        // These arrangements are created by instance initialization, not written
+        // dataflows. Other indexes, including user indexes on logs, need selections.
+        let log_indexes: BTreeSet<_> = catalog
+            .try_get_cluster(cluster)
+            .into_iter()
+            .flat_map(|cluster| cluster.log_indexes.values().copied())
+            .collect();
         self.pending.retain(|item_id| {
             // This cache describes the current selection, not installed work.
             // A replacement that is not available must not expose stale bytes.
             self.selected.remove(item_id);
             let candidate = catalog.try_get_entry(item_id).and_then(|entry| {
                 let item = entry.item();
-                if item.is_compute_object_on_cluster() != Some(cluster) {
+                if item.cluster_id() != Some(cluster) {
                     return None;
                 }
                 match item {
-                    CatalogItem::Index(index) => Some((index.global_id(), RelationVersion::root())),
+                    CatalogItem::Index(index) if !log_indexes.contains(&index.global_id()) => {
+                        Some((index.global_id(), RelationVersion::root()))
+                    }
                     CatalogItem::MaterializedView(mv)
                         if mv.target_replica.is_none_or(|id| id == replica) =>
                     {
