@@ -183,7 +183,7 @@ module "materialize_nodepool" {
 
 # 4. Create PostgreSQL database
 module "database" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/database?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/database?ref=v13.10.0"
 
   depends_on = [module.networking]
 
