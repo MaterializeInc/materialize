@@ -6543,7 +6543,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "num-traits",
- "ordered-float 5.3.0",
+ "ordered-float 5.5.0",
  "serde_json",
  "uuid",
 ]
@@ -7529,7 +7529,7 @@ dependencies = [
  "mz-transform",
  "num",
  "num_enum 0.7.6",
- "ordered-float 5.3.0",
+ "ordered-float 5.5.0",
  "paste",
  "proptest",
  "proptest-derive",
@@ -7689,7 +7689,7 @@ dependencies = [
  "mz-ore",
  "mz-pgrepr",
  "mz-repr",
- "ordered-float 5.3.0",
+ "ordered-float 5.5.0",
  "prost",
  "prost-build",
  "prost-reflect",
@@ -8517,7 +8517,7 @@ dependencies = [
  "mz-timely-util",
  "num-traits",
  "num_enum 0.7.6",
- "ordered-float 5.3.0",
+ "ordered-float 5.5.0",
  "postgres-protocol",
  "proptest",
  "proptest-derive",
@@ -8836,7 +8836,7 @@ dependencies = [
  "mz-repr",
  "mz-sql-server-util",
  "mz-ssh-util",
- "ordered-float 5.3.0",
+ "ordered-float 5.5.0",
  "proptest",
  "proptest-derive",
  "prost",
@@ -9392,7 +9392,7 @@ dependencies = [
  "mz-repr",
  "mz-sql",
  "mz-transform",
- "ordered-float 5.3.0",
+ "ordered-float 5.5.0",
  "paste",
  "proptest",
  "proptest-derive",
@@ -10277,9 +10277,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "5.3.0"
+version = "5.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7d950ca161dc355eaf28f82b11345ed76c6e1f6eb1f4f4479e0323b9e2fbd0e"
+checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
