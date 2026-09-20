@@ -1813,7 +1813,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -3451,7 +3451,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -4976,7 +4976,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5201,7 +5201,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.3",
+ "hashbrown 0.16.1",
  "serde",
  "serde_core",
 ]
@@ -5310,7 +5310,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -5660,7 +5660,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower 0.5.3",
- "tower-http",
+ "tower-http 0.6.11",
  "tracing",
 ]
 
@@ -7474,7 +7474,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tower 0.5.3",
- "tower-http",
+ "tower-http 0.7.1",
  "tower-sessions",
  "tracing",
  "tracing-capture",
@@ -7664,7 +7664,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower 0.5.3",
- "tower-http",
+ "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
 ]
@@ -8005,7 +8005,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
- "tower-http",
+ "tower-http 0.7.1",
  "tracing",
  "uuid",
 ]
@@ -8900,7 +8900,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
- "tower-http",
+ "tower-http 0.7.1",
  "tracing",
  "uuid",
  "walkdir",
@@ -11441,7 +11441,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -11480,9 +11480,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -11999,7 +11999,7 @@ dependencies = [
  "tokio-native-tls",
  "tokio-util",
  "tower 0.5.3",
- "tower-http",
+ "tower-http 0.6.11",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -12043,7 +12043,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tower 0.5.3",
- "tower-http",
+ "tower-http 0.6.11",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -12337,7 +12337,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -12396,7 +12396,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -13549,7 +13549,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -13568,7 +13568,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -14173,16 +14173,37 @@ version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
+ "base64 0.22.1",
+ "bitflags 2.11.0",
+ "bytes",
+ "futures-util",
+ "http 1.4.2",
+ "http-body 1.0.1",
+ "mime",
+ "pin-project-lite",
+ "tower 0.5.3",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08a05a66a4fdd61cbbe0a1d755ffe0ca6aba159dd4820936a0ff8a8278245b9c"
+dependencies = [
  "async-compression",
  "base64 0.22.1",
  "bitflags 2.11.0",
  "bytes",
  "futures-core",
- "futures-util",
  "http 1.4.2",
  "http-body 1.0.1",
  "http-body-util",
  "mime",
+ "percent-encoding",
  "pin-project-lite",
  "tokio",
  "tokio-util",
@@ -14190,7 +14211,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
- "url",
 ]
 
 [[package]]
