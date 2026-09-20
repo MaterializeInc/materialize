@@ -583,9 +583,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     // Start compute server.
-    let compute_client_builder = mz_compute::server::serve(
+    let compute_server = mz_compute::server::serve(
         compute_timely_config,
         ComputeRuntimeRole::Solo,
+        false,
         &metrics_registry,
         persist_clients,
         txns_ctx,
@@ -597,6 +598,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
     )
     .await?;
+    let compute_client_builder = compute_server.client_builder();
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr

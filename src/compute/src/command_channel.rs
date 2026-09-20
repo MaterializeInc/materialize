@@ -67,12 +67,15 @@ pub enum UnifiedCommand {
 pub enum Origin {
     Lifecycle(Uuid),
     Query(Uuid),
+    /// Runtime-owned maintained commands, independent of transport connections.
+    Replica,
 }
 
 /// A missing command denotes query disconnect, never lifecycle replacement.
 pub type Envelope = (Option<ComputeCommand>, Origin);
 
 /// A sender pushing compute commands onto the command channel.
+#[derive(Clone)]
 pub struct Sender {
     tx: mpsc::Sender<Envelope>,
     activator: Arc<Mutex<Option<SyncActivator>>>,

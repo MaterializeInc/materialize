@@ -60,6 +60,7 @@ pub struct RoleClient<C> {
     inner: C,
     query: Option<bool>,
     query_configured: bool,
+    allow_lifecycle: bool,
 }
 
 impl<C> RoleClient<C> {
@@ -69,6 +70,16 @@ impl<C> RoleClient<C> {
             inner,
             query: None,
             query_configured: false,
+            allow_lifecycle: true,
+        }
+    }
+
+    /// Accepts only query connections to a replica-owned runtime.
+    /// Lifecycle handshakes are rejected before they reach the cluster client.
+    pub fn query_only(inner: C) -> Self {
+        Self {
+            allow_lifecycle: false,
+            ..Self::new(inner)
         }
     }
 }
@@ -78,6 +89,9 @@ impl<C: ComputeClient> GenericClient<ComputeCommand, ComputeResponse> for RoleCl
     async fn send(&mut self, command: ComputeCommand) -> anyhow::Result<()> {
         use ComputeCommand::*;
         match (self.query, &command) {
+            (None, Hello { .. }) if !self.allow_lifecycle => {
+                anyhow::bail!("maintained compute is owned by this replica")
+            }
             (None, Hello { .. }) => self.query = Some(false),
             (None, HelloQuery { nonce }) => {
                 self.inner.send(Hello { nonce: *nonce }).await?;
@@ -966,6 +980,57 @@ mod query_wire_tests {
     use mz_service::client::Partitioned;
     use mz_service::local::LocalClient;
     use tokio::sync::mpsc;
+
+    #[mz_ore::test(tokio::test)]
+    async fn replica_owned_runtime_rejects_lifecycle_before_cluster_admission() {
+        let connect = || {
+            let (commands, received) = mpsc::unbounded_channel();
+            let (_responses, response_rx) = mpsc::unbounded_channel();
+            (
+                RoleClient::query_only(LocalClient::new(
+                    response_rx,
+                    commands,
+                    std::thread::current(),
+                )),
+                received,
+            )
+        };
+        let (mut client, mut received) = connect();
+        assert!(
+            client
+                .send(ComputeCommand::Hello {
+                    nonce: Uuid::new_v4()
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            received.try_recv().is_err(),
+            "lifecycle handshake reached cluster admission"
+        );
+
+        let (mut client, mut received) = connect();
+        let nonce = Uuid::new_v4();
+        client
+            .send(ComputeCommand::HelloQuery { nonce })
+            .await
+            .expect("query admission");
+        assert_eq!(received.recv().await, Some(ComputeCommand::Hello { nonce }));
+        assert_eq!(
+            received.recv().await,
+            Some(ComputeCommand::HelloQuery { nonce })
+        );
+        assert!(
+            client
+                .send(ComputeCommand::InitializationComplete)
+                .await
+                .is_err()
+        );
+        assert!(
+            received.try_recv().is_err(),
+            "query connection submitted maintained work"
+        );
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn role_validation_at_channel_boundary() {

@@ -6862,6 +6862,7 @@ dependencies = [
  "mz-rocksdb",
  "mz-row-spine",
  "mz-secrets",
+ "mz-service",
  "mz-storage",
  "mz-storage-client",
  "mz-storage-operators",
