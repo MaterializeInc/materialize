@@ -281,7 +281,7 @@ const MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES: Version = Version::new(26, 17, 
 /// pool — no additional synchronization is needed.
 ///
 /// Global ID uniqueness is guaranteed because each refill calls
-/// [`Catalog::allocate_user_ids`], which performs a durable persist
+/// [`mz_catalog::catalog::Catalog::allocate_user_ids`], which performs a durable persist
 /// write that atomically reserves the entire batch before any IDs from
 /// it are handed out. If the process crashes after a refill but before
 /// all pre-allocated IDs are consumed, the unused IDs form harmless

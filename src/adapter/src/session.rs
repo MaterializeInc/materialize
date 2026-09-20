@@ -1661,7 +1661,7 @@ pub enum TransactionOps {
                     + Sync,
             >,
         >,
-        /// [`crate::catalog::Catalog::transient_revision`] when this transaction started.
+        /// [`mz_catalog::catalog::Catalog::transient_revision`] when this transaction started.
         transient_revision: u64,
         /// Snapshot of the durable transaction state after the last dry run.
         /// Used to initialize the next dry run's transaction so it starts

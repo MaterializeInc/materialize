@@ -208,7 +208,7 @@ where
     optimizer.catch_unwind_optimize(resolved_mir_plan)
 }
 
-/// [`OptimizerConfig`] overrides coming from an [`ExplainContext`].
+/// Applies EXPLAIN parameter and feature overrides to [`OptimizerConfig`].
 impl OverrideFrom<ExplainContext> for OptimizerConfig {
     fn override_from(mut self, ctx: &ExplainContext) -> Self {
         let ExplainContext::Plan(ctx) = ctx else {
