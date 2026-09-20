@@ -69,6 +69,28 @@ impl std::fmt::Display for VariadicAllModifiers {
 }
 impl crate::func::FuncName for VariadicAllModifiers {
     const NAME: &'static str = stringify!(variadic_all_modifiers);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(could_error = true, output_type = i16, is_infix_op = true, is_monotone = true, is_associative = true, propagates_nulls = true, sqlname = \"variadic_all_modifiers\",)] fn variadic_all_modifiers<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a>",
+        signature: "fn(Variadic<Datum<'a>>) -> Datum<'a>",
+        body_fingerprint: 3216709877986504653u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn variadic_all_modifiers<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
     datums.into_iter().next().unwrap_or(Datum::Null)

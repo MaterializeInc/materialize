@@ -70,6 +70,28 @@ impl std::fmt::Display for BinaryAllModifiers {
 }
 impl crate::func::FuncName for BinaryAllModifiers {
     const NAME: &'static str = stringify!(binary_all_modifiers);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(could_error = true, output_type = i16, is_infix_op = true, is_monotone = (true, true), is_infinity_monotone = false, negate = None, propagates_nulls = true, sqlname = \"binary_all_modifiers\",)] fn binary_all_modifiers<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>",
+        signature: "fn(Datum<'a>, Datum<'a>) -> Datum<'a>",
+        body_fingerprint: 14373755090808246356u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn binary_all_modifiers<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     a

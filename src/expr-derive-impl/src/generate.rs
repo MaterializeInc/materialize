@@ -14,6 +14,7 @@ use quote::quote;
 use crate::modifiers::{Modifiers, reject_inapplicable};
 use crate::shape::{Modifier, Shape};
 use crate::signature;
+use crate::source::sqlfunc_source;
 
 /// One `fn name(&self) -> Ret { expr }` per modifier present in `mods`, except
 /// `introduces_nulls`.
@@ -75,6 +76,9 @@ struct Expansion {
     has_self: bool,
     sqlname: TokenStream,
     fn_name: Ident,
+    /// The registry's record of this function's source, generated as members of the
+    /// `FuncName` impl.
+    source: TokenStream,
 }
 
 /// Wraps an arity's trait impl with the parts every arity shares: the unit-struct
@@ -86,6 +90,7 @@ fn expand(e: &Expansion, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenSt
         has_self,
         sqlname,
         fn_name,
+        source,
     } = e;
 
     let display_impl = quote! {
@@ -99,6 +104,7 @@ fn expand(e: &Expansion, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenSt
     let funcname_impl = quote! {
         impl crate::func::FuncName for #struct_name {
             const NAME: &'static str = stringify!(#fn_name);
+            #source
         }
     };
 
@@ -178,6 +184,7 @@ pub(crate) fn generate(
     mut mods: Modifiers,
     struct_ty: Option<syn::Path>,
     has_self: bool,
+    attr: &TokenStream,
 ) -> darling::Result<TokenStream> {
     reject_inapplicable(shape, &mods)?;
 
@@ -354,6 +361,7 @@ pub(crate) fn generate(
         has_self,
         sqlname,
         fn_name: fn_name.clone(),
+        source: sqlfunc_source(attr, func, &param_types_raw, output_ty_raw, &param_types),
     };
     Ok(expand(&expansion, func, trait_impl))
 }
@@ -492,6 +500,7 @@ mod tests {
             has_self: false,
             sqlname: quote! { "some_fn" },
             fn_name: syn::parse_quote!(some_fn),
+            source: quote! {},
         };
         let out = super::expand(&e, &func, quote! { impl Marker for SomeFn {} }).to_string();
         assert!(out.contains("pub struct SomeFn"), "got:\n{out}");
@@ -516,6 +525,7 @@ mod tests {
             has_self: true,
             sqlname: quote! { "some_fn" },
             fn_name: syn::parse_quote!(some_fn),
+            source: quote! {},
         };
         let out = super::expand(&e, &func, quote! { impl Marker for SomeFn {} }).to_string();
         assert!(!out.contains("pub struct SomeFn"), "got:\n{out}");

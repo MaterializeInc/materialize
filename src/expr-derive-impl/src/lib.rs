@@ -17,6 +17,7 @@ mod generate;
 mod modifiers;
 mod shape;
 mod signature;
+mod source;
 mod sqlfunc;
 
 pub use sqlfunc::sqlfunc;
@@ -360,7 +361,7 @@ mod test {
             },
         );
         assert!(
-            output.contains("negate") && output.contains("unary"),
+            output.contains("`negate` is not supported for unary functions"),
             "expected an error naming the modifier and the arity, got:\n{output}"
         );
     }
@@ -375,7 +376,7 @@ mod test {
             },
         );
         assert!(
-            output.contains("is_infinity_monotone"),
+            output.contains("`is_infinity_monotone` is not supported for unary functions"),
             "is_infinity_monotone must be rejected on unary rather than ignored, got:\n{output}"
         );
     }
