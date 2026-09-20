@@ -50,7 +50,7 @@ module "eks" {
 # nodes cannot become Ready without one, so it must be installed before any
 # node group.
 module "vpc_cni" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/vpc-cni?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/vpc-cni?ref=v13.10.0"
 
   name_prefix       = var.name_prefix
   oidc_provider_arn = module.eks.oidc_provider_arn
