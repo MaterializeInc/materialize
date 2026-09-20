@@ -7015,6 +7015,7 @@ dependencies = [
  "mz-repr",
  "mz-row-spine",
  "mz-secrets",
+ "mz-service",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",

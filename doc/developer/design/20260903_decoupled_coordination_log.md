@@ -1027,3 +1027,16 @@ read policies. Pending incremental installations need local import holds across
 retries. The adapter-loss target now restarts a compute replica after compaction,
 stops its surviving sibling, and requires a fresh source-fed result without SQL
 ingress. Sink takeover latency and Iceberg overlap remain pre-cutover decisions.
+
+### 2026-09-20: Native execution protection boundary
+
+Native ingress is independent of query connections and aggregates global-worker
+progress. Incremental selection takes protected live-index frontiers alongside
+the pending DAG. The remaining integration is incarnation-scoped protection,
+local dependency holds, and bounds publication before replacing the controller.
+
+Execution-input progress and index retention are distinct needs. Dropping the
+controller's input holds would change historical reads through retaining indexes.
+Proposed, awaiting Aljoscha: preserve the live index's retention window with
+incarnation-scoped logical-input protection, without promising durable index
+reconstruction at that window. Sink cutover questions remain open.

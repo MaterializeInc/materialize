@@ -19,24 +19,25 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
-use mz_cluster::client::{ClusterClient, ClusterSpec};
+use mz_cluster::client::{ClusterClient, ClusterSpec, TimelyContainer};
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
-use mz_compute_client::service::{ComputeClient, RoleClient};
+use mz_compute_client::service::{ComputeClient, PartitionedComputeState, RoleClient};
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_service::client::{Partitionable, PartitionedState};
 use mz_storage_types::connections::ConnectionContext;
 use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
 use timely::logging::TimelyEvent;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
@@ -45,6 +46,99 @@ use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
+use crate::replica_progress;
+
+/// Runtime-owned compute control, sequenced before worker partitioning.
+///
+/// This endpoint has no connection nonce or reconciliation handshake. Its first
+/// command must initialize the instance exactly once. Responses aggregate every global worker,
+/// including workers in other processes. Keep draining responses while it lives.
+pub struct ReplicaCompute {
+    // Maintained execution must not depend on query listener/client lifetimes.
+    _runtime: Arc<Mutex<TimelyContainer<Config>>>,
+    commands: command_channel::Sender,
+    responses: mpsc::UnboundedReceiver<(usize, ComputeResponse)>,
+    aggregation: PartitionedComputeState,
+    initialized: bool,
+}
+
+type ReplicaChannels = (
+    command_channel::Sender,
+    mpsc::UnboundedReceiver<(usize, ComputeResponse)>,
+    usize,
+);
+
+/// The process-local compute runtime and its connection factory.
+///
+/// Workers run for the process lifetime, without an in-process shutdown protocol.
+/// Retain a server, endpoint, or connection factory for that lifetime. Dropping the
+/// last runtime owner joins the worker threads.
+pub struct ComputeServer {
+    runtime: Arc<Mutex<TimelyContainer<Config>>>,
+    replica_owned: bool,
+    replica: Option<ReplicaCompute>,
+}
+
+impl ComputeServer {
+    /// Creates a transport factory without transferring runtime ownership.
+    pub fn client_builder(&self) -> impl Fn() -> Box<dyn ComputeClient> + use<> {
+        let runtime = Arc::clone(&self.runtime);
+        let replica_owned = self.replica_owned;
+        move || -> Box<dyn ComputeClient> {
+            let client = ClusterClient::new(Arc::clone(&runtime));
+            if replica_owned {
+                Box::new(RoleClient::query_only(client))
+            } else {
+                Box::new(RoleClient::new(client))
+            }
+        }
+    }
+
+    /// Takes the unique native control endpoint, present only on process zero
+    /// of a replica-owned runtime.
+    pub fn take_replica(&mut self) -> Option<ReplicaCompute> {
+        self.replica.take()
+    }
+}
+
+impl ReplicaCompute {
+    /// Enqueues a maintained command in the replica's common worker order.
+    /// The first command must be `CreateInstance`, which must not be repeated.
+    pub fn send(&mut self, command: ComputeCommand) {
+        assert!(
+            !matches!(
+                command,
+                ComputeCommand::Hello { .. }
+                    | ComputeCommand::HelloQuery { .. }
+                    | ComputeCommand::SetQueryMaxResultSize { .. }
+                    | ComputeCommand::CreateQueryDataflow { .. }
+                    | ComputeCommand::Peek(_)
+                    | ComputeCommand::CancelPeek { .. }
+            ),
+            "query and transport commands must use query connections"
+        );
+        let initializes = matches!(command, ComputeCommand::CreateInstance(_));
+        assert_eq!(
+            initializes, !self.initialized,
+            "replica must initialize its instance exactly once, before other commands"
+        );
+        self.initialized = true;
+        self.aggregation.observe_command(&command);
+        self.commands
+            .send((Some(command), command_channel::Origin::Replica));
+    }
+
+    /// Receives replica-wide progress or another maintained response.
+    /// Cancel safe. Partial worker responses remain in the aggregation state.
+    pub async fn recv(&mut self) -> Result<Option<ComputeResponse>, Error> {
+        while let Some((worker, response)) = self.responses.recv().await {
+            if let Some(response) = self.aggregation.absorb_response(worker, response) {
+                return response.map(Some);
+            }
+        }
+        Ok(None)
+    }
+}
 
 /// Caller-provided configuration for compute.
 #[derive(Clone, Debug)]
@@ -129,6 +223,8 @@ pub(crate) type StorageTimelyLogReader =
 /// Configures the server with compute-specific metrics.
 #[derive(Clone)]
 struct Config {
+    replica_owned: bool,
+    replica_ready: Arc<Mutex<Option<oneshot::Sender<ReplicaChannels>>>>,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
     /// Context necessary for rendering txn-wal operators.
@@ -150,17 +246,26 @@ struct Config {
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
+/// Replica-owned runtimes accept only query connections and return their native
+/// control endpoint on process zero. Controller-owned runtimes return no endpoint.
 pub async fn serve(
     timely_config: TimelyConfig,
     role: ComputeRuntimeRole,
+    replica_owned: bool,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
     storage_log_readers: Vec<StorageTimelyLogReader>,
-) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
+) -> Result<ComputeServer, Error> {
     let workers_per_process = timely_config.workers;
+    let (ready_tx, ready_rx) = if replica_owned && timely_config.process == 0 {
+        let (tx, rx) = oneshot::channel();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     // Normalize the log-reader vec to exactly one slot per local worker. Empty
     // input means logging is disabled; pad with `None` so index-based access is
     // always in bounds.
@@ -177,6 +282,8 @@ pub async fn serve(
     mz_timely_util::pool_config::metrics::register(metrics_registry);
 
     let config = Config {
+        replica_owned,
+        replica_ready: Arc::new(Mutex::new(ready_tx)),
         persist_clients,
         txns_ctx,
         tracing_handle,
@@ -194,13 +301,24 @@ pub async fn serve(
     let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
     let timely_container = Arc::new(Mutex::new(timely_container));
 
-    let client_builder = move || {
-        let client = ClusterClient::new(Arc::clone(&timely_container));
-        let client: Box<dyn ComputeClient> = Box::new(RoleClient::new(client));
-        client
+    let replica = match ready_rx {
+        Some(rx) => {
+            let (commands, responses, peers) = rx.await?;
+            Some(ReplicaCompute {
+                _runtime: Arc::clone(&timely_container),
+                commands,
+                responses,
+                aggregation: <(ComputeCommand, ComputeResponse) as Partitionable<_, _>>::new(peers),
+                initialized: false,
+            })
+        }
+        None => None,
     };
-
-    Ok(client_builder)
+    Ok(ComputeServer {
+        runtime: timely_container,
+        replica_owned,
+        replica,
+    })
 }
 
 /// Error type returned on connection nonce changes.
@@ -211,8 +329,10 @@ struct NonceChange(Uuid);
 
 /// Endpoint used by workers to receive compute commands.
 ///
-/// Observes nonce changes in the command stream and converts them into receive errors.
+/// Separates queries from maintained commands. Only controller-owned runtimes
+/// observe lifecycle nonce changes and convert them into reconciliation requests.
 struct CommandReceiver {
+    replica_owned: bool,
     /// The channel supplying commands.
     inner: command_channel::Receiver,
     /// The ID of the Timely worker.
@@ -230,6 +350,7 @@ struct CommandReceiver {
 impl CommandReceiver {
     fn new(inner: command_channel::Receiver, worker_id: usize) -> Self {
         Self {
+            replica_owned: false,
             inner,
             worker_id,
             nonce: None,
@@ -251,7 +372,19 @@ impl CommandReceiver {
                 Some((command, command_channel::Origin::Query(nonce))) => {
                     self.deferred_queries.push_back((command, nonce));
                 }
+                Some((Some(command), command_channel::Origin::Replica)) => {
+                    assert!(
+                        self.replica_owned,
+                        "replica command on a controller-owned runtime"
+                    );
+                    return Ok(Some(command));
+                }
+                Some((None, command_channel::Origin::Replica)) => unreachable!(),
                 Some((Some(command), command_channel::Origin::Lifecycle(nonce))) => {
+                    assert!(
+                        !self.replica_owned,
+                        "lifecycle command on a replica-owned runtime"
+                    );
                     break (command, nonce);
                 }
                 Some((None, command_channel::Origin::Lifecycle(_))) => unreachable!(),
@@ -280,8 +413,9 @@ pub(crate) enum ResponseEvent {
     QueryRetired(Uuid),
 }
 
-/// Tags responses with their owning connection nonce.
+/// Routes query responses to their connection and maintained responses to their owner.
 pub(crate) struct ResponseSender {
+    replica: Option<replica_progress::Sender>,
     /// The channel consuming responses.
     inner: mpsc::UnboundedSender<ResponseEvent>,
     /// The ID of the Timely worker.
@@ -294,6 +428,7 @@ impl ResponseSender {
     /// `pub(crate)` rather than private so the peek tests can build the sender a worker holds.
     pub(crate) fn new(inner: mpsc::UnboundedSender<ResponseEvent>, worker_id: usize) -> Self {
         Self {
+            replica: None,
             inner,
             worker_id,
             nonce: None,
@@ -302,12 +437,24 @@ impl ResponseSender {
 
     /// Set the cluster protocol nonce.
     pub(crate) fn set_nonce(&mut self, nonce: Uuid) {
+        assert!(
+            self.replica.is_none(),
+            "replica responses have no lifecycle nonce"
+        );
         self.nonce = Some(nonce);
         let _ = self.inner.send(ResponseEvent::Lifecycle(nonce));
     }
 
-    /// Send a compute response.
+    /// Sends a maintained response to its owner.
+    ///
+    /// Controller transport loss is reported to the caller. Replica-owned
+    /// progress loss panics because execution must not continue without its
+    /// protection owner receiving progress.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
+        if let Some(replica) = &self.replica {
+            replica.send(response);
+            return Ok(());
+        }
         let nonce = self.nonce.expect("nonce must be initialized");
 
         self.send_query(nonce, response)
@@ -395,13 +542,30 @@ impl ClusterSpec for Config {
         // See database-issues#8964.
         let (cmd_tx, cmd_rx) = command_channel::render(timely_worker);
         let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+        let mut command_rx = CommandReceiver::new(cmd_rx, worker_id);
+        command_rx.replica_owned = self.replica_owned;
+        let mut response_tx = ResponseSender::new(resp_tx, worker_id);
+        if self.replica_owned {
+            let (progress_tx, progress_rx) = replica_progress::render(timely_worker);
+            response_tx.replica = Some(progress_tx);
+            if worker_id == 0 {
+                let endpoint = (cmd_tx.clone(), progress_rx, timely_worker.peers());
+                self.replica_ready
+                    .lock()
+                    .expect("poisoned")
+                    .take()
+                    .expect("replica owner is registered")
+                    .send(endpoint)
+                    .unwrap_or_else(|_| panic!("replica owner lost during startup"));
+            }
+        }
 
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
 
         Worker {
             timely_worker,
-            command_rx: CommandReceiver::new(cmd_rx, worker_id),
-            response_tx: ResponseSender::new(resp_tx, worker_id),
+            command_rx,
+            response_tx,
             metrics,
             context: self.context.clone(),
             persist_clients: Arc::clone(&self.persist_clients),
@@ -464,6 +628,18 @@ fn set_core_affinity(_worker_id: usize) {
 impl<'w> Worker<'w> {
     /// Runs a compute worker.
     pub fn run(&mut self) {
+        if self.command_rx.replica_owned {
+            let first = self
+                .recv_command()
+                .unwrap_or_else(|_| panic!("replica initialization changed nonce"));
+            assert!(
+                matches!(first, ComputeCommand::CreateInstance(_)),
+                "replica must initialize its instance first"
+            );
+            self.handle_command(first);
+            let Err(_) = self.run_commands();
+            unreachable!("replica-owned runtime cannot change lifecycle nonce");
+        }
         // The command receiver is initialized without an nonce, so receiving the first command
         // always triggers a nonce change.
         let NonceChange(nonce) = self.recv_command().expect_err("change to first nonce");
@@ -482,6 +658,10 @@ impl<'w> Worker<'w> {
     /// Handles commands for a client connection, returns when the nonce changes.
     fn run_client(&mut self) -> Result<Infallible, NonceChange> {
         self.reconcile()?;
+        self.run_commands()
+    }
+
+    fn run_commands(&mut self) -> Result<Infallible, NonceChange> {
         self.handle_deferred_queries();
 
         // The last time we did periodic maintenance.
@@ -579,6 +759,10 @@ impl<'w> Worker<'w> {
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
         if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
+            assert!(
+                !self.command_rx.replica_owned || self.compute_state.is_none(),
+                "replica instance must not be reinitialized",
+            );
             self.compute_state = Some(ComputeState::new(
                 Arc::clone(&self.persist_clients),
                 self.txns_ctx.clone(),
@@ -1066,3 +1250,6 @@ fn spawn_channel_adapter(
 
 #[cfg(test)]
 mod query_wire_tests;
+
+#[cfg(test)]
+mod replica_tests;
