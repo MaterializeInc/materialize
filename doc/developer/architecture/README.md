@@ -361,4 +361,9 @@ less room, in exchange for the caller being able to reason without reading the i
   itself a decision that several processes must agree on.
 * Whether the split of catalog, planning, controllers, compaction policy, timestamp selection, and
   policy is the right one, or whether some of these are one component seen from different angles.
-* Whether this document's prose or a machine-checked model is normative, once there is a model.
+* Whether this document's prose or a machine-checked model is normative. There is one model,
+  [`RenditionHandover.lean`](RenditionHandover.lean), covering the rendition handover protocol in
+  [`architecture-storage.md`](../platform/architecture-storage.md). It found three obligations that
+  document relies on without stating, which is an argument for models being worth writing, and it
+  is checked by no build or CI job, which is an argument against them being normative until one
+  does.
