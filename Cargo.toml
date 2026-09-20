@@ -475,7 +475,7 @@ reqwest = { version = "0.12.28", features = ["blocking", "charset", "cookies", "
 reqwest-middleware = { version = "0.4.2", features = ["json"] }
 reqwest-retry = "0.8.0"
 rlimit = "0.11.0"
-rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
+rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.38"
 rpassword = "7.5.1"
