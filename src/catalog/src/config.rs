@@ -17,7 +17,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterC
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_controller::clusters::ReplicaAllocation;
+use mz_controller_types::clusters::ReplicaAllocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::MemoryLimit;

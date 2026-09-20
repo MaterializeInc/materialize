@@ -6687,7 +6687,6 @@ dependencies = [
  "mz-cluster-controller",
  "mz-compute-client",
  "mz-compute-types",
- "mz-controller",
  "mz-controller-types",
  "mz-durable-cache",
  "mz-dyncfg",
@@ -7132,9 +7131,15 @@ dependencies = [
 name = "mz-controller-types"
 version = "0.0.0"
 dependencies = [
+ "bytesize",
  "mz-cluster-client",
  "mz-compute-types",
  "mz-dyncfg",
+ "mz-orchestrator",
+ "mz-ore",
+ "mz-repr",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

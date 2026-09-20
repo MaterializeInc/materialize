@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use mz_audit_log::VersionedEvent;
-use mz_controller::clusters::ReplicaLogging;
+use mz_controller_types::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
 use mz_proto::RustType;
@@ -555,8 +555,8 @@ pub struct ReplicaConfig {
     pub arrangement_compression: bool,
 }
 
-impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
-    fn from(config: mz_controller::clusters::ReplicaConfig) -> Self {
+impl From<mz_controller_types::clusters::ReplicaConfig> for ReplicaConfig {
+    fn from(config: mz_controller_types::clusters::ReplicaConfig) -> Self {
         Self {
             location: config.location.into(),
             logging: config.compute.logging,
@@ -589,11 +589,11 @@ pub enum ReplicaLocation {
     },
 }
 
-impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
-    fn from(loc: mz_controller::clusters::ReplicaLocation) -> Self {
+impl From<mz_controller_types::clusters::ReplicaLocation> for ReplicaLocation {
+    fn from(loc: mz_controller_types::clusters::ReplicaLocation) -> Self {
         match loc {
-            mz_controller::clusters::ReplicaLocation::Unmanaged(
-                mz_controller::clusters::UnmanagedReplicaLocation {
+            mz_controller_types::clusters::ReplicaLocation::Unmanaged(
+                mz_controller_types::clusters::UnmanagedReplicaLocation {
                     storagectl_addrs,
                     computectl_addrs,
                 },
@@ -601,8 +601,8 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                 storagectl_addrs,
                 computectl_addrs,
             },
-            mz_controller::clusters::ReplicaLocation::Managed(
-                mz_controller::clusters::ManagedReplicaLocation {
+            mz_controller_types::clusters::ReplicaLocation::Managed(
+                mz_controller_types::clusters::ManagedReplicaLocation {
                     allocation: _,
                     size,
                     availability_zones,

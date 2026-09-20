@@ -47,7 +47,7 @@ use mz_audit_log::{
     VersionedEvent,
 };
 use mz_cluster_controller::ctx::RefreshWindowDecision;
-use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
+use mz_controller_types::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::CollectionPlan;
 use mz_ore::collections::HashSet;
@@ -5694,8 +5694,8 @@ mod tests {
         };
         use mz_adapter_types::cluster_state::ReconfigurationAudit;
         use mz_audit_log::ReconfigurationLifecycleV1;
-        use mz_controller::clusters::ReplicaLogging;
         use mz_controller_types::ClusterId;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::Timestamp;
         use mz_repr::optimize::OptimizerFeatureOverrides;
 
@@ -5799,7 +5799,7 @@ mod tests {
             ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
             ReconfigurationStatus, ReconfigurationTarget,
         };
-        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::Timestamp;
         use mz_repr::optimize::OptimizerFeatureOverrides;
 
@@ -5882,7 +5882,7 @@ mod tests {
         use crate::memory::objects::{
             BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
         };
-        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::Timestamp;
         use mz_repr::optimize::OptimizerFeatureOverrides;
 
@@ -5953,7 +5953,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::memory::objects::{BurstState, ClusterVariantManaged};
-        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::optimize::OptimizerFeatureOverrides;
         use mz_sql::plan::{AutoScalingStrategy, OnHydration};
 
@@ -6052,8 +6052,8 @@ mod tests {
         };
         use mz_adapter_types::cluster_state::{BurstAudit, BurstFinishCause};
         use mz_audit_log::{BurstFinishCauseV1, HydrationBurstLifecycleV1};
-        use mz_controller::clusters::ReplicaLogging;
         use mz_controller_types::ClusterId;
+        use mz_controller_types::clusters::ReplicaLogging;
         use mz_repr::optimize::OptimizerFeatureOverrides;
 
         let cluster_id = ClusterId::user(1).expect("valid id");

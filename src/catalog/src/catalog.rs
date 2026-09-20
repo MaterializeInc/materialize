@@ -46,7 +46,7 @@ use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_controller::clusters::ReplicaLocation;
+use mz_controller_types::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_license_keys::ValidatedLicenseKey;

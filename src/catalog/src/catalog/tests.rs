@@ -122,7 +122,8 @@ async fn owned_catalog_reconstruction_preserves_pending_replica() {
             .expect("bootstrap user replica")
             .clone();
         let mut config = replica.config;
-        let mz_controller::clusters::ReplicaLocation::Managed(location) = &mut config.location
+        let mz_controller_types::clusters::ReplicaLocation::Managed(location) =
+            &mut config.location
         else {
             panic!("bootstrap replica must be managed");
         };
@@ -1593,7 +1594,8 @@ async fn test_multi_subscriber_catalog() {
         .expect("bootstrap user replica")
         .clone();
     let mut replica_config = replica.config;
-    let mz_controller::clusters::ReplicaLocation::Managed(location) = &mut replica_config.location
+    let mz_controller_types::clusters::ReplicaLocation::Managed(location) =
+        &mut replica_config.location
     else {
         panic!("bootstrap replica must be managed");
     };

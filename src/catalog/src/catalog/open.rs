@@ -45,8 +45,8 @@ use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
 };
 use mz_auth::hash::scram256_hash;
-use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::ClusterId;
+use mz_controller_types::clusters::ReplicaLogging;
 use mz_expr::CollectionPlan;
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;

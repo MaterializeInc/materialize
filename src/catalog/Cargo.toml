@@ -36,7 +36,6 @@ mz-cloud-resources = { path = "../cloud-resources" }
 mz-cluster-controller = { path = "../cluster-controller" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
-mz-controller = { path = "../controller" }
 mz-controller-types = { path = "../controller-types" }
 mz-durable-cache = { path = "../durable-cache" }
 mz-dyncfg = { path = "../dyncfg" }
