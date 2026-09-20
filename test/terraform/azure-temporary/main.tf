@@ -240,7 +240,7 @@ module "storage" {
 
 # 6. Install cert-manager for TLS
 module "cert_manager" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=v13.10.0"
 
   node_selector = local.generic_node_labels
 
