@@ -13,16 +13,15 @@
 //!
 //! See [parse_state_update] for details.
 
-use mz_catalog::builtin::BUILTIN_LOG_LOOKUP;
-use mz_catalog::memory::implications::{ParsedStateUpdate, ParsedStateUpdateKind};
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, StateUpdate, StateUpdateKind};
-use mz_catalog::{durable, memory};
+use crate::builtin::BUILTIN_LOG_LOOKUP;
+use crate::memory::implications::{ParsedStateUpdate, ParsedStateUpdateKind};
+use crate::memory::objects::{CatalogItem, DataSourceDesc, StateUpdate, StateUpdateKind};
+use crate::{durable, memory};
 use mz_ore::instrument;
 use mz_repr::CatalogItemId;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::sources::GenericSourceConnection;
 
-// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::CatalogState;
 
 /// Potentially generate a [ParsedStateUpdate] that corresponds to the given
@@ -170,8 +169,8 @@ fn parse_cluster_replica_update(
 
 #[cfg(test)]
 mod tests {
-    use mz_catalog::durable::objects::{ReplicaSystemConfiguration, SystemConfiguration};
-    use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+    use crate::durable::objects::{ReplicaSystemConfiguration, SystemConfiguration};
+    use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
     use mz_controller_types::ReplicaId;
     use mz_repr::Timestamp;
 

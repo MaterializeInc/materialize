@@ -17,6 +17,26 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
+use crate::builtin::{
+    BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin, Fingerprint,
+    MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+};
+use crate::config::StateConfig;
+use crate::durable::objects::{
+    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
+};
+use crate::durable::{
+    ClusterReplica, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
+    Transaction, managed_cluster_replica_name,
+};
+use crate::expr_cache::{
+    ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
+    latest_item_version,
+};
+use crate::memory::error::{Error, ErrorKind};
+use crate::memory::objects::{
+    CatalogItem, CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate, StateUpdateKind,
+};
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
@@ -25,26 +45,6 @@ use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
 };
 use mz_auth::hash::scram256_hash;
-use mz_catalog::builtin::{
-    BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin, Fingerprint,
-    MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
-};
-use mz_catalog::config::StateConfig;
-use mz_catalog::durable::objects::{
-    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
-};
-use mz_catalog::durable::{
-    ClusterReplica, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
-    Transaction, managed_cluster_replica_name,
-};
-use mz_catalog::expr_cache::{
-    ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
-    latest_item_version,
-};
-use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::{
-    CatalogItem, CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate, StateUpdateKind,
-};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
@@ -67,15 +67,14 @@ use semver::Version;
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
 
-// DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::AdapterError;
+use crate::catalog::CatalogError;
 use crate::catalog::migrate::{self, get_migration_version, set_migration_version};
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Config, is_reserved_name};
 
 pub struct InitializeStateResult {
     /// Parsed effects emitted by native initialization, in application order.
-    pub catalog_updates: Vec<mz_catalog::memory::implications::ParsedStateUpdate>,
+    pub catalog_updates: Vec<crate::memory::implications::ParsedStateUpdate>,
     /// An initialized [`CatalogState`].
     pub state: CatalogState,
     /// Items whose builtin schema migration allocated a fresh, self-owned persist shard. Only used
@@ -151,7 +150,7 @@ impl Catalog {
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones.clone(),
             http_host_name: config.http_host_name.clone(),
             connection_context: config.connection_context.clone(),
-            builtin_item_migration_config: mz_catalog::config::BuiltinItemMigrationConfig {
+            builtin_item_migration_config: crate::config::BuiltinItemMigrationConfig {
                 persist_client: config.persist_client.clone(),
                 read_only: config.builtin_item_migration_config.read_only,
                 force_migration: None,
@@ -166,8 +165,8 @@ impl Catalog {
 
     pub(crate) async fn reconstruct_state(
         &self,
-        input: mz_catalog::durable::CatalogSnapshot,
-    ) -> Result<CatalogState, AdapterError> {
+        input: crate::durable::CatalogSnapshot,
+    ) -> Result<CatalogState, CatalogError> {
         let mut config = Self::diagnostic_state_config(&self.diagnostic_config);
         config.system_parameter_defaults = self.state.system_config().defaults();
         Self::reconstruct_state_from_config(config, input).await
@@ -175,8 +174,8 @@ impl Catalog {
 
     pub(super) async fn reconstruct_state_from_config(
         config: StateConfig,
-        input: mz_catalog::durable::CatalogSnapshot,
-    ) -> Result<CatalogState, AdapterError> {
+        input: crate::durable::CatalogSnapshot,
+    ) -> Result<CatalogState, CatalogError> {
         Self::reconstruct_state_and_updates(config, input)
             .await
             .map(|(state, _)| state)
@@ -185,18 +184,18 @@ impl Catalog {
     /// Replays a committed snapshot without committing or accepting durable changes.
     pub(super) async fn reconstruct_state_and_updates(
         config: StateConfig,
-        input: mz_catalog::durable::CatalogSnapshot,
+        input: crate::durable::CatalogSnapshot,
     ) -> Result<
         (
             CatalogState,
-            Vec<mz_catalog::memory::implications::ParsedStateUpdate>,
+            Vec<crate::memory::implications::ParsedStateUpdate>,
         ),
-        AdapterError,
+        CatalogError,
     > {
         let mut config = Self::diagnostic_state_config(&config);
         config.boot_ts = input.upper;
         let before = input.snapshot;
-        let mut txn = mz_catalog::durable::DryRunTransaction::from_snapshot(
+        let mut txn = crate::durable::DryRunTransaction::from_snapshot(
             before.clone(),
             input.upper,
             input.is_bootstrap_complete,
@@ -207,7 +206,7 @@ impl Catalog {
                 .await?;
         drop(cleanup);
         if txn.current_snapshot() != before {
-            return Err(AdapterError::Internal(
+            return Err(CatalogError::Internal(
                 "catalog reconstruction requires durable changes".into(),
             ));
         }
@@ -215,12 +214,12 @@ impl Catalog {
     }
 
     /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
-    /// external to a [mz_catalog::durable::DurableCatalogState]
+    /// external to a [crate::durable::DurableCatalogState]
     /// (for example: no [mz_secrets::SecretsReader]).
     pub async fn initialize_state<'a>(
         config: StateConfig,
-        storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
-    ) -> Result<InitializeStateResult, AdapterError> {
+        storage: &'a mut Box<dyn crate::durable::DurableCatalogState>,
+    ) -> Result<InitializeStateResult, CatalogError> {
         let deploy_generation = storage.get_deployment_generation().await?;
         let updates = storage.sync_to_current_updates().await?;
         let mut txn = storage.transaction().await?;
@@ -240,7 +239,7 @@ impl Catalog {
         mut updates: Vec<StateUpdate>,
         txn: &mut Transaction<'_>,
         deploy_generation: Option<u64>,
-    ) -> Result<(InitializeStateResult, BoxFuture<'static, ()>), AdapterError> {
+    ) -> Result<(InitializeStateResult, BoxFuture<'static, ()>), CatalogError> {
         for builtin_role in BUILTIN_ROLES {
             assert!(
                 is_reserved_name(builtin_role.name),
@@ -384,7 +383,7 @@ impl Catalog {
                 || !mappings.is_empty()
                 || get_migration_version(txn).as_ref() != Some(&config.build_info.semver_version())
             {
-                return Err(AdapterError::Internal(
+                return Err(CatalogError::Internal(
                     "catalog reconstruction requires a builtin schema migration".into(),
                 ));
             }
@@ -508,7 +507,7 @@ impl Catalog {
                     password_hash: Some(
                         scram256_hash(&password, &NonZeroU32::new(600_000).expect("known valid"))
                             .map_err(|_| {
-                            AdapterError::Internal("Failed to hash mz_system password.".to_owned())
+                            CatalogError::Internal("Failed to hash mz_system password.".to_owned())
                         })?,
                     ),
                     updated_at: SYSTEM_TIME(),
@@ -517,8 +516,8 @@ impl Catalog {
                     .role_auth_by_id
                     .insert(MZ_SYSTEM_ROLE_ID, role_auth.clone());
                 let builtin_table_update = state.generate_builtin_table_update(
-                    mz_catalog::memory::objects::StateUpdateKind::RoleAuth(role_auth.into()),
-                    mz_catalog::memory::objects::StateDiff::Addition,
+                    crate::memory::objects::StateUpdateKind::RoleAuth(role_auth.into()),
+                    crate::memory::objects::StateDiff::Addition,
                 );
                 builtin_table_updates.extend(builtin_table_update);
             }
@@ -746,7 +745,7 @@ impl Catalog {
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
     #[instrument(name = "catalog::open")]
-    pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
+    pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, CatalogError>> {
         async move {
             let mut storage = config.storage;
             let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config.state));
@@ -834,10 +833,10 @@ impl Catalog {
     /// Note that this must be done before creating/rendering collections
     /// because the storage controller might not be aware of new system
     /// collections created between versions.
-    async fn initialize_storage_state(
+    pub async fn initialize_storage_state(
         &mut self,
         storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
-    ) -> Result<(), mz_catalog::durable::CatalogError> {
+    ) -> Result<(), crate::durable::CatalogError> {
         let mut collections: BTreeSet<_> = self
             .entries()
             .filter(|entry| entry.item().is_storage_collection())
@@ -868,7 +867,7 @@ impl Catalog {
         match txn.get_collection_metadata().get(&global_id) {
             None => {
                 txn.insert_collection_metadata([(global_id, shard_id)].into())
-                    .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+                    .map_err(crate::durable::DurableCatalogError::from)?;
             }
             Some(id) => assert_eq!(*id, shard_id),
         }
@@ -876,7 +875,7 @@ impl Catalog {
         storage_collections
             .initialize_state(&mut txn, collections)
             .await
-            .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+            .map_err(crate::durable::DurableCatalogError::from)?;
 
         if state.catalog_read_protection_enabled() {
             // The catalog's controller critical reader is established by durable
@@ -936,77 +935,6 @@ impl Catalog {
         Ok(())
     }
 
-    /// Initialize adapter-owned WAL writing before lifecycle transaction readers start.
-    pub(crate) async fn initialize_table_writer(
-        &self,
-        persist: mz_persist_client::PersistClient,
-        metrics_registry: &mz_ore::metrics::MetricsRegistry,
-        read_only: bool,
-    ) -> Result<
-        (
-            Arc<dyn crate::table_writer::TableWriteHandle>,
-            Arc<mz_txn_wal::metrics::Metrics>,
-        ),
-        mz_catalog::durable::CatalogError,
-    > {
-        let shard = {
-            let mut storage = self.storage().await;
-            let mut tx = storage.transaction().await?;
-            mz_controller::prepare_initialization(&mut tx)
-                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
-            let updates = tx.get_and_commit_op_updates();
-            assert!(
-                updates.is_empty(),
-                "WAL initialization should not produce catalog projection updates: {updates:?}"
-            );
-            let shard = tx.get_txn_wal_shard().expect("WAL identity is initialized");
-            let commit_ts = tx.upper();
-            tx.commit(commit_ts).await?;
-            shard
-        };
-        let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(metrics_registry));
-        let writer =
-            crate::table_writer::open(persist, shard, Arc::clone(&metrics), read_only).await;
-        Ok((writer, metrics))
-    }
-
-    /// Open lifecycle controllers after the adapter has initialized the WAL identity
-    /// and format. Does not open an adapter table writer.
-    pub(crate) async fn initialize_controller(
-        &mut self,
-        config: mz_controller::ControllerConfig,
-        envd_epoch: core::num::NonZeroI64,
-        read_only: bool,
-        txns_metrics: Arc<mz_txn_wal::metrics::Metrics>,
-    ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
-        let controller_start = Instant::now();
-        info!("startup: controller init: beginning");
-
-        let controller = {
-            let mut storage = self.storage().await;
-            let read_only_tx = storage.transaction().await?;
-            mz_controller::Controller::new(
-                config,
-                envd_epoch,
-                read_only,
-                self.state().catalog_read_protection_enabled(),
-                &read_only_tx,
-                txns_metrics,
-            )
-            .await
-        };
-
-        self.initialize_storage_state(&controller.storage_collections)
-            .await?;
-
-        info!(
-            "startup: controller init: complete in {:?}",
-            controller_start.elapsed()
-        );
-
-        Ok(controller)
-    }
-
     /// Politely releases all external resources that can only be released in an async context.
     pub async fn expire(self) {
         // If no one else holds a reference to storage, then clean up the storage resources.
@@ -1033,8 +961,8 @@ impl CatalogState {
 ///
 /// Returns the list of new builtin [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
-    txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
+    txn: &mut crate::durable::Transaction<'_>,
+) -> Result<Vec<GlobalId>, crate::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
     // Used to validate unique descriptions.
     let mut builtin_descs = HashSet::new();
@@ -1126,7 +1054,7 @@ fn add_new_remove_old_builtin_items_migration(
                     catalog_id,
                     c.oid,
                     global_id,
-                    mz_catalog::durable::initialize::resolve_system_schema(c.schema).id,
+                    crate::durable::initialize::resolve_system_schema(c.schema).id,
                     c.name,
                     c.sql.into(),
                     *c.owner_id,
@@ -1258,10 +1186,10 @@ fn add_new_remove_old_builtin_items_migration(
 }
 
 fn add_new_remove_old_builtin_clusters_migration(
-    txn: &mut mz_catalog::durable::Transaction<'_>,
+    txn: &mut crate::durable::Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
     boot_ts: Timestamp,
-) -> Result<(), mz_catalog::durable::CatalogError> {
+) -> Result<(), crate::durable::CatalogError> {
     let mut durable_clusters: BTreeMap<_, _> = txn
         .get_clusters()
         .filter(|cluster| cluster.id.is_system())
@@ -1278,8 +1206,8 @@ fn add_new_remove_old_builtin_clusters_migration(
                 vec![],
                 builtin_cluster.privileges.to_vec(),
                 builtin_cluster.owner_id.to_owned(),
-                mz_catalog::durable::ClusterConfig {
-                    variant: mz_catalog::durable::ClusterVariant::Managed(ClusterVariantManaged {
+                crate::durable::ClusterConfig {
+                    variant: crate::durable::ClusterVariant::Managed(ClusterVariantManaged {
                         size: cluster_config.size,
                         availability_zones: vec![],
                         replication_factor: cluster_config.replication_factor,
@@ -1337,8 +1265,8 @@ fn add_new_remove_old_builtin_clusters_migration(
 }
 
 fn add_new_remove_old_builtin_introspection_source_migration(
-    txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<(), AdapterError> {
+    txn: &mut crate::durable::Transaction<'_>,
+) -> Result<(), CatalogError> {
     let mut new_indexes = Vec::new();
     let mut removed_indexes = BTreeSet::new();
     for cluster in txn.get_clusters() {
@@ -1372,8 +1300,8 @@ fn add_new_remove_old_builtin_introspection_source_migration(
 }
 
 fn add_new_remove_old_builtin_roles_migration(
-    txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<(), mz_catalog::durable::CatalogError> {
+    txn: &mut crate::durable::Transaction<'_>,
+) -> Result<(), crate::durable::CatalogError> {
     let mut durable_roles: BTreeMap<_, _> = txn
         .get_roles()
         .filter(|role| role.id.is_system() || role.id.is_predefined())
@@ -1436,7 +1364,7 @@ fn reconcile_builtin_cluster_replicas(
     txn: &mut Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
     boot_ts: Timestamp,
-) -> Result<(), AdapterError> {
+) -> Result<(), CatalogError> {
     let builtin_cluster_names: BTreeSet<&str> = BUILTIN_CLUSTERS
         .iter()
         .map(|cluster| cluster.name)
@@ -1653,7 +1581,7 @@ fn managed_replica_config(managed: &ClusterVariantManaged) -> ReplicaConfig {
 /// accepted set of values.
 fn remove_invalid_config_param_role_defaults_migration(
     txn: &mut Transaction<'_>,
-) -> Result<(), AdapterError> {
+) -> Result<(), CatalogError> {
     static BUILD_INFO: mz_build_info::BuildInfo = mz_build_info::build_info!();
 
     let roles_to_migrate: BTreeMap<_, _> = txn
@@ -1717,7 +1645,7 @@ fn remove_pending_cluster_replicas_migration(
     let occurred_at = boot_ts.into();
 
     for replica in tx.get_cluster_replicas().collect::<Vec<_>>() {
-        if let mz_catalog::durable::ReplicaLocation::Managed { pending: true, .. } =
+        if let crate::durable::ReplicaLocation::Managed { pending: true, .. } =
             replica.config.location
         {
             let cluster_name = cluster_names
@@ -1782,19 +1710,19 @@ impl BuiltinBootstrapClusterConfigMap {
     fn get_config(
         &self,
         cluster_name: &str,
-    ) -> Result<BootstrapBuiltinClusterConfig, mz_catalog::durable::CatalogError> {
-        let cluster_config = if cluster_name == mz_catalog::builtin::MZ_SYSTEM_CLUSTER.name {
+    ) -> Result<BootstrapBuiltinClusterConfig, crate::durable::CatalogError> {
+        let cluster_config = if cluster_name == crate::builtin::MZ_SYSTEM_CLUSTER.name {
             &self.system_cluster
-        } else if cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name {
+        } else if cluster_name == crate::builtin::MZ_CATALOG_SERVER_CLUSTER.name {
             &self.catalog_server_cluster
-        } else if cluster_name == mz_catalog::builtin::MZ_PROBE_CLUSTER.name {
+        } else if cluster_name == crate::builtin::MZ_PROBE_CLUSTER.name {
             &self.probe_cluster
-        } else if cluster_name == mz_catalog::builtin::MZ_SUPPORT_CLUSTER.name {
+        } else if cluster_name == crate::builtin::MZ_SUPPORT_CLUSTER.name {
             &self.support_cluster
-        } else if cluster_name == mz_catalog::builtin::MZ_ANALYTICS_CLUSTER.name {
+        } else if cluster_name == crate::builtin::MZ_ANALYTICS_CLUSTER.name {
             &self.analytics_cluster
         } else {
-            return Err(mz_catalog::durable::CatalogError::Catalog(
+            return Err(crate::durable::CatalogError::Catalog(
                 SqlCatalogError::UnexpectedBuiltinCluster(cluster_name.to_owned()),
             ));
         };
@@ -1821,7 +1749,7 @@ pub(crate) fn into_consolidatable_updates_startup(
 
 #[cfg(test)]
 mod tests {
-    use mz_catalog::durable::ClusterVariantManaged;
+    use crate::durable::ClusterVariantManaged;
 
     use super::*;
 

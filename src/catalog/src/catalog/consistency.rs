@@ -24,7 +24,6 @@ use mz_sql_parser::ast::{self, Statement};
 use mz_sql_parser::parser::ParserStatementError;
 use serde::Serialize;
 
-// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use super::CatalogState;
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
@@ -59,12 +58,12 @@ impl CatalogInconsistencies {
 }
 
 impl super::Catalog {
-    pub(crate) async fn check_durable_consistency(
+    pub async fn check_durable_consistency(
         &self,
-        input: mz_catalog::durable::CatalogSnapshot,
-    ) -> Result<(), crate::AdapterError> {
+        input: crate::durable::CatalogSnapshot,
+    ) -> Result<(), crate::catalog::CatalogError> {
         self.check_consistency()
-            .map_err(|error| crate::AdapterError::Internal(error.to_string()))?;
+            .map_err(|error| crate::catalog::CatalogError::Internal(error.to_string()))?;
         let reconstructed = self.reconstruct_state(input).await?;
         // Shard finalization is asynchronous and is not applied to CatalogState.
         let unfinalized_shards = self
@@ -84,7 +83,7 @@ impl super::Catalog {
                 .find(|&i| memory_lines[i] != disk_lines[i])
                 .unwrap_or(common_len);
             let start = first.saturating_sub(5);
-            return Err(crate::AdapterError::Internal(format!(
+            return Err(crate::catalog::CatalogError::Internal(format!(
                 "in-memory catalog differs from durable reconstruction at line {}\nmemory:\n{}\ndurable:\n{}",
                 first + 1,
                 memory_lines[start..]

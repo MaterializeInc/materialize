@@ -106,6 +106,7 @@ uuid.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 datadriven.workspace = true
+mz-catalog = { path = "../catalog", features = ["test"] }
 mz-persist = { path = "../persist", features = ["turmoil"] }
 mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
 turmoil.workspace = true

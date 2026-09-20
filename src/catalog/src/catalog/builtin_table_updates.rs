@@ -9,26 +9,25 @@
 
 mod notice;
 
-use bytesize::ByteSize;
-use ipnet::IpNet;
-use mz_adapter_types::compaction::CompactionWindow;
-use mz_audit_log::VersionedStorageUsage;
-use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::builtin::{
+use crate::SYSTEM_CONN_ID;
+use crate::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SOURCE_REFERENCES,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SOURCE_REFERENCES,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
 };
-use mz_catalog::durable::SourceReferences;
-use mz_catalog::memory::error::Error;
-use mz_catalog::memory::objects::{
+use crate::durable::SourceReferences;
+use crate::memory::error::Error;
+use crate::memory::objects::{
     CatalogEntry, CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table,
     TableDataSource, Type,
 };
+use bytesize::ByteSize;
+use ipnet::IpNet;
+use mz_adapter_types::compaction::CompactionWindow;
+use mz_audit_log::VersionedStorageUsage;
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
@@ -42,7 +41,7 @@ use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
+    CatalogItemId, Datum, Diff, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
 };
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogType, TypeCategory};
@@ -51,12 +50,8 @@ use mz_sql::names::SchemaSpecifier;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
 use smallvec::smallvec;
-use uuid::Uuid;
 
-// DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::active_compute_sink::ActiveSubscribe;
 use crate::catalog::CatalogState;
-use crate::coord::ConnMeta;
 
 /// An update to a built-in table.
 #[derive(Debug, Clone)]
@@ -786,51 +781,6 @@ impl CatalogState {
         }
 
         updates
-    }
-
-    pub fn pack_subscribe_update(
-        &self,
-        id: GlobalId,
-        subscribe: &ActiveSubscribe,
-        session_uuid: Uuid,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::Uuid(session_uuid));
-        packer.push(Datum::String(&subscribe.cluster_id.to_string()));
-
-        let start_dt = mz_ore::now::to_datetime(subscribe.start_time);
-        packer.push(Datum::TimestampTz(start_dt.try_into().expect("must fit")));
-
-        let depends_on: Vec<_> = subscribe
-            .depends_on
-            .iter()
-            .map(|id| id.to_string())
-            .collect();
-        packer.push_list(depends_on.iter().map(|s| Datum::String(s)));
-
-        BuiltinTableUpdate::row(&*MZ_SUBSCRIPTIONS, row, diff)
-    }
-
-    pub fn pack_session_update(
-        &self,
-        conn: &ConnMeta,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let connect_dt = mz_ore::now::to_datetime(conn.connected_at());
-        BuiltinTableUpdate::row(
-            &*MZ_SESSIONS,
-            Row::pack_slice(&[
-                Datum::Uuid(conn.uuid()),
-                Datum::UInt32(conn.conn_id().unhandled()),
-                Datum::String(&conn.authenticated_role_id().to_string()),
-                Datum::from(conn.client_ip().map(|ip| ip.to_string()).as_deref()),
-                Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
-            ]),
-            diff,
-        )
     }
 
     fn pack_privilege_array_row(&self, privileges: &PrivilegeMap) -> Row {

@@ -16,25 +16,25 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use ipnet::IpNet;
-use itertools::Itertools;
-use mz_adapter_types::compaction::CompactionWindow;
-use mz_adapter_types::connection::ConnectionId;
-use mz_build_info::DUMMY_BUILD_INFO;
-use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::builtin::{
+use crate::SYSTEM_CONN_ID;
+use crate::builtin::{
     BUILTINS, Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType,
 };
-use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
-use mz_catalog::durable::objects::MaintainedReadRequirement;
-use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
-use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::{
+use crate::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
+use crate::durable::objects::MaintainedReadRequirement;
+use crate::expr_cache::{LocalExpressions, latest_item_version};
+use crate::memory::error::{Error, ErrorKind};
+use crate::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
     NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
     TableDataSource, Type, View,
 };
+use ipnet::IpNet;
+use itertools::Itertools;
+use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::connection::ConnectionId;
+use mz_build_info::DUMMY_BUILD_INFO;
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
@@ -94,16 +94,14 @@ use timely::progress::Antichain;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{Catalog, CatalogStateView};
-use crate::optimize::OptimizerCatalog;
-use mz_catalog::config::ScopedParameters;
-use mz_catalog::memory::error::ItemError;
-use mz_catalog::optimize::{self, Optimize, infer_sql_type_for_catalog};
+use crate::config::ScopedParameters;
+use crate::memory::error::ItemError;
+use crate::optimize::{self, Optimize, infer_sql_type_for_catalog};
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
 /// metadata to persistent storage. For persistent metadata see
-/// [`mz_catalog::durable::DurableCatalogState`].
+/// [`crate::durable::DurableCatalogState`].
 ///
 /// [`Serialize`] is implemented to create human readable dumps of the in-memory state, not for
 /// storing the contents of this struct on disk.
@@ -1049,7 +1047,7 @@ impl CatalogState {
     pub(super) fn durable_item(
         &self,
         entry: CatalogEntry,
-    ) -> Result<mz_catalog::durable::Item, ItemError> {
+    ) -> Result<crate::durable::Item, ItemError> {
         let ephemeral_owner_session = entry
             .conn_id()
             .map(|conn_id| {
@@ -1063,7 +1061,7 @@ impl CatalogState {
             })
             .transpose()?;
         let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
-        Ok(mz_catalog::durable::Item {
+        Ok(crate::durable::Item {
             id: entry.id,
             oid: entry.oid,
             global_id,
@@ -1169,7 +1167,7 @@ impl CatalogState {
         Some(desc)
     }
 
-    pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
+    pub fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
         self.try_get_cluster(cluster_id)
             .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
     }
@@ -2669,13 +2667,13 @@ impl CatalogState {
 
     pub fn concretize_replica_location(
         &self,
-        location: mz_catalog::durable::ReplicaLocation,
+        location: crate::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
         allow_disabled: bool,
     ) -> Result<ReplicaLocation, Error> {
         let location = match location {
-            mz_catalog::durable::ReplicaLocation::Unmanaged {
+            crate::durable::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
                 computectl_addrs,
             } => {
@@ -2692,7 +2690,7 @@ impl CatalogState {
                     computectl_addrs,
                 })
             }
-            mz_catalog::durable::ReplicaLocation::Managed {
+            crate::durable::ReplicaLocation::Managed {
                 size,
                 // The AZ list the replica was provisioned under: provisioning
                 // paths pass the cluster's pool as `allowed_availability_zones`
@@ -3101,65 +3099,12 @@ impl ConnectionResolver for CatalogState {
     }
 }
 
-impl OptimizerCatalog for CatalogState {
-    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
-        CatalogState::get_entry_by_global_id(self, id)
-    }
-    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
-        CatalogState::get_entry(self, id)
-    }
-    fn resolve_full_name(
-        &self,
-        name: &QualifiedItemName,
-        conn_id: Option<&ConnectionId>,
-    ) -> FullItemName {
-        CatalogState::resolve_full_name(self, name, conn_id)
-    }
-    fn get_indexes_on(
-        &self,
-        id: GlobalId,
-        cluster: ClusterId,
-    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_> {
-        Box::new(CatalogState::get_indexes_on(self, id, cluster))
-    }
-}
-
-impl OptimizerCatalog for Catalog {
-    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
-        self.state.get_entry_by_global_id(id)
-    }
-
-    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
-        self.state.get_entry(id)
-    }
-
-    fn resolve_full_name(
-        &self,
-        name: &QualifiedItemName,
-        conn_id: Option<&ConnectionId>,
-    ) -> FullItemName {
-        self.state.resolve_full_name(name, conn_id)
-    }
-
-    fn get_indexes_on(
-        &self,
-        id: GlobalId,
-        cluster: ClusterId,
-    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_> {
-        Box::new(self.state.get_indexes_on(id, cluster))
-    }
-}
-
 impl Catalog {
     /// Drains IDs whose read protection may have changed since the last drain.
     pub fn take_read_protection_changes(&mut self) -> BTreeSet<GlobalId> {
         std::mem::take(&mut self.state.read_protection_changes)
             .into_iter()
             .collect()
-    }
-
-    pub fn as_optimizer_catalog(self: Arc<Self>) -> Arc<dyn OptimizerCatalog> {
-        self
     }
 }
 
@@ -3208,9 +3153,9 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn written_plan_selection_emits_notice_implications_without_installation() {
-        use mz_catalog::durable::objects::WrittenPlan;
-        use mz_catalog::memory::implications::ParsedStateUpdateKind;
-        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+        use crate::durable::objects::WrittenPlan;
+        use crate::memory::implications::ParsedStateUpdateKind;
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
         let id = GlobalId::User(42);
         let revision = uuid::Uuid::new_v4();
@@ -3266,8 +3211,8 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn client_requirements_replay_preserves_other_clients() {
-        use mz_catalog::durable::objects::{ClientIncarnation, ClientReadRequirement};
-        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+        use crate::durable::objects::{ClientIncarnation, ClientReadRequirement};
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
         let id = GlobalId::User(2);
         let other = GlobalId::User(4);
@@ -3386,8 +3331,8 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn storage_permission_projects_only_shard_backed_bounds() {
-        use mz_catalog::durable::objects::{CollectionCompactionBound, StorageCollectionMetadata};
-        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+        use crate::durable::objects::{CollectionCompactionBound, StorageCollectionMetadata};
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
         use mz_ore::cast::CastFrom;
         use mz_persist_client::ShardId;
 
@@ -3534,7 +3479,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn maintained_read_requirements_apply_snapshot_update_drop() {
-        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
         use mz_repr::Timestamp;
 
         let mut state = CatalogState::empty_test();
@@ -3625,7 +3570,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn read_protection_changes_and_requirement_projection() {
-        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
         Catalog::with_debug(|mut catalog| async move {
             catalog.take_read_protection_changes();
@@ -3840,7 +3785,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn read_protection_changes_include_item_versions() {
-        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+        use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
         Catalog::with_debug(|mut catalog| async move {
             catalog.take_read_protection_changes();
@@ -4047,129 +3992,5 @@ mod tests {
             catalog.expire().await;
         })
         .await
-    }
-
-    /// Read-then-write dependency validation walks the transitive `uses()` of
-    /// the read set. A deep chain of stacked views (user controlled, arbitrarily
-    /// deep) must be validated without overflowing the coordinator thread's
-    /// stack, so the traversal must not recurse.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-    async fn validate_read_then_write_deep_chain_no_stack_overflow() {
-        use crate::coord::read_then_write::{
-            DependencyPolicy, validate_read_then_write_dependencies,
-        };
-
-        Catalog::with_debug(|mut catalog| async move {
-            // Deep enough that the previous recursive implementation overflowed
-            // the stack.
-            const DEPTH: usize = 100_000;
-            const BASE: u64 = 1 << 40;
-            insert_synthetic_view_chain(&mut catalog, BASE, DEPTH);
-
-            // A generous bound so this test isolates the no-overflow property
-            // rather than the dependency limit.
-            validate_read_then_write_dependencies(
-                &catalog,
-                [CatalogItemId::User(BASE)],
-                usize::MAX,
-                DependencyPolicy::UserDml,
-            )
-            .expect("deep chain of user views is valid for read-then-write");
-
-            catalog.expire().await;
-        })
-        .await
-    }
-
-    /// Read-then-write dependency validation is bounded: a read set with more
-    /// transitive dependencies than the limit is rejected with a clean error
-    /// rather than walking an unbounded graph.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-    async fn validate_read_then_write_dependency_limit() {
-        use crate::coord::read_then_write::{
-            DependencyPolicy, validate_read_then_write_dependencies,
-        };
-        use crate::error::AdapterError;
-
-        Catalog::with_debug(|mut catalog| async move {
-            const DEPTH: usize = 100;
-            const BASE: u64 = 1 << 40;
-            insert_synthetic_view_chain(&mut catalog, BASE, DEPTH);
-
-            // The chain has DEPTH + 1 distinct objects (root plus DEPTH links).
-            const OBJECTS: usize = DEPTH + 1;
-
-            // Exactly at the limit is allowed.
-            validate_read_then_write_dependencies(
-                &catalog,
-                [CatalogItemId::User(BASE)],
-                OBJECTS,
-                DependencyPolicy::UserDml,
-            )
-            .expect("chain at the limit is valid");
-
-            // One below the limit is rejected with a clean error.
-            let err = validate_read_then_write_dependencies(
-                &catalog,
-                [CatalogItemId::User(BASE)],
-                OBJECTS - 1,
-                DependencyPolicy::UserDml,
-            )
-            .expect_err("chain over the limit is rejected");
-            assert!(matches!(
-                err,
-                AdapterError::ReadThenWriteDependencyLimitExceeded {
-                    max_rw_dependencies
-                } if max_rw_dependencies == OBJECTS - 1
-            ));
-
-            catalog.expire().await;
-        })
-        .await
-    }
-
-    /// Inserts a synthetic chain of `depth + 1` user views into `catalog` where
-    /// view `base + i` reads from `base + i + 1`. Ids start well above any id
-    /// the debug catalog assigns so they do not collide with real entries.
-    ///
-    /// Clones a builtin view as a template rather than constructing a `View` by
-    /// hand. Read-then-write validation only reads the item type, `uses()`, and
-    /// the optimized expression's temporal-ness, all of which a builtin view
-    /// satisfies (user id + non-temporal).
-    fn insert_synthetic_view_chain(catalog: &mut Catalog, base: u64, depth: usize) {
-        use mz_ore::cast::CastFrom;
-        use mz_sql::names::{DependencyIds, ResolvedIds};
-
-        let template = catalog
-            .state
-            .entry_by_id
-            .values()
-            .find(|entry| matches!(entry.item(), CatalogItem::View(_)))
-            .expect("debug catalog has builtin views")
-            .clone();
-
-        // `uses()` for a view unions `resolved_ids` and `dependencies`, so clear
-        // both and point only at the next link.
-        for i in 0..=depth {
-            let id = CatalogItemId::User(base + u64::cast_from(i));
-            let mut entry = template.clone();
-            entry.id = id;
-            entry.referenced_by = Vec::new();
-            entry.used_by = Vec::new();
-            let mut resolved_ids = ResolvedIds::empty();
-            if i < depth {
-                resolved_ids.add_item(CatalogItemId::User(base + u64::cast_from(i + 1)));
-            }
-            match &mut entry.item {
-                CatalogItem::View(view) => {
-                    view.resolved_ids = resolved_ids;
-                    view.dependencies = DependencyIds(BTreeSet::new());
-                }
-                _ => unreachable!("template is a view"),
-            }
-            catalog.state.entry_by_id.insert(id, entry);
-        }
     }
 }

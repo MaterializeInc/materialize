@@ -31,11 +31,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, LazyLock};
 
-use anyhow::bail;
-use futures::FutureExt;
-use futures::future::BoxFuture;
-use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use mz_catalog::builtin::{
+use crate::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
     MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION,
     MZ_OBJECT_HYDRATION_HISTORY, MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION,
@@ -43,10 +39,14 @@ use mz_catalog::builtin::{
     MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
     RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
-use mz_catalog::config::BuiltinItemMigrationConfig;
-use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
-use mz_catalog::durable::{SystemObjectDescription, SystemObjectMapping, Transaction};
-use mz_catalog::memory::error::{Error, ErrorKind};
+use crate::config::BuiltinItemMigrationConfig;
+use crate::durable::objects::SystemObjectUniqueIdentifier;
+use crate::durable::{SystemObjectDescription, SystemObjectMapping, Transaction};
+use crate::memory::error::{Error, ErrorKind};
+use anyhow::bail;
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::critical::{Opaque, SinceHandle};

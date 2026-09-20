@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Logic related to applying updates from a [`mz_catalog::durable::DurableCatalogState`] to a
+//! Logic related to applying updates from a [`crate::durable::DurableCatalogState`] to a
 //! [`CatalogState`].
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -16,25 +16,25 @@ use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::consolidate_updates;
-use futures::future;
-use itertools::{Either, Itertools};
-use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::builtin::{
+use crate::SYSTEM_CONN_ID;
+use crate::builtin::{
     BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP, Builtin, BuiltinLog, BuiltinTable, BuiltinView,
 };
-use mz_catalog::durable::objects::{
+use crate::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleAuthKey, RoleKey,
     SchemaKey,
 };
-use mz_catalog::durable::{CatalogError, SystemObjectMapping};
-use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::{
+use crate::durable::{CatalogError, SystemObjectMapping};
+use crate::memory::error::{Error, ErrorKind};
+use crate::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
     Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, Type, UpdateFrom,
 };
+use differential_dataflow::consolidation::consolidate_updates;
+use futures::future;
+use itertools::{Either, Itertools};
+use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
@@ -66,9 +66,9 @@ use tracing::{info_span, warn};
 
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
-use crate::util::{index_sql, sort_topological};
-use mz_catalog::memory::error::ItemError;
-use mz_catalog::memory::implications::ParsedStateUpdate;
+use crate::catalog::{index_sql, sort_topological};
+use crate::memory::error::ItemError;
+use crate::memory::implications::ParsedStateUpdate;
 
 mod parsed_state_updates;
 
@@ -531,7 +531,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_role_auth_update(
         &mut self,
-        role_auth: mz_catalog::durable::RoleAuth,
+        role_auth: crate::durable::RoleAuth,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
@@ -547,7 +547,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_role_update(
         &mut self,
-        role: mz_catalog::durable::Role,
+        role: crate::durable::Role,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
@@ -564,7 +564,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_database_update(
         &mut self,
-        database: mz_catalog::durable::Database,
+        database: crate::durable::Database,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
@@ -586,7 +586,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_schema_update(
         &mut self,
-        schema: mz_catalog::durable::Schema,
+        schema: crate::durable::Schema,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
@@ -626,7 +626,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_default_privilege_update(
         &mut self,
-        default_privilege: mz_catalog::durable::DefaultPrivilege,
+        default_privilege: crate::durable::DefaultPrivilege,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
@@ -658,7 +658,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_system_configuration_update(
         &mut self,
-        system_configuration: mz_catalog::durable::SystemConfiguration,
+        system_configuration: crate::durable::SystemConfiguration,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
@@ -723,7 +723,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_cluster_update(
         &mut self,
-        cluster: mz_catalog::durable::Cluster,
+        cluster: crate::durable::Cluster,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
@@ -734,7 +734,7 @@ impl CatalogState {
         // A managed cluster with at least one running replica still panics
         // via `concretize_replica_location` in `apply_cluster_replica_update`.
         if matches!(diff, StateDiff::Addition) {
-            if let mz_catalog::durable::ClusterVariant::Managed(managed) = &cluster.config.variant {
+            if let crate::durable::ClusterVariant::Managed(managed) = &cluster.config.variant {
                 if !self.cluster_replica_sizes.0.contains_key(&managed.size) {
                     soft_panic_or_log!(
                         "managed cluster {} ({}) references unknown replica size {:?}; \
@@ -759,7 +759,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_network_policy_update(
         &mut self,
-        policy: mz_catalog::durable::NetworkPolicy,
+        policy: crate::durable::NetworkPolicy,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
@@ -781,7 +781,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_introspection_source_index_update(
         &mut self,
-        introspection_source_index: mz_catalog::durable::IntrospectionSourceIndex,
+        introspection_source_index: crate::durable::IntrospectionSourceIndex,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
@@ -839,7 +839,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_cluster_replica_update(
         &mut self,
-        cluster_replica: mz_catalog::durable::ClusterReplica,
+        cluster_replica: crate::durable::ClusterReplica,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
@@ -856,7 +856,7 @@ impl CatalogState {
         // results. We tolerate disabled sizes here (allow_disabled=true)
         // because an existing replica must remain queryable even if the
         // operator has since disabled its size.
-        if let mz_catalog::durable::ReplicaLocation::Managed { size, .. } =
+        if let crate::durable::ReplicaLocation::Managed { size, .. } =
             &cluster_replica.config.location
         {
             if !self.cluster_replica_sizes.0.contains_key(size) {
@@ -933,7 +933,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_system_object_mapping_update(
         &mut self,
-        system_object_mapping: mz_catalog::durable::SystemObjectMapping,
+        system_object_mapping: crate::durable::SystemObjectMapping,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
@@ -1310,7 +1310,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_item_update(
         &mut self,
-        item: mz_catalog::durable::Item,
+        item: crate::durable::Item,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
@@ -1318,7 +1318,7 @@ impl CatalogState {
         match diff {
             StateDiff::Addition => {
                 let key = item.key();
-                let mz_catalog::durable::Item {
+                let crate::durable::Item {
                     id,
                     oid,
                     global_id,
@@ -1462,7 +1462,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_comment_update(
         &mut self,
-        comment: mz_catalog::durable::Comment,
+        comment: crate::durable::Comment,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
@@ -1498,7 +1498,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_source_references_update(
         &mut self,
-        source_references: mz_catalog::durable::SourceReferences,
+        source_references: crate::durable::SourceReferences,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
@@ -1525,7 +1525,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_storage_collection_metadata_update(
         &mut self,
-        storage_collection_metadata: mz_catalog::durable::StorageCollectionMetadata,
+        storage_collection_metadata: crate::durable::StorageCollectionMetadata,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
@@ -1566,7 +1566,7 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_unfinalized_shard_update(
         &mut self,
-        unfinalized_shard: mz_catalog::durable::UnfinalizedShard,
+        unfinalized_shard: crate::durable::UnfinalizedShard,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
@@ -2502,11 +2502,11 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     /// # Panics
     ///
     /// This function requires that all provided items have unique item IDs.
-    fn sort_items_topological(items: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
+    fn sort_items_topological(items: &mut Vec<(crate::durable::Item, Timestamp, StateDiff)>) {
         tracing::debug!(?items, "sorting items by dependencies");
 
-        let key_fn = |item: &(mz_catalog::durable::Item, _, _)| item.0.id;
-        let dependencies_fn = |item: &(mz_catalog::durable::Item, _, _)| {
+        let key_fn = |item: &(crate::durable::Item, _, _)| item.0.id;
+        let dependencies_fn = |item: &(crate::durable::Item, _, _)| {
             let statement = mz_sql::parse::parse(&item.0.create_sql)
                 .expect("valid create_sql")
                 .into_element()
@@ -2532,8 +2532,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     ///
     /// The logic of this function should match [`sort_temp_item_updates`].
     fn sort_item_updates(
-        item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
-    ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
+        item_updates: Vec<(crate::durable::Item, Timestamp, StateDiff)>,
+    ) -> VecDeque<(crate::durable::Item, Timestamp, StateDiff)> {
         // Partition items into groups s.t. each item in one group has a predefined order with all
         // items in other groups. For example, all sinks are ordered greater than all tables.
         let mut types = Vec::new();
@@ -2596,7 +2596,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     // cross-type dependencies and the topological sorts order dependencies
     // within a group, regardless of which items are temporary.
     fn into_state_updates(
-        item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
+        item_updates: VecDeque<(crate::durable::Item, Timestamp, StateDiff)>,
     ) -> Vec<StateUpdate> {
         item_updates
             .into_iter()

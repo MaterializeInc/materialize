@@ -1695,6 +1695,29 @@ impl From<mz_catalog::memory::error::ItemError> for AdapterError {
     }
 }
 
+impl From<mz_catalog::catalog::CatalogError> for AdapterError {
+    fn from(error: mz_catalog::catalog::CatalogError) -> Self {
+        use mz_catalog::catalog::CatalogError;
+        match error {
+            CatalogError::Catalog(error) => error.into(),
+            CatalogError::Item(error) => error.into(),
+            CatalogError::PlanError(error) => error.into(),
+            CatalogError::Storage(error) => error.into(),
+            CatalogError::Internal(error) => Self::Internal(error),
+            CatalogError::Unstructured(error) => Self::Unstructured(error),
+            CatalogError::Unsupported(feature) => Self::Unsupported(feature),
+            CatalogError::ReadOnly => Self::ReadOnly,
+            CatalogError::DDLTransactionRace => Self::DDLTransactionRace,
+            CatalogError::ClusterStateChanged { cluster_id } => {
+                Self::ClusterStateChanged { cluster_id }
+            }
+            CatalogError::InputNotReadableAtRefreshAtTime(time, frontier) => {
+                Self::InputNotReadableAtRefreshAtTime(time, frontier)
+            }
+        }
+    }
+}
+
 impl From<mz_catalog::durable::CatalogError> for AdapterError {
     fn from(e: mz_catalog::durable::CatalogError) -> Self {
         mz_catalog::memory::error::Error::from(e).into()
@@ -1868,30 +1891,6 @@ impl Error for AdapterError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn catalog_invalid_cast_remains_typed() {
-        use crate::catalog::{Catalog, CatalogState};
-        use mz_catalog::memory::error::ItemError;
-
-        Catalog::with_debug(|catalog| async move {
-            let error = CatalogState::parse_plan(
-                "CREATE VIEW materialize.public.v AS SELECT CAST(ARRAY[1] AS INTEGER)",
-                None,
-                &catalog.for_system_session(),
-            )
-            .expect_err("array cannot be cast to integer");
-            let ItemError::PlanError(error @ PlanError::InvalidCast { .. }) = error else {
-                panic!("native catalog parsing lost the invalid-cast cause");
-            };
-            assert!(matches!(
-                ItemError::from(OptimizerError::PlanError(error)),
-                ItemError::PlanError(PlanError::InvalidCast { .. })
-            ));
-        })
-        .await;
-    }
 
     #[mz_ore::test]
     fn catalog_item_errors_preserve_sql_error_responses() {
