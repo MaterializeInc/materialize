@@ -7,73 +7,46 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use super::super::tests::{BUILD, committed, create_table, debug_catalog, name, store, transact};
 use super::*;
-use mz_catalog::durable::objects::serialization::proto::TxnWalShardValue;
+use mz_catalog::builtin::{BUILTINS, Builtin};
+use mz_catalog::catalog::Op;
+use mz_catalog::durable::Transaction;
 use mz_catalog::expr_cache::GlobalExpressions;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::SqlScalarType;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, SqlScalarType};
-use mz_sql::names::SchemaId as CatalogSchemaId;
+use mz_storage_client::controller::StorageTxn;
 
-const BUILD: &str = "1.0.0";
-
-fn item(snapshot: &mut Snapshot, id: u64, sql: &str, aliases: &[u64]) {
-    let mut version = RelationVersion::root();
-    let extra_versions = aliases
-        .iter()
-        .map(|id| {
-            version = version.bump();
-            (version, GlobalId::User(*id))
-        })
-        .collect();
-    let (key, value) = objects::Item {
-        id: CatalogItemId::User(id),
-        oid: 1,
-        global_id: GlobalId::User(id),
-        schema_id: CatalogSchemaId::User(1),
-        name: format!("item{id}"),
-        create_sql: sql.into(),
-        owner_id: RoleId::User(1),
-        privileges: Vec::new(),
-        extra_versions,
-        ephemeral_owner_session: None,
-    }
-    .into_key_value();
-    snapshot.items.insert(key.into_proto(), value.into_proto());
+// Fixtures may mutate the singleton before opening their read projection.
+// Production obtains this immutable identity from OpenCommittedCatalog.
+async fn resolve(
+    catalog: &Catalog,
+    wanted: &BTreeSet<GlobalId>,
+    store: &ExpressionCacheHandle,
+    build: &str,
+    persist: &PersistClient,
+    location: &PersistLocation,
+) -> anyhow::Result<Resolution> {
+    use mz_storage_client::controller::StorageTxn;
+    let wal = catalog
+        .storage()
+        .await
+        .transaction()
+        .await?
+        .get_txn_wal_shard();
+    super::resolve(catalog, wanted, store, build, persist, location, wal).await
 }
 
-fn mapping(snapshot: &mut Snapshot, id: u64, shard: ShardId) {
-    let (key, value) = objects::StorageCollectionMetadata {
-        id: GlobalId::User(id),
-        shard,
-    }
-    .into_key_value();
-    snapshot
-        .storage_collection_metadata
-        .insert(key.into_proto(), value.into_proto());
-}
-
-fn select(snapshot: &mut Snapshot, id: u64, revision: Uuid) {
-    let (key, value) = objects::WrittenPlan {
-        id: GlobalId::User(id),
-        build_version: BUILD.into(),
-        revision,
-    }
-    .into_key_value();
-    snapshot
-        .written_plans
-        .insert(key.into_proto(), value.into_proto());
-}
-
-async fn store(persist: &PersistClient) -> ExpressionCacheHandle {
-    ExpressionCacheHandle::open_plan_store(
-        BUILD.parse().expect("valid metadata fixture"),
-        persist,
-        ShardId::new(),
-    )
-    .await
+async fn durable(catalog: &Catalog, change: impl FnOnce(&mut Transaction<'_>)) {
+    let mut storage = catalog.storage().await;
+    let mut tx = storage.transaction().await.expect("durable transaction");
+    change(&mut tx);
+    let _ = tx.get_and_commit_op_updates();
+    let ts = tx.upper();
+    tx.commit(ts).await.expect("commit fixture");
 }
 
 async fn register(persist: &PersistClient, shard: ShardId, desc: &RelationDesc) {
@@ -92,11 +65,36 @@ async fn register(persist: &PersistClient, shard: ShardId, desc: &RelationDesc) 
 }
 
 #[mz_ore::test(tokio::test)]
-async fn table_aliases_use_exact_schema_versions() {
+async fn table_aliases_use_exact_schema_versions_and_wal_upper() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
-    let shard = ShardId::new();
+    let mut catalog = debug_catalog(&persist).await;
+    let (item, root) = create_table(&mut catalog, "versioned_table").await;
+    let mut aliases = vec![root];
+    for column in ["a", "b"] {
+        let (_, new_global_id) = catalog.allocate_user_id_for_test().await.expect("alias ID");
+        transact(
+            &mut catalog,
+            vec![Op::AlterAddColumn {
+                id: item,
+                new_global_id,
+                name: column.into(),
+                typ: SqlScalarType::Int64.nullable(true),
+                sql: mz_sql_parser::parser::parse_data_type("bigint").expect("type"),
+            }],
+        )
+        .await;
+        aliases.push(new_global_id);
+    }
+    let shard = catalog.state().storage_metadata().collection_metadata[&root];
+    for alias in &aliases {
+        assert_eq!(
+            catalog.state().storage_metadata().collection_metadata[alias],
+            shard
+        );
+    }
     let wal = ShardId::new();
+    durable(&catalog, |tx| tx.write_txn_wal_shard(wal).expect("WAL")).await;
     let old = RelationDesc::empty();
     let new = RelationDesc::builder()
         .with_column("a", SqlScalarType::Int64.nullable(true))
@@ -108,113 +106,165 @@ async fn table_aliases_use_exact_schema_versions() {
             RelationVersion::root().into(),
             &new,
             &UnitSchema,
-            diagnostics(GlobalId::User(1)),
+            diagnostics(root),
         )
         .await
-        .expect("valid metadata fixture");
+        .expect("evolve schema");
     assert!(matches!(
         evolved,
         mz_persist_client::schema::CaESchema::Ok(_)
     ));
-    // The WAL is ahead of the data shard. Both table aliases must report WAL progress.
+    // Only the WAL advances. Observing the data shard instead would return zero.
     let mut writer = persist
         .open_writer::<SourceData, (), Timestamp, StorageDiff>(
             wal,
             std::sync::Arc::new(old.clone()),
             std::sync::Arc::new(UnitSchema),
-            diagnostics(GlobalId::User(1)),
+            diagnostics(root),
         )
         .await
-        .expect("valid metadata fixture");
-    let updates: Vec<((SourceData, ()), Timestamp, StorageDiff)> = Vec::new();
+        .expect("WAL writer");
     writer
         .compare_and_append(
-            updates,
+            Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
             Antichain::from_elem(Timestamp::from(0)),
             Antichain::from_elem(Timestamp::from(9)),
         )
         .await
-        .expect("valid metadata fixture")
-        .expect("valid metadata fixture");
+        .expect("append")
+        .expect("upper");
     writer.expire().await;
-    let mut snapshot = Snapshot::empty();
-    item(&mut snapshot, 1, "CREATE TABLE t (a bigint)", &[2, 3]);
-    for id in [1, 2, 3] {
-        mapping(&mut snapshot, id, shard);
-    }
-    snapshot.txn_wal_shard.insert(
-        (),
-        TxnWalShardValue {
-            shard: wal.to_string(),
-        },
-    );
+
     let result = resolve(
-        &snapshot,
-        &BTreeSet::from([GlobalId::User(1), GlobalId::User(2), GlobalId::User(3)]),
+        &catalog,
+        &aliases.iter().copied().collect(),
         &store,
         BUILD,
         &persist,
         &PersistLocation::new_in_mem(),
     )
     .await
-    .expect("valid metadata fixture");
-    assert_eq!(result.metadata[&GlobalId::User(1)].relation_desc, old);
-    assert_eq!(result.metadata[&GlobalId::User(2)].relation_desc, new);
+    .expect("resolve tables");
+    assert_eq!(result.metadata[&root].relation_desc, old);
+    assert_eq!(result.metadata[&aliases[1]].relation_desc, new);
     assert_eq!(
         result.pending,
         BTreeMap::from([(
-            GlobalId::User(3),
-            Pending::Schema(Some(RelationVersion::root().bump().bump().into()))
+            aliases[2],
+            Pending::Schema(Some(RelationVersion::root().bump().bump().into())),
         )])
     );
     assert_eq!(
         result.uppers,
         BTreeMap::from([
-            (GlobalId::User(1), Antichain::from_elem(Timestamp::from(9))),
-            (GlobalId::User(2), Antichain::from_elem(Timestamp::from(9))),
+            (root, Antichain::from_elem(Timestamp::from(9))),
+            (aliases[1], Antichain::from_elem(Timestamp::from(9))),
         ])
     );
+    for metadata in result.metadata.values() {
+        assert_eq!(metadata.data_shard, shard);
+        assert_eq!(metadata.txns_shard, Some(wal));
+    }
+    catalog.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
 async fn mv_alias_uses_selected_cross_cluster_writer_not_persist_schema() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
+    let writer_catalog = debug_catalog(&persist).await;
+    let (item, alias) = writer_catalog
+        .allocate_user_id_for_test()
+        .await
+        .expect("MV IDs");
+    let (_, writer) = writer_catalog
+        .allocate_user_id_for_test()
+        .await
+        .expect("writer ID");
+    let producer_cluster = writer_catalog
+        .user_clusters()
+        .next()
+        .expect("producer cluster")
+        .id;
+    let consumer_cluster = writer_catalog
+        .clusters()
+        .find(|c| c.id != producer_cluster)
+        .expect("other cluster")
+        .id;
+    let schema = name(&writer_catalog, "producer")
+        .qualifiers
+        .schema_spec
+        .into();
+    let version = RelationVersion::root().bump();
     let shard = ShardId::new();
+    let writer_shard = ShardId::new();
+    durable(&writer_catalog, |tx| {
+        tx.insert_user_item(
+            item,
+            alias,
+            schema,
+            "producer",
+            format!("CREATE MATERIALIZED VIEW materialize.public.producer IN CLUSTER [{producer_cluster}] AS SELECT 1 AS a"),
+            RoleId::System(1),
+            vec![],
+            &Default::default(),
+            BTreeMap::from([(version, writer)]),
+            None,
+        ).expect("durable MV");
+        tx.insert_collection_metadata(BTreeMap::from([(alias, shard), (writer, writer_shard)])).expect("MV shards");
+    }).await;
+    let (mut catalog, initial) = committed(&writer_catalog, &persist).await;
+    let CatalogItem::MaterializedView(mv) = catalog.get_entry(&item).item() else {
+        panic!("native MV");
+    };
+    assert_eq!(mv.cluster_id, producer_cluster);
+    assert_eq!(mv.global_id_writes(), writer);
+    let mut consumer = super::super::ReplicaEffects::default();
+    super::super::absorb_updates(&mut consumer, &catalog, consumer_cluster, BUILD, initial);
+    consumer
+        .observe_plans(
+            &catalog,
+            consumer_cluster,
+            mz_controller_types::ReplicaId::User(1),
+            &store,
+            BUILD,
+        )
+        .await
+        .expect("consumer inventory");
+    assert!(!consumer.pending.contains(&item));
+    assert!(!consumer.selected.contains_key(&item));
+    // The alias is readable even though its producer is not a local compute member.
     register(&persist, shard, &RelationDesc::empty()).await;
+    let wanted = BTreeSet::from([alias]);
+    let location = PersistLocation::new_in_mem();
+    let result = resolve(&catalog, &wanted, &store, BUILD, &persist, &location)
+        .await
+        .expect("selection pending");
+    assert_eq!(
+        result.pending,
+        BTreeMap::from([(alias, Pending::ProducerSelection(writer))])
+    );
+
+    let revision = Uuid::new_v4();
+    durable(&writer_catalog, |tx| {
+        tx.set_written_plan(writer, BUILD, Some(revision))
+            .expect("select writer")
+    })
+    .await;
+    catalog
+        .sync_to_current_updates()
+        .await
+        .expect("native selection sync");
+    let result = resolve(&catalog, &wanted, &store, BUILD, &persist, &location)
+        .await
+        .expect("bytes pending");
+    assert_eq!(
+        result.pending,
+        BTreeMap::from([(alias, Pending::ProducerBytes(writer, revision))])
+    );
     let desc = RelationDesc::builder()
         .with_column("a", SqlScalarType::String.nullable(false))
         .finish();
-    let writer = GlobalId::User(3);
-    let version = RelationVersion::root().bump().bump();
-    let revision = Uuid::new_v4();
-    let mut snapshot = Snapshot::empty();
-    // A consumer only asks for the retired alias. The producer's placement and
-    // latest output must not constrain lookup to the consumer's local members.
-    item(
-        &mut snapshot,
-        1,
-        "CREATE MATERIALIZED VIEW mv IN CLUSTER [u99] AS SELECT 1",
-        &[2, 3],
-    );
-    mapping(&mut snapshot, 1, shard);
-    let wanted = BTreeSet::from([GlobalId::User(1)]);
-    let location = PersistLocation::new_in_mem();
-    let result = resolve(&snapshot, &wanted, &store, BUILD, &persist, &location)
-        .await
-        .expect("valid metadata fixture");
-    assert_eq!(
-        result.pending[&GlobalId::User(1)],
-        Pending::ProducerSelection(writer)
-    );
-    select(&mut snapshot, 3, revision);
-    let result = resolve(&snapshot, &wanted, &store, BUILD, &persist, &location)
-        .await
-        .expect("valid metadata fixture");
-    assert_eq!(
-        result.pending[&GlobalId::User(1)],
-        Pending::ProducerBytes(writer, revision)
-    );
     let mut plan = GlobalExpressions {
         global_mir: DataflowDescription::new("mv".into()),
         physical_plan: DataflowDescription::new("mv".into()),
@@ -233,120 +283,133 @@ async fn mv_alias_uses_selected_cross_cluster_writer_not_persist_schema() {
             }),
             with_snapshot: true,
             up_to: Antichain::new(),
-            non_null_assertions: Vec::new(),
+            non_null_assertions: vec![],
             refresh_schedule: None,
         },
     );
     store
         .write_plans(vec![(writer, revision, plan)])
         .await
-        .expect("valid metadata fixture");
-    let result = resolve(&snapshot, &wanted, &store, BUILD, &persist, &location)
+        .expect("writer bytes");
+    let result = resolve(&catalog, &wanted, &store, BUILD, &persist, &location)
         .await
-        .expect("valid metadata fixture");
+        .expect("resolve alias");
     assert!(result.pending.is_empty());
     assert_eq!(
-        result.metadata[&GlobalId::User(1)],
-        CollectionMetadata {
-            persist_location: location,
-            data_shard: shard,
-            relation_desc: desc,
-            txns_shard: None,
-        }
+        result.metadata,
+        BTreeMap::from([(
+            alias,
+            CollectionMetadata {
+                persist_location: location,
+                data_shard: shard,
+                relation_desc: desc,
+                txns_shard: None,
+            }
+        )])
     );
     assert_eq!(
-        result.uppers[&GlobalId::User(1)],
-        Antichain::from_elem(Timestamp::from(0))
+        result.uppers,
+        BTreeMap::from([(alias, Antichain::from_elem(Timestamp::from(0)))])
     );
+    catalog.expire().await;
+    writer_catalog.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
-async fn missing_metadata_and_orphan_mappings_are_pending() {
+async fn missing_definitions_mappings_and_schemas_remain_pending() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
-    let mut snapshot = Snapshot::empty();
-    item(&mut snapshot, 1, "CREATE TABLE t (a bigint)", &[]);
-    item(&mut snapshot, 2, "CREATE TABLE t2 (a bigint)", &[]);
-    mapping(&mut snapshot, 2, ShardId::new());
-    item(
-        &mut snapshot,
-        3,
-        "CREATE SUBSOURCE progress (a bigint) WITH (PROGRESS)",
-        &[],
-    );
-    mapping(&mut snapshot, 3, ShardId::new());
-    mapping(&mut snapshot, 4, ShardId::new());
+    let mut writer = debug_catalog(&persist).await;
+    let (_, unmapped) = create_table(&mut writer, "unmapped").await;
+    let (_, no_schema) = create_table(&mut writer, "no_schema").await;
     let result = resolve(
-        &snapshot,
-        &(1..=4).map(GlobalId::User).collect(),
+        &writer,
+        &BTreeSet::from([no_schema]),
         &store,
         BUILD,
         &persist,
         &PersistLocation::new_in_mem(),
     )
     .await
-    .expect("valid metadata fixture");
+    .expect("WAL pending");
+    assert_eq!(
+        result.pending,
+        BTreeMap::from([(no_schema, Pending::TxnWalShard)])
+    );
+    assert!(result.metadata.is_empty());
+    assert!(result.uppers.is_empty());
+    let (_, orphan) = writer.allocate_user_id_for_test().await.expect("orphan ID");
+    durable(&writer, |tx| {
+        tx.delete_collection_metadata(BTreeSet::from([unmapped]));
+        tx.insert_collection_metadata(BTreeMap::from([(orphan, ShardId::new())]))
+            .expect("orphan mapping");
+        tx.write_txn_wal_shard(ShardId::new()).expect("WAL");
+    })
+    .await;
+    let (catalog, _) = committed(&writer, &persist).await;
+    let result = resolve(
+        &catalog,
+        &BTreeSet::from([unmapped, no_schema, orphan]),
+        &store,
+        BUILD,
+        &persist,
+        &PersistLocation::new_in_mem(),
+    )
+    .await
+    .expect("pending metadata");
     assert!(result.metadata.is_empty());
     assert!(result.uppers.is_empty());
     assert_eq!(
         result.pending,
         BTreeMap::from([
-            (GlobalId::User(1), Pending::ShardMapping),
-            (GlobalId::User(2), Pending::TxnWalShard),
-            (GlobalId::User(3), Pending::Schema(None)),
-            (GlobalId::User(4), Pending::Definition),
+            (unmapped, Pending::ShardMapping),
+            (
+                no_schema,
+                Pending::Schema(Some(RelationVersion::root().into()))
+            ),
+            (orphan, Pending::Definition),
         ])
     );
+    catalog.expire().await;
+    writer.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
-async fn builtin_descriptors_and_wal_participation_come_from_build_definitions() {
+async fn builtin_descriptors_and_wal_ownership_come_from_native_catalog() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
-    let mut snapshot = Snapshot::empty();
-    let wal = ShardId::new();
-    snapshot.txn_wal_shard.insert(
-        (),
-        TxnWalShardValue {
-            shard: wal.to_string(),
-        },
-    );
+    let writer = debug_catalog(&persist).await;
     let table = BUILTINS::iter()
-        .find(|builtin| matches!(builtin, Builtin::Table(_)))
-        .expect("valid metadata fixture");
+        .find(|b| matches!(b, Builtin::Table(_)))
+        .expect("builtin table");
     let source = BUILTINS::iter()
-        .find(|builtin| matches!(builtin, Builtin::Source(_)))
-        .expect("valid metadata fixture");
+        .find(|b| matches!(b, Builtin::Source(_)))
+        .expect("builtin source");
+    let wal = ShardId::new();
     let location = PersistLocation::new_in_mem();
     let mut expected = BTreeMap::new();
-    for (number, builtin) in [(1, table), (2, source)] {
-        let id = GlobalId::System(number);
+    let mut mappings = BTreeMap::new();
+    for builtin in [table, source] {
+        let item = writer.state().resolve_builtin_object(builtin);
+        let id = writer.get_entry(&item).latest_global_id();
         let (desc, transactional) = match builtin {
             Builtin::Table(table) => (table.desc.clone(), true),
             Builtin::Source(source) => (source.desc.clone(), false),
             _ => unreachable!("selected table and source"),
         };
-        let (key, value) = objects::SystemObjectMapping {
-            description: objects::SystemObjectDescription {
-                schema_name: builtin.schema().into(),
-                object_name: builtin.name().into(),
-                object_type: builtin.catalog_item_type(),
-            },
-            unique_identifier: objects::SystemObjectUniqueIdentifier {
-                catalog_id: CatalogItemId::System(number),
-                global_id: id,
-                fingerprint: String::new(),
-            },
-        }
-        .into_key_value();
-        snapshot
-            .system_object_mappings
-            .insert(key.into_proto(), value.into_proto());
-        let shard = ShardId::new();
-        let (key, value) = objects::StorageCollectionMetadata { id, shard }.into_key_value();
-        snapshot
-            .storage_collection_metadata
-            .insert(key.into_proto(), value.into_proto());
+        let shard = match writer
+            .state()
+            .storage_metadata()
+            .collection_metadata
+            .get(&id)
+        {
+            Some(shard) => *shard,
+            None => {
+                let shard = ShardId::new();
+                mappings.insert(id, shard);
+                shard
+            }
+        };
         expected.insert(
             id,
             CollectionMetadata {
@@ -357,11 +420,30 @@ async fn builtin_descriptors_and_wal_participation_come_from_build_definitions()
             },
         );
     }
-    // Neither shard has a Persist schema. Builtin descriptors do not require one.
-    let wanted = expected.keys().copied().collect();
-    let result = resolve(&snapshot, &wanted, &store, BUILD, &persist, &location)
-        .await
-        .expect("valid metadata fixture");
+    durable(&writer, |tx| {
+        tx.insert_collection_metadata(mappings)
+            .expect("builtin mappings");
+        tx.write_txn_wal_shard(wal).expect("WAL");
+    })
+    .await;
+    let (catalog, _) = committed(&writer, &persist).await;
+    // Neither shard has a Persist schema. Builtin descriptors must suffice.
+    let result = resolve(
+        &catalog,
+        &expected.keys().copied().collect(),
+        &store,
+        BUILD,
+        &persist,
+        &location,
+    )
+    .await
+    .expect("builtin metadata");
     assert!(result.pending.is_empty());
     assert_eq!(result.metadata, expected);
+    assert_eq!(
+        result.uppers.keys().collect::<Vec<_>>(),
+        result.metadata.keys().collect::<Vec<_>>()
+    );
+    catalog.expire().await;
+    writer.expire().await;
 }

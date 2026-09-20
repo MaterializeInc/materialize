@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// Native catalog reconstruction uses deeply nested async types.
+#![recursion_limit = "256"]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -111,8 +114,11 @@ struct Args {
     persist_pubsub_url: String,
 
     /// The cluster whose committed catalog state this replica follows.
-    #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url"])]
+    #[clap(long, requires_all = ["catalog_replica_id", "catalog_deploy_generation", "catalog_persist_blob_url", "catalog_persist_consensus_url", "catalog_config"])]
     catalog_cluster_id: Option<mz_controller_types::ClusterId>,
+    /// Serialized non-runtime configuration for catalog reconstruction.
+    #[clap(long, requires = "catalog_cluster_id")]
+    catalog_config: Option<String>,
     /// The replica identity within the declared cluster.
     #[clap(long, requires = "catalog_cluster_id")]
     catalog_replica_id: Option<mz_controller_types::ReplicaId>,
@@ -427,13 +433,29 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     ));
     let txns_ctx = TxnsContext::default();
 
+    let connection_context = ConnectionContext::from_cli_args(
+        args.environment_id,
+        &args.tracing.startup_log_filter,
+        args.aws_external_id_prefix,
+        args.aws_connection_role_arn,
+        secrets_reader,
+        None,
+    );
+
     // Catalog following is replica-wide, not independently sampled per process.
     if args.process == 0
         && let Some(cluster_id) = args.catalog_cluster_id
     {
-        let environment_id: mz_sql::catalog::EnvironmentId = args.environment_id.parse()?;
+        let environment_id = connection_context.environment_id.parse()?;
+        let reconstruction: mz_catalog::config::ReplicaCatalogConfig = serde_json::from_str(
+            args.catalog_config
+                .as_deref()
+                .expect("required with cluster identity"),
+        )?;
         let config = catalog_follower::Config {
-            organization_id: environment_id.organization_id(),
+            reconstruction,
+            environment_id,
+            connection_context: connection_context.clone(),
             cluster_id,
             replica_id: args
                 .catalog_replica_id
@@ -459,15 +481,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             }
         });
     }
-
-    let connection_context = ConnectionContext::from_cli_args(
-        args.environment_id,
-        &args.tracing.startup_log_filter,
-        args.aws_external_id_prefix,
-        args.aws_connection_role_arn,
-        secrets_reader,
-        None,
-    );
 
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let cluster_server_metrics = ClusterServerMetrics::register_with(&metrics_registry);

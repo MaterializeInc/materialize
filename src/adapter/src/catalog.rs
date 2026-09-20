@@ -412,7 +412,7 @@ impl Catalog {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
-        let controller = {
+        let mut controller = {
             let mut storage = self.storage().await;
             let read_only_tx = storage.transaction().await?;
             mz_controller::Controller::new(
@@ -426,6 +426,10 @@ impl Catalog {
             .await
         };
 
+        controller.set_catalog_follower_config(
+            serde_json::to_string(&self.replica_config())
+                .expect("catalog reconstruction configuration is serializable"),
+        );
         self.initialize_storage_state(&controller.storage_collections)
             .await?;
 

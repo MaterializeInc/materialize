@@ -735,6 +735,10 @@ impl Controller {
         let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let catalog_persist_location = self.catalog_persist_location.clone();
+        let catalog_follower_config = self.catalog_follower_config.clone();
+        if catalog_persist_location.is_some() && catalog_follower_config.is_none() {
+            anyhow::bail!("catalog follower config must be set before provisioning replicas");
+        }
         let deploy_generation = self.deploy_generation;
         let secrets_args = self.secrets_args.to_flags();
 
@@ -828,6 +832,12 @@ impl Controller {
                             format!("--catalog-cluster-id={cluster_id}"),
                             format!("--catalog-replica-id={replica_id}"),
                             format!("--catalog-deploy-generation={deploy_generation}"),
+                            format!(
+                                "--catalog-config={}",
+                                catalog_follower_config
+                                    .as_ref()
+                                    .expect("checked before provisioning")
+                            ),
                             format!(
                                 "--catalog-persist-blob-url={}",
                                 location.blob_uri.to_string_unredacted()

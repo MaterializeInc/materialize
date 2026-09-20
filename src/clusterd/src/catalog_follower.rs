@@ -7,184 +7,257 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Replica-local observation of committed desired state. The controller remains
-//! the sole installer. Nothing here acquires read protection or enacts bounds.
+//! Replica-local following through the shared committed catalog implementation.
+//!
+//! The controller is the sole installer until replica execution protection and
+//! worker sequencing are established. Observing a selection is not installation.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, bail};
-use mz_catalog::builtin::{BUILTINS, Builtin};
-use mz_catalog::durable::objects::{self, DurableType};
-use mz_catalog::durable::{Metrics, Snapshot, persist_backed_catalog_state};
+use anyhow::Context;
+use mz_catalog::catalog::Catalog;
+use mz_catalog::config::ReplicaCatalogConfig;
+use mz_catalog::durable::{Metrics, persist_backed_catalog_state};
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, expression_build_version};
-use mz_controller_types::ClusterId;
+use mz_catalog::memory::implications::{CatalogImplications, ParsedStateUpdate};
+use mz_catalog::memory::objects::CatalogItem;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::metrics::MetricsRegistry;
-use mz_persist_client::PersistLocation;
-use mz_persist_client::cache::PersistClientCache;
-use mz_proto::RustType;
-use mz_repr::{GlobalId, RelationVersion};
-use mz_sql::catalog::CatalogItemType;
-use mz_sql_parser::ast::{RawClusterName, Statement};
+use mz_persist_client::{PersistLocation, cache::PersistClientCache};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_sql::catalog::EnvironmentId;
+use mz_storage_types::connections::ConnectionContext;
 use uuid::Uuid;
 
 mod storage_metadata;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) struct Config {
-    pub organization_id: Uuid,
+    pub environment_id: EnvironmentId,
+    pub reconstruction: ReplicaCatalogConfig,
+    pub connection_context: ConnectionContext,
     pub cluster_id: ClusterId,
-    pub replica_id: mz_cluster_client::ReplicaId,
+    pub replica_id: ReplicaId,
     pub deploy_generation: u64,
     pub persist_location: PersistLocation,
     pub build_info: &'static mz_build_info::BuildInfo,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Member {
-    WrittenPlan(RelationVersion),
-    Introspection,
-    Storage,
+/// The replica's pending effects, not a second projection of catalog membership.
+#[derive(Default)]
+struct ReplicaEffects {
+    pending: BTreeSet<CatalogItemId>,
+    selected: BTreeMap<CatalogItemId, (GlobalId, Uuid, GlobalExpressions)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Pending {
-    Selection,
-    Bytes(Uuid),
-    ItemVersion,
-    Imports(BTreeSet<GlobalId>),
-    Dependencies(BTreeSet<GlobalId>),
-    StorageMetadata(BTreeMap<GlobalId, storage_metadata::Pending>),
+impl ReplicaEffects {
+    fn absorb(&mut self, catalog: &Catalog, cluster: ClusterId, effects: CatalogImplications) {
+        self.pending.extend(effects.items.into_keys());
+        self.pending.extend(
+            effects
+                .written_plans
+                .into_iter()
+                .filter_map(|id| catalog.try_resolve_item_id(&id)),
+        );
+        if effects.clusters.contains_key(&cluster) {
+            if let Some(cluster) = catalog.try_get_cluster(cluster) {
+                self.pending.extend(cluster.bound_objects.iter().copied());
+            } else {
+                self.selected.clear();
+            }
+        }
+        // A changed storage lifetime or permission may unblock pending effects.
+        // Reading it is not permission to compact without local dependency accounting.
+    }
+
+    async fn observe_plans(
+        &mut self,
+        catalog: &Catalog,
+        cluster: ClusterId,
+        replica: ReplicaId,
+        store: &ExpressionCacheHandle,
+        build: &str,
+    ) -> anyhow::Result<()> {
+        let mut revisions = Vec::new();
+        let mut candidates = BTreeMap::new();
+        self.pending.retain(|item_id| {
+            // This cache describes the current selection, not installed work.
+            // A replacement that is not available must not expose stale bytes.
+            self.selected.remove(item_id);
+            let candidate = catalog.try_get_entry(item_id).and_then(|entry| {
+                let item = entry.item();
+                if item.is_compute_object_on_cluster() != Some(cluster) {
+                    return None;
+                }
+                match item {
+                    CatalogItem::Index(index) => Some((index.global_id(), RelationVersion::root())),
+                    CatalogItem::MaterializedView(mv)
+                        if mv.target_replica.is_none_or(|id| id == replica) =>
+                    {
+                        Some((
+                            mv.global_id_writes(),
+                            *mv.collections.last_key_value().expect("MV has a version").0,
+                        ))
+                    }
+                    CatalogItem::MetricSink(sink) => {
+                        Some((sink.global_id, RelationVersion::root()))
+                    }
+                    _ => None,
+                }
+            });
+            let Some((id, version)) = candidate else {
+                return false;
+            };
+            if let Some(revision) = catalog.state().written_plan(id, build) {
+                revisions.push((id, revision));
+                candidates.insert(*item_id, (id, revision, version));
+            }
+            true
+        });
+        let mut plans = store.read_plans(revisions).await?;
+        for (item, (id, revision, version)) in candidates {
+            if let Some(plan) = plans.remove(&(id, revision))
+                && plan.item_version == version
+                && plan.physical_plan.export_ids().any(|export| export == id)
+            {
+                self.selected.insert(item, (id, revision, plan));
+                self.pending.remove(&item);
+            }
+        }
+        Ok(())
+    }
 }
 
-/// A complete committed prefix, including full definitions and desired bounds.
-/// Plans remain intact even when dependencies are missing. Presence here is not
-/// an installation acknowledgement or proof that any input is readable.
-struct DesiredState {
-    snapshot: Snapshot,
-    members: BTreeMap<GlobalId, Member>,
-    selections: BTreeMap<GlobalId, Uuid>,
-    plans: BTreeMap<(GlobalId, Uuid), GlobalExpressions>,
-    pending: BTreeMap<GlobalId, Pending>,
-    storage_metadata: storage_metadata::Resolution,
+fn absorb_updates(
+    effects: &mut ReplicaEffects,
+    catalog: &Catalog,
+    cluster: ClusterId,
+    build: &str,
+    updates: Vec<ParsedStateUpdate>,
+) {
+    // Absorption's contract is one consolidated timestamp at a time. One sync
+    // can contain multiple committed transactions for the same object.
+    let mut timestamps: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    for update in updates {
+        timestamps.entry(update.ts).or_default().push(update);
+    }
+    for updates in timestamps.into_values() {
+        effects.absorb(
+            catalog,
+            cluster,
+            CatalogImplications::from_updates(updates, build),
+        );
+    }
 }
 
-/// Observe with a retained generation-bound join, without allocating an epoch or
-/// incarnation. Retry delays are capped, while persistent stalls remain visible.
 pub(crate) async fn run(
     config: Config,
     persist_clients: Arc<PersistClientCache>,
-    metrics_registry: MetricsRegistry,
+    registry: MetricsRegistry,
 ) -> anyhow::Result<()> {
     let persist = persist_clients
         .open(config.persist_location.clone())
         .await?;
-    let mut catalog = persist_backed_catalog_state(
+    let storage = persist_backed_catalog_state(
         persist.clone(),
-        config.organization_id,
+        config.environment_id.organization_id(),
         config.build_info.semver_version(),
         Some(config.deploy_generation),
-        Arc::new(Metrics::new(&metrics_registry)),
+        Arc::new(Metrics::new(&registry)),
     )
     .await?
     .join()
     .await?;
+    let state_config = config.reconstruction.into_state(
+        config.build_info,
+        config.environment_id,
+        config.connection_context,
+        persist.clone(),
+    );
+    let opened = Catalog::open_committed(state_config, storage).await?;
+    let mut catalog = opened.catalog;
+    let initial = opened.initial_updates;
+    let txns_shard = opened.txn_wal_shard;
     let build = expression_build_version(config.build_info);
-    let mut store = None;
-    let mut desired: Option<DesiredState> = None;
-    let mut delay = Duration::from_secs(1);
+    let shard = opened
+        .expression_cache_shard
+        .context("catalog has no expression shard")?;
+    let store = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
+    let build = build.to_string();
+    let mut effects = ReplicaEffects::default();
+    absorb_updates(&mut effects, &catalog, config.cluster_id, &build, initial);
     let mut last_report = tokio::time::Instant::now();
     let mut last_error = None;
+    let mut delay = Duration::from_secs(1);
+    let mut pending_metadata = true;
     loop {
-        let result: anyhow::Result<DesiredState> = async {
-            // These updates only drain the handle's delivery queue. snapshot()
-            // synchronizes independently and is the sole source of derived state.
-            // Applying either queue to the snapshot would double-apply commits.
-            catalog.sync_to_current_updates().await?;
-            let snapshot = catalog.snapshot().await?;
-            let shard = snapshot
-                .settings
-                .iter()
-                .find(|(key, _)| key.name == mz_catalog::durable::EXPRESSION_CACHE_SHARD_KEY)
-                .context("catalog has no expression shard")?
-                .1
-                .value
-                .parse()
-                .map_err(anyhow::Error::msg)?;
-            if store.as_ref().map(|(id, _)| *id) != Some(shard) {
-                store = Some((
-                    shard,
-                    ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await,
-                ));
-            }
-            let mut next = derive(snapshot, config.cluster_id, &build.to_string())?;
-            let revisions = next
-                .selections
-                .iter()
-                .map(|(id, rev)| (*id, *rev))
-                .collect();
-            next.plans = store
-                .as_ref()
-                .expect("opened above")
-                .1
-                .read_plans(revisions)
+        // Native application owns parsing, ordering and in-memory catalog state.
+        // It halts on unapplicable committed changes and returns fencing errors.
+        let (_, updates) = catalog.sync_to_current_updates().await?;
+        let changed = !updates.is_empty();
+        absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
+        if !changed && effects.pending.is_empty() && !pending_metadata {
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+        let result: anyhow::Result<_> = async {
+            effects
+                .observe_plans(
+                    &catalog,
+                    config.cluster_id,
+                    config.replica_id,
+                    &store,
+                    &build,
+                )
                 .await?;
-            next.check_plans()?;
-            let wanted = next
-                .plans
-                .iter()
-                .filter(|((id, _), _)| !next.pending.contains_key(id))
-                .flat_map(|(_, plan)| {
+            let wanted = effects
+                .selected
+                .values()
+                .flat_map(|(_, _, plan)| {
                     plan.physical_plan
                         .imported_source_ids()
                         .chain(plan.physical_plan.persist_sink_ids())
                 })
                 .collect();
-            next.storage_metadata = storage_metadata::resolve(
-                &next.snapshot,
+            storage_metadata::resolve(
+                &catalog,
                 &wanted,
-                &store.as_ref().expect("opened above").1,
-                &build.to_string(),
+                &store,
+                &build,
                 &persist,
                 &config.persist_location,
+                txns_shard,
             )
-            .await?;
-            next.check_storage_metadata();
-            Ok(next)
+            .await
         }
         .await;
         match result {
-            Ok(next) => {
-                let changed = desired.as_ref().is_none_or(|old| {
-                    old.members != next.members
-                        || old.selections != next.selections
-                        || old.pending != next.pending
-                        || old.snapshot.collection_compaction_bounds
-                            != next.snapshot.collection_compaction_bounds
-                });
-                if changed || last_error.is_some() {
-                    tracing::info!(cluster = %config.cluster_id, replica = %config.replica_id,
-                        members = next.members.len(), plans = next.plans.len(),
-                        storage_inputs = next.storage_metadata.metadata.len(),
-                        observed_uppers = next.storage_metadata.uppers.len(),
-                        pending = ?next.pending, "catalog follower desired state changed (not enacted)");
-                    last_report = tokio::time::Instant::now();
-                } else if !next.pending.is_empty()
-                    && last_report.elapsed() >= Duration::from_secs(60)
+            Ok(metadata) => {
+                pending_metadata = !metadata.pending.is_empty();
+                let pending = !effects.pending.is_empty() || pending_metadata;
+                if changed
+                    || last_error.is_some()
+                    || (pending && last_report.elapsed() >= Duration::from_secs(60))
                 {
-                    tracing::warn!(cluster = %config.cluster_id, pending = ?next.pending,
-                        "catalog follower waiting for written plans or dependencies");
+                    tracing::info!(cluster = %config.cluster_id, replica = %config.replica_id,
+                        plans = effects.selected.len(), pending_plans = ?effects.pending,
+                        pending_metadata = ?metadata.pending, storage_inputs = metadata.metadata.len(),
+                        observed_uppers = metadata.uppers.len(), "catalog follower effects observed (not enacted)");
                     last_report = tokio::time::Instant::now();
                 }
-                delay = if next.pending.is_empty() || changed {
+                last_error = None;
+                delay = if !pending || changed {
                     Duration::from_secs(1)
                 } else {
                     (delay * 2).min(Duration::from_secs(10))
                 };
-                last_error = None;
-                desired = Some(next);
             }
             Err(error) => {
+                pending_metadata = true;
                 let error = format!("{error:#}");
                 if last_error.as_ref() != Some(&error)
                     || last_report.elapsed() >= Duration::from_secs(60)
@@ -200,266 +273,3 @@ pub(crate) async fn run(
         tokio::time::sleep(delay).await;
     }
 }
-
-/// Extract placement syntactically. Ordinary durable SQL must already contain
-/// resolved IDs. Only builtin SQL may resolve names against durable clusters.
-fn placement(
-    sql: &str,
-    clusters: Option<&BTreeMap<String, ClusterId>>,
-) -> anyhow::Result<Option<(ClusterId, bool)>> {
-    let mut statements = mz_sql_parser::parser::parse_statements(sql)?;
-    anyhow::ensure!(
-        statements.len() == 1,
-        "expected one canonical CREATE statement"
-    );
-    let (cluster, compute) = match statements.remove(0).ast {
-        Statement::CreateIndex(s) => (s.in_cluster, true),
-        Statement::CreateMaterializedView(s) => (s.in_cluster, true),
-        Statement::CreateMetricSink(s) => (s.in_cluster, true),
-        Statement::CreateSource(s) => (s.in_cluster, false),
-        Statement::CreateWebhookSource(s) if !s.is_table => (s.in_cluster, false),
-        Statement::CreateSink(s) => (s.in_cluster, false),
-        _ => return Ok(None),
-    };
-    let cluster = match cluster {
-        Some(RawClusterName::Resolved(id)) => id.parse()?,
-        Some(RawClusterName::Unresolved(name)) => *clusters
-            .and_then(|clusters| clusters.get(name.as_str()))
-            .with_context(|| format!("unresolved maintained cluster {name}"))?,
-        None => bail!("maintained object has no explicit cluster"),
-    };
-    Ok(Some((cluster, compute)))
-}
-
-fn derive(snapshot: Snapshot, cluster_id: ClusterId, build: &str) -> anyhow::Result<DesiredState> {
-    let mut members = BTreeMap::new();
-    for (key, value) in &snapshot.items {
-        let item = objects::Item::from_key_value(
-            RustType::from_proto(key.clone())?,
-            RustType::from_proto(value.clone())?,
-        );
-        if item.ephemeral_owner_session.is_some() {
-            continue;
-        }
-        if let Some((placement, compute)) =
-            placement(&item.create_sql, None).with_context(|| format!("item {}", item.id))?
-            && placement == cluster_id
-        {
-            let (version, writer_id) = item.extra_versions.last_key_value().map_or_else(
-                || (RelationVersion::root(), item.global_id),
-                |(v, id)| (*v, *id),
-            );
-            for id in std::iter::once(item.global_id).chain(item.extra_versions.values().copied()) {
-                // Replaced MV outputs remain readable aliases. Only the current
-                // output owns a writer and requires a selected execution plan.
-                let retired_alias =
-                    item.item_type() == CatalogItemType::MaterializedView && id != writer_id;
-                members.insert(
-                    id,
-                    if compute && !retired_alias {
-                        Member::WrittenPlan(version)
-                    } else {
-                        Member::Storage
-                    },
-                );
-            }
-        }
-    }
-    let clusters = snapshot
-        .clusters
-        .iter()
-        .map(|(key, value)| {
-            let cluster = objects::Cluster::from_key_value(
-                RustType::from_proto(key.clone())?,
-                RustType::from_proto(value.clone())?,
-            );
-            Ok((cluster.name, cluster.id))
-        })
-        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-    let builtins: BTreeMap<_, _> = BUILTINS::iter()
-        .map(|builtin| {
-            (
-                objects::SystemObjectDescription {
-                    schema_name: builtin.schema().into(),
-                    object_type: builtin.catalog_item_type(),
-                    object_name: builtin.name().into(),
-                },
-                builtin,
-            )
-        })
-        .collect();
-    for (key, value) in &snapshot.system_object_mappings {
-        let mapping = objects::SystemObjectMapping::from_key_value(
-            RustType::from_proto(key.clone())?,
-            RustType::from_proto(value.clone())?,
-        );
-        let description = &mapping.description;
-        // Unknown build definitions are a blocker, not evidence that the object
-        // does not belong to this cluster.
-        let builtin = builtins
-            .get(description)
-            .with_context(|| format!("unknown builtin {description:?}"))?;
-        let sql = match builtin {
-            Builtin::Index(index) => index.create_sql(),
-            Builtin::MaterializedView(view) => view.create_sql(),
-            _ => continue,
-        };
-        if let Some((placement, _)) = placement(&sql, Some(&clusters))?
-            && placement == cluster_id
-        {
-            members.insert(
-                mapping.unique_identifier.global_id,
-                Member::WrittenPlan(RelationVersion::root()),
-            );
-        }
-    }
-    for (key, value) in &snapshot.introspection_sources {
-        let index = objects::IntrospectionSourceIndex::from_key_value(
-            RustType::from_proto(key.clone())?,
-            RustType::from_proto(value.clone())?,
-        );
-        if index.cluster_id == cluster_id {
-            members.insert(index.index_id, Member::Introspection);
-        }
-    }
-    let mut selections = BTreeMap::new();
-    for (key, value) in &snapshot.written_plans {
-        let selection = objects::WrittenPlan::from_key_value(
-            RustType::from_proto(key.clone())?,
-            RustType::from_proto(value.clone())?,
-        );
-        if selection.build_version == build
-            && matches!(members.get(&selection.id), Some(Member::WrittenPlan(_)))
-        {
-            selections.insert(selection.id, selection.revision);
-        }
-    }
-    Ok(DesiredState {
-        snapshot,
-        members,
-        selections,
-        plans: BTreeMap::new(),
-        pending: BTreeMap::new(),
-        storage_metadata: Default::default(),
-    })
-}
-
-impl DesiredState {
-    fn check_plans(&mut self) -> anyhow::Result<()> {
-        let mut live = BTreeSet::new();
-        for (key, value) in &self.snapshot.items {
-            let item = objects::Item::from_key_value(
-                RustType::from_proto(key.clone())?,
-                RustType::from_proto(value.clone())?,
-            );
-            if item.ephemeral_owner_session.is_none()
-                && (item.item_type() != CatalogItemType::Index
-                    || self.members.contains_key(&item.global_id))
-            {
-                live.insert(item.global_id);
-                live.extend(item.extra_versions.values().copied());
-            }
-        }
-        for (key, value) in &self.snapshot.system_object_mappings {
-            let mapping = objects::SystemObjectMapping::from_key_value(
-                RustType::from_proto(key.clone())?,
-                RustType::from_proto(value.clone())?,
-            );
-            let id = mapping.unique_identifier.global_id;
-            if mapping.description.object_type != CatalogItemType::Index
-                || self.members.contains_key(&id)
-            {
-                live.insert(id);
-            }
-        }
-        for (key, value) in &self.snapshot.introspection_sources {
-            let index = objects::IntrospectionSourceIndex::from_key_value(
-                RustType::from_proto(key.clone())?,
-                RustType::from_proto(value.clone())?,
-            );
-            if self.members.contains_key(&index.index_id) {
-                live.insert(index.index_id);
-            }
-        }
-        self.pending.clear();
-        for (id, member) in &self.members {
-            let Member::WrittenPlan(version) = member else {
-                continue;
-            };
-            let Some(revision) = self.selections.get(id) else {
-                self.pending.insert(*id, Pending::Selection);
-                continue;
-            };
-            let Some(plan) = self.plans.get(&(*id, *revision)) else {
-                self.pending.insert(*id, Pending::Bytes(*revision));
-                continue;
-            };
-            if plan.item_version != *version {
-                self.pending.insert(*id, Pending::ItemVersion);
-                continue;
-            }
-            let missing: BTreeSet<_> = plan
-                .collection_imports()
-                .filter(|id| !live.contains(id))
-                .copied()
-                .collect();
-            if !missing.is_empty() {
-                self.pending.insert(*id, Pending::Imports(missing));
-            }
-        }
-        self.propagate_pending();
-        Ok(())
-    }
-
-    fn check_storage_metadata(&mut self) {
-        for ((id, _), plan) in &self.plans {
-            if self.pending.contains_key(id) {
-                continue;
-            }
-            let missing: BTreeMap<_, _> = plan
-                .physical_plan
-                .imported_source_ids()
-                .chain(plan.physical_plan.persist_sink_ids())
-                .filter_map(|id| {
-                    self.storage_metadata
-                        .pending
-                        .get(&id)
-                        .map(|reason| (id, reason.clone()))
-                })
-                .collect();
-            if !missing.is_empty() {
-                self.pending.insert(*id, Pending::StorageMetadata(missing));
-            }
-        }
-        self.propagate_pending();
-    }
-
-    fn propagate_pending(&mut self) {
-        // Propagate pending dependencies through the complete prefix, independent
-        // of ID ordering. This is desired-state readiness, not worker readiness.
-        loop {
-            let mut additions = BTreeMap::new();
-            for (id, revision) in &self.selections {
-                if self.pending.contains_key(id) {
-                    continue;
-                }
-                let plan = &self.plans[&(*id, *revision)];
-                let dependencies: BTreeSet<_> = plan
-                    .collection_imports()
-                    .filter(|id| self.pending.contains_key(id))
-                    .copied()
-                    .collect();
-                if !dependencies.is_empty() {
-                    additions.insert(*id, Pending::Dependencies(dependencies));
-                }
-            }
-            if additions.is_empty() {
-                break;
-            }
-            self.pending.extend(additions);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests;

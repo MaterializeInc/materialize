@@ -8691,6 +8691,7 @@ def workflow_adapter_loss(c: Composition) -> None:
         },
     )
     replicas = ("clusterd1", "clusterd2", "clusterd3")
+    running_replicas = set(replicas)
     blob_uri = minio_blob_uri()
     consensus_uri = (
         f"postgres://root@{c.metadata_store()}:26257?options=--search_path=consensus"
@@ -8772,11 +8773,37 @@ def workflow_adapter_loss(c: Composition) -> None:
 
     def absent() -> None:
         assert not c.is_running(adapter.name), "adapter restarted during absence"
-        for replica in replicas:
+        for replica in running_replicas:
             assert c.is_running(replica), f"replica stopped: {replica}"
 
     with c.override(adapter, td, Persistcli()), ExitStack() as replica_overrides:
         c.up("kafka", adapter.name)
+        # Reuse the environment's actual reconstruction context from a managed
+        # replica. This keeps unmanaged replicas on the same size map, defaults,
+        # and deployment metadata without duplicating Rust configuration defaults.
+        replica_catalog_config = json.loads(
+            c.exec(
+                adapter.name,
+                "bash",
+                "-c",
+                r"""
+                for args in /proc/[0-9]*/cmdline; do
+                    [[ -r "$args" ]] || continue
+                    while IFS= read -r -d '' argument; do
+                        case "$argument" in
+                            --catalog-config=*)
+                                printf '%s\n' "${argument#--catalog-config=}"
+                                exit 0
+                                ;;
+                        esac
+                    done < "$args"
+                done
+                echo 'No managed replica catalog context found' >&2
+                exit 1
+                """,
+                capture=True,
+            ).stdout
+        )
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
@@ -8829,6 +8856,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                         options=[
                             f"--catalog-cluster-id={cluster_id}",
                             f"--catalog-replica-id={replica_id}",
+                            f"--catalog-config={json.dumps(replica_catalog_config)}",
                             "--catalog-deploy-generation=1",
                             f"--catalog-persist-blob-url={blob_uri}",
                             f"--catalog-persist-consensus-url={consensus_uri}",
@@ -8940,6 +8968,38 @@ def workflow_adapter_loss(c: Composition) -> None:
                         f"compactions before={before}, after={after}"
                     )
 
+            # Reconstruct after actual history compaction, with no SQL ingress.
+            # Stop the surviving compute sibling before producing a fresh value:
+            # its shared Persist upper cannot stand in for restarted-replica work.
+            c.kill("clusterd3")
+            running_replicas.remove("clusterd3")
+            absent()
+            c.up("clusterd3")
+            running_replicas.add("clusterd3")
+            c.kill("clusterd2")
+            running_replicas.remove("clusterd2")
+            n += 1
+            produce(n)
+            expected.add(n * 10)
+            deadline = time.monotonic() + timeout
+            while True:
+                absent()
+                assert not c.is_running("clusterd2"), "compute sibling restarted"
+                actual = consume("source", len(expected))
+                absent()
+                assert not c.is_running("clusterd2"), "compute sibling restarted"
+                if actual == expected:
+                    print(
+                        f"Restarted replica alone, adapter absent: "
+                        f"fresh Kafka MV/sink value={n * 10}"
+                    )
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"Restarted replica did not reconstruct and progress: "
+                        f"expected={expected}, Kafka={actual}"
+                    )
+
             for name in ("table", "webhook"):
                 actual = consume(name, len(expected))
                 assert {0} <= actual <= expected, (name, actual)
@@ -8959,6 +9019,7 @@ def workflow_adapter_loss(c: Composition) -> None:
         finally:
             # Restore ingress even on failure, without turning failed outage
             # observations into passing post-restart observations.
+            c.up(*replicas)
             c.up(adapter.name)
 
         for name in outputs:

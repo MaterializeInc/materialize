@@ -179,6 +179,9 @@ pub struct Controller {
     /// Catalog access supplied to replicas in writable protected environments.
     catalog_persist_location: Option<PersistLocation>,
 
+    /// Opaque serialized reconstruction inputs supplied by the catalog owner.
+    catalog_follower_config: Option<String>,
+
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
 
@@ -216,6 +219,12 @@ pub struct Controller {
 }
 
 impl Controller {
+    /// Sets catalog reconstruction inputs for subsequently provisioned replicas.
+    /// Must be called before provisioning replicas in a protected writable environment.
+    pub fn set_catalog_follower_config(&mut self, config: String) {
+        self.catalog_follower_config = Some(config);
+    }
+
     /// Update the controller configuration.
     pub fn update_configuration(&mut self, updates: ConfigUpdates) {
         updates.apply(&self.dyncfg);
@@ -299,6 +308,7 @@ impl Controller {
             now: _,
             persist_pubsub_url: _,
             catalog_persist_location: _,
+            catalog_follower_config: _,
             secrets_args: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
@@ -749,6 +759,7 @@ impl Controller {
             now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
             catalog_persist_location,
+            catalog_follower_config: None,
             secrets_args: config.secrets_args,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),
