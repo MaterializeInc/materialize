@@ -172,7 +172,10 @@ impl ReplicaQueryClient {
     }
 
     /// Return only actually observed frontiers. Missing optional fields remain
-    /// unknown until reported. Completed entries remain until disconnection.
+    /// unknown until reported. Transient exports are observed only while owned by
+    /// a live request, including pending creation, and retired at request cleanup.
+    /// Maintained observations remain until disconnection. An empty write frontier
+    /// indicates completion, not that an export has been dropped.
     pub fn frontiers(&self) -> Result<BTreeMap<GlobalId, FrontiersResponse>, QueryError> {
         let state = self.0.observations.lock().expect("lock poisoned");
         match &state.error {
@@ -181,7 +184,8 @@ impl ReplicaQueryClient {
         }
     }
 
-    /// Return the cached observation for one collection, or `None` if unobserved.
+    /// Return the cached observation for one collection, or `None` if unobserved
+    /// or a transient export whose request has been cleaned up.
     /// Optional fields remain unknown until reported. Connection loss returns an
     /// error rather than observations from the disconnected replica.
     pub fn collection_frontiers(
@@ -441,8 +445,19 @@ impl Actor {
 
     async fn drop_dataflow(&mut self, id: Uuid) -> Result<(), anyhow::Error> {
         if let Some(dataflow) = self.dataflows.remove(&id) {
+            // Retire all observations before a transport send can block cleanup.
+            {
+                let mut state = self.observations.lock().expect("lock poisoned");
+                let mut changed = false;
+                for id in &dataflow.exports {
+                    self.exports.remove(id);
+                    changed |= state.frontiers.remove(id).is_some();
+                }
+                if changed {
+                    self.changed.send_replace(());
+                }
+            }
             for id in dataflow.exports {
-                self.exports.remove(&id);
                 self.client
                     .send(ComputeCommand::AllowCompaction {
                         id,
@@ -462,6 +477,11 @@ impl Actor {
                 }
             }
             ComputeResponse::Frontiers(id, update) => {
+                // Export IDs are never reused on a connection. Live ownership
+                // rejects late transient reports without retaining tombstones.
+                if id.is_transient() && !self.exports.contains_key(&id) {
+                    return Ok(());
+                }
                 let mut state = self.observations.lock().expect("lock poisoned");
                 let cached = state.frontiers.entry(id).or_default();
                 if update.write_frontier.is_some() {
@@ -766,6 +786,150 @@ mod tests {
             client.collection_frontiers(id),
             Err(QueryError::Disconnected(_))
         ));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn transient_observations_follow_live_request_ownership() {
+        let (client, mut peer) = connect().await;
+        let maintained = GlobalId::User(1);
+        let live = GlobalId::Transient(1);
+        let observation = FrontiersResponse {
+            write_frontier: Some(Antichain::new()),
+            read_frontier: Some(Antichain::from_elem(Timestamp::from(1))),
+            ..Default::default()
+        };
+        let mut survivor = Box::pin(client.create_dataflow(subscribe(live)));
+        assert!(futures::poll!(&mut survivor).is_pending());
+        assert!(matches!(
+            peer.command().await,
+            ComputeCommand::CreateQueryDataflow { .. }
+        ));
+        peer.respond(ComputeResponse::Frontiers(maintained, observation.clone()));
+        peer.respond(ComputeResponse::Frontiers(live, observation.clone()));
+
+        // Alternate completion, cancellation before ACK, and creation rejection
+        // without reconnecting. A separate pending request must retain its state.
+        for cycle in 0..30 {
+            let id = GlobalId::Transient(cycle + 2);
+            let mut creating = Box::pin(client.create_dataflow(subscribe(id)));
+            assert!(futures::poll!(&mut creating).is_pending());
+            let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await
+            else {
+                panic!("expected creation");
+            };
+            let mut changed = client.frontier_changes();
+            peer.respond(ComputeResponse::Frontiers(id, observation.clone()));
+            // A response on the same peer orders the observation before inspection.
+            let uuid = Uuid::new_v4();
+            let mut barrier = Box::pin(client.peek(peek(uuid)));
+            assert!(futures::poll!(&mut barrier).is_pending());
+            assert!(matches!(peer.command().await, ComputeCommand::Peek(p) if p.uuid == uuid));
+            peer.respond(ComputeResponse::PeekResponse(
+                uuid,
+                PeekResponse::Canceled,
+                OpenTelemetryContext::empty(),
+            ));
+            bounded(barrier).await.expect("barrier response");
+            assert_eq!(
+                client
+                    .collection_frontiers(id)
+                    .expect("connection remains live"),
+                Some(observation.clone())
+            );
+            assert_eq!(
+                client.frontiers().expect("connection remains live").len(),
+                3
+            );
+            changed.borrow_and_update();
+
+            match cycle % 3 {
+                0 => {
+                    peer.respond(ComputeResponse::QueryDataflowResponse {
+                        request_id,
+                        error: None,
+                    });
+                    let mut handle = bounded(creating).await.expect("creation ACK");
+                    let scheduled = peer.command().await;
+                    assert!(matches!(scheduled, ComputeCommand::Schedule(export) if export == id));
+                    peer.respond(ComputeResponse::SubscribeResponse(
+                        id,
+                        SubscribeResponse::Batch(
+                            mz_compute_client::protocol::response::SubscribeBatch {
+                                lower: Antichain::from_elem(Timestamp::from(1)),
+                                upper: Antichain::new(),
+                                updates: Ok(vec![]),
+                            },
+                        ),
+                    ));
+                    assert!(matches!(
+                        bounded(handle.recv()).await,
+                        Some(Ok(DataflowResponse::Subscribe(export, _))) if export == id
+                    ));
+                    // Completion does not invalidate a still-owned export.
+                    assert_eq!(
+                        client
+                            .collection_frontiers(id)
+                            .expect("connection remains live"),
+                        Some(observation.clone())
+                    );
+                    drop(handle);
+                }
+                1 => drop(creating),
+                _ => {
+                    peer.respond(ComputeResponse::QueryDataflowResponse {
+                        request_id,
+                        error: Some("creation rejected".into()),
+                    });
+                    assert!(matches!(
+                        bounded(creating).await,
+                        Err(QueryError::Rejected(_))
+                    ));
+                }
+            }
+            assert!(matches!(peer.command().await,
+                ComputeCommand::AllowCompaction { id: export, frontier }
+                    if export == id && frontier.is_empty()
+            ));
+            assert!(changed.has_changed().expect("cleanup notification"));
+            assert_eq!(
+                client
+                    .collection_frontiers(id)
+                    .expect("connection remains live"),
+                None
+            );
+            changed.borrow_and_update();
+
+            peer.respond(ComputeResponse::QueryDataflowResponse {
+                request_id,
+                error: None,
+            });
+            peer.respond(ComputeResponse::Frontiers(id, observation.clone()));
+            peer.respond(ComputeResponse::Frontiers(
+                GlobalId::Transient(1000 + cycle),
+                observation.clone(),
+            ));
+            // This maintained report is a FIFO barrier for both ignored reports.
+            peer.respond(ComputeResponse::Frontiers(maintained, observation.clone()));
+            bounded(changed.changed())
+                .await
+                .expect("maintained observation");
+            assert_eq!(
+                client.frontiers().expect("connection remains live"),
+                BTreeMap::from([
+                    (maintained, observation.clone()),
+                    (live, observation.clone())
+                ])
+            );
+            assert!(peer.commands.try_recv().is_err(), "late ACK scheduled work");
+        }
+        drop(survivor);
+        assert!(matches!(peer.command().await,
+            ComputeCommand::AllowCompaction { id, frontier } if id == live && frontier.is_empty()
+        ));
+        assert_eq!(
+            client.frontiers().expect("connection remains live"),
+            BTreeMap::from([(maintained, observation)])
+        );
     }
 
     #[mz_ore::test(tokio::test)]
