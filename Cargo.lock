@@ -1813,7 +1813,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -3451,7 +3451,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -3999,7 +3999,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4976,7 +4976,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5201,7 +5201,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.3",
+ "hashbrown 0.16.1",
  "serde",
  "serde_core",
 ]
@@ -5310,7 +5310,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -6379,7 +6379,7 @@ dependencies = [
  "mz-sql-parser",
  "open",
  "openssl-probe",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "rpassword",
  "security-framework",
  "semver",
@@ -6588,7 +6588,7 @@ dependencies = [
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgwire-common",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "tokio-postgres",
@@ -6709,7 +6709,7 @@ dependencies = [
  "postgres",
  "prometheus",
  "proxy-header",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "rustls",
  "semver",
  "tempfile",
@@ -6875,7 +6875,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost-build",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "tokio",
@@ -6890,7 +6890,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "mz-frontegg-client",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "thiserror 2.0.20",
  "tokio",
@@ -7220,7 +7220,7 @@ dependencies = [
  "mz-tls-util",
  "postgres-openssl",
  "regex",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_yaml",
  "tokio",
@@ -7268,7 +7268,7 @@ dependencies = [
  "owo-colors",
  "postgres-openssl",
  "rayon",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "ropey",
  "rusqlite",
  "serde",
@@ -7455,7 +7455,7 @@ dependencies = [
  "rdkafka",
  "rdkafka-sys",
  "regex",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "rlimit",
  "rustls",
  "semver",
@@ -7597,7 +7597,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "prometheus",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "reqwest-middleware",
  "reqwest-retry",
  "serde",
@@ -7614,7 +7614,7 @@ version = "0.0.0"
 dependencies = [
  "jsonwebtoken",
  "mz-frontegg-auth",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "thiserror 2.0.20",
  "tokio",
@@ -7637,7 +7637,7 @@ dependencies = [
  "mz-frontegg-auth",
  "mz-ore",
  "openssl",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "tokio",
@@ -7767,7 +7767,7 @@ dependencies = [
 name = "mz-metabase"
 version = "0.0.0"
 dependencies = [
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
 ]
 
@@ -7858,7 +7858,7 @@ dependencies = [
  "flate2",
  "hex",
  "hex-literal",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "sha2 0.10.9",
  "tar",
  "walkdir",
@@ -7911,7 +7911,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-secrets",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -7997,7 +7997,7 @@ dependencies = [
  "mz-server-core",
  "prometheus",
  "rand 0.9.4",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "rustls",
  "semver",
  "serde",
@@ -8134,7 +8134,7 @@ dependencies = [
  "prost",
  "prost-build",
  "rand 0.9.4",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -8744,7 +8744,7 @@ dependencies = [
  "protobuf-native",
  "rdkafka",
  "regex",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "static_assertions",
@@ -8891,7 +8891,7 @@ dependencies = [
  "mz-tracing",
  "postgres-protocol",
  "regex",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "rustls",
  "serde_json",
  "shell-words",
@@ -9120,7 +9120,7 @@ dependencies = [
  "mz-txn-wal",
  "parquet",
  "proptest",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "sentry",
  "serde",
  "smallvec",
@@ -9200,7 +9200,7 @@ dependencies = [
  "rdkafka",
  "regex",
  "reqsign-core",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -9283,7 +9283,7 @@ dependencies = [
  "rand 0.9.4",
  "rdkafka",
  "regex",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "rustls",
  "semver",
  "serde",
@@ -11441,7 +11441,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -11480,9 +11480,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -11970,23 +11970,17 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "cookie",
- "cookie_store",
- "encoding_rs",
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.4.17",
  "http 1.4.2",
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.9.0",
- "hyper-rustls",
  "hyper-tls 0.6.0",
  "hyper-util",
  "js-sys",
  "log",
- "mime",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
@@ -12016,9 +12010,13 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "cookie",
+ "cookie_store",
+ "encoding_rs",
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2 0.4.17",
  "http 1.4.2",
  "http-body 1.0.1",
  "http-body-util",
@@ -12028,6 +12026,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
@@ -12337,7 +12336,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -12396,7 +12395,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -13549,7 +13548,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -13568,7 +13567,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
