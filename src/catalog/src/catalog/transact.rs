@@ -34,7 +34,6 @@ use mz_adapter_types::cluster_state::{
     BurstAudit, BurstFinishCause, ExpectedClusterState, ReconfigurationAudit,
 };
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
@@ -723,12 +722,26 @@ impl Catalog {
     }
 
     /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
-    /// within a connection id.
-    fn temporary_ids(
-        &self,
-        ops: &[Op],
-        temporary_drops: BTreeSet<(&ConnectionId, String)>,
-    ) -> Result<BTreeSet<CatalogItemId>, Error> {
+    /// within a connection id against the state being transacted.
+    fn temporary_ids(state: &CatalogState, ops: &[Op]) -> Result<BTreeSet<CatalogItemId>, Error> {
+        let temporary_drops: BTreeSet<_> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::DropObjects(infos) => Some(infos),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|info| match info.to_object_id() {
+                ObjectId::Item(id) => {
+                    let entry = state.get_entry(&id);
+                    entry
+                        .item()
+                        .conn_id()
+                        .map(|conn_id| (conn_id, entry.name().item.clone()))
+                }
+                _ => None,
+            })
+            .collect();
         let mut creating = BTreeSet::new();
         let mut temporary_ids = BTreeSet::new();
         for op in ops.iter() {
@@ -740,8 +753,12 @@ impl Catalog {
             } = op
             {
                 if let Some(conn_id) = item.conn_id() {
-                    if self.item_exists_in_temp_schemas(conn_id, &name.item)
-                        && !temporary_drops.contains(&(conn_id, name.item.clone()))
+                    // A namespace need not exist before its first temporary item.
+                    let exists = state
+                        .temporary_namespaces
+                        .schema(conn_id)
+                        .is_some_and(|schema| schema.items.contains_key(&name.item));
+                    if exists && !temporary_drops.contains(&(conn_id, name.item.clone()))
                         || creating.contains(&(conn_id, &name.item))
                     {
                         return Err(
@@ -774,33 +791,7 @@ impl Catalog {
             )))
         });
 
-        let drop_ids: BTreeSet<CatalogItemId> = ops
-            .iter()
-            .filter_map(|op| match op {
-                Op::DropObjects(drop_object_infos) => {
-                    let ids = drop_object_infos.iter().map(|info| info.to_object_id());
-                    let item_ids = ids.filter_map(|id| match id {
-                        ObjectId::Item(id) => Some(id),
-                        _ => None,
-                    });
-                    Some(item_ids)
-                }
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        let temporary_drops = drop_ids
-            .iter()
-            .filter_map(|id| {
-                let entry = self.get_entry(id);
-                match entry.item().conn_id() {
-                    Some(conn_id) => Some((conn_id, entry.name().item.clone())),
-                    None => None,
-                }
-            })
-            .collect();
-
-        let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
+        let temporary_ids = Self::temporary_ids(&self.state, &ops)?;
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
@@ -893,9 +884,7 @@ impl Catalog {
         prev_snapshot: Option<Snapshot>,
         oracle_write_ts: mz_repr::Timestamp,
     ) -> Result<(CatalogState, Snapshot), CatalogError> {
-        // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
-        // but we still need to check for collisions.
-        let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
+        let temporary_ids = Self::temporary_ids(base_state, &ops)?;
 
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
@@ -4119,6 +4108,9 @@ impl ObjectsToDrop {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod temp_tests;
 
 #[cfg(test)]
 mod tests {
