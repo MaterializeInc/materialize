@@ -23,22 +23,23 @@ steering for removal rather than accumulating a checklist.
 
 Milestone 2 is active. Following and enactment belong in clusterd replicas for
 compute and storage alike, not a separate lifecycle process or connection.
-The query client, cooperating writers, and written-plan installation are
-in-process checkpoints. The replica follower observes but does not enact, and
-the shared-catalog extraction is incomplete. The next integration is:
+Adapter and clusterd share the committed catalog path, and the native runtime
+endpoint and selector are in place. Replica enactment remains disabled pending
+protection and publication integration. The next integration is:
 
-1. Finish the minimum shared core in mz-catalog: committed loading, update
-   application, item reconstruction, and implication absorption. Adapter and
-   clusterd must use the same path. Delete the snapshot-derived follower, do not
-   build a parallel derivation. Sessions, prepared statements, serving wrappers,
-   and DDL admission stay in adapter. State-owned mutations move with the core,
-   without exposing mutable maps. Separate mechanical moves from behavior changes.
+1. Implement the design's Object-owned retention contract. Index retention must
+   not depend on a live replica incarnation. Reclaiming every client and replica
+   grant must still leave the object policy constraining compaction and recovery.
+   Derive requirements from catalog definitions and durable progress where possible,
+   without assuming a new record per index. Establish how the policy's relevant
+   upper is determined with no replicas. Bring ambiguity or disproportionate cost
+   before choosing new durable progress state or weakening the contract.
 2. Enact from the replica's committed state. Acquire incarnation-scoped import
-   protection before choosing as_of and installing written plans, then apply
-   bounds and propose them from replica progress. Finish bootstrap installation
-   from selections too, without installer replanning or durable physical-import
-   requirements. Keep the controller as sole installer until the replica path
-   can replace it. Retire the superseded enactment path at cutover.
+   protection for additional execution needs before choosing as_of and installing
+   written plans, then apply bounds and propose them from replica progress.
+   Finish bootstrap installation from selections too, without installer replanning
+   or durable physical-import requirements. Keep the controller as sole installer
+   until the replica path can replace it. Retire the superseded path at cutover.
 3. Complete direct query routing and response merging in the query client, and
    storage enactment through the same follower. Split StorageCollections by its
    responsibilities: critical handles follow bounds, table registration and
@@ -49,21 +50,12 @@ Use cluster/adapter-loss as the acceptance target, including replica reconstruct
 during adapter absence. Show that the restarted replica progresses, not just its
 surviving sibling. Exercise slow hydration, same-batch dependencies, pending
 replacements, and fixed-plan recovery from logical inputs after actual compaction.
+Test retention with no query holds and no index replicas, including incarnation
+reclamation, total shutdown/recovery, and a historical read still covered by the
+policy. Also show that protection advances with the policy's upper, rather than
+pinning creation history indefinitely, while independent reader holds still apply.
 Unavailable diagnostics may remain unknown. Do not let a diagnostic audit block
 the ownership change.
-
-Two bounded query-client fixes belong before acceptance, not in a new redesign:
-- Protection acquisition prepares a frontier once, then can retry the same grant
-  after a peer advances permission. Re-observe on acquisition contention while
-  preserving the caller's timestamp constraints. Closed clients and genuinely
-  unavailable historical reads must still fail. Test the competing publication.
-- src/adapter/src/query_client/compute.rs caches reported transient-export frontiers
-  until disconnection, even after request cleanup, and planning clones that cache.
-  Retire request-owned observations and prevent late reports from recreating them,
-  or avoid caching unused transient observations. Do not replace this with an
-  unbounded tombstone set. Test repeated create/complete/cancel cycles on one
-  connection, including late reports, while preserving observations needed by
-  live work. An empty write frontier alone does not mean a collection is gone.
 
 The publisher defers all bounds and client reclamation while any installation is
 pending. Execution, catalog effects, sources, sinks, and queries continue. Pending
@@ -76,7 +68,7 @@ Storage steering: finalization ownership is settled in the 2026-09-14 log entry.
 Kafka uses the lowest live replica incarnation, transactional fencing and versioned
 progress, without a sink lease. Re-evaluate eligibility and the committed definition
 before producer restarts, rather than blindly restarting a stale local definition.
-Two questions remain for the storage cutover, not the shared-core extraction:
+Two questions remain for the storage cutover:
 - Does tying takeover to the five-minute reclamation grace give acceptable sink
   recovery latency? Bring that tradeoff before choosing a faster closure rule.
 - Iceberg's conflict retry can append an overlapping same-version batch after
@@ -116,8 +108,9 @@ Prefer changes that remove a dependency on the originating adapter and demonstra
 that through a production path. Preparatory work is appropriate when it unblocks
 that path. Temporary interfaces may be replaced as integration clarifies the
 boundary. Do not add parallel machinery merely to preserve them or keep milestone
-boundaries tidy. Keep maintained requirements object-owned and client protection
-incarnation-scoped, without durable per-query or per-SQL-session bookkeeping.
+boundaries tidy. Keep maintained recovery and retention requirements object-owned,
+and additional client and execution protection incarnation-scoped, without durable
+per-query or per-SQL-session bookkeeping.
 
 Treat the design as the agreed boundaries, not a prescribed mechanism. Prefer
 the smallest coherent solution that preserves the full capability. Incremental

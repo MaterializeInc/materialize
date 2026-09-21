@@ -1040,3 +1040,16 @@ controller's input holds would change historical reads through retaining indexes
 Proposed, awaiting Aljoscha: preserve the live index's retention window with
 incarnation-scoped logical-input protection, without promising durable index
 reconstruction at that window. Sink cutover questions remain open.
+
+### 2026-09-20: Object-owned retention agreed with Aljoscha
+
+Retention policies remain authoritative with no adapters, query clients, or
+replicas, including after incarnation reclamation. This supersedes the live-only
+index-retention proposal. Replica grants cover additional execution needs, not
+the object's policy. Recovery cannot skip history the policy still requires.
+Retention advances with the relevant upper rather than pinning creation history.
+
+Next: integrate this constraint before replica cutover and verify it without
+incarnation grants, through shutdown and reconstruction. Derive from catalog
+definitions and durable progress where possible. The progress basis for an absent
+index must be established before choosing any additional durable state.
