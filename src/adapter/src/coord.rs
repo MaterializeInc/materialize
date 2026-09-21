@@ -2513,42 +2513,7 @@ impl Coordinator {
     pub(crate) fn replica_dyncfg_overrides(
         &self,
     ) -> BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>> {
-        let replica_overrides = &self.catalog().state().scoped_system_parameters().replica;
-
-        let dyncfgs = self.catalog().system_config().dyncfgs();
-        let mut instance_overrides: BTreeMap<
-            ComputeInstanceId,
-            BTreeMap<ReplicaId, ConfigUpdates>,
-        > = BTreeMap::new();
-        for cluster in self.catalog().clusters() {
-            for replica in cluster.replicas() {
-                let Some(values) = replica_overrides.get(&replica.replica_id) else {
-                    continue;
-                };
-                let mut updates = ConfigUpdates::default();
-                for (name, value) in values {
-                    let Some(entry) = dyncfgs.entry(name) else {
-                        // A replica-local parameter that is not a dyncfg has no
-                        // per-replica realization, so skip it.
-                        continue;
-                    };
-                    match entry.parse_val(value) {
-                        Ok(val) => updates.add_dynamic(name, val),
-                        Err(e) => {
-                            tracing::warn!(%name, %value, "cannot parse scoped override: {e}")
-                        }
-                    }
-                }
-                if !updates.updates.is_empty() {
-                    instance_overrides
-                        .entry(cluster.id)
-                        .or_default()
-                        .insert(replica.replica_id, updates);
-                }
-            }
-        }
-
-        instance_overrides
+        mz_catalog::compute_config::replica_dyncfg_overrides(self.catalog())
     }
 
     /// Resolves the replica-local scoped overrides from the catalog working copy
@@ -2846,7 +2811,11 @@ impl Coordinator {
         // `bootstrap_dataflow_plans`.
         let bootstrap_as_ofs_start = Instant::now();
         info!("startup: coordinator init: bootstrap: dataflow as-of bootstrapping beginning");
-        let dataflow_read_holds = self.bootstrap_dataflow_as_ofs().await?;
+        let dataflow_read_holds = if self.controller.replica_owned_compute() {
+            BTreeMap::new()
+        } else {
+            self.bootstrap_dataflow_as_ofs().await?
+        };
         info!(
             "startup: coordinator init: bootstrap: dataflow as-of bootstrapping complete in {:?}",
             bootstrap_as_ofs_start.elapsed()
@@ -2944,10 +2913,12 @@ impl Coordinator {
                             .or_insert_with(Default::default)
                             .extend(df_desc.export_ids());
 
-                        self.controller
-                            .compute
-                            .create_dataflow(idx.cluster_id, df_desc, None)
-                            .unwrap_or_terminate("cannot fail to create dataflows");
+                        if !self.controller.replica_owned_compute() {
+                            self.controller
+                                .compute
+                                .create_dataflow(idx.cluster_id, df_desc, None)
+                                .unwrap_or_terminate("cannot fail to create dataflows");
+                        }
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -2969,7 +2940,7 @@ impl Coordinator {
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
-                    Self::set_materialized_view_dataflow_bounds(&mut df_desc, mview);
+                    mview.apply_execution_bounds(&mut df_desc);
 
                     let df_meta = self
                         .catalog()
@@ -2985,13 +2956,17 @@ impl Coordinator {
                         );
                     }
 
-                    self.ship_dataflow(df_desc, mview.cluster_id, mview.target_replica)
-                        .await;
+                    if !self.controller.replica_owned_compute() {
+                        self.ship_dataflow(df_desc, mview.cluster_id, mview.target_replica)
+                            .await;
+                    }
 
                     // A pending `REPLACEMENT FOR` MV must stay read-only until
                     // `ALTER ... APPLY REPLACEMENT` swaps it in. Unrelated to the
                     // builtin-migration `Replacement` mechanism below.
-                    if mview.replacement_target.is_none() {
+                    if mview.replacement_target.is_none()
+                        && !self.controller.replica_owned_compute()
+                    {
                         let gid = mview.global_id_writes();
                         if hydrate_migrated_mvs
                             && migrated_storage_collections_0dt.contains(&entry.id())
@@ -3037,8 +3012,10 @@ impl Coordinator {
 
                     // No read policy to set: the export is a sink, not a readable collection, so
                     // `ship_dataflow` has no index export to initialize a policy for.
-                    self.ship_dataflow(df_desc, metric_sink.cluster_id, None)
-                        .await;
+                    if !self.controller.replica_owned_compute() {
+                        self.ship_dataflow(df_desc, metric_sink.cluster_id, None)
+                            .await;
+                    }
                 }
                 CatalogItem::Sink(sink) => {
                     policies_to_set
@@ -3291,11 +3268,10 @@ impl Coordinator {
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
-        // Initialize unified introspection.
-        self.bootstrap_introspection_subscribes().await;
-
-        // Install the curated metric sinks on every replica.
-        self.bootstrap_metric_sinks().await;
+        if !self.controller.replica_owned_compute() {
+            self.bootstrap_introspection_subscribes().await;
+            self.bootstrap_metric_sinks().await;
+        }
 
         info!(
             "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode complete in {:?}",
@@ -3930,24 +3906,6 @@ impl Coordinator {
             optimizer_features: optimizer_config.features,
             item_version: RelationVersion::root(),
         })
-    }
-
-    /// Applies visibility and finite-refresh bounds independently of installation as_of.
-    fn set_materialized_view_dataflow_bounds(
-        dataflow: &mut DataflowDescription<LirRelationExpr>,
-        mv: &MaterializedView,
-    ) {
-        if let Some(initial_as_of) = &mv.initial_as_of {
-            dataflow.set_initial_as_of(initial_as_of.clone());
-        }
-        if let Some(until) = mv
-            .refresh_schedule
-            .as_ref()
-            .and_then(|s| s.last_refresh())
-            .and_then(|r| r.try_step_forward())
-        {
-            dataflow.until.meet_assign(&Antichain::from_elem(until));
-        }
     }
 
     /// Builds a materialized view plan and rendered notices from its catalog definition.
@@ -4965,7 +4923,7 @@ impl Coordinator {
         &self,
         id: ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
-        if self.query_client.is_none() {
+        if !self.catalog().state().catalog_read_protection_enabled() {
             return self.instance_snapshot(id);
         }
         let cluster = self
@@ -5025,6 +4983,9 @@ impl Coordinator {
     /// from the specified instance. Calling this function multiple times and
     /// calling it on a read-only instance has no effect.
     pub(crate) fn allow_writes(&mut self, instance: ComputeInstanceId, id: GlobalId) {
+        if self.controller.replica_owned_compute() {
+            return;
+        }
         self.controller
             .compute
             .allow_writes(instance, id)
@@ -6109,6 +6070,12 @@ pub fn serve(
 
                     coord.prune_arrangement_sizes_history_on_startup().await;
                     coord.initialize_query_client().await?;
+                    if coord.controller.replica_owned_compute() {
+                        // These observations execute through the query client.
+                        // Their admission must not delay storage/WAL bootstrap.
+                        coord.bootstrap_introspection_subscribes().await;
+                        coord.bootstrap_metric_sinks().await;
+                    }
 
                     Ok(())
                 });

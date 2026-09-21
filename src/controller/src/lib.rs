@@ -225,6 +225,13 @@ impl Controller {
         self.catalog_follower_config = Some(config);
     }
 
+    /// Whether maintained compute is enacted by catalog-following replicas.
+    /// Process provisioning and adapter-owned table work remain local.
+    pub fn replica_owned_compute(&self) -> bool {
+        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE
+            && self.catalog_persist_location.is_some()
+    }
+
     /// Update the controller configuration.
     pub fn update_configuration(&mut self, updates: ConfigUpdates) {
         updates.apply(&self.dyncfg);

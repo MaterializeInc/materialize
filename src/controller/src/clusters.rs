@@ -87,8 +87,10 @@ impl Controller {
     ) -> Result<(), anyhow::Error> {
         self.storage
             .create_instance(id, config.workload_class.clone());
-        self.compute
-            .create_instance(id, config.arranged_logs, config.workload_class)?;
+        if !self.replica_owned_compute() {
+            self.compute
+                .create_instance(id, config.arranged_logs, config.workload_class)?;
+        }
         Ok(())
     }
 
@@ -100,9 +102,11 @@ impl Controller {
     pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
-        self.compute
-            .update_instance_workload_class(id, workload_class)
-            .expect("instance exists");
+        if !self.replica_owned_compute() {
+            self.compute
+                .update_instance_workload_class(id, workload_class)
+                .expect("instance exists");
+        }
     }
 
     /// Drops the specified cluster.
@@ -112,7 +116,9 @@ impl Controller {
     /// Panics if the cluster still has replicas.
     pub fn drop_cluster(&mut self, id: ClusterId) {
         self.storage.drop_instance(id);
-        self.compute.drop_instance(id);
+        if !self.replica_owned_compute() {
+            self.compute.drop_instance(id);
+        }
     }
 
     /// Creates a replica of the specified cluster with the specified identifier
@@ -173,12 +179,14 @@ impl Controller {
 
         self.storage
             .connect_replica(cluster_id, replica_id, storage_location);
-        self.compute.add_replica_to_instance(
-            cluster_id,
-            replica_id,
-            compute_location,
-            config.compute,
-        )?;
+        if !self.replica_owned_compute() {
+            self.compute.add_replica_to_instance(
+                cluster_id,
+                replica_id,
+                compute_location,
+                config.compute,
+            )?;
+        }
 
         if let Some(task) = metrics_task {
             self.metrics_tasks.insert(replica_id, task);
@@ -209,7 +217,9 @@ impl Controller {
         // otherwise be retained until the next such change.
         self.replica_dyncfg_overrides.remove(&replica_id);
 
-        self.compute.drop_replica(cluster_id, replica_id)?;
+        if !self.replica_owned_compute() {
+            self.compute.drop_replica(cluster_id, replica_id)?;
+        }
         self.storage.drop_replica(cluster_id, replica_id);
         Ok(())
     }

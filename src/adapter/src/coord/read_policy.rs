@@ -246,7 +246,7 @@ impl crate::coord::Coordinator {
         // Lifecycle policy installation must not wait for query connections or
         // durable client publication. Protected windows are acquired after the
         // installation batch, when readable query replicas can be observed.
-        let query_owned = self.query_client.is_some();
+        let query_owned = self.query_client.is_some() || self.controller.replica_owned_compute();
         for (timeline_context, id_bundle) in
             self.catalog().partition_ids_by_timeline_context(id_bundle)
         {
@@ -282,6 +282,9 @@ impl crate::coord::Coordinator {
             .set_read_policies(storage_policies);
 
         for (instance_id, collection_ids) in &id_bundle.compute_ids {
+            if self.controller.replica_owned_compute() {
+                continue;
+            }
             let compute_policies = collection_ids
                 .iter()
                 .map(|id| (*id, read_policy.clone()))
@@ -314,6 +317,9 @@ impl crate::coord::Coordinator {
         &self,
         mut policies: Vec<(ComputeInstanceId, CatalogItemId, ReadPolicy)>,
     ) {
+        if self.controller.replica_owned_compute() {
+            return;
+        }
         policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
         for (cluster_id, group) in &policies
             .into_iter()

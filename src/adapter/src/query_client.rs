@@ -269,6 +269,27 @@ impl QueryClient {
         ComputeInstanceSnapshot::new_from_parts(cluster, ids)
     }
 
+    /// Whether the current query connection observed actual hydration of every
+    /// expected collection on this replica. Missing observations are not readiness.
+    pub(crate) fn collections_hydrated_on_replica(
+        &self,
+        cluster: ComputeInstanceId,
+        replica: ReplicaId,
+        expected: &BTreeSet<GlobalId>,
+    ) -> bool {
+        self.replica_clients(cluster, Some(replica))
+            .iter()
+            .any(|client| {
+                client.frontiers().is_ok_and(|frontiers| {
+                    expected.iter().all(|id| {
+                        frontiers
+                            .get(id)
+                            .is_some_and(|frontiers| frontiers.hydrated == Some(true))
+                    })
+                })
+            })
+    }
+
     /// Initializes the independent WAL reader on first use, after WAL bootstrap.
     /// Callers must await this off the coordinator loop, within their read timeout.
     pub(crate) async fn collection_reader(&self) -> &CollectionReader {

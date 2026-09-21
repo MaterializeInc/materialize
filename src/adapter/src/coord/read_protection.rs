@@ -9,13 +9,20 @@
 
 //! Publishes durable recovery requirements and compaction permission together.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use differential_dataflow::lattice::Lattice;
+#[cfg(test)]
 use mz_catalog::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
 use mz_catalog::memory::objects::CatalogItem;
-use mz_repr::{GlobalId, Timestamp};
+#[cfg(test)]
+use mz_catalog::read_protection::publication::PublicationCandidates;
+use mz_catalog::read_protection::publication::publication_candidates;
+#[cfg(test)]
+use mz_repr::GlobalId;
+use mz_repr::Timestamp;
+#[cfg(test)]
 use mz_storage_client::storage_collections::CollectionFrontiers;
 use timely::progress::Antichain;
 
@@ -391,6 +398,9 @@ impl Coordinator {
 
     /// Restores published compute bounds before installing clusters and dataflows.
     pub(super) async fn restore_compute_read_protection(&mut self) -> Result<(), AdapterError> {
+        if self.controller.replica_owned_compute() {
+            return Ok(());
+        }
         if !self.catalog().state().catalog_read_protection_enabled() {
             return Ok(());
         }
@@ -413,6 +423,9 @@ impl Coordinator {
 
     /// Delivers changed published bounds to compute lifetimes in the local catalog.
     pub(super) async fn sync_compute_read_protection(&mut self) -> Result<(), AdapterError> {
+        if self.controller.replica_owned_compute() {
+            return Ok(());
+        }
         let Some(subscriber) = &mut self.compaction_bound_subscriber else {
             return Ok(());
         };
@@ -556,114 +569,6 @@ impl Coordinator {
         );
         Ok(())
     }
-}
-
-#[derive(Debug, Default)]
-struct PublicationCandidates {
-    requirements: Vec<MaintainedReadRequirement>,
-    bounds: Vec<CollectionCompactionBound>,
-    // Timestamp distance from the resulting bound to finite policy permission,
-    // not wall-clock age. Empty policy frontiers with finite bounds count separately.
-    max_policy_lag_ts: u64,
-    unbounded_policy_lag: usize,
-}
-
-/// Computes changed records from committed protection and installed controller frontiers.
-/// Compute proposals contain only live governed catalog indexes, using actual readability
-/// for indexes without a published bound.
-fn publication_candidates(
-    requirements: &imbl::OrdMap<GlobalId, MaintainedReadRequirement>,
-    bounds: &imbl::OrdMap<GlobalId, Antichain<Timestamp>>,
-    frontiers: &[CollectionFrontiers],
-    compaction_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-    compute_proposals: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-    owns_durable_progress: impl Fn(GlobalId) -> bool,
-    committed_input_limit: impl Fn(GlobalId, &BTreeSet<GlobalId>) -> Option<Timestamp>,
-) -> PublicationCandidates {
-    let mut candidates = PublicationCandidates::default();
-    let mut input_limits: BTreeMap<GlobalId, Timestamp> = BTreeMap::new();
-    let mut advancing = BTreeSet::new();
-
-    for output in frontiers {
-        let Some(requirement) = requirements.get(&output.id) else {
-            continue;
-        };
-        if !owns_durable_progress(requirement.id) {
-            continue;
-        }
-        let mut frontier: Antichain<_> = requirement.frontier.into_iter().collect();
-        // An upper at a refresh timestamp does not complete that refresh.
-        // Its predecessor retains the pending input snapshot, including at MIN.
-        let predecessor = output
-            .write_frontier
-            .iter()
-            .map(|t| t.saturating_sub(1))
-            .collect();
-        frontier.join_assign(&predecessor);
-        let frontier = frontier.into_option();
-        if frontier == requirement.frontier {
-            continue;
-        }
-        advancing.insert(requirement.id);
-        candidates.requirements.push(MaintainedReadRequirement {
-            frontier,
-            ..requirement.clone()
-        });
-        if let Some(frontier) = frontier {
-            for input in &requirement.inputs {
-                input_limits
-                    .entry(*input)
-                    .and_modify(|limit| *limit = (*limit).min(frontier))
-                    .or_insert(frontier);
-            }
-        }
-    }
-
-    let storage_proposals = frontiers.iter().filter_map(|collection| {
-        compaction_frontiers.get(&collection.id).map(|proposal| {
-            (
-                collection.id,
-                proposal,
-                Some(&collection.implied_capability),
-            )
-        })
-    });
-    let compute_proposals = compute_proposals
-        .iter()
-        .map(|(&id, proposal)| (id, proposal, None));
-    for (id, proposal, policy) in storage_proposals.chain(compute_proposals) {
-        let old_bound = bounds.get(&id);
-        if old_bound.is_none() && policy.is_some() {
-            continue;
-        }
-        let mut bound = proposal.clone();
-        // Controller proposals exclude only catalog permission. Early creation and
-        // execution holds remain authoritative alongside durable input requirements.
-        bound.extend(committed_input_limit(id, &advancing));
-        bound.extend(input_limits.get(&id).copied());
-        if let Some(old_bound) = old_bound {
-            bound.join_assign(old_bound);
-        }
-        if let Some(bound_ts) = bound.as_option()
-            && let Some(policy) = policy
-        {
-            match policy.as_option() {
-                Some(policy_ts) => {
-                    candidates.max_policy_lag_ts = candidates
-                        .max_policy_lag_ts
-                        .max(u64::from(policy_ts.saturating_sub(*bound_ts)));
-                }
-                None => candidates.unbounded_policy_lag += 1,
-            }
-        }
-        if Some(&bound) != old_bound {
-            candidates.bounds.push(CollectionCompactionBound {
-                id,
-                frontier: bound.into_option(),
-            });
-        }
-    }
-    candidates
 }
 
 #[cfg(test)]
