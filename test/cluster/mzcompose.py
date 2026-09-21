@@ -6497,6 +6497,121 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                 """))
 
 
+def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
+    c.up("materialized")
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_background_alter_cluster = true;
+        ALTER SYSTEM SET enable_cluster_reconfiguration_lag_gate = true;
+        ALTER SYSTEM SET cluster_reconfiguration_allowed_lag = '0s';
+        ALTER SYSTEM SET cluster_controller_tick_interval = '100ms';
+        SET failpoints = 'cluster_controller_hold_readiness=return';
+        """,
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("""
+        CREATE CLUSTER lag_gate SIZE 'scale=1,workers=1';
+        CREATE TABLE lag_gate_table (a int);
+        CREATE DEFAULT INDEX IN CLUSTER lag_gate ON lag_gate_table;
+        INSERT INTO lag_gate_table VALUES (1);
+        ALTER CLUSTER lag_gate SET (SIZE = 'scale=1,workers=2');
+        """)
+
+    def wait_for(query: str) -> None:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if c.sql_query(query) == [(True,)]:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"condition did not become true: {query}")
+
+    replicas = """
+        SELECT r.id FROM mz_cluster_replicas r
+        JOIN mz_clusters c ON c.id = r.cluster_id
+        WHERE c.name = 'lag_gate'
+    """
+    wait_for(f"SELECT count(*) = 2 FROM ({replicas})")
+    outgoing, target = sorted(
+        (row[0] for row in c.sql_query(replicas)), key=lambda id: int(id[1:])
+    )
+    index_id = c.sql_query("""
+        SELECT i.id FROM mz_indexes i JOIN mz_tables t ON i.on_id = t.id
+        WHERE t.name = 'lag_gate_table'
+        """)[0][0]
+    wait_for(f"""
+        SELECT count(*) = 2 AND bool_and(hydrated)
+        FROM mz_internal.mz_compute_hydration_statuses
+        WHERE object_id = '{index_id}' AND replica_id IN ('{outgoing}', '{target}')
+        """)
+
+    # The process orchestrator records each worker process in its service's
+    # run directory. Stop only the replacement after real hydration, leaving
+    # its connection and the outgoing replica running.
+    pid_files = c.exec(
+        "materialized",
+        "find",
+        "/tmp",
+        "-path",
+        f"*/cluster-*-replica-{target}-gen-*/0.pid",
+        capture=True,
+    ).stdout.splitlines()
+    assert len(pid_files) == 1, pid_files
+    pid = c.exec(
+        "materialized", "head", "-n", "1", pid_files[0], capture=True
+    ).stdout.strip()
+    assert pid.isdigit(), pid
+    c.exec("materialized", "kill", "-STOP", pid)
+    try:
+        c.sql("INSERT INTO lag_gate_table VALUES (2)")
+        wait_for(f"""
+            SELECT old.write_frontier > new.write_frontier
+            FROM mz_catalog.mz_cluster_replica_frontiers old
+            JOIN mz_catalog.mz_cluster_replica_frontiers new USING (object_id)
+            WHERE old.object_id = '{index_id}'
+              AND old.replica_id = '{outgoing}' AND new.replica_id = '{target}'
+            """)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+        # Observe an actual failed readiness probe before asserting retention.
+        # Merely sleeping and checking the catalog could pass without a probe.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            assert len(c.sql_query(replicas)) == 2, "cut over to a lagging replacement"
+            logs = c.invoke("logs", "materialized", capture=True).stdout
+            if any(
+                "collections are not ready" in line
+                and re.search(
+                    rf"lagging_ticks=\{{[^}}]*User\({index_id[1:]}\): [1-9][0-9]*", line
+                )
+                for line in logs.splitlines()
+            ):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("no lagging replacement readiness probe observed")
+        assert len(c.sql_query(replicas)) == 2
+        assert c.sql_query("SELECT size FROM mz_clusters WHERE name = 'lag_gate'") == [
+            ("scale=1,workers=1",)
+        ]
+    finally:
+        c.exec("materialized", "kill", "-CONT", pid)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+
+    wait_for("""
+        SELECT size = 'scale=1,workers=2' FROM mz_clusters WHERE name = 'lag_gate'
+        """)
+    wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
+    assert c.sql_query(replicas) == [(target,)]
+
+
 def workflow_test_zero_downtime_reconfigure(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

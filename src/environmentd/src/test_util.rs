@@ -32,6 +32,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
+use mz_adapter_types::dyncfgs::ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE;
 
 use mz_auth::password::Password;
 use mz_catalog::config::ClusterReplicaSizeMap;
@@ -232,10 +233,13 @@ impl Default for TestHarness {
             deploy_generation: 0,
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
-            system_parameter_defaults: BTreeMap::from([(
-                "log_filter".to_string(),
-                "error".to_string(),
-            )]),
+            system_parameter_defaults: BTreeMap::from([
+                ("log_filter".to_string(), "error".to_string()),
+                (
+                    ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),
+                    "true".to_string(),
+                ),
+            ]),
             internal_console_redirect_url: None,
             metrics_registry: None,
             orchestrator_tracing_cli_args: TracingCliArgs {
