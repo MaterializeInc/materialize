@@ -842,7 +842,10 @@ async fn do_commit(
         .map_err(CommitError::Request)
 }
 
-/// Attempt a single commit of a batch of data files to an Iceberg table.
+/// Attempt to publish prepared files. Every attempt reloads before admission,
+/// including after an uncertain outcome. Overlap stops the operator, whose halting
+/// health status requests reconstruction. Do not rewrite batch bounds, publish a
+/// subset of these files, or delete files whose commit outcome is unknown.
 async fn try_commit_batch(
     table: Table,
     snapshot_properties: Vec<(String, String)>,
@@ -910,23 +913,25 @@ async fn try_commit_batch(
             );
         }
 
-        if PartialOrder::less_equal(batch_upper, &last_frontier)
-            || PartialOrder::less_than(batch_lower, &last_frontier)
-        {
-            // This batch contains records someone else has already written.
+        // Prepared files may only extend exactly the durable Materialize upper.
+        // A mismatch requires reconstruction, not rebasing or publishing a subset.
+        if last_frontier != *batch_lower {
             return (
                 table,
                 RetryResult::FatalErr(anyhow!(
                     "Iceberg table '{}' has been modified by another writer. \
-                    Current frontier: {:?}, last frontier: {:?}.",
+                    Iceberg commit requires reconstruction from committed upper {}: prepared lower {}",
                     conn_table,
-                    batch_upper,
-                    last_frontier,
+                    last_frontier.pretty(),
+                    batch_lower.pretty(),
                 )),
             );
         }
     }
 
+    // Admission and RowDelta's main-snapshot CAS (including None) and UUID
+    // requirement use the same metadata. Progress-bearing snapshots belong to
+    // main, not independent branches. No progress permits a nonzero initial as_of.
     match do_commit(
         &table,
         catalog,
@@ -2072,6 +2077,9 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod commit_tests;
 
 #[cfg(test)]
 mod tests {
