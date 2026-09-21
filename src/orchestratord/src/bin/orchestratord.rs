@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::{
+    collections::BTreeMap,
     env, future,
     net::SocketAddr,
     pin::pin,
@@ -253,6 +254,10 @@ pub struct Args {
     balancerd_tolerations: Option<Vec<Toleration>>,
     #[clap(long, value_parser = parse_resources)]
     balancerd_default_resources: Option<ResourceRequirements>,
+    /// JSON object used to seed each balancerd ConfigMap when it is first created.
+    /// Existing ConfigMaps are left unchanged so operators can tune them at runtime.
+    #[clap(long, default_value = "{}", value_parser = parse_balancerd_initial_config)]
+    balancerd_initial_config: BTreeMap<String, serde_json::Value>,
     #[clap(long)]
     console_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, value_parser = parse_affinity)]
@@ -348,6 +353,10 @@ fn parse_tolerations(s: &str) -> anyhow::Result<Toleration> {
 }
 
 fn parse_resources(s: &str) -> anyhow::Result<ResourceRequirements> {
+    Ok(serde_json::from_str(s)?)
+}
+
+fn parse_balancerd_initial_config(s: &str) -> anyhow::Result<BTreeMap<String, serde_json::Value>> {
     Ok(serde_json::from_str(s)?)
 }
 
@@ -770,6 +779,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             balancerd_affinity: args.balancerd_affinity,
             balancerd_tolerations: args.balancerd_tolerations,
             balancerd_default_resources: args.balancerd_default_resources,
+            balancerd_initial_config: args.balancerd_initial_config,
             default_certificate_specs: args.default_certificate_specs.clone(),
             environmentd_sql_port: args.environmentd_sql_port,
             environmentd_http_port: args.environmentd_http_port,
@@ -785,6 +795,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             )
             .with_controller(|controller| {
                 let controller = controller
+                    .owns(
+                        Api::<ConfigMap>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
+                    )
                     .owns(
                         Api::<Deployment>::all(client.clone()),
                         watcher::Config::default()

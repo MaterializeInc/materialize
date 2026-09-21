@@ -2796,8 +2796,143 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
     definition = setup(c, args)
+    if args.tag is None:
+        definition["operator"]["balancerd"]["initialConfig"] = {
+            "balancerd_max_connections": 123,
+        }
     init(definition)
     run_balancer(definition, False)
+    if args.tag is None:
+        check_balancer_config_sync(definition)
+
+
+def check_balancer_config_sync(definition: dict[str, Any]) -> None:
+    namespace = definition["balancer"]["metadata"]["namespace"]
+    pods = get_balancerd_data()["items"]
+    assert pods, "Expected balancerd pods"
+
+    def pod_state() -> dict[str, tuple[str, list[int]]]:
+        return {
+            pod["metadata"]["name"]: (
+                pod["metadata"]["uid"],
+                [s["restartCount"] for s in pod["status"].get("containerStatuses", [])],
+            )
+            for pod in get_balancerd_data()["items"]
+        }
+
+    initial_pod_state = pod_state()
+    volume = next(
+        v for v in pods[0]["spec"]["volumes"] if v["name"] == "dynamic-config"
+    )
+    config_map_name = volume["configMap"]["name"]
+
+    def read_config() -> dict[str, Any]:
+        cm = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "configmap",
+                    config_map_name,
+                    "-n",
+                    namespace,
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        return json.loads(cm["data"]["config.json"])
+
+    def check_limit(expected: int) -> None:
+        for pod in pods:
+            container = pod["spec"]["containers"][0]
+            port = next(
+                p["containerPort"]
+                for p in container["ports"]
+                if p["name"] == "internal-http"
+            )
+            name = pod["metadata"]["name"]
+            metrics = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "--raw",
+                    f"/api/v1/namespaces/{namespace}/pods/{name}:{port}/proxy/metrics",
+                ]
+            )
+            assert (
+                f"mz_balancer_connection_limit {expected}" in metrics.splitlines()
+            ), metrics
+
+    assert read_config() == {"balancerd_max_connections": 123}
+    retry(lambda: check_limit(123), 60)
+    for index, limit in enumerate((456, 0)):
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "configmap",
+                config_map_name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps(
+                    {
+                        "data": {
+                            "config.json": json.dumps(
+                                {"balancerd_max_connections": limit}
+                            )
+                        }
+                    }
+                ),
+            ]
+        )
+        # A spec change forces a completed reconciliation, exercising the
+        # create-only policy even if the ConfigMap watch has not fired yet.
+        replicas = len(pods) + index + 1
+        name = definition["balancer"]["metadata"]["name"]
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "balancer",
+                name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps({"spec": {"replicas": replicas}}),
+            ]
+        )
+        deployment = config_map_name.removesuffix("-config")
+
+        def check_reconciled() -> None:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "deployment",
+                        deployment,
+                        "-n",
+                        namespace,
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            assert data["spec"]["replicas"] == replicas
+
+        retry(check_reconciled, 60)
+        assert read_config() == {"balancerd_max_connections": limit}
+        # Kubelet projection can take two minutes before the five-second sync.
+        retry(lambda: check_limit(limit), 180)
+        current_pod_state = pod_state()
+        for name, state in initial_pod_state.items():
+            assert (
+                current_pod_state.get(name) == state
+            ), "balancerd restarted during config sync"
 
 
 def get_materialize_v1alpha1() -> dict[str, Any]:

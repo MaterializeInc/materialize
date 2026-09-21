@@ -7,16 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use anyhow::bail;
 use k8s_controller::TraceMetadata;
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy, RollingUpdateDeployment},
         core::v1::{
-            Affinity, Capabilities, Container, ContainerPort, HTTPGetAction, PodSecurityContext,
-            PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile,
-            SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec, Toleration,
-            Volume, VolumeMount,
+            Affinity, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
+            HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
+            ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
+            ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
         },
     },
     apimachinery::pkg::{
@@ -57,6 +59,7 @@ pub struct Config {
     pub balancerd_affinity: Option<Affinity>,
     pub balancerd_tolerations: Option<Vec<Toleration>>,
     pub balancerd_default_resources: Option<ResourceRequirements>,
+    pub balancerd_initial_config: BTreeMap<String, serde_json::Value>,
 
     pub default_certificate_specs: DefaultCertificateSpecs,
 
@@ -224,6 +227,8 @@ impl Context {
 
         let mut args = vec![
             "service".to_string(),
+            "--config-sync-file-path=/etc/balancerd/config.json".to_string(),
+            "--config-sync-loop-interval=5s".to_string(),
             format!(
                 "--pgwire-listen-addr=0.0.0.0:{}",
                 self.config.balancerd_sql_port
@@ -266,8 +271,26 @@ impl Context {
             args.push("--internal-tls".to_owned())
         }
 
-        let mut volumes = Vec::new();
-        let mut volume_mounts = Vec::new();
+        let mut volumes = vec![Volume {
+            name: "dynamic-config".to_owned(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: balancer.name_prefixed("balancerd-config"),
+                items: Some(vec![KeyToPath {
+                    key: "config.json".to_owned(),
+                    path: "config.json".to_owned(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+        let mut volume_mounts = vec![VolumeMount {
+            name: "dynamic-config".to_owned(),
+            // Mount the directory: subPath mounts do not receive ConfigMap updates.
+            mount_path: "/etc/balancerd".to_owned(),
+            read_only: Some(true),
+            ..Default::default()
+        }];
         if issuer_ref_defined(
             &self.config.default_certificate_specs.balancerd_external,
             &balancer.spec.external_certificate_spec,
@@ -582,6 +605,32 @@ impl k8s_controller::Context for Context {
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
+        let config_map_api: Api<ConfigMap> = Api::namespaced(client.clone(), &namespace);
+
+        let config_map_name = balancer.name_prefixed("balancerd-config");
+        if get_resource(&config_map_api, &config_map_name)
+            .await?
+            .is_none()
+        {
+            let config_map = ConfigMap {
+                metadata: balancer.managed_resource_meta(config_map_name),
+                data: Some(btreemap! {
+                    "config.json".to_owned() => serde_json::to_string(&self.config.balancerd_initial_config)
+                        .map_err(anyhow::Error::from)?,
+                }),
+                ..Default::default()
+            };
+            // Seed once, before pods start. Reconciliation must preserve operator
+            // edits, including a ConfigMap created concurrently with this request.
+            match config_map_api
+                .create(&PostParams::default(), &config_map)
+                .await
+            {
+                Ok(_) => {}
+                Err(kube::Error::Api(e)) if e.code == 409 => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
 
         if let Some(external_certificate) = self.create_external_certificate_object(balancer)? {
             trace!("creating new balancerd external certificate");

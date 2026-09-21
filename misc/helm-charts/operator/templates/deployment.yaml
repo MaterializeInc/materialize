@@ -230,6 +230,9 @@ spec:
         {{- if .Values.balancerd.defaultResources }}
         - '--balancerd-default-resources={{ toJson .Values.balancerd.defaultResources }}'
         {{- end }}
+        {{- if .Values.balancerd.initialConfig }}
+        - {{ printf "--balancerd-initial-config=%s" (mustToJson .Values.balancerd.initialConfig) | quote }}
+        {{- end }}
         {{- if .Values.console.nodeSelector }}
         {{- range $key, $value := .Values.console.nodeSelector }}
         - "--console-node-selector={{ $key }}={{ $value }}"

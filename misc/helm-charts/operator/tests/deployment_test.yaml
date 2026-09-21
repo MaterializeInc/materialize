@@ -11,6 +11,23 @@ suite: test deployment
 templates:
 - deployment.yaml
 tests:
+- it: should pass initial balancerd configuration preserving JSON types and quotes
+  set:
+    balancerd.initialConfig:
+      balancerd_max_connections: 0
+      balancerd_inject_proxy_protocol_header_http: false
+      balancerd_log_filter: "info,example::module=debug"
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: '--balancerd-initial-config={"balancerd_inject_proxy_protocol_header_http":false,"balancerd_log_filter":"info,example::module=debug","balancerd_max_connections":0}'
+
+- it: should omit initial balancerd configuration by default
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: '--balancerd-initial-config={}'
+
 - it: should create a deployment
   asserts:
   - isKind:
