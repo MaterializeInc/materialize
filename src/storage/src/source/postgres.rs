@@ -373,6 +373,13 @@ pub enum DefiniteError {
     )]
     InvalidTimelineId { expected: u64, actual: u64 },
     #[error(
+        "unsupported action: upstream went back in time. Expected a snapshot at or after LSN {initial_lsn} but the snapshot was taken at {snapshot_lsn}"
+    )]
+    InvalidSnapshotLsn {
+        initial_lsn: MzOffset,
+        snapshot_lsn: MzOffset,
+    },
+    #[error(
         "unsupported action: upstream physical replica status changed (e.g. a physical replica was promoted to a primary). Expected pg_is_in_recovery()={expected} but got {actual}"
     )]
     InvalidPhysicalReplica { expected: bool, actual: bool },
@@ -417,6 +424,7 @@ impl From<DefiniteError> for DataflowError {
                 DefiniteError::MissingColumn => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidCopyInput => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidTimelineId { .. } => SourceErrorDetails::Initialization(m),
+                DefiniteError::InvalidSnapshotLsn { .. } => SourceErrorDetails::Initialization(m),
                 DefiniteError::InvalidPhysicalReplica { .. } => {
                     SourceErrorDetails::Initialization(m)
                 }
