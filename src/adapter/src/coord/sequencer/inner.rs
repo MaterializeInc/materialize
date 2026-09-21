@@ -4497,8 +4497,22 @@ impl Coordinator {
         plan::GrantPrivilegesPlan {
             update_privileges,
             grantees,
+            through_index,
         }: plan::GrantPrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // Prototype `THROUGH <index>`: record the (grantee, object) -> index
+        // binding before `update_privileges` is consumed. Planning guarantees a
+        // single object target when `through_index` is set.
+        if let Some(index_id) = through_index {
+            for update in &update_privileges {
+                if let SystemObjectId::Object(ObjectId::Item(object_id)) = &update.target_id {
+                    for grantee in &grantees {
+                        self.through_index_bindings
+                            .insert((*grantee, *object_id), index_id);
+                    }
+                }
+            }
+        }
         self.sequence_update_privileges(
             session,
             update_privileges,

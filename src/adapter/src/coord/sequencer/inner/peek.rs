@@ -801,6 +801,65 @@ impl Coordinator {
             source_ids,
         };
 
+        // Prototype `GRANT ... THROUGH <index>` enforcement, post-optimization.
+        //
+        // NOTE: this only fires for peeks that reach the Coordinator. Simple
+        // SELECTs served by `try_frontend_peek` on a catalog snapshot never call
+        // `peek_finish`, so they bypass this check. The prototype disables
+        // `enable_frontend_peek_sequencing`; a real implementation must also
+        // enforce in the frontend path, or hold the binding in catalog state the
+        // snapshot can see (which also earns durability).
+        //
+        // The binding names the object the query REFERENCES, typically a view.
+        // By the time a plan reaches here the view has been inlined away, so
+        // `planned_peek.source_ids` (the post-inlining reads) no longer mentions
+        // it: off a cluster that lacks the index the read is a persist scan of
+        // the base table. We therefore key on the resolved statement's
+        // dependencies, which still name the view, and require the optimized
+        // plan to have read the bound index. A plan that reads the object any
+        // other way (a persist fast path, or a dataflow that does not import the
+        // index) is rejected.
+        if !self.through_index_bindings.is_empty() {
+            let role = session.role_metadata().current_role;
+            let referenced: BTreeSet<mz_repr::CatalogItemId> = match &plan.select {
+                Some(stmt) => {
+                    let session_catalog = self.catalog().for_session(session);
+                    mz_sql::names::visit_dependencies(&session_catalog, stmt.as_ref())
+                        .items()
+                        .copied()
+                        .collect()
+                }
+                None => BTreeSet::new(),
+            };
+            for ((binding_role, object_id), index_id) in &self.through_index_bindings {
+                if *binding_role != role || !referenced.contains(object_id) {
+                    continue;
+                }
+                let index_gids: BTreeSet<GlobalId> =
+                    self.catalog().get_entry(index_id).global_ids().collect();
+                let routed = match &planned_peek.plan {
+                    peek::PeekPlan::FastPath(peek::FastPathPlan::PeekExisting(
+                        _coll,
+                        idx_id,
+                        _lc,
+                        _mfp,
+                    )) => index_gids.contains(idx_id),
+                    peek::PeekPlan::FastPath(_) => false,
+                    peek::PeekPlan::SlowPath(PeekDataflowPlan { desc, .. }) => desc
+                        .index_imports
+                        .keys()
+                        .any(|imported| index_gids.contains(imported)),
+                };
+                if !routed {
+                    let index_name = self.catalog().get_entry(index_id).name().item.clone();
+                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                        "access to this object is granted only through index \"{index_name}\"; \
+                         run the query on a cluster that holds that index"
+                    )));
+                }
+            }
+        }
+
         if let Some(transient_index_id) = match &planned_peek.plan {
             peek::PeekPlan::FastPath(_) => None,
             peek::PeekPlan::SlowPath(PeekDataflowPlan { id, .. }) => Some(id),

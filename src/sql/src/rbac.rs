@@ -1490,6 +1490,7 @@ fn generate_rbac_requirements(
         Plan::GrantPrivileges(plan::GrantPrivilegesPlan {
             update_privileges,
             grantees: _,
+            through_index: _,
         })
         | Plan::RevokePrivileges(plan::RevokePrivilegesPlan {
             update_privileges,

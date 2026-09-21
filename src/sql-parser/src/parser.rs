@@ -9788,12 +9788,18 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(ON)?;
         let target = self.expect_grant_target_specification("GRANT")?;
+        let through = if self.parse_keyword(THROUGH) {
+            Some(self.parse_raw_name()?)
+        } else {
+            None
+        };
         self.expect_keyword(TO)?;
         let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
         Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
             privileges,
             target,
             roles,
+            through,
         }))
     }
 
