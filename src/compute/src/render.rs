@@ -822,10 +822,15 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
-                // Maintained aliases must retain their producers too: a query can
-                // keep an alias alive after lifecycle deletion of the whole chain.
+                // Keep the producer scheduled after lifecycle deletion, but let
+                // this alias's unused import operators shut down. Introspection
+                // identifies reused exports by their completed wrapper dataflow.
+                let producer = compute_state
+                    .collections
+                    .get(&gid)
+                    .map(|c| Rc::clone(&c.dataflow_index));
                 let retained = trace.to_drop().clone();
-                let trace = trace.with_drop((retained, needed_tokens));
+                let trace = trace.with_drop((retained, producer));
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
@@ -928,8 +933,14 @@ where
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
+                // As in the single-time export, retain the producer without
+                // keeping this alias's unused import operators alive.
+                let producer = compute_state
+                    .collections
+                    .get(&gid)
+                    .map(|c| Rc::clone(&c.dataflow_index));
                 let retained = trace.to_drop().clone();
-                let trace = trace.with_drop((retained, needed_tokens));
+                let trace = trace.with_drop((retained, producer));
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
