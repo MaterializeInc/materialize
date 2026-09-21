@@ -105,7 +105,9 @@ use iceberg::spec::{
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
-use iceberg::transaction::{ApplyTransactionAction, Transaction};
+use iceberg::transaction::{
+    ActionCommit, ApplyTransactionAction, RowDeltaAction, Transaction, TransactionAction,
+};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::base_writer::equality_delete_writer::{
     EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
@@ -778,9 +780,61 @@ async fn reload_table(
     }
 }
 
-/// Attempt a single commit of a batch of data files to an Iceberg table.
-/// On conflict or failure, reloads the table and returns a retryable error.
-/// On success, returns the updated table state.
+/// A prepared batch may only extend exactly the durable Materialize upper.
+/// Absence of progress is the initial snapshot case: its lower is the input
+/// as_of, which need not be the minimum timestamp.
+fn validate_commit_progress(
+    table: &Table,
+    sink_version: u64,
+    batch_lower: &Antichain<Timestamp>,
+) -> anyhow::Result<()> {
+    let mut snapshots = table.metadata().snapshots().cloned().collect::<Vec<_>>();
+    if let Some((upper, version)) = retrieve_upper_from_snapshots(&mut snapshots)? {
+        if version > sink_version {
+            anyhow::bail!(
+                "Fenced off by newer sink version: resume_version {}, sink_version {}",
+                version,
+                sink_version
+            );
+        }
+        if upper != *batch_lower {
+            anyhow::bail!(
+                "Iceberg commit requires reconstruction from committed upper {}: prepared lower {}",
+                upper.pretty(),
+                batch_lower.pretty()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The transaction invokes this action again after every refresh/rebase.
+/// Validation and row-delta requirements must use the same metadata. RowDelta
+/// supplies the main-snapshot CAS (including None) and table UUID requirement,
+/// so a concurrent publication cannot invalidate the check and still commit.
+/// Progress-bearing snapshots belong to main: Materialize writers and supported
+/// compaction publish there, not on independent Iceberg branches.
+struct GuardedRowDelta {
+    action: Arc<RowDeltaAction>,
+    sink_version: u64,
+    batch_lower: Antichain<Timestamp>,
+}
+
+#[async_trait::async_trait]
+impl TransactionAction for GuardedRowDelta {
+    async fn commit(self: Arc<Self>, table: &Table) -> iceberg::Result<ActionCommit> {
+        validate_commit_progress(table, self.sink_version, &self.batch_lower).map_err(|e| {
+            iceberg::Error::new(ErrorKind::DataInvalid, "Unsafe prepared Iceberg batch")
+                .with_source(e)
+        })?;
+        Arc::clone(&self.action).commit(table).await
+    }
+}
+
+/// Attempt to publish prepared files. Any uncertain outcome is reloaded before
+/// retrying. Overlap stops the operator, whose halting health status requests
+/// sink reconstruction. Do not commit a subset of these files, rewrite their
+/// bounds, or delete files whose commit outcome is unknown.
 async fn try_commit_batch(
     mut table: Table,
     snapshot_properties: Vec<(String, String)>,
@@ -790,29 +844,35 @@ async fn try_commit_batch(
     conn_namespace: &str,
     conn_table: &str,
     sink_version: u64,
-    frontier: &Antichain<Timestamp>,
     batch_lower: &Antichain<Timestamp>,
-    batch_upper: &Antichain<Timestamp>,
     metrics: &IcebergSinkMetrics,
 ) -> (Table, RetryResult<(), anyhow::Error>) {
     let tx = Transaction::new(&table);
-    let mut action = tx
+    let action = tx
         .row_delta()
         .set_snapshot_properties(snapshot_properties.into_iter().collect())
-        .with_check_duplicate(false);
-
-    if !data_files.is_empty() || !delete_files.is_empty() {
-        action = action
-            .add_data_files(data_files)
-            .add_delete_files(delete_files);
+        .with_check_duplicate(false)
+        .add_data_files(data_files)
+        .add_delete_files(delete_files);
+    let tx = GuardedRowDelta {
+        action: Arc::new(action),
+        sink_version,
+        batch_lower: batch_lower.clone(),
     }
+    .apply(tx)
+    .expect("applying a transaction action only queues it");
 
-    let tx = match action
-        .apply(tx)
-        .context("Failed to apply data file addition to iceberg table transaction")
-    {
-        Ok(tx) => tx,
+    match tx.commit(catalog).await {
+        Ok(new_table) => (new_table, RetryResult::Ok(())),
         Err(e) => {
+            if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) {
+                metrics.commit_conflicts.inc();
+            } else {
+                metrics.commit_failures.inc();
+            }
+            // This includes transport failures after a successful publication.
+            // If reload fails, the next transaction must itself successfully
+            // refresh and validate before it can attempt another publication.
             match reload_table(
                 catalog,
                 conn_namespace.to_string(),
@@ -823,92 +883,17 @@ async fn try_commit_batch(
             {
                 Ok(reloaded) => table = reloaded,
                 Err(reload_err) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(reload_err)));
+                    return (table, RetryResult::RetryableErr(reload_err));
                 }
             }
-            return (
-                table,
-                RetryResult::RetryableErr(anyhow!(
-                    "Failed to apply data file addition to iceberg table transaction: {}",
-                    e
-                )),
-            );
-        }
-    };
-
-    let new_table = tx.commit(catalog).await;
-    match new_table {
-        Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
-            metrics.commit_conflicts.inc();
-            match reload_table(
-                catalog,
-                conn_namespace.to_string(),
-                conn_table.to_string(),
-                table.clone(),
-            )
-            .await
-            {
-                Ok(reloaded) => table = reloaded,
-                Err(e) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(e)));
-                }
-            };
-
-            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
-            let last = retrieve_upper_from_snapshots(&mut snapshots);
-            let last = match last {
-                Ok(val) => val,
-                Err(e) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(e)));
-                }
-            };
-
-            // Check if another writer has advanced the frontier beyond ours (fencing check)
-            if let Some((last_frontier, last_version)) = last {
-                if last_version > sink_version {
-                    return (
-                        table,
-                        RetryResult::FatalErr(anyhow!(
-                            "Iceberg table '{}' has been modified by another writer \
-                             with version {}. Current sink version: {}. \
-                             Frontiers may be out of sync, aborting to avoid data loss.",
-                            conn_table,
-                            last_version,
-                            sink_version,
-                        )),
-                    );
-                }
-                if PartialOrder::less_equal(frontier, &last_frontier) {
-                    return (
-                        table,
-                        RetryResult::FatalErr(anyhow!(
-                            "Iceberg table '{}' has been modified by another writer. \
-                             Current frontier: {:?}, last frontier: {:?}.",
-                            conn_table,
-                            frontier,
-                            last_frontier,
-                        )),
-                    );
-                }
+            if let Err(err) = validate_commit_progress(&table, sink_version, batch_lower) {
+                return (table, RetryResult::FatalErr(err));
             }
-
-            (
-                table,
-                RetryResult::RetryableErr(anyhow!(
-                    "Commit conflict detected when committing batch [{}, {}) \
-                     to Iceberg table '{}.{}'. Retrying...",
-                    batch_lower.pretty(),
-                    batch_upper.pretty(),
-                    conn_namespace,
-                    conn_table
-                )),
-            )
-        }
-        Err(e) => {
-            metrics.commit_failures.inc();
+            if matches!(e.kind(), ErrorKind::DataInvalid) {
+                return (table, RetryResult::FatalErr(anyhow!(e)));
+            }
             (table, RetryResult::RetryableErr(anyhow!(e)))
         }
-        Ok(new_table) => (new_table, RetryResult::Ok(())),
     }
 }
 
@@ -1967,6 +1952,9 @@ where
 }
 
 #[cfg(test)]
+mod commit_tests;
+
+#[cfg(test)]
 mod tests {
     use iceberg::spec::{PrimitiveType, Type};
     use iceberg::writer::file_writer::location_generator::LocationGenerator;
@@ -2681,9 +2669,7 @@ fn commit_to_iceberg<'scope>(
                             let catalog = Arc::clone(&catalog);
                             let conn_namespace = connection.namespace.clone();
                             let conn_table = connection.table.clone();
-                            let frontier = frontier.clone();
                             let batch_lower = batch.0.clone();
-                            let batch_upper = batch.1.clone();
                             async move {
                                 try_commit_batch(
                                     table,
@@ -2694,9 +2680,7 @@ fn commit_to_iceberg<'scope>(
                                     &conn_namespace,
                                     &conn_table,
                                     sink_version,
-                                    &frontier,
                                     &batch_lower,
-                                    &batch_upper,
                                     &metrics,
                                 )
                                 .await

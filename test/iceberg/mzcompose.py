@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
@@ -408,6 +409,208 @@ def workflow_commit_conflict(c: Composition) -> None:
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "commit-conflict-verify.td",
+    )
+
+
+def workflow_commit_overlap_recovery(c: Composition) -> None:
+    """An external empty-prefix commit must reconstruct the sink, not rebase
+    prepared files. APPEND makes replayed records visible to DuckDB."""
+    key = _setup(c)
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "commit-overlap-setup.td",
+    )
+    c.sql("SET statement_timeout = '10s'")
+    base_url = f"http://localhost:{c.port('polaris', 8181)}/api/catalog/v1"
+    table_url = (
+        f"{base_url}/default_catalog/namespaces/default_namespace/tables/overlap_table"
+    )
+    token_req = urllib.request.Request(
+        f"{base_url}/oauth/tokens",
+        data=b"grant_type=client_credentials&client_id=root&client_secret=root&scope=PRINCIPAL_ROLE:ALL",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(token_req, timeout=10) as response:
+        access_token = json.load(response)["access_token"]
+
+    diagnostics: dict = {"conflicts": 0, "injection": None}
+
+    def request(payload: dict | None = None) -> dict:
+        req = urllib.request.Request(
+            table_url,
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as e:
+            diagnostics["http_error"] = {"code": e.code, "body": e.read().decode()}
+            raise
+
+    def snapshot() -> tuple[dict, dict | None]:
+        data = request()
+        diagnostics["table"] = data
+        metadata = data["metadata"]
+        current = next(
+            (
+                s
+                for s in metadata.get("snapshots", [])
+                if s["snapshot-id"] == metadata.get("current-snapshot-id")
+            ),
+            None,
+        )
+        return metadata, current
+
+    def upper(snap: dict) -> int:
+        (value,) = json.loads(snap["summary"]["mz-frontier"])
+        return int(value)
+
+    def read_timestamp() -> int:
+        # A read of the input uses its actual logical timeline, not host time.
+        value = int(c.sql_query("SELECT mz_now()::text FROM overlap_src LIMIT 1")[0][0])
+        diagnostics["read_timestamp"] = value
+        return value
+
+    def history() -> list:
+        rows = c.sql_query(
+            "SELECT h.occurred_at, h.status, h.error "
+            "FROM mz_internal.mz_sink_status_history h "
+            "JOIN mz_sinks s ON s.id = h.sink_id "
+            "WHERE s.name = 'overlap_sink' ORDER BY h.occurred_at"
+        )
+        diagnostics["status_history"] = rows
+        return rows
+
+    def wait_for(phase: str, condition: Callable[[], bool]) -> None:
+        deadline = time.monotonic() + 120
+        try:
+            while time.monotonic() < deadline:
+                if condition():
+                    return
+                time.sleep(0.25)
+            raise TimeoutError(f"Timed out waiting for {phase}")
+        except Exception as e:
+            try:
+                snapshot()
+            except Exception as metadata_error:
+                diagnostics["metadata_error"] = repr(metadata_error)
+            try:
+                history()
+            except Exception as status_error:
+                diagnostics["status_error"] = repr(status_error)
+            raise AssertionError(
+                f"{phase}: {e}\n{json.dumps(diagnostics, default=str, indent=2)}"
+            ) from e
+
+    def initially_committed() -> bool:
+        try:
+            _, snap = snapshot()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return False
+            raise
+        return snap is not None and snap["summary"].get("total-records") == "3"
+
+    wait_for("initial three committed records", initially_committed)
+
+    def inject() -> bool:
+        metadata, snap = snapshot()
+        assert snap is not None
+        assert snap["summary"]["total-records"] == "3"
+        injected_upper = upper(snap) + 1
+        # All input rows are committed and no DML runs until this CAS succeeds.
+        # Require the new upper to be strictly behind an observed input read
+        # timestamp. Thus [upper, upper+1) is empty, and later INSERT timestamps
+        # cannot be covered by the injected progress, even if clocks disagree.
+        if injected_upper >= read_timestamp():
+            return False
+        snap_id = snap["snapshot-id"]
+        dummy_id = max(s["snapshot-id"] for s in metadata["snapshots"]) + 1
+        dummy = {
+            "snapshot-id": dummy_id,
+            "parent-snapshot-id": snap_id,
+            "timestamp-ms": int(time.time() * 1000),
+            "sequence-number": metadata["last-sequence-number"] + 1,
+            "summary": {
+                **snap["summary"],
+                "mz-frontier": json.dumps([injected_upper]),
+            },
+            "manifest-list": snap["manifest-list"],
+            "schema-id": snap["schema-id"],
+        }
+        diagnostics["attempt"] = dummy
+        try:
+            request(
+                {
+                    "requirements": [
+                        {"type": "assert-table-uuid", "uuid": metadata["table-uuid"]},
+                        {
+                            "type": "assert-ref-snapshot-id",
+                            "ref": "main",
+                            "snapshot-id": snap_id,
+                        },
+                    ],
+                    "updates": [
+                        {"action": "add-snapshot", "snapshot": dummy},
+                        {
+                            "action": "set-snapshot-ref",
+                            "ref-name": "main",
+                            "type": "branch",
+                            "snapshot-id": dummy_id,
+                        },
+                    ],
+                }
+            )
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                diagnostics["conflicts"] += 1
+                return False
+            raise
+        # Only definite CAS conflicts are retried. An ambiguous HTTP outcome
+        # fails the test rather than risking a second successful injection.
+        diagnostics["injection"] = dummy
+        return True
+
+    wait_for("one acknowledged empty-prefix CAS", inject)
+    injected_upper = upper(diagnostics["injection"])
+    wait_for(
+        "health-driven reconstruction",
+        lambda: any(
+            status == "stalled"
+            and error is not None
+            and "requires reconstruction from committed upper" in error
+            for _, status, error in history()
+        ),
+    )
+
+    c.sql("INSERT INTO overlap_src VALUES (4, 'd'), (5, 'e'), (6, 'f')")
+    # A read after the INSERT bounds all its updates from above.
+    final_read = read_timestamp()
+    diagnostics["final_read"] = final_read
+
+    def caught_up() -> bool:
+        _, snap = snapshot()
+        assert snap is not None
+        return (
+            upper(snap) > max(injected_upper, final_read)
+            and snap["summary"].get("total-records") == "6"
+        )
+
+    wait_for("sink progress beyond injection and all inserted data", caught_up)
+    print(json.dumps(diagnostics, default=str, indent=2))
+    # Read the exact committed metadata, without S3 version guessing or a race
+    # with the sink's next idle commit.
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=s3-access-key={key}",
+        f"--var=metadata-location={diagnostics['table']['metadata-location']}",
+        f"--var=injected-upper={injected_upper}",
+        f"--var=final-read={final_read}",
+        "commit-overlap-verify.td",
     )
 
 
