@@ -733,7 +733,8 @@ impl Catalog {
             .flatten()
             .filter_map(|info| match info.to_object_id() {
                 ObjectId::Item(id) => {
-                    let entry = state.get_entry(&id);
+                    // Only pre-existing items can free names in the base namespace.
+                    let entry = state.try_get_entry(&id)?;
                     entry
                         .item()
                         .conn_id()
