@@ -27,18 +27,21 @@ Adapter and clusterd share the committed catalog path, and the native runtime
 endpoint and selector are in place. Replica enactment remains disabled pending
 protection and publication integration. The next integration is:
 
-1. Implement the design's Object-owned retention contract. Index retention must
-   not depend on a live replica incarnation. Reclaiming every client and replica
-   grant must still leave the object policy constraining compaction and recovery.
+1. Implement the design's Object-owned retention contract using durable logical-input
+   progress with or without replicas. Reclaiming every client and replica grant
+   must still leave the object-owned requirement constraining compaction and
+   recovery. Preserve zero-replica advancement from input progress rather than
+   freezing at the last execution upper.
    Derive requirements from catalog definitions and durable progress where possible,
-   without assuming a new record per index. Preserve zero-replica policy advancement
-   from input progress, using the existing paused-cluster behavior as the baseline.
-   This does not authorize changing the upper used for live indexes. Bring ambiguity
-   or disproportionate cost before choosing new durable progress state or weakening
-   the contract.
+   without assuming a new record per index or persisting its execution upper.
+   Bring ambiguity or disproportionate cost before adding durable state or
+   weakening the contract.
 2. Enact from the replica's committed state. Acquire incarnation-scoped import
-   protection for additional execution needs before choosing as_of and installing
-   written plans, then apply bounds and propose them from replica progress.
+   protection before choosing as_of and installing written plans, then apply
+   bounds and propose them from replica progress. Replica grants must cover both
+   execution needs and the running index's execution-relative retention window.
+   Faster input progress must not make that retained window unavailable to new
+   historical reads. Holding only unfinished execution is not sufficient.
    Finish bootstrap installation from selections too, without installer replanning
    or durable physical-import requirements. Keep the controller as sole installer
    until the replica path can replace it. Retire the superseded path at cutover.
@@ -56,7 +59,10 @@ Test retention with no query holds and no index replicas, including incarnation
 reclamation, total shutdown/recovery, and a historical read still covered by the
 policy. Verify input uppers and permitted compaction advancing while the index
 cluster has zero replicas, rather than pinning creation history indefinitely.
-Independent reader holds must still constrain that advancement.
+Also cover a live index lagging its inputs, with a new historical read inside its
+running retention window. Independent reader holds still constrain advancement.
+Compute logs and indexes over them retain replica-local history semantics, not
+shutdown persistence. This exception does not cover persisted catalog collections.
 Unavailable diagnostics may remain unknown. Do not let a diagnostic audit block
 the ownership change.
 
