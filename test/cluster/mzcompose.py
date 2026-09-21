@@ -8317,7 +8317,7 @@ def workflow_test_item_parsing_expression_cache(c: Composition) -> None:
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
-                "log_filter": "mz_adapter::catalog::state=debug,info",
+                "log_filter": "mz_catalog::catalog::state=debug,info",
             },
         ),
     ):
