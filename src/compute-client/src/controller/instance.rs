@@ -773,7 +773,8 @@ impl Instance {
         }
 
         let mut unhydrated = BTreeSet::new();
-        let mut lagging = BTreeSet::new();
+        let mut lagging_ticks = BTreeMap::new();
+        let mut awaiting_completion = BTreeSet::new();
         for (id, _collection) in self.collections_iter() {
             if id.is_transient() || exclude_collections.contains(&id) {
                 continue;
@@ -796,8 +797,11 @@ impl Instance {
                 // We collect all not-ready collections instead of breaking out
                 // early, so that the log below names every collection the caller
                 // is waiting on, and why.
-                CollectionReadiness::Lagging => {
-                    lagging.insert(id);
+                CollectionReadiness::Lagging { lag: Some(lag) } => {
+                    lagging_ticks.insert(id, lag);
+                }
+                CollectionReadiness::Lagging { lag: None } => {
+                    awaiting_completion.insert(id);
                 }
                 CollectionReadiness::Unhydrated => {
                     unhydrated.insert(id);
@@ -805,24 +809,24 @@ impl Instance {
             }
         }
 
-        if !unhydrated.is_empty() || !lagging.is_empty() {
+        let ready =
+            unhydrated.is_empty() && lagging_ticks.is_empty() && awaiting_completion.is_empty();
+        if !ready {
             // Callers poll this on the cluster controller's reconcile tick,
             // which tests turn down to milliseconds, so this is deliberately
-            // one line per call rather than one per collection. The two reasons
-            // are reported separately: "hydrated but still behind" is the state
-            // a cut-over must not fire in, and it is indistinguishable from
-            // "ready" in the logs otherwise.
+            // one line per call rather than one per collection.
             tracing::info!(
                 replicas = ?target_replicas,
                 reference = ?reference_replica_ids,
                 unhydrated = ?unhydrated,
-                lagging = ?lagging,
+                ?lagging_ticks,
+                ?awaiting_completion,
                 ?allowed_lag,
                 "collections are not ready on any target replica",
             );
         }
 
-        Ok(unhydrated.is_empty() && lagging.is_empty())
+        Ok(ready)
     }
 
     /// Clean up collection state that is not needed anymore.
@@ -3489,7 +3493,17 @@ where
             lag.as_ref().map(|(reference, lag)| (reference, *lag)),
         ) {
             CollectionReadiness::Ready => return CollectionReadiness::Ready,
-            CollectionReadiness::Lagging => result = CollectionReadiness::Lagging,
+            CollectionReadiness::Lagging { lag } => {
+                // Report the closest hydrated target, since any ready target
+                // suffices. A finite gap is closer than awaiting completion.
+                let lag = match result {
+                    CollectionReadiness::Lagging {
+                        lag: Some(previous),
+                    } => Some(previous.min(lag.unwrap_or(u64::MAX))),
+                    _ => lag,
+                };
+                result = CollectionReadiness::Lagging { lag };
+            }
             CollectionReadiness::Unhydrated => {}
         }
     }
@@ -3559,7 +3573,7 @@ mod tests {
         ];
         assert_eq!(
             classify(&replicas, &[target], &[reference], LAG),
-            CollectionReadiness::Lagging,
+            CollectionReadiness::Lagging { lag: Some(9_899) },
         );
         replicas[1].1.update_output_frontier(ac(9_940));
         assert_eq!(
@@ -3600,7 +3614,7 @@ mod tests {
         );
         assert_eq!(
             classify(&replicas, &[target], &[trailing, ahead], LAG),
-            CollectionReadiness::Lagging,
+            CollectionReadiness::Lagging { lag: Some(1_010) },
         );
     }
 
@@ -3625,7 +3639,7 @@ mod tests {
         );
         assert_eq!(
             classify(&replicas, &[unhydrated, lagging], &[reference], LAG),
-            CollectionReadiness::Lagging,
+            CollectionReadiness::Lagging { lag: Some(9_000) },
         );
     }
 
@@ -3649,6 +3663,25 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn lag_reports_the_closest_hydrated_target() {
+        let reference = ReplicaId::User(1);
+        let far = ReplicaId::User(2);
+        let close = ReplicaId::User(3);
+        let mut replicas = vec![
+            (reference, state(reference, 100, 10_000, 10_000)),
+            (far, state(far, 100, 1_000, 1_000)),
+            (close, state(close, 100, 9_000, 9_000)),
+        ];
+        for _ in 0..2 {
+            assert_eq!(
+                classify(&replicas, &[far, close], &[reference], LAG),
+                CollectionReadiness::Lagging { lag: Some(1_000) },
+            );
+            replicas.reverse();
+        }
+    }
+
+    #[mz_ore::test]
     fn completed_reference_requires_completed_target() {
         let reference = ReplicaId::User(1);
         let target = ReplicaId::User(2);
@@ -3659,7 +3692,7 @@ mod tests {
         replicas[0].1.update_output_frontier(Antichain::new());
         assert_eq!(
             classify(&replicas, &[target], &[reference], Some(Timestamp::new(0))),
-            CollectionReadiness::Lagging,
+            CollectionReadiness::Lagging { lag: None },
         );
         replicas[1].1.update_output_frontier(Antichain::new());
         assert_eq!(

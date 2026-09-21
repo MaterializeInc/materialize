@@ -101,7 +101,11 @@ pub enum CollectionReadiness {
     /// Hydrated and within the requested lag allowance.
     Ready,
     /// Hydrated, but behind the requested frontier.
-    Lagging,
+    Lagging {
+        /// The gap in timestamp ticks, or `None` when awaiting completion.
+        /// Ticks are milliseconds only on the epoch-milliseconds timeline.
+        lag: Option<u64>,
+    },
     /// Not yet hydrated.
     Unhydrated,
 }
@@ -123,7 +127,15 @@ impl CollectionReadiness {
         } else if lag_requirement
             .is_some_and(|(reference, lag)| !frontier_within_lag(frontier, reference, lag))
         {
-            Self::Lagging
+            let reference = lag_requirement.expect("lag requirement was checked").0;
+            let lag =
+                frontier
+                    .as_option()
+                    .zip(reference.as_option())
+                    .map(|(frontier, reference)| {
+                        u64::from(*reference).saturating_sub(u64::from(*frontier))
+                    });
+            Self::Lagging { lag }
         } else {
             Self::Ready
         }
