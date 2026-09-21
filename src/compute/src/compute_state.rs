@@ -1003,7 +1003,7 @@ impl<'a> ActiveComputeState<'a> {
 
     /// Drop the given collection.
     fn drop_collection(&mut self, id: GlobalId) {
-        let collection = self
+        let mut collection = self
             .compute_state
             .collections
             .remove(&id)
@@ -1016,6 +1016,9 @@ impl<'a> ActiveComputeState<'a> {
 
         // Importers and peeks retain the producer's scheduling guard as well as
         // its trace. Retire only when both exports and readers have released it.
+        // Capture hydration before retiring frontiers or releasing probes. Empty
+        // retirement frontiers are not evidence of completed snapshot computation.
+        let hydrated = collection.hydration_update();
         let index = *collection.dataflow_index;
         let retained = Rc::strong_count(&collection.dataflow_index) > 1;
         let defer_input = retained
@@ -1066,6 +1069,7 @@ impl<'a> ActiveComputeState<'a> {
                 input_frontier,
                 output_frontier,
                 read_frontier,
+                hydrated,
             };
             if frontiers.has_updates() {
                 self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
@@ -1252,6 +1256,7 @@ impl<'a> ActiveComputeState<'a> {
                 input_frontier: new_input_frontier,
                 output_frontier: new_output_frontier,
                 read_frontier: new_read_frontier,
+                hydrated: collection.hydration_update(),
             };
             if response.has_updates() {
                 responses.push((id, response));
@@ -2220,6 +2225,10 @@ impl ComputeState {
 pub struct CollectionState {
     /// Tracks the frontiers that have been reported to the controller.
     reported_frontiers: ReportedFrontiers,
+    /// Last hydration observation broadcast on the progress protocol.
+    reported_hydrated: Option<bool>,
+    /// Actual hydration is monotone even when reported frontiers are reset.
+    hydrated: bool,
     /// The index of the dataflow computing this collection.
     ///
     /// Shared by all exports and by query readers that still need the producer to run.
@@ -2285,6 +2294,8 @@ impl CollectionState {
 
         Self {
             reported_frontiers: ReportedFrontiers::new(),
+            reported_hydrated: None,
+            hydrated: false,
             dataflow_index,
             is_subscribe_or_copy,
             as_of,
@@ -2315,6 +2326,7 @@ impl CollectionState {
 
     /// Reset all reported frontiers to the given value.
     pub fn reset_reported_frontiers(&mut self, frontier: ReportedFrontier) {
+        self.reported_hydrated = None;
         self.reported_frontiers.read_frontier = frontier.clone();
         self.reported_frontiers.write_frontier = frontier.clone();
         self.reported_frontiers.input_frontier = frontier.clone();
@@ -2349,11 +2361,16 @@ impl CollectionState {
 
     /// Set the output frontier that has been reported to the controller.
     fn set_reported_output_frontier(&mut self, frontier: ReportedFrontier) {
-        let already_hydrated = self.hydrated();
-
+        if let ReportedFrontier::Reported(output) = &frontier {
+            self.observe_hydration(output);
+        }
         self.reported_frontiers.output_frontier = frontier;
+    }
 
-        if !already_hydrated && self.hydrated() {
+    /// Observe actual output progress, never synthetic retirement progress.
+    fn observe_hydration(&mut self, output: &Antichain<Timestamp>) {
+        if !self.hydrated && PartialOrder::less_than(&self.as_of, output) {
+            self.hydrated = true;
             if let Some(logging) = &mut self.logging {
                 logging.set_hydrated();
             }
@@ -2363,9 +2380,16 @@ impl CollectionState {
 
     /// Return whether this collection is hydrated.
     fn hydrated(&self) -> bool {
-        match &self.reported_frontiers.output_frontier {
-            ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
-            ReportedFrontier::NotReported { .. } => false,
+        self.hydrated
+    }
+
+    fn hydration_update(&mut self) -> Option<bool> {
+        let hydrated = self.hydrated();
+        if self.reported_hydrated == Some(hydrated) {
+            None
+        } else {
+            self.reported_hydrated = Some(hydrated);
+            Some(hydrated)
         }
     }
 

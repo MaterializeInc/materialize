@@ -685,6 +685,101 @@ async fn maintained_sink_write_frontiers_respect_installed_as_of() {
 }
 
 #[mz_ore::test(tokio::test)]
+async fn hydration_observes_output_not_shared_or_refresh_write_upper() {
+    use timely::dataflow::operators::{Input, Probe};
+
+    let frontier = |time| Antichain::from_elem(Timestamp::from(time));
+    for finish in [false, true] {
+        let mut h = Harness::new();
+        let probe = probe::Handle::new();
+        let index = h.worker.next_dataflow_index();
+        let mut input = h.worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, stream) = scope.new_input::<Vec<()>>();
+            stream.probe_with(&probe);
+            input
+        });
+        input.advance_to(Timestamp::from(10));
+        h.worker
+            .step_while(|| probe.less_than(&Timestamp::from(10)));
+        let mut collection = CollectionState::new(
+            Rc::new(index),
+            false,
+            frontier(10),
+            h.state.metrics.for_collection(CATALOG),
+        );
+        // A faster replica or REFRESH may put the shared write upper arbitrarily
+        // ahead while this replica's pre-refresh computation is still at as_of.
+        collection.sink_write_frontier = Some(Rc::new(RefCell::new(frontier(100))));
+        collection.compute_probe = Some(probe.clone());
+        collection.allow_writes();
+        assert!(collection.logging.is_none());
+        h.state.collections.insert(CATALOG, collection);
+        h.open(A);
+        let observations = |responses: Vec<(ComputeResponse, Uuid)>, client| {
+            responses
+                .into_iter()
+                .filter_map(|(response, nonce)| match response {
+                    ComputeResponse::Frontiers(id, f) if nonce == client && id == CATALOG => {
+                        Some(f)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let snapshot = observations(h.drain(), A);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].write_frontier, Some(frontier(100)));
+        assert_eq!(snapshot[0].output_frontier, Some(frontier(10)));
+        assert_eq!(snapshot[0].hydrated, Some(false));
+        for expected in [Some(false), None] {
+            ActiveComputeState {
+                timely_worker: &mut h.worker,
+                compute_state: &mut h.state,
+                response_tx: &mut h.sender,
+            }
+            .report_frontiers();
+            let updates: Vec<_> = observations(h.drain(), A)
+                .into_iter()
+                .filter_map(|f| f.hydrated)
+                .collect();
+            assert_eq!(updates, expected.into_iter().collect::<Vec<_>>());
+        }
+        if finish {
+            input.advance_to(Timestamp::from(11));
+            h.worker
+                .step_while(|| probe.less_than(&Timestamp::from(11)));
+        }
+        // A late join observes current output without waiting for the next
+        // periodic broadcast, and does not consume existing clients' updates.
+        h.open(B);
+        let snapshot = observations(h.drain(), B);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].hydrated, Some(finish));
+        ActiveComputeState {
+            timely_worker: &mut h.worker,
+            compute_state: &mut h.state,
+            response_tx: &mut h.sender,
+        }
+        .report_frontiers();
+        let updates: Vec<_> = observations(h.drain(), A)
+            .into_iter()
+            .filter_map(|f| f.hydrated)
+            .collect();
+        assert_eq!(updates, if finish { vec![true] } else { vec![] });
+        ActiveComputeState {
+            timely_worker: &mut h.worker,
+            compute_state: &mut h.state,
+            response_tx: &mut h.sender,
+        }
+        .drop_collection(CATALOG);
+        let retired = observations(h.drain(), A);
+        assert_eq!(retired.len(), 1);
+        assert_eq!(retired[0].output_frontier, Some(Antichain::new()));
+        assert_eq!(retired[0].hydrated, None, "retirement must not hydrate");
+    }
+}
+
+#[mz_ore::test(tokio::test)]
 async fn query_read_frontiers_snapshot_update_and_retirement() {
     for as_of in [Timestamp::MIN, Timestamp::from(8)] {
         let mut h = Harness::new();

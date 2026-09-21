@@ -280,12 +280,16 @@ impl PartitionedComputeState {
         let read_frontier = frontiers
             .read_frontier
             .and_then(|f| tracked.update_read_frontier(shard_id, &f));
+        let hydrated = frontiers
+            .hydrated
+            .and_then(|h| tracked.update_hydrated(shard_id, h));
 
         let frontiers = FrontiersResponse {
             write_frontier,
             input_frontier,
             output_frontier,
             read_frontier,
+            hydrated,
         };
         let result = frontiers
             .has_updates()
@@ -517,6 +521,8 @@ impl PartitionedState<ComputeCommand, ComputeResponse> for PartitionedComputeSta
 /// unknown partitions explicitly, because a readable timestamp must be readable on every part.
 #[derive(Debug)]
 struct TrackedFrontiers {
+    /// The reported hydration status and each partition's observation.
+    hydrated: (Option<bool>, Vec<Option<bool>>),
     /// The tracked write frontier.
     write_frontier: (MutableAntichain<Timestamp>, Vec<Antichain<Timestamp>>),
     /// The tracked input frontier.
@@ -547,6 +553,23 @@ impl TrackedFrontiers {
             input_frontier: frontier_entry.clone(),
             output_frontier: frontier_entry,
             read_frontier: (None, vec![None; parts]),
+            hydrated: (None, vec![None; parts]),
+        }
+    }
+
+    fn update_hydrated(&mut self, shard_id: usize, hydrated: bool) -> Option<bool> {
+        let (reported, parts) = &mut self.hydrated;
+        let part = &mut parts[shard_id];
+        *part = Some(part.unwrap_or(false) || hydrated);
+        let mut all_hydrated = true;
+        for part in parts {
+            all_hydrated &= (*part)?;
+        }
+        if *reported == Some(all_hydrated) {
+            None
+        } else {
+            *reported = Some(all_hydrated);
+            Some(all_hydrated)
         }
     }
 

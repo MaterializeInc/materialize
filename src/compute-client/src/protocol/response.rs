@@ -197,6 +197,13 @@ pub struct FrontiersResponse {
     /// and retired indexes. Write completion alone does not make a trace unreadable.
     /// Across partitions this is the join, and remains unknown until every partition reports.
     pub read_frontier: Option<Antichain<Timestamp>>,
+    /// Whether actual output progress has passed the collection's installation `as_of`.
+    ///
+    /// Independent of logging, write-frontier jumps, and read compaction. `None` means no
+    /// update, and the status is unknown until the first `Some`. Once true, it stays true
+    /// for this installation. Retirement does not imply hydration.
+    /// Across partitions this is unknown until all partitions report, then their logical AND.
+    pub hydrated: Option<bool>,
 }
 
 impl FrontiersResponse {
@@ -206,6 +213,7 @@ impl FrontiersResponse {
             || self.input_frontier.is_some()
             || self.output_frontier.is_some()
             || self.read_frontier.is_some()
+            || self.hydrated.is_some()
     }
 }
 

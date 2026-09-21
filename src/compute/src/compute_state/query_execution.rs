@@ -374,7 +374,7 @@ impl ComputeState {
 
     fn report_query_catalog_frontiers(&mut self, nonce: Uuid, sender: &ResponseSender) {
         let mut frontiers = BTreeMap::new();
-        for (&id, collection) in &self.collections {
+        for (&id, collection) in &mut self.collections {
             if !(id.is_user() || id.is_system()) || collection.is_subscribe_or_copy {
                 continue;
             }
@@ -402,9 +402,11 @@ impl ComputeState {
             // Logical write progress starts at installation, even if the shared Persist
             // upper is behind. Output progress above still uses the raw upper.
             write.join_assign(&collection.as_of);
+            collection.observe_hydration(&output);
             frontiers.insert(
                 id,
                 FrontiersResponse {
+                    hydrated: Some(collection.hydrated()),
                     write_frontier: Some(write),
                     input_frontier: Some(input),
                     output_frontier: Some(output),

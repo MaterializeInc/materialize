@@ -496,6 +496,9 @@ impl Actor {
                 if update.read_frontier.is_some() {
                     cached.read_frontier = update.read_frontier;
                 }
+                if update.hydrated.is_some() {
+                    cached.hydrated = update.hydrated;
+                }
                 self.changed.send_replace(());
             }
             ComputeResponse::PeekResponse(uuid, mut response, context) => {
@@ -720,6 +723,7 @@ mod tests {
             input_frontier: Some(Antichain::from_elem(Timestamp::from(3))),
             output_frontier: None,
             read_frontier: Some(Antichain::from_elem(Timestamp::from(2))),
+            hydrated: Some(false),
         };
         peer.respond(ComputeResponse::Frontiers(id, initial.clone()));
         bounded(changed.changed())
