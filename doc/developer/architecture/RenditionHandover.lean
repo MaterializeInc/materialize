@@ -6,6 +6,9 @@ A model of the rendition handover protocol specified in
 claim: a collection transitioning through renditions is still perceived by every reader as one
 definite collection advancing in time.
 
+`doc/developer/architecture/README.md` places this protocol as the fallback for the case where no
+fence is available, and records the three obligations found here in prose.
+
 To run it, clone `https://github.com/verse-lab/veil`, place this file at
 `Examples/Materialize/RenditionHandover.lean`, and run
 `lake build Examples.Materialize.RenditionHandover`. No Materialize build or CI job checks this
@@ -13,15 +16,26 @@ file, so it can rot against the protocol it models.
 
 What is checked, in increasing difficulty:
 
-* `gc_safety`, that a rendition is never deleted while a reader can still reach it.
+* `gc_safety`, that a rendition is never deleted while a reader still holds it.
+* `gc_respects_caps`, that a rendition is never deleted while any reader's capability still covers
+  a time at which that rendition is active.
 * `handover_agreement`, that independent readers agree wherever both have produced output.
 * `frontier_soundness`, that a reader's output at a time is the contents of the rendition
   actually active at that time.
 
+A reader acts on its own polled copy of the metadata, `obs_active` and `obs_frontier`, refreshed
+only by `reader_poll`. Nothing forces a poll, so the view can be arbitrarily stale, which is what a
+real reader reading a collection asynchronously has. Modeling the reader as testing the live
+metadata would assume away the first obligation below.
+
 What is abstracted away:
 
 * A collection is an opaque accumulated `value` per (rendition, time). No update sets, no
-  consolidation, no compaction internals, no timely.
+  consolidation, no timely.
+* Renditions have no `since` or `upper` of their own and no shards, so every rendition is assumed
+  readable at every time. The consequence is that this model never checks the obligation that
+  makes handover implementable: that the incoming rendition has been backfilled to cover the
+  handover time before that handover becomes visible.
 * Times are totally ordered. `architecture-storage.md` says to replace max and min with join and
   meet for partially ordered times, so whether the protocol survives antichains is not answered
   here.
@@ -31,9 +45,11 @@ What is abstracted away:
 
 Three obligations the protocol relies on that `architecture-storage.md` does not state:
 
-* A reader observes the metadata over every interval it crosses. The frontier keeps what it
-  observed true, rather than excusing it from observing. A reader advancing on the frontier alone
-  produces the wrong contents once a handover falls in the interval it skipped.
+* A reader may only advance across an interval its own observation of the metadata covers. A seal
+  advance proves no further updates will appear below it, not that none exist there, so sealed is
+  not empty. `obs_sealed_prefix` below is why acting on a stale observation is nonetheless safe:
+  metadata below an observed frontier is frozen, so a stale read of a sealed prefix equals a live
+  one.
 * The metadata collection is append-only in time order, so appending a handover advances its
   frontier past that handover's time. `persist` supplies this through `upper`. Without it, a
   handover appended at an earlier time overwrites a later one's suffix and leaves two renditions
@@ -59,6 +75,13 @@ immutable function contents : rendition -> time -> value
 relation active : rendition -> time -> Bool
 -- The metadata collection is sealed through here.
 individual meta_frontier : time
+-- The collection's read frontier. No reader may begin below it, and it never passes a held
+-- capability, which is what makes deleting a rendition below it safe.
+individual coll_since : time
+
+-- Each reader's own, possibly stale, copy of the metadata and of its frontier.
+relation obs_active : reader -> rendition -> time -> Bool
+function obs_frontier : reader -> time
 
 relation started : reader -> Bool
 function cursor : reader -> time
@@ -84,6 +107,9 @@ assumption ∀ (x : time), le zero x
 after_init {
   active R T := decide $ R = r0;
   meta_frontier := zero;
+  coll_since := zero;
+  obs_active RDR R T := decide $ R = r0;
+  obs_frontier RDR := zero;
   started R := false;
   produced R T := false;
   deleted R := false
@@ -99,6 +125,7 @@ action insert_handover (r1 : rendition) (r2 : rendition) (t : time) {
   require active r1 t;
   require r1 ≠ r2;
   require ¬ le t meta_frontier;
+  require ¬ deleted r2;
   active r1 T := active r1 T && !(le t T);
   active r2 T := active r2 T || le t T;
   -- Appending at `t` advances the metadata collection's upper, which is what stops a later
@@ -111,10 +138,26 @@ action advance_meta_frontier (t : time) {
   meta_frontier := t
 }
 
+-- Advance the collection's read frontier, past no time a reader still holds.
+action advance_since (t : time) {
+  require le coll_since t;
+  require le t meta_frontier;
+  require ∀ (rdr : reader), started rdr → le t (read_cap rdr);
+  coll_since := t
+}
+
+-- Re-read the metadata collection. Nothing forces this, so between polls a reader's view of the
+-- metadata can be arbitrarily stale.
+action reader_poll (rdr : reader) {
+  obs_active rdr R T := active R T;
+  obs_frontier rdr := meta_frontier
+}
+
 action reader_start (rdr : reader) (r : rendition) (t : time) {
   require ¬ started rdr;
-  require le t meta_frontier;
-  require active r t;
+  require le coll_since t;
+  require le t (obs_frontier rdr);
+  require obs_active rdr r t;
   require ¬ deleted r;
   started rdr := true;
   cursor rdr := t;
@@ -124,15 +167,15 @@ action reader_start (rdr : reader) (r : rendition) (t : time) {
   output rdr t := contents r t
 }
 
--- Advance across an interval the metadata shows no rendition change over.
+-- Advance across an interval the reader's own observation shows no rendition change over.
 --
--- The final `require` is the reader's observation of the metadata. Dropping it, so that the
--- reader advances on the frontier alone, is what breaks `frontier_soundness`.
+-- The final `require` is that observation. Dropping it, so that the reader advances on the
+-- frontier alone, is what breaks `frontier_soundness`.
 action reader_advance (rdr : reader) (t : time) {
   require started rdr;
   require le (cursor rdr) t;
-  require le t meta_frontier;
-  require ∀ (s : time), le (cursor rdr) s ∧ le s t → active (cur_rend rdr) s;
+  require le t (obs_frontier rdr);
+  require ∀ (s : time), le (cursor rdr) s ∧ le s t → obs_active rdr (cur_rend rdr) s;
   cursor rdr := t;
   produced rdr t := true;
   output rdr t := contents (cur_rend rdr) t
@@ -146,9 +189,9 @@ action reader_advance (rdr : reader) (t : time) {
 action reader_handover (rdr : reader) (r2 : rendition) (t : time) {
   require started rdr;
   require le (cursor rdr) t;
-  require le t meta_frontier;
-  require active r2 t;
-  require ¬ active (cur_rend rdr) t;
+  require le t (obs_frontier rdr);
+  require obs_active rdr r2 t;
+  require ¬ obs_active rdr (cur_rend rdr) t;
   require ¬ deleted r2;
   cur_rend rdr := r2;
   cursor rdr := t;
@@ -163,24 +206,27 @@ action downgrade_cap (rdr : reader) (t : time) {
   read_cap rdr := t
 }
 
--- Delete a rendition no reader can still reach, given the capabilities they hold.
+-- Delete a rendition the collection's read frontier has passed.
+--
+-- The guard is stated against `coll_since` rather than against started readers directly, because
+-- `since_below_caps` ties the two together. Stating it against started readers alone is vacuous
+-- when none have started, which permits deleting the only active rendition.
 action gc_rendition (r : rendition) {
-  require ∀ (rdr : reader) (t : time),
-    started rdr ∧ le (read_cap rdr) t → ¬ active r t;
-  require ∀ (rdr : reader), started rdr → cur_rend rdr ≠ r;
+  require ∀ (t : time), le coll_since t → ¬ active r t;
   deleted r := true
 }
 
--- A rendition is never deleted while a reader still needs it.
+-- A rendition is never deleted while a reader still holds it.
 safety [gc_safety] started R → ¬ deleted (cur_rend R)
+
+-- Nor while any reader's capability still covers a time at which it is active.
+safety [gc_respects_caps]
+  started R ∧ le (read_cap R) T ∧ active RD T → ¬ deleted RD
 
 -- The central definiteness claim: independent readers agree wherever both have produced.
 safety [handover_agreement] produced R1 T ∧ produced R2 T → output R1 T = output R2 T
 
 -- A reader's output at a time is the contents of the rendition actually active then.
---
--- This is the writer-side obligation seen from the reader. Violate the frontier discipline in
--- `insert_handover` and this is what breaks, silently.
 safety [frontier_soundness] produced R T ∧ active RD T → output R T = contents RD T
 
 -- Supporting: the metadata names exactly one active rendition per time.
@@ -199,6 +245,20 @@ invariant [produced_below_cursor] produced R T → started R ∧ le T (cursor R)
 -- Supporting: a reader's capability never passes its cursor.
 invariant [cap_below_cursor] started R → le (read_cap R) (cursor R)
 
+-- Supporting: the read frontier never passes a held capability. This is what makes the
+-- `coll_since` guard on `gc_rendition` equivalent to asking every reader.
+invariant [since_below_caps] started R → le coll_since (read_cap R)
+
+-- Supporting: a reader's current rendition is the one active where the reader is standing. This
+-- is what connects `gc_rendition`'s guard, which is stated over times, to `gc_safety`, which is
+-- stated over readers.
+invariant [rend_active_at_cursor] started R → active (cur_rend R) (cursor R)
+
+-- Supporting: a deleted rendition is active nowhere the read frontier has not passed. The guard
+-- on `gc_rendition` establishes this, and nothing restores a deleted rendition, because
+-- `insert_handover` refuses to hand over to one.
+invariant [deleted_below_since] deleted RD ∧ le coll_since T → ¬ active RD T
+
 -- Supporting: a reader never reads beyond the metadata frontier. This is the reader-side half of
 -- the frontier discipline, and it is what makes the writer's obligation in `insert_handover`
 -- sufficient. Without it a reader can produce output at a time a later handover still claims.
@@ -206,8 +266,32 @@ invariant [cursor_below_frontier] started R → le (cursor R) meta_frontier
 
 invariant [produced_below_frontier] produced R T → le T meta_frontier
 
+-- Supporting: a stale view never claims to be sealed further than the real metadata.
+invariant [obs_frontier_below_frontier]
+  ∀ (rdr : reader), le (obs_frontier rdr) meta_frontier
+
+-- Supporting: below its own observed frontier, a stale view agrees with the live metadata. This is
+-- the sealed-prefix property that makes acting on a stale observation safe, and it holds only
+-- because a handover is never appended below the frontier.
+invariant [obs_sealed_prefix]
+  le T (obs_frontier R) → (obs_active R RD T ↔ active RD T)
+
+invariant [cursor_below_obs_frontier] started R → le (cursor R) (obs_frontier R)
+
 #time #gen_spec
 
 #check_invariants
+
+-- The interesting behavior is reachable: a reader crosses a handover using only its own polled
+-- view of the metadata.
+sat trace [stale_reader_crosses_handover] {
+  advance_meta_frontier
+  reader_poll
+  reader_start
+  reader_advance
+  insert_handover
+  reader_poll
+  reader_handover
+}
 
 end RenditionHandover
