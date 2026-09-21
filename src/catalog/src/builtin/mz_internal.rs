@@ -6837,7 +6837,7 @@ WHERE
         -- name, both return false. We use mz_session_role_memberships() instead
         -- because pg_has_role internally calls mz_role_oid_memberships(), which
         -- loads the full system role graph and is blocked in restricted sessions.
-        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
+        ELSE grantee = ANY(mz_catalog.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -6904,7 +6904,7 @@ WHERE
         -- name, both return false. We use mz_session_role_memberships() instead
         -- because pg_has_role internally calls mz_role_oid_memberships(), which
         -- loads the full system role graph and is blocked in restricted sessions.
-        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
+        ELSE grantee = ANY(mz_catalog.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -6971,7 +6971,7 @@ WHERE
         -- name, both return false. We use mz_session_role_memberships() instead
         -- because pg_has_role internally calls mz_role_oid_memberships(), which
         -- loads the full system role graph and is blocked in restricted sessions.
-        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
+        ELSE grantee = ANY(mz_catalog.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -7050,7 +7050,7 @@ WHERE
         -- name, both return false. We use mz_session_role_memberships() instead
         -- because pg_has_role internally calls mz_role_oid_memberships(), which
         -- loads the full system role graph and is blocked in restricted sessions.
-        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
+        ELSE grantee = ANY(mz_catalog.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -7146,7 +7146,7 @@ WHERE
         -- name, both return false. We use mz_session_role_memberships() instead
         -- because pg_has_role internally calls mz_role_oid_memberships(), which
         -- loads the full system role graph and is blocked in restricted sessions.
-        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
+        ELSE grantee = ANY(mz_catalog.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -7236,7 +7236,7 @@ WHERE
         -- name, both return false. We use mz_session_role_memberships() instead
         -- because pg_has_role internally calls mz_role_oid_memberships(), which
         -- loads the full system role graph and is blocked in restricted sessions.
-        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
+        ELSE grantee = ANY(mz_catalog.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -7347,7 +7347,7 @@ WHERE
         -- name, both return false. We use mz_session_role_memberships() instead
         -- because pg_has_role internally calls mz_role_oid_memberships(), which
         -- loads the full system role graph and is blocked in restricted sessions.
-        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
+        ELSE grantee = ANY(mz_catalog.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
