@@ -12,6 +12,8 @@
 # The topology is baked in at replica provisioning, so the parameter must be
 # set before the cluster is created.
 
+$ set-arg-default default-replica-size=scale=1,workers=1
+
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unified_cluster = true
 
