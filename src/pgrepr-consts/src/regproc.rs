@@ -686,6 +686,8 @@ pub const NAMES: &[(u32, &str)] = &[
     (17114, "mz_aws_external_id_prefix"),
     (17115, "mz_aws_connection_role_arn"),
     (17125, "mz_internal.parse_catalog_item_references"),
+    (17127, "mz_unsafe.mz_avg_promotion"),
+    (17128, "mz_unsafe.mz_avg_promotion_internal_v1"),
     // END GENERATED
 ];
 
