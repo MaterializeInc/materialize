@@ -163,16 +163,17 @@ pub struct FrontiersResponse {
     /// The collection's new write frontier, if any.
     ///
     /// Upon receiving an updated `write_frontier`, the controller may assume that the contents of the
-    /// collection are sealed for all times less than that frontier. Once it has reported the
-    /// `write_frontier` as the empty frontier, the replica must no longer change the contents of the
-    /// collection.
+    /// collection are sealed for all times less than that frontier. After an empty frontier,
+    /// the contents available through this export must no longer change. Retiring an export
+    /// does not stop a producer retained by existing importers.
     pub write_frontier: Option<Antichain<Timestamp>>,
     /// The collection's new input frontier, if any.
     ///
     /// Upon receiving an updated `input_frontier`, the controller may assume that the replica has
     /// finished reading from the collection’s inputs up to that frontier. Once it has reported the
     /// `input_frontier` as the empty frontier, the replica must no longer read from the
-    /// collection's inputs.
+    /// collection's inputs. Dropping an export does not complete these reads if its producer
+    /// remains alive for importers. Input reports may therefore outlive export retirement.
     pub input_frontier: Option<Antichain<Timestamp>>,
     /// The collection's new output frontier, if any.
     ///
@@ -196,6 +197,13 @@ pub struct FrontiersResponse {
     /// and retired indexes. Write completion alone does not make a trace unreadable.
     /// Across partitions this is the join, and remains unknown until every partition reports.
     pub read_frontier: Option<Antichain<Timestamp>>,
+    /// Whether actual output progress has passed the collection's installation `as_of`.
+    ///
+    /// Independent of logging, write-frontier jumps, and read compaction. `None` means no
+    /// update, and the status is unknown until the first `Some`. Once true, it stays true
+    /// for this installation. Retirement does not imply hydration.
+    /// Across partitions this is unknown until all partitions report, then their logical AND.
+    pub hydrated: Option<bool>,
 }
 
 impl FrontiersResponse {
@@ -205,6 +213,7 @@ impl FrontiersResponse {
             || self.input_frontier.is_some()
             || self.output_frontier.is_some()
             || self.read_frontier.is_some()
+            || self.hydrated.is_some()
     }
 }
 

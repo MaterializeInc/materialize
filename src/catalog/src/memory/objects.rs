@@ -1465,6 +1465,23 @@ pub struct MaterializedView {
 }
 
 impl MaterializedView {
+    /// Applies committed visibility and finite-refresh bounds without choosing
+    /// the installation `as_of`.
+    pub fn apply_execution_bounds(&self, dataflow: &mut DataflowDescription<ComputePlan>) {
+        use differential_dataflow::lattice::Lattice;
+        if let Some(initial_as_of) = &self.initial_as_of {
+            dataflow.set_initial_as_of(initial_as_of.clone());
+        }
+        if let Some(until) = self
+            .refresh_schedule
+            .as_ref()
+            .and_then(|schedule| schedule.last_refresh())
+            .and_then(|refresh| refresh.try_step_forward())
+        {
+            dataflow.until.meet_assign(&Antichain::from_elem(until));
+        }
+    }
+
     /// Returns all [`GlobalId`]s that this [`MaterializedView`] can be referenced by.
     pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.collections.values().copied()

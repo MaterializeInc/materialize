@@ -10,29 +10,17 @@
 use std::time::Duration;
 
 use mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT;
-use mz_compute_client::protocol::command::ComputeParameters;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_types::parameters::{
     PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters,
 };
-use mz_tracing::params::TracingParameters;
 
 use mz_timestamp_oracle::postgres_oracle::TimestampOracleParameters;
 
-/// Return the current compute configuration, derived from the system configuration.
-pub fn compute_config(config: &SystemVars) -> ComputeParameters {
-    ComputeParameters {
-        workload_class: None,
-        max_result_size: Some(config.max_result_size()),
-        tracing: tracing_config(config),
-        grpc_client: grpc_client_config(config),
-        dyncfg_updates: config.dyncfg_updates(),
-    }
-}
+pub use mz_catalog::compute_config::{compute_config, grpc_client_config, tracing_config};
 
 /// Return the current storage configuration, derived from the system configuration.
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
@@ -148,16 +136,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
     }
 }
 
-pub fn tracing_config(config: &SystemVars) -> TracingParameters {
-    TracingParameters {
-        log_filter: Some(config.logging_filter()),
-        opentelemetry_filter: Some(config.opentelemetry_filter()),
-        log_filter_defaults: config.logging_filter_defaults(),
-        opentelemetry_filter_defaults: config.opentelemetry_filter_defaults(),
-        sentry_filters: config.sentry_filters(),
-    }
-}
-
 pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
     let ttl_secs = config.webhooks_secrets_caching_ttl_secs();
     mz_secrets::CachingPolicy {
@@ -183,14 +161,6 @@ pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters
         pg_connection_pool_keepalives_interval: Some(config.crdb_keepalives_interval()),
         pg_connection_pool_keepalives_retries: Some(config.crdb_keepalives_retries()),
         pg_statement_timeout: Some(PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.get(config.dyncfgs())),
-    }
-}
-
-fn grpc_client_config(config: &SystemVars) -> GrpcClientParameters {
-    GrpcClientParameters {
-        connect_timeout: Some(config.grpc_connect_timeout()),
-        http2_keep_alive_interval: Some(config.grpc_client_http2_keep_alive_interval()),
-        http2_keep_alive_timeout: Some(config.grpc_client_http2_keep_alive_timeout()),
     }
 }
 

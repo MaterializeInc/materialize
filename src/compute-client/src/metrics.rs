@@ -30,6 +30,7 @@ use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{ComputeResponse, PeekResponse};
+use crate::sequential_hydration::SequentialHydration;
 
 pub(crate) type Counter = DeleteOnDropCounter<AtomicF64, Vec<String>>;
 pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
@@ -145,13 +146,7 @@ impl ComputeControllerMetrics {
                 help: "The number of receives on the compute response queue.",
                 var_labels: ["instance_id"],
             )),
-            hydration_queue_size: metrics_registry.register(metric!(
-                name: "mz_compute_controller_hydration_queue_size",
-                help: "The size of the compute hydration queue.",
-                var_labels: ["instance_id", "replica_id"],
-                visibility: MetricVisibility::Public,
-                tags: [MetricTag::Compute],
-            )),
+            hydration_queue_size: SequentialHydration::register_queue_metric(metrics_registry),
             history_command_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_command_count",
                 help: "The number of commands in the controller's command history.",

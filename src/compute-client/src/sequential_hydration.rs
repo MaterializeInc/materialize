@@ -25,18 +25,12 @@
 //! implementation. If the assumption ever ceases to hold, we will need to adjust the code in this
 //! module.
 //!
-//! Sequential hydration is enforced by a `SequentialHydration` interceptor that sits between the
-//! controller and the `PartitionedState` client that splits commands across replica processes.
-//! This location is important:
-//!
-//!  * It needs to be behind the controller since hydration is a per-replica mechanism. Different
-//!    replicas can progress through hydration at different paces.
-//!  * It needs to be before the `PartitionedState` client because all replica workers must see
-//!    `Schedule` commands in the same order. Otherwise we risk getting stuck when different
-//!    workers hydrate different dataflows and wait on each other for progress in these dataflows.
-//!  * It also needs to be before the `PartitionedState` client because it needs to be able to
-//!    observe all compute commands. Clients behind `PartitionedState` are not guaranteed to do so,
-//!    since commands are only forwarded to the first process.
+//! Use one `SequentialHydration` interceptor per replica incarnation, before partitioning commands
+//! across processes or workers. Different replicas can progress through hydration at different
+//! paces. The interceptor must observe every command and the replica's aggregated responses. All
+//! workers must see the returned commands in the same order, or they risk hydrating different
+//! dataflows and waiting on each other for progress. Both the controller's `PartitionedState` client
+//! and a native replica's `ReplicaCompute` worker partitioning belong after this interceptor.
 //!
 //! `SequentialHydration` is a synchronous interceptor: the replica task feeds it every command it
 //! is about to send and every response it receives, and the interceptor returns the commands that
@@ -50,13 +44,15 @@ use mz_compute_types::dyncfgs::HYDRATION_CONCURRENCY;
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::raw::UIntGaugeVec;
+use mz_ore::metrics::{DeleteOnDropGauge, MetricTag, MetricVisibility, MetricsRegistry};
 use mz_ore::soft_assert_eq_or_log;
 use mz_repr::{GlobalId, Timestamp};
+use prometheus::core::AtomicU64;
 use timely::PartialOrder;
 use timely::progress::Antichain;
 use tracing::debug;
 
-use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{ComputeResponse, FrontiersResponse};
 
@@ -72,13 +68,17 @@ type Token = Arc<()>;
 /// hydration concurrency.
 ///
 /// Both methods take the replica's effective configuration, which the task owns and keeps current.
-/// Reading [`HYDRATION_CONCURRENCY`] from there rather than from the controller's environment-wide
-/// set is what makes its `Replica` scope effective, given that the config is enforced here and
-/// never read on the replica itself.
+/// Apply `CreateInstance`'s initial configuration and `UpdateConfiguration`'s dynamic updates to
+/// that set before passing the command to [`Self::absorb_command`]. Reading
+/// [`HYDRATION_CONCURRENCY`] from this set makes replica-scoped limits effective.
+///
+/// Send each returned batch in order before feeding the next command or response. Returned commands
+/// go directly to the replica, not back through this interceptor. Responses are only observed and
+/// must still be handled by the caller. Recreate the interceptor when starting a new incarnation.
 #[derive(Debug)]
-pub(super) struct SequentialHydration {
-    /// Tracked metrics.
-    metrics: ReplicaMetrics,
+pub struct SequentialHydration {
+    /// Gauge tracking the size of the hydration queue.
+    hydration_queue_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// Tracked collections.
     ///
     /// Entries are inserted in response to observed `CreateDataflow` commands.
@@ -95,10 +95,25 @@ pub(super) struct SequentialHydration {
 }
 
 impl SequentialHydration {
+    /// Registers the queue metric once per runtime registry. Both lifecycle
+    /// owners use the same descriptor and replica labels.
+    pub fn register_queue_metric(registry: &MetricsRegistry) -> UIntGaugeVec {
+        registry.register(mz_ore::metric! {
+            name: "mz_compute_controller_hydration_queue_size",
+            help: "The size of the compute hydration queue.",
+            var_labels: ["instance_id", "replica_id"],
+            visibility: MetricVisibility::Public,
+            tags: [MetricTag::Compute],
+        })
+    }
+
     /// Create a new `SequentialHydration` interceptor.
-    pub(super) fn new(metrics: ReplicaMetrics) -> Self {
+    ///
+    /// The caller supplies a native queue-size gauge labeled for this replica. Clones share its
+    /// registration, which is removed when the last handle is dropped.
+    pub fn new(hydration_queue_size: DeleteOnDropGauge<AtomicU64, Vec<String>>) -> Self {
         Self {
-            metrics,
+            hydration_queue_size,
             collections: Default::default(),
             hydration_queue: Default::default(),
             hydration_token: Default::default(),
@@ -113,7 +128,7 @@ impl SequentialHydration {
     /// Absorb a command the task intends to send, returning the commands it should actually send.
     ///
     /// `dyncfg` is the replica's effective configuration, as maintained by the task.
-    pub(super) fn absorb_command(
+    pub fn absorb_command(
         &mut self,
         cmd: ComputeCommand,
         dyncfg: &ConfigSet,
@@ -164,7 +179,7 @@ impl SequentialHydration {
     /// Observe a response the task received, returning the commands it should send in reaction.
     ///
     /// `dyncfg` is the replica's effective configuration, as maintained by the task.
-    pub(super) fn observe_response(
+    pub fn observe_response(
         &mut self,
         resp: &ComputeResponse,
         dyncfg: &ConfigSet,
@@ -240,7 +255,7 @@ impl SequentialHydration {
         }
 
         let queue_size = u64::cast_from(self.hydration_queue.len());
-        self.metrics.inner.hydration_queue_size.set(queue_size);
+        self.hydration_queue_size.set(queue_size);
 
         commands
     }
@@ -302,12 +317,15 @@ mod tests {
 
     use super::*;
 
-    fn metrics() -> ReplicaMetrics {
+    fn metrics() -> DeleteOnDropGauge<AtomicU64, Vec<String>> {
         let registry = MetricsRegistry::new();
         let shared = ControllerMetrics::new(&registry);
         ComputeControllerMetrics::new(&registry, shared)
             .for_instance(ComputeInstanceId::User(1))
             .for_replica(mz_cluster_client::ReplicaId::User(1))
+            .inner
+            .hydration_queue_size
+            .clone()
     }
 
     /// A `CreateDataflow` command for a non-transient dataflow exporting `id`.

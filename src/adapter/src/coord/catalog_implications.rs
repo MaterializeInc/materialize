@@ -387,6 +387,9 @@ impl Coordinator {
             .into_iter()
             .partition(|(id, _)| storage_metadata.collection_metadata.contains_key(id));
         for (id, bound) in compute_bounds {
+            if self.controller.replica_owned_compute() {
+                continue;
+            }
             self.controller
                 .compute
                 .apply_compaction_bound(id, bound)
@@ -997,7 +1000,28 @@ impl Coordinator {
         }
         // Storage exists before compute imports it. Within compute, install indexes
         // immediately after their input so downstream plans can use same-batch indexes.
-        if self.catalog().state().catalog_read_protection_enabled() {
+        if self.controller.replica_owned_compute() {
+            // Serving timelines are adapter-owned. Installation, execution holds,
+            // and compaction policies are applied by each replica's follower.
+            let indexes: Vec<_> = compute_items_to_create
+                .iter()
+                .filter_map(|id| {
+                    let entry = self.catalog().get_entry(id);
+                    match entry.item() {
+                        CatalogItem::Index(index) => Some((
+                            index.global_id(),
+                            index.cluster_id,
+                            index.custom_logical_compaction_window.unwrap_or_default(),
+                        )),
+                        _ => None,
+                    }
+                })
+                .collect();
+            for (id, cluster, window) in indexes {
+                self.initialize_compute_read_policies(vec![id], cluster, window)
+                    .await;
+            }
+        } else if self.catalog().state().catalog_read_protection_enabled() {
             if !compute_items_to_create.is_empty() {
                 self.pending_compute_installation_retry = None;
             }
@@ -1854,7 +1878,7 @@ impl Coordinator {
             .set_physical_plan(global_id, physical_plan.clone());
         let notices = self.persist_dataflow_metainfo(dataflow_metainfos, global_id);
         physical_plan.set_as_of(as_of);
-        Self::set_materialized_view_dataflow_bounds(&mut physical_plan, mv);
+        mv.apply_execution_bounds(&mut physical_plan);
         self.ship_dataflow_and_notice_builtin_table_updates(
             physical_plan,
             mv.cluster_id,

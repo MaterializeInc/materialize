@@ -17,6 +17,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::sinks::ComputeSinkConnection;
 use mz_controller_types::ReplicaId;
+use mz_ore::task::AbortOnDropHandle;
 use timely::progress::Antichain;
 use tracing::Instrument;
 
@@ -39,6 +40,47 @@ impl Coordinator {
         creation_holds: ReadHolds,
     ) -> Result<(), AdapterError> {
         let invalid = |message: &str| AdapterError::Internal(message.into());
+        if dataflow.sink_exports.len() != 1 || !dataflow.index_exports.is_empty() {
+            return Err(invalid("query sink requires exactly one sink export"));
+        }
+        let (&id, desc) = dataflow.sink_exports.iter().next().expect("one sink");
+        let subscribe = match &desc.connection {
+            ComputeSinkConnection::Subscribe(_) => true,
+            ComputeSinkConnection::CopyToS3Oneshot(_) => false,
+            _ => return Err(invalid("query sink requires SUBSCRIBE or COPY TO")),
+        };
+        let sink = self
+            .active_compute_sinks
+            .get_mut(&id)
+            .ok_or_else(|| invalid("query sink must be registered before execution"))?;
+        if sink.cluster_id() != cluster
+            || matches!(sink, ActiveComputeSink::Subscribe(_)) != subscribe
+        {
+            return Err(invalid("query sink does not match registered sink"));
+        }
+        if sink.query_execution_mut().is_some() {
+            return Err(invalid("query sink execution already started"));
+        }
+        let execution = self.spawn_query_sink(dataflow, cluster, target, creation_holds)?;
+        *self
+            .active_compute_sinks
+            .get_mut(&id)
+            .expect("validated sink")
+            .query_execution_mut() = Some(execution);
+        Ok(())
+    }
+
+    /// Spawns a transient sink without waiting for runtime admission. The caller
+    /// must retain the returned handle, which owns creation holds through ACK and
+    /// drops the query's exports when aborted.
+    pub(super) fn spawn_query_sink(
+        &self,
+        dataflow: DataflowDescription<LirRelationExpr>,
+        cluster: ComputeInstanceId,
+        target: Option<ReplicaId>,
+        creation_holds: ReadHolds,
+    ) -> Result<AbortOnDropHandle<()>, AdapterError> {
+        let invalid = |message: &str| AdapterError::Internal(message.into());
         let client = Arc::clone(
             self.query_client
                 .as_ref()
@@ -57,67 +99,51 @@ impl Coordinator {
             .as_of
             .clone()
             .ok_or_else(|| invalid("query sink requires as_of"))?;
-        let sink = self
-            .active_compute_sinks
-            .get_mut(&id)
-            .ok_or_else(|| invalid("query sink must be registered before execution"))?;
-        if sink.cluster_id() != cluster
-            || matches!(sink, ActiveComputeSink::Subscribe(_)) != subscribe
-        {
-            return Err(invalid("query sink does not match registered sink"));
-        }
-        let execution = sink.query_execution_mut();
-        if execution.is_some() {
-            return Err(invalid("query sink execution already started"));
-        }
         let catalog = Arc::clone(&self.catalog);
         let tx = self.internal_cmd_tx.clone();
-        *execution = Some(
-            mz_ore::task::spawn(
-                || "query sink",
-                async move {
-                    let result: Result<(), AdapterError> = async {
-                        let mut dataflows = client
-                            .create_dataflow(catalog, cluster, target, dataflow, creation_holds)
-                            .await?;
-                        while let Some(response) = dataflows.recv().await {
-                            let response = response?;
-                            if let DataflowResponse::Subscribe(_, SubscribeResponse::Batch(batch)) =
-                                &response
-                            {
-                                lower = batch.upper.clone();
-                            }
-                            if tx.send(Message::QueryDataflowResponse(response)).is_err() {
-                                return Ok(());
-                            }
+        Ok(mz_ore::task::spawn(
+            || "query sink",
+            async move {
+                let result: Result<(), AdapterError> = async {
+                    let mut dataflows = client
+                        .create_dataflow(catalog, cluster, target, dataflow, creation_holds)
+                        .await?;
+                    while let Some(response) = dataflows.recv().await {
+                        let response = response?;
+                        if let DataflowResponse::Subscribe(_, SubscribeResponse::Batch(batch)) =
+                            &response
+                        {
+                            lower = batch.upper.clone();
                         }
-                        Ok(())
+                        if tx.send(Message::QueryDataflowResponse(response)).is_err() {
+                            return Ok(());
+                        }
                     }
-                    .await;
-                    if let Err(error) = result {
-                        // Only creation failure or loss of all alternatives reaches
-                        // here. Native terminal responses preserve sink bookkeeping
-                        // and client error delivery without failing healthy siblings.
-                        let response = if subscribe {
-                            DataflowResponse::Subscribe(
-                                id,
-                                SubscribeResponse::Batch(SubscribeBatch {
-                                    lower,
-                                    upper: Antichain::new(),
-                                    updates: Err(subscribe_error(error, target)),
-                                }),
-                            )
-                        } else {
-                            DataflowResponse::CopyTo(id, CopyToResponse::Error(error.to_string()))
-                        };
-                        let _ = tx.send(Message::QueryDataflowResponse(response));
-                    }
+                    Ok(())
                 }
-                .instrument(tracing::Span::current()),
-            )
-            .abort_on_drop(),
-        );
-        Ok(())
+                .await;
+                if let Err(error) = result {
+                    // Only creation failure or loss of all alternatives reaches
+                    // here. Native terminal responses preserve sink bookkeeping
+                    // and client error delivery without failing healthy siblings.
+                    let response = if subscribe {
+                        DataflowResponse::Subscribe(
+                            id,
+                            SubscribeResponse::Batch(SubscribeBatch {
+                                lower,
+                                upper: Antichain::new(),
+                                updates: Err(subscribe_error(error, target)),
+                            }),
+                        )
+                    } else {
+                        DataflowResponse::CopyTo(id, CopyToResponse::Error(error.to_string()))
+                    };
+                    let _ = tx.send(Message::QueryDataflowResponse(response));
+                }
+            }
+            .instrument(tracing::Span::current()),
+        )
+        .abort_on_drop())
     }
 }
 

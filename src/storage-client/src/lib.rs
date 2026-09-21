@@ -14,6 +14,7 @@ pub mod collection_reader;
 pub mod controller;
 pub mod healthcheck;
 pub mod metrics;
+pub mod read_protection;
 pub mod sink;
 pub mod statistics;
 pub mod storage_collections;

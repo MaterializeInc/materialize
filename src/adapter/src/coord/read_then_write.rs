@@ -66,8 +66,8 @@ impl Coordinator {
     /// The dataflow is otherwise ordinary and shows up in replica
     /// introspection like any other.
     ///
-    /// Takes ownership of `read_holds` and drops them only once the dataflow is
-    /// shipped, so the `since` cannot advance past `as_of` in between.
+    /// Takes ownership of `read_holds` through installation. Query-owned execution
+    /// retains them until replica admission acknowledges its own protection.
     ///
     /// Answers through `response_tx`, with an error if the owning connection
     /// went away or if a dependency was dropped since the plan was optimized.
@@ -100,6 +100,19 @@ impl Coordinator {
             ActiveSubscribeOwner::Background => {}
         }
 
+        if self.query_client.is_some()
+            && let Some(id) = df_desc
+                .import_ids()
+                .find(|id| self.catalog().try_get_entry_by_global_id(id).is_none())
+        {
+            let _ = response_tx.send(Err(
+                AdapterError::concurrent_dependency_drop_from_collection_missing(
+                    mz_storage_types::errors::CollectionMissing(id),
+                ),
+            ));
+            return;
+        }
+
         let (tx, rx) = mpsc::unbounded_channel();
 
         let active_subscribe = ActiveSubscribe {
@@ -127,25 +140,33 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        // Ship the dataflow before registering the sink, so a failure has
-        // nothing to unwind.
-        //
-        // Creation can fail here: the plan was optimized against a catalog
-        // snapshot taken off the coordinator loop, so a dependency can be
-        // dropped before this message is handled. That makes it a conflict to
-        // report rather than an invariant violation, hence `try_ship_dataflow`.
-        if let Err(err) = self
-            .try_ship_dataflow(df_desc, cluster_id, replica_id)
-            .await
-        {
-            let _ = response_tx.send(Err(
-                AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(err),
-            ));
-            return;
-        }
-
-        self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
-            .await;
+        let read_holds = if self.query_client.is_some() {
+            // Register before spawning execution so early rows and progress have
+            // an owner. Admission must not block the coordinator event loop.
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+                .await;
+            if let Err(error) = self.start_query_sink(df_desc, cluster_id, replica_id, read_holds) {
+                self.remove_active_compute_sink(sink_id).await;
+                let _ = response_tx.send(Err(error));
+                return;
+            }
+            None
+        } else {
+            // The off-loop planning snapshot can lose dependencies before this
+            // command arrives. Report that conflict rather than halt.
+            if let Err(error) = self
+                .try_ship_dataflow(df_desc, cluster_id, replica_id)
+                .await
+            {
+                let _ = response_tx.send(Err(
+                    AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(error),
+                ));
+                return;
+            }
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+                .await;
+            Some(read_holds)
+        };
 
         if response_tx.send(Ok(rx)).is_err() {
             // The receiver is gone, so cancellation or a statement timeout
@@ -158,8 +179,7 @@ impl Coordinator {
             return;
         }
 
-        // Drop read holds only after `ship_dataflow` returns, so the since
-        // can't advance past `as_of` before the dataflow is running.
+        // Query execution owns its holds. Legacy shipping has installed its own.
         drop(read_holds);
     }
 

@@ -40,6 +40,7 @@ use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
+use mz_ore::task::AbortOnDropHandle;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::SessionCatalog;
@@ -82,6 +83,10 @@ pub(super) struct IntrospectionSubscribe {
     /// reconnected). Consumers that must not observe such stale rows, like the
     /// `mz_object_arrangement_size_history` snapshots, use this to judge per-replica freshness.
     first_data_at: Option<Instant>,
+    /// Owns pending admission and installed query exports. Dropping this handle
+    /// cancels creation or releases the exports without controller involvement.
+    #[derivative(Debug = "ignore")]
+    query_execution: Option<AbortOnDropHandle<()>>,
 }
 
 impl IntrospectionSubscribe {
@@ -164,6 +169,7 @@ impl Coordinator {
             spec,
             deferred_write: None,
             first_data_at: None,
+            query_execution: None,
         };
         self.introspection_subscribes.insert(id, subscribe);
 
@@ -218,7 +224,9 @@ impl Coordinator {
             replica_id,
         } = stage;
 
-        let compute_instance = self.instance_snapshot(cluster_id).expect("must exist");
+        let compute_instance = self
+            .query_instance_snapshot(cluster_id)
+            .expect("must exist");
         let (_, view_id) = self.allocate_transient_id();
 
         let vars = self.catalog().system_config();
@@ -324,10 +332,20 @@ impl Coordinator {
 
         // The subscribe may already have been dropped, in which case we must not install a
         // dataflow for it.
-        let response = if self.introspection_subscribes.contains_key(&subscribe_id) {
+        if self.introspection_subscribes.contains_key(&subscribe_id) {
             let (df_desc, _df_meta) = global_lir_plan.unapply();
-            self.ship_dataflow(df_desc, cluster_id, Some(replica_id))
-                .await;
+            if self.query_client.is_some() {
+                let execution =
+                    self.spawn_query_sink(df_desc, cluster_id, Some(replica_id), read_holds)?;
+                self.introspection_subscribes
+                    .get_mut(&subscribe_id)
+                    .expect("registered subscribe")
+                    .query_execution = Some(execution);
+            } else {
+                self.ship_dataflow(df_desc, cluster_id, Some(replica_id))
+                    .await;
+                drop(read_holds);
+            }
 
             Ok(StageResult::Response(
                 ExecuteResponse::CreatedIntrospectionSubscribe,
@@ -337,10 +355,7 @@ impl Coordinator {
                 "introspection",
                 "introspection subscribe has already been dropped",
             ))
-        };
-
-        drop(read_holds);
-        response
+        }
     }
 
     /// Drops the introspection subscribes installed on the given replica.
@@ -379,10 +394,12 @@ impl Coordinator {
         // This can fail if the sequencing hasn't finished yet for the subscribe. In this case,
         // `sequence_introspection_subscribe_finish` will skip installing the compute collection in
         // the first place.
-        let _ = self
-            .controller
-            .compute
-            .drop_collections(subscribe.cluster_id, vec![id]);
+        if self.query_client.is_none() {
+            let _ = self
+                .controller
+                .compute
+                .drop_collections(subscribe.cluster_id, vec![id]);
+        }
 
         self.controller.storage.update_introspection_collection(
             subscribe.spec.introspection_type,
@@ -416,10 +433,14 @@ impl Coordinator {
             "reinstalling introspection subscribe",
         );
 
-        if let Err(error) = self
-            .controller
-            .compute
-            .drop_collections(cluster_id, vec![old_id])
+        // Abort pending admission as well as installed exports before assigning
+        // the replacement a new ID. Queued responses retain the old ID.
+        drop(subscribe.query_execution.take());
+        if self.query_client.is_none()
+            && let Err(error) = self
+                .controller
+                .compute
+                .drop_collections(cluster_id, vec![old_id])
         {
             soft_panic_or_log!(
                 "error dropping compute collection for introspection subscribe: {error} \

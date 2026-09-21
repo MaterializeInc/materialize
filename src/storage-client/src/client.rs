@@ -437,7 +437,8 @@ impl Partitionable<StorageCommand, StorageResponse> for (StorageCommand, Storage
 }
 
 impl PartitionedStorageState {
-    fn observe_command(&mut self, command: &StorageCommand) {
+    /// Tracks a command before responses arrive, without partitioning the command.
+    pub fn observe_command(&mut self, command: &StorageCommand) {
         // Note that `observe_command` is quite different in `mz_compute_client`.
         // Compute (currently) only sends the command to 1 process,
         // but storage fans out to all workers, allowing the storage processes

@@ -2973,6 +2973,8 @@ impl<'a> Transaction<'a> {
     /// Validation checks committed permission and read requirements, not physical
     /// frontiers. Protected indexes may publish their first bound after birth.
     /// `None` denotes the empty frontier, not an ungoverned collection.
+    /// Bound-advancing writers must use [`crate::catalog::Catalog::transact`],
+    /// which also enforces retention derived from the native catalog definitions.
     pub fn set_collection_compaction_bound(
         &mut self,
         id: GlobalId,
@@ -2984,6 +2986,52 @@ impl<'a> Transaction<'a> {
             self.op_id,
         )?;
         Ok(())
+    }
+
+    /// Returns the candidate permission, distinguishing absence from completion.
+    pub(crate) fn proposed_compaction_bound(
+        &self,
+        id: GlobalId,
+    ) -> Option<timely::progress::Antichain<mz_repr::Timestamp>> {
+        self.collection_compaction_bounds
+            .get(&CollectionCompactionBoundKey { id })
+            .map(|bound| bound.frontier.into_iter().collect())
+    }
+
+    /// Returns committed permission, or the first staged birth permission.
+    /// Later proposals in the same batch cannot justify their own advancement.
+    pub(crate) fn initial_compaction_bound(
+        &self,
+        id: GlobalId,
+    ) -> Option<timely::progress::Antichain<mz_repr::Timestamp>> {
+        let key = CollectionCompactionBoundKey { id };
+        self.collection_compaction_bounds
+            .initial
+            .get(&key)
+            .or_else(|| {
+                self.collection_compaction_bounds
+                    .pending
+                    .get(&key)?
+                    .iter()
+                    .find(|update| update.diff == Diff::ONE)
+                    .map(|update| &update.value)
+            })
+            .map(|bound| bound.frontier.into_iter().collect())
+    }
+
+    /// Returns all permission identities touched by this transaction.
+    pub(crate) fn changed_compaction_bounds(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.collection_compaction_bounds
+            .pending
+            .keys()
+            .map(|key| key.id)
+    }
+
+    /// Resolves an input shard against the candidate collection lifetimes.
+    pub(crate) fn retention_input_shard(&self, id: GlobalId) -> Option<ShardId> {
+        self.storage_collection_metadata
+            .get(&StorageCollectionMetadataKey { id })
+            .map(|metadata| metadata.shard)
     }
 
     /// Stages a maintained read requirement, checked against permission at commit.
@@ -3008,6 +3056,7 @@ impl<'a> Transaction<'a> {
     ///
     /// The caller must satisfy the readability and recovery contracts of
     /// [`Self::set_collection_compaction_bound`] and [`Self::set_maintained_read_requirement`].
+    /// Advancement requires the native catalog transaction's object-retention check.
     /// For repeated IDs in either vector, the last record wins.
     pub fn set_read_protection(
         &mut self,

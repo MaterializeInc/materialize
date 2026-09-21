@@ -1074,3 +1074,48 @@ does not persist those logs or recover their history after replica loss. Persist
 system-catalog collections remain under the normal guarantees. These decisions
 resolve both pending retention questions. Next: integrate and verify both retention
 constraints before replica cutover, without assuming additional durable state.
+
+### 2026-09-21: Derived retention at the native catalog boundary
+
+Object retention needs no additional index record. The native commit path can
+derive it from final definitions, durable logical-input uppers, and the transaction
+base's readable floor. Proposals cannot supply their own floor. First index-bound
+publication records installed readability rather than advancing it.
+
+Progress sampling has bounded fanout. Failure retains committed permission by
+aborting publication for retry. Log-dependent indexes retain local semantics,
+including mixed views, without exempting persisted inputs' own policies. Next is
+replica grant integration for execution and live retention windows, plus recovery
+and zero-replica advancement through the runtime path.
+
+### 2026-09-21: Execution protection outlives export retirement
+
+Queries and maintained importers can keep a producer running after its catalog
+export is dropped. Their read timestamps need not protect the producer's pending
+input snapshot. Replica execution grants must follow actual input completion,
+not catalog absence or retirement of the readable export. Passive input probes
+can continue reporting without extending execution lifetime. Legacy reconnection
+must silence retired IDs at the nonce boundary, before initialization is received.
+Next: bind execution grants to these signals and add execution-relative live windows.
+
+### 2026-09-21: Replica enactment integration boundaries
+
+Local index imports must remain pinned across installation retries, before applying
+new committed bounds. Ordered creation transfers execution protection to trace
+readers. First index permission must respect every committed window, not join a
+proposing replica's later installation frontier over another replica's requirement.
+
+Questions brought to Aljoscha: whether five-minute Kafka takeover is acceptable,
+whether curated non-catalog metric observers may be adapter-owned diagnostic
+queries, and whether replica incarnations should carry their catalog replica ID.
+The identity tag is a proposal: current heartbeat/grant records cannot distinguish
+eligible sink replicas from readers. Iceberg's overlapping same-version retry still
+needs a commit-boundary decision. These do not block committed-bound application.
+Next: complete adapter compute cutover, then storage enactment on the same follower.
+
+Slow catalog I/O can outlive local renewal evidence. Installation now requires
+recent evidence measured from the start of a successful publication, not its
+acknowledgement. Staleness pauses new installation without killing pinned existing
+execution or preventing renewal. Observed reclamation still terminates the follower.
+Current own-build DROP transactions repair pending consumers' selections, so late
+old plan bytes are not authority to install against a dropped index.

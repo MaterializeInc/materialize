@@ -104,6 +104,7 @@ mod apply;
 pub mod cluster_state;
 mod error;
 mod open;
+mod retention;
 mod state;
 #[cfg(any(test, feature = "test"))]
 pub mod test_support;

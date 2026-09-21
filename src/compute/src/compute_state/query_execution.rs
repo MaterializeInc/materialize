@@ -352,19 +352,29 @@ impl ComputeState {
             );
             self.queries.insert(nonce, query);
         }
-        self.retiring_dataflows.retain(|index, token| {
-            if token.strong_count() == 0 {
+        let mut completed = Vec::new();
+        self.retiring_dataflows.retain(|index, retired| {
+            if retired.guard.strong_count() == 0 {
                 worker.drop_dataflow(*index);
+                completed.extend(retired.input_completions());
                 false
             } else {
                 true
             }
         });
+        let active = ActiveComputeState {
+            timely_worker: worker,
+            compute_state: self,
+            response_tx: response_sender,
+        };
+        for response in completed {
+            active.send_compute_response(response);
+        }
     }
 
     fn report_query_catalog_frontiers(&mut self, nonce: Uuid, sender: &ResponseSender) {
         let mut frontiers = BTreeMap::new();
-        for (&id, collection) in &self.collections {
+        for (&id, collection) in &mut self.collections {
             if !(id.is_user() || id.is_system()) || collection.is_subscribe_or_copy {
                 continue;
             }
@@ -392,9 +402,11 @@ impl ComputeState {
             // Logical write progress starts at installation, even if the shared Persist
             // upper is behind. Output progress above still uses the raw upper.
             write.join_assign(&collection.as_of);
+            collection.observe_hydration(&output);
             frontiers.insert(
                 id,
                 FrontiersResponse {
+                    hydrated: Some(collection.hydrated()),
                     write_frontier: Some(write),
                     input_frontier: Some(input),
                     output_frontier: Some(output),
