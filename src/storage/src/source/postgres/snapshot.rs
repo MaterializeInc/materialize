@@ -720,6 +720,14 @@ pub(crate) fn render<'scope>(
                         continue;
                     }
                     trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", info.desc.name);
+                    // The snapshot transaction starts after the output's schema was captured
+                    // during purification, so the rewind range can never begin before it. A
+                    // violation would mean the upstream went back in time.
+                    assert!(
+                        info.initial_lsn <= snapshot_lsn,
+                        "initial_lsn={} snapshot_lsn={snapshot_lsn}",
+                        info.initial_lsn,
+                    );
                     let req = RewindRequest { output_index: *output_index, snapshot_lsn };
                     rewinds_handle.give(&rewind_cap_set[0], req);
                 }

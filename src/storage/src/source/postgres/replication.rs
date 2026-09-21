@@ -130,7 +130,8 @@ static PG_EPOCH: LazyLock<SystemTime> =
 
 // A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN of the replication
 // slot. This is accomplished by emitting `(data, 0, -diff)` for all updates `(data, lsn, diff)`
-// whose `lsn <= snapshot_lsn`. By convention the snapshot is always emitted at LSN 0.
+// whose `lsn <= snapshot_lsn` and that the output does not ignore (see
+// `SourceOutputInfo::ignores`). By convention the snapshot is always emitted at LSN 0.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RewindRequest {
     /// The output index that should be rewound.
@@ -883,6 +884,19 @@ async fn raw_stream<'a>(
     Ok(Ok(stream))
 }
 
+/// The outputs of relation `rel` that a message committed at `commit_lsn` applies to.
+fn outputs_at(
+    table_info: &BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+    rel: u32,
+    commit_lsn: MzOffset,
+) -> impl Iterator<Item = (&usize, &SourceOutputInfo)> {
+    table_info
+        .get(&rel)
+        .into_iter()
+        .flatten()
+        .filter(move |(_, info)| !info.ignores(commit_lsn))
+}
+
 /// Extracts a single transaction from the replication stream delimited by a BEGIN and COMMIT
 /// message. The BEGIN message must have already been consumed from the stream before calling this
 /// function.
@@ -920,7 +934,7 @@ fn extract_transaction<'a>(
                 Insert(body) => {
                     metrics.inserts.inc();
                     let rel = body.rel_id();
-                    for (output, info) in table_info.get(&rel).into_iter().flatten() {
+                    for (output, info) in outputs_at(table_info, rel, commit_lsn) {
                         let tuple_data = body.tuple().tuple_data();
                         let Some(ref projection) = info.projection else {
                             panic!("missing projection for {rel}");
@@ -935,7 +949,7 @@ fn extract_transaction<'a>(
                         metrics.updates.inc();
                         let new_tuple = body.new_tuple();
                         let rel = body.rel_id();
-                        for (output, info) in table_info.get(&rel).into_iter().flatten() {
+                        for (output, info) in outputs_at(table_info, rel, commit_lsn) {
                             let Some(ref projection) = info.projection else {
                                 panic!("missing projection for {rel}");
                             };
@@ -959,7 +973,7 @@ fn extract_transaction<'a>(
                     }
                     None => {
                         let rel = body.rel_id();
-                        for (output, _) in table_info.get(&rel).into_iter().flatten() {
+                        for (output, _) in outputs_at(table_info, rel, commit_lsn) {
                             yield (
                                 rel,
                                 *output,
@@ -973,7 +987,7 @@ fn extract_transaction<'a>(
                     Some(old_tuple) => {
                         metrics.deletes.inc();
                         let rel = body.rel_id();
-                        for (output, info) in table_info.get(&rel).into_iter().flatten() {
+                        for (output, info) in outputs_at(table_info, rel, commit_lsn) {
                             let Some(ref projection) = info.projection else {
                                 panic!("missing projection for {rel}");
                             };
@@ -984,7 +998,7 @@ fn extract_transaction<'a>(
                     }
                     None => {
                         let rel = body.rel_id();
-                        for (output, _) in table_info.get(&rel).into_iter().flatten() {
+                        for (output, _) in outputs_at(table_info, rel, commit_lsn) {
                             yield (
                                 rel,
                                 *output,
@@ -1036,11 +1050,27 @@ fn extract_transaction<'a>(
                             .map(|(idx, col)| (col.name().unwrap(), idx))
                             .collect();
                         for info in outputs.values_mut() {
-                            let mut projection = vec![];
-                            for col in info.desc.columns.iter() {
-                                projection.push(column_positions[&*col.name]);
+                            let projection: Option<Vec<_>> = info
+                                .desc
+                                .columns
+                                .iter()
+                                .map(|col| column_positions.get(&*col.name).copied())
+                                .collect();
+                            match projection {
+                                Some(projection) => info.projection = Some(projection),
+                                // This message describes a schema from before the output was
+                                // created, which need not cover `desc`. Retaining the previous
+                                // projection is safe: messages at these LSNs are ignored, and the
+                                // schema change that made the columns diverge invalidates the
+                                // upstream's relation cache, so another Relation message arrives
+                                // ahead of the first message that isn't ignored.
+                                None if info.ignores(commit_lsn) => (),
+                                None => panic!(
+                                    "Relation message for {rel_id} at {commit_lsn} does not \
+                                     cover the captured schema of {}",
+                                    info.desc.name
+                                ),
                             }
-                            info.projection = Some(projection);
                         }
                         for schema_error in schema_errors {
                             yield schema_error;
@@ -1050,7 +1080,12 @@ fn extract_transaction<'a>(
                 Truncate(body) => {
                     for &rel_id in body.rel_ids() {
                         if let Some(outputs) = table_info.get_mut(&rel_id) {
-                            for (output, _) in std::mem::take(outputs) {
+                            let mut ignored = BTreeMap::new();
+                            for (output, info) in std::mem::take(outputs) {
+                                if info.ignores(commit_lsn) {
+                                    ignored.insert(output, info);
+                                    continue;
+                                }
                                 yield (
                                     rel_id,
                                     output,
@@ -1058,6 +1093,7 @@ fn extract_transaction<'a>(
                                     Diff::ONE,
                                 );
                             }
+                            *outputs = ignored;
                         }
                     }
                 }

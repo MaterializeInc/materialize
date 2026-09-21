@@ -60,7 +60,7 @@ use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SourceDesc, SourceExportStatementDetails,
+    GenericSourceConnection, MzOffset, SourceConnection, SourceDesc, SourceExportStatementDetails,
     SqlServerSourceExtras,
 };
 use prost::Message;
@@ -259,6 +259,7 @@ pub enum PurifiedExportDetails {
         table: PostgresTableDesc,
         text_columns: Option<Vec<Ident>>,
         exclude_columns: Option<Vec<Ident>>,
+        initial_lsn: MzOffset,
     },
     SqlServer {
         table: SqlServerTableDesc,
@@ -989,6 +990,15 @@ async fn purify_create_source(
             };
             retrieved_source_references = reference_client.get_source_references().await?;
 
+            // Record whether the upstream server is a physical replica, which changes how we can determine
+            // the latest LSN.
+            let is_physical_replica = mz_postgres_util::get_is_in_recovery(&client).await?;
+
+            // Read after the references above, so it bounds the LSN their schemas belong to.
+            let initial_lsn = MzOffset::from(
+                mz_postgres_util::fetch_max_lsn(&client, is_physical_replica).await?,
+            );
+
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
@@ -1002,6 +1012,7 @@ async fn purify_create_source(
                 false,
                 source_name,
                 &reference_policy,
+                initial_lsn,
             )
             .await?;
 
@@ -1018,10 +1029,6 @@ async fn purify_create_source(
             // point-in-time-recovery that will put the source into an error state.
             let timeline_id = mz_postgres_util::get_timeline_id(&client).await?;
 
-            // Record whether the upstream server is a physical replica, which changes how we can determine
-            // the latest LSN.
-            let is_physical_replica = Some(mz_postgres_util::get_is_in_recovery(&client).await?);
-
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourcePublicationDetails {
@@ -1031,7 +1038,7 @@ async fn purify_create_source(
                 ),
                 timeline_id: Some(timeline_id),
                 database: connection.database,
-                is_physical_replica,
+                is_physical_replica: Some(is_physical_replica),
             };
             options.push(PgConfigOption {
                 name: PgConfigOptionName::Details,
@@ -1552,6 +1559,17 @@ async fn purify_alter_source_add_subsources(
             };
             let retrieved_source_references = reference_client.get_source_references().await?;
 
+            // Read after the references above, so it bounds the LSN their schemas belong to.
+            let initial_lsn = MzOffset::from(
+                mz_postgres_util::fetch_max_lsn(
+                    &client,
+                    pg_source_connection
+                        .publication_details
+                        .get_is_physical_replica(),
+                )
+                .await?,
+            );
+
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
@@ -1565,6 +1583,7 @@ async fn purify_alter_source_add_subsources(
                 false,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
+                initial_lsn,
             )
             .await?;
 
@@ -1940,6 +1959,17 @@ async fn purify_create_table_from_source(
             };
             retrieved_source_references = reference_client.get_source_references().await?;
 
+            // Read after the references above, so it bounds the LSN their schemas belong to.
+            let initial_lsn = MzOffset::from(
+                mz_postgres_util::fetch_max_lsn(
+                    &client,
+                    pg_source_connection
+                        .publication_details
+                        .get_is_physical_replica(),
+                )
+                .await?,
+            );
+
             let postgres::PurifiedSourceExports {
                 source_exports,
                 // TODO(database-issues#8620): Remove once subsources are removed
@@ -1956,6 +1986,7 @@ async fn purify_create_table_from_source(
                 exclude_all_constraints,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
+                initial_lsn,
             )
             .await?;
             // There should be exactly one source_export returned for this statement

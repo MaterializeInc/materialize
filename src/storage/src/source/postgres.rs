@@ -106,7 +106,7 @@ use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::{Scope, StreamVec};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
@@ -169,6 +169,7 @@ impl SourceRender for PostgresSourceConnection {
                 casts,
                 resume_upper,
                 export_id: id.clone(),
+                initial_lsn: details.initial_lsn.unwrap_or_else(MzOffset::minimum),
             };
             table_info
                 .entry(output.desc.oid)
@@ -284,6 +285,26 @@ struct SourceOutputInfo {
     casts: Vec<(CastType, StorageScalarExpr)>,
     resume_upper: Antichain<MzOffset>,
     export_id: GlobalId,
+    /// An upper bound on the LSN whose upstream schema `desc` describes, read during purification
+    /// once `desc` was in hand. Outputs created before this was recorded fall back to
+    /// [`MzOffset::minimum`], which ignores nothing.
+    initial_lsn: MzOffset,
+}
+
+impl SourceOutputInfo {
+    /// Whether this output must skip replication messages committed at `commit_lsn`.
+    ///
+    /// Such messages fall outside the range this output describes. Its snapshot is taken at an LSN
+    /// at or after `initial_lsn`, so the rewind that subtracts the replication stream from that
+    /// snapshot stops at the same point. They also need not line up with `desc`, since the
+    /// upstream schema may have changed between them and `initial_lsn`.
+    ///
+    /// The comparison is strict because `initial_lsn` is an upper. Everything committed when it
+    /// was read is strictly below it, so a transaction landing exactly on it is one this output
+    /// has to ingest.
+    fn ignores(&self, commit_lsn: MzOffset) -> bool {
+        commit_lsn < self.initial_lsn
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
