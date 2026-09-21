@@ -31,9 +31,11 @@ protection and publication integration. The next integration is:
    not depend on a live replica incarnation. Reclaiming every client and replica
    grant must still leave the object policy constraining compaction and recovery.
    Derive requirements from catalog definitions and durable progress where possible,
-   without assuming a new record per index. Establish how the policy's relevant
-   upper is determined with no replicas. Bring ambiguity or disproportionate cost
-   before choosing new durable progress state or weakening the contract.
+   without assuming a new record per index. Preserve zero-replica policy advancement
+   from input progress, using the existing paused-cluster behavior as the baseline.
+   This does not authorize changing the upper used for live indexes. Bring ambiguity
+   or disproportionate cost before choosing new durable progress state or weakening
+   the contract.
 2. Enact from the replica's committed state. Acquire incarnation-scoped import
    protection for additional execution needs before choosing as_of and installing
    written plans, then apply bounds and propose them from replica progress.
@@ -52,8 +54,9 @@ surviving sibling. Exercise slow hydration, same-batch dependencies, pending
 replacements, and fixed-plan recovery from logical inputs after actual compaction.
 Test retention with no query holds and no index replicas, including incarnation
 reclamation, total shutdown/recovery, and a historical read still covered by the
-policy. Also show that protection advances with the policy's upper, rather than
-pinning creation history indefinitely, while independent reader holds still apply.
+policy. Verify input uppers and permitted compaction advancing while the index
+cluster has zero replicas, rather than pinning creation history indefinitely.
+Independent reader holds must still constrain that advancement.
 Unavailable diagnostics may remain unknown. Do not let a diagnostic audit block
 the ownership change.
 

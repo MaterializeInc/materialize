@@ -129,11 +129,13 @@ constraints. Reclaiming an incarnation does not remove the object's retention
 requirement.
 
 Retention advances with the relevant upper as prescribed by the policy, not
-because a process disappears. If progress cannot be established, retain the
-existing protection. With no components running, advancement may stop
-conservatively. Recovery must preserve history still required by the policy.
-This neither pins creation-time history forever nor restores history already
-discarded before protection was established.
+because a process disappears. For an index with no replicas, policy-based retention
+continues to advance from input progress, subject to other valid read requirements.
+Having zero replicas must neither release retention nor freeze its advancement.
+If progress cannot be established, retain the existing protection. With no
+components running, advancement may stop conservatively. Recovery must preserve
+history still required by the policy. This neither pins creation-time history
+forever nor restores history already discarded before protection was established.
 
 ### Applying committed permission
 
