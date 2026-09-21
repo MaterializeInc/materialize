@@ -126,6 +126,7 @@ def workflow_smoke(c: Composition) -> None:
         "--var=aws-endpoint=minio:9000",
         "catalog.td",
         "nested-records.td",
+        "uuid-column.td",
         "key-validation.td",
     )
 

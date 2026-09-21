@@ -2135,6 +2135,14 @@ mod tests {
             DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
         );
 
+        // Interval should override to LargeUtf8
+        let result = iceberg_type_overrides(&SqlScalarType::Interval);
+        assert_eq!(result.unwrap().0, DataType::LargeUtf8);
+
+        // Uuid should override to Utf8
+        let result = iceberg_type_overrides(&SqlScalarType::Uuid);
+        assert_eq!(result.unwrap().0, DataType::Utf8);
+
         // Other types should return None (use default)
         assert!(iceberg_type_overrides(&SqlScalarType::Int32).is_none());
         assert!(iceberg_type_overrides(&SqlScalarType::String).is_none());
@@ -2195,6 +2203,35 @@ mod tests {
             .field_by_name("dur")
             .expect("field should exist");
         assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+    }
+
+    /// A uuid column must reach the Iceberg table as `string`, not as the
+    /// `fixed[16]` that the default `FixedSizeBinary(16)` mapping would produce.
+    #[mz_ore::test]
+    fn test_iceberg_uuid_override() {
+        let result = iceberg_type_overrides(&SqlScalarType::Uuid);
+        assert_eq!(result.unwrap().0, DataType::Utf8);
+
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("u", SqlScalarType::Uuid.nullable(true))
+            .finish();
+
+        let (arrow_schema, iceberg_schema) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+
+        let field = iceberg_schema
+            .as_struct()
+            .field_by_name("u")
+            .expect("field should exist");
+        assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+        assert_ne!(
+            *field.field_type,
+            Type::Primitive(PrimitiveType::Fixed(16)),
+            "uuid must not fall back to the default FixedSizeBinary(16) mapping"
+        );
     }
 
     #[mz_ore::test]
