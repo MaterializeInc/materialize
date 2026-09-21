@@ -187,9 +187,11 @@ The resize still proceeds in the background.
 
 - `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
   resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
-  replicas and proceed with the new ones even if they are not ready, which can
-  cause downtime or stale results) or `ROLLBACK` (keep the
-  current size). Default: `ROLLBACK`.
+  replicas and proceed with the new ones even if they are not ready) or
+  `ROLLBACK` (keep the current size). Default: `ROLLBACK`. A forced cutover can
+  cause downtime or increased query latency. Strict-serializable queries wait
+  for the required progress. Queries using isolation levels that permit stale
+  reads may return older results.
 
   ```mzsql
   ALTER CLUSTER c1
