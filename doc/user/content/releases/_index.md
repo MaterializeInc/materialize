@@ -534,7 +534,7 @@ For more information, see the `AUTO SCALING STRATEGY` option on
 
 <red>*Materialize Cloud only*</red>
 
-You can now map identity provider groups to Materialize roles via SCIM, automatically syncing group membership from your identity provider to role assignments in Materialize. This keeps access in Materialize aligned with your identity provider as team membership changes, without manual role management. For details, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
+You can provision identity provider groups via SCIM and map their members to Materialize database roles. The revised setup described in the guide uses an explicit intermediate mapping: assign each synced group a custom organization role, then create a database role matching that organization role’s JWT key. IdP group names can differ from database role names. For setup and migration steps, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
 
 ### Improvements {#v26.34-improvements}
 - **Azure SQL source support**: Materialize can now ingest data from Azure SQL databases using the [SQL Server source connector](/ingest-data/sql-server/).
