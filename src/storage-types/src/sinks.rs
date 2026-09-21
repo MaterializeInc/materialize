@@ -857,8 +857,20 @@ pub struct PostgresSinkConnection<C: ConnectionAccess = InlinedConnection> {
 }
 
 impl PostgresSinkConnection {
-    pub fn progress_table_name(&self, sink_id: GlobalId) -> String {
-        format!("materialize_progress_{}_{}", self.connection_id, sink_id)
+    /// Schema in the target database that holds Materialize's bookkeeping
+    /// tables.
+    pub const MZ_SCHEMA: &str = "materialize";
+    /// Progress table shared by every sink writing into the target database,
+    /// one row per sink.
+    pub const PROGRESS_TABLE: &str = "sink_progress";
+
+    /// Name of the staging table that sits next to the target table in
+    /// `self.schema`.
+    ///
+    /// NOTE: PostgreSQL truncates identifiers to 63 bytes, so a very long
+    /// target table name can make two sinks' staging tables collide.
+    pub fn staging_table_name(&self, sink_id: GlobalId) -> String {
+        format!("{}_mz_staging_{}", self.table, sink_id)
     }
 }
 

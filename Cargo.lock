@@ -8973,6 +8973,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-pgcopy",
+ "mz-pgrepr",
  "mz-postgres-util",
  "mz-repr",
  "mz-rocksdb",
