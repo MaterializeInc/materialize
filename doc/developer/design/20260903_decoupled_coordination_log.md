@@ -1053,3 +1053,11 @@ Next: integrate this constraint before replica cutover and verify it without
 incarnation grants, through shutdown and reconstruction. Derive from catalog
 definitions and durable progress where possible. The progress basis for an absent
 index must be established before choosing any additional durable state.
+
+### 2026-09-21: Zero-replica retention advancement clarified with Aljoscha
+
+Zero-replica indexes retain policy-driven advancement from input progress, using
+the existing paused-cluster behavior as the baseline. Losing replicas neither
+releases the policy nor freezes its frontier. Verify advancement without query
+or replica grants. Upper semantics for live, lagging indexes and the retention
+contract for replica-local compute logs remain separate open questions.
