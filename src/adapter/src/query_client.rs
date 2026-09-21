@@ -573,6 +573,7 @@ impl QueryClient {
     /// later than that time require fresh readability and permission observations.
     /// The returned floor can exceed the desired time, so callers must validate
     /// timestamp constraints against the acquired holds before reading.
+    #[tracing::instrument(level = "debug", skip_all, err(level = "debug"))]
     pub(crate) async fn prepare_read(
         &self,
         catalog: &Catalog,
@@ -584,10 +585,12 @@ impl QueryClient {
         let mut index_inputs = BTreeMap::new();
         let mut storage = bundle.storage_ids.clone();
         for id in bundle.compute_ids.values().flatten() {
-            let entry = catalog
-                .try_get_entry_by_global_id(id)
-                .ok_or_else(|| unavailable(*id))?;
+            let entry = catalog.try_get_entry_by_global_id(id).ok_or_else(|| {
+                tracing::debug!(%id, "read preparation target absent from catalog");
+                unavailable(*id)
+            })?;
             let CatalogItem::Index(index) = entry.item() else {
+                tracing::debug!(%id, "read preparation compute target is not an index");
                 return Err(unavailable(*id));
             };
             let inputs: BTreeSet<_> = catalog
@@ -624,7 +627,10 @@ impl QueryClient {
                 }
                 since
                     .into_option()
-                    .ok_or_else(|| unavailable(id))?
+                    .ok_or_else(|| {
+                        tracing::debug!(%id, %shard, "read preparation storage frontier is empty");
+                        unavailable(id)
+                    })?
                     .max(read_ts.unwrap_or(Timestamp::MIN))
             };
             frontiers.insert(id, frontier);
@@ -639,9 +645,14 @@ impl QueryClient {
                 let bound = catalog.state().collection_compaction_bounds().get(id);
                 let observed = replicas
                     .iter()
-                    .filter_map(|replica| {
-                        replica
-                            .collection_frontiers(*id)
+                    .enumerate()
+                    .filter_map(|(replica_slot, replica)| {
+                        let observation = replica.collection_frontiers(*id);
+                        tracing::debug!(
+                            %cluster, %id, replica_slot, ?bound, ?observation,
+                            "read preparation compute observation"
+                        );
+                        observation
                             .ok()??
                             .read_frontier
                             .as_ref()?
@@ -656,13 +667,20 @@ impl QueryClient {
                         instance.log_indexes.values().any(|index| index == id)
                     })
                 {
+                    tracing::debug!(
+                        %cluster, %id, ?bound, replica_count = replicas.len(),
+                        "read preparation has neither compute readability nor permission"
+                    );
                     return Err(unavailable(*id));
                 }
                 // Logging traces initialize at MIN and are held there until
                 // first permission publication. They have no Persist inputs to
                 // observe. Execution still waits for their actual trace frontier.
                 if let Some(bound) = bound {
-                    since = since.max(*bound.as_option().ok_or_else(|| unavailable(*id))?);
+                    since = since.max(*bound.as_option().ok_or_else(|| {
+                        tracing::debug!(%cluster, %id, ?bound, "read preparation compute bound is empty");
+                        unavailable(*id)
+                    })?);
                 }
                 for input in &index_inputs[id] {
                     since = since.max(frontiers[input]);
