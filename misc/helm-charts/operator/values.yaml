@@ -357,10 +357,6 @@ clusterd:
 balancerd:
   # -- Flag to indicate whether to create balancerd pods for the environments
   enabled: true
-  # -- Dynamic configuration used to seed each balancerd ConfigMap when first
-  # created. Edit the ConfigMap to change running balancers. Changes to this
-  # value do not overwrite existing ConfigMaps.
-  initialConfig: {}
   # -- Node selector to use for balancerd pods spawned by the operator
   # @notationType -- k8s/nodeSelector
   # @default -- ``{}``

@@ -27,6 +27,14 @@
         "deprecated": false
       },
       {
+        "name": "balancerdConfigmapName",
+        "type": "String",
+        "description": "The name of an externally managed ConfigMap in this namespace containing\nbalancerd dynamic configuration as a JSON object in `config.json`.\nChanges to its contents are applied at runtime. Changing this reference\nrestarts balancerd pods but does not trigger an environmentd rollout.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
         "name": "balancerdExternalCertificateSpec",
         "type": "MaterializeCertSpec",
         "description": "The configuration for generating an x509 certificate using cert-manager for balancerd\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",

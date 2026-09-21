@@ -1228,6 +1228,62 @@ class ConsoleReplicas(Modification):
         retry(check_replicas, 120)
 
 
+def balancerd_configmap() -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": "balancerd-settings",
+            "namespace": "materialize-environment",
+        },
+        "data": {"config.json": json.dumps({"balancerd_max_connections": 123})},
+    }
+
+
+class BalancerdConfigMap(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.44.0-dev.0"):
+            return [None, "balancerd-settings"]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["balancerdConfigmapName"] = self.value
+        if self.value is not None:
+            definition["balancerd_configmap"] = balancerd_configmap()
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if not mods[BalancerdEnabled] or MzVersion.parse_mz(
+            mods[EnvironmentdImageRef]
+        ) < MzVersion.parse_mz("v26.44.0-dev.0"):
+            return
+
+        def check() -> None:
+            pods = get_balancerd_data()["items"]
+            assert pods
+            for pod in pods:
+                volumes = [
+                    v for v in pod["spec"]["volumes"] if v["name"] == "dynamic-config"
+                ]
+                args = pod["spec"]["containers"][0]["args"]
+                if self.value is None:
+                    assert not volumes
+                    assert not any(
+                        arg.startswith("--config-sync-file-path=") for arg in args
+                    )
+                else:
+                    assert len(volumes) == 1
+                    assert volumes[0]["configMap"]["name"] == self.value
+                    assert "--config-sync-file-path=/etc/balancerd/config.json" in args
+                    assert "--config-sync-loop-interval=1s" in args
+
+        retry(check, 240)
+
+
 class SystemParamConfigMap(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
@@ -2797,9 +2853,8 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     definition = setup(c, args)
     if args.tag is None:
-        definition["operator"]["balancerd"]["initialConfig"] = {
-            "balancerd_max_connections": 123,
-        }
+        definition["balancerd_configmap"] = balancerd_configmap()
+        definition["balancer"]["spec"]["configmapName"] = "balancerd-settings"
     init(definition)
     run_balancer(definition, False)
     if args.tag is None:
@@ -2825,6 +2880,7 @@ def check_balancer_config_sync(definition: dict[str, Any]) -> None:
         v for v in pods[0]["spec"]["volumes"] if v["name"] == "dynamic-config"
     )
     config_map_name = volume["configMap"]["name"]
+    assert config_map_name == "balancerd-settings"
 
     def read_config() -> dict[str, Any]:
         cm = json.loads(
@@ -2841,6 +2897,9 @@ def check_balancer_config_sync(definition: dict[str, Any]) -> None:
                 ]
             )
         )
+        assert not cm["metadata"].get(
+            "ownerReferences"
+        ), "Operator adopted an external ConfigMap"
         return json.loads(cm["data"]["config.json"])
 
     def check_limit(expected: int) -> None:
@@ -2888,8 +2947,8 @@ def check_balancer_config_sync(definition: dict[str, Any]) -> None:
                 ),
             ]
         )
-        # A spec change forces a completed reconciliation, exercising the
-        # create-only policy even if the ConfigMap watch has not fired yet.
+        # A spec change forces reconciliation, which must leave the external
+        # ConfigMap unchanged.
         replicas = len(pods) + index + 1
         name = definition["balancer"]["metadata"]["name"]
         spawn.runv(
@@ -2905,7 +2964,7 @@ def check_balancer_config_sync(definition: dict[str, Any]) -> None:
                 json.dumps({"spec": {"replicas": replicas}}),
             ]
         )
-        deployment = config_map_name.removesuffix("-config")
+        deployment = pods[0]["metadata"]["labels"]["materialize.cloud/name"]
 
         def check_reconciled() -> None:
             data = json.loads(
@@ -2926,7 +2985,7 @@ def check_balancer_config_sync(definition: dict[str, Any]) -> None:
 
         retry(check_reconciled, 60)
         assert read_config() == {"balancerd_max_connections": limit}
-        # Kubelet projection can take two minutes before the five-second sync.
+        # Kubelet projection can take two minutes before the one-second sync.
         retry(lambda: check_limit(limit), 180)
         current_pod_state = pod_state()
         for name, state in initial_pod_state.items():
@@ -3705,6 +3764,8 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         defs.append(definition["materialize2"])
     if "system_params_configmap" in definition:
         defs.append(definition["system_params_configmap"])
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
     yaml_str = yaml.dump_all(defs)
     print(f"Attempting to apply:\n{yaml_str}")
     kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], yaml_str)
@@ -5322,8 +5383,10 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
 def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
     defs = [
         definition["namespace"],
-        definition["balancer"],
     ]
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
+    defs.append(definition["balancer"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],

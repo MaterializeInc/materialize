@@ -168,6 +168,12 @@ pub mod v1alpha1 {
         pub environmentd_scratch_volume_storage_requirement: Option<Quantity>,
         /// Resource requirements for the balancerd pod.
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
+        /// The name of an externally managed ConfigMap in this namespace containing
+        /// balancerd dynamic configuration as a JSON object in `config.json`.
+        /// Changes to its contents are applied at runtime. Changing this reference
+        /// restarts balancerd pods but does not trigger an environmentd rollout.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_configmap_name: Option<String>,
         /// Resource requirements for the console pod.
         pub console_resource_requirements: Option<ResourceRequirements>,
         /// Number of balancerd pods to create.
@@ -859,6 +865,7 @@ pub mod v1alpha1 {
                         .spec
                         .environmentd_scratch_volume_storage_requirement,
                     balancerd_resource_requirements: value.spec.balancerd_resource_requirements,
+                    balancerd_configmap_name: value.spec.balancerd_configmap_name,
                     console_resource_requirements: value.spec.console_resource_requirements,
                     balancerd_replicas: value.spec.balancerd_replicas,
                     console_replicas: value.spec.console_replicas,
@@ -964,6 +971,12 @@ pub mod v1alpha1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub balancerd_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_configmap_name: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -1179,6 +1192,7 @@ pub mod v1alpha1 {
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
                 console_replicas,
@@ -1213,6 +1227,7 @@ pub mod v1alpha1 {
                     environmentd_scratch_volume_storage_requirement,
                 ),
                 balancerd_resource_requirements: present_opt(balancerd_resource_requirements),
+                balancerd_configmap_name: present_opt(balancerd_configmap_name),
                 console_resource_requirements: present_opt(console_resource_requirements),
                 balancerd_replicas: present_opt(balancerd_replicas),
                 console_replicas: present_opt(console_replicas),
@@ -1298,6 +1313,7 @@ pub mod v1alpha1 {
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
                 console_replicas,
@@ -1329,6 +1345,7 @@ pub mod v1alpha1 {
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
                 console_replicas,
@@ -1455,6 +1472,12 @@ pub mod v1 {
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
+        /// The name of an externally managed ConfigMap in this namespace containing
+        /// balancerd dynamic configuration as a JSON object in `config.json`.
+        /// Changes to its contents are applied at runtime. Changing this reference
+        /// restarts balancerd pods but does not trigger an environmentd rollout.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_configmap_name: Option<String>,
         /// Resource requirements for the console pod.
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
@@ -1600,6 +1623,7 @@ pub mod v1 {
                     .environmentd_scratch_volume_storage_requirement
                     .clone(),
                 balancerd_resource_requirements: None,
+                balancerd_configmap_name: None,
                 console_resource_requirements: None,
                 balancerd_replicas: None,
                 console_replicas: None,
@@ -2076,6 +2100,7 @@ pub mod v1 {
                         .spec
                         .environmentd_scratch_volume_storage_requirement,
                     balancerd_resource_requirements: value.spec.balancerd_resource_requirements,
+                    balancerd_configmap_name: value.spec.balancerd_configmap_name,
                     console_resource_requirements: value.spec.console_resource_requirements,
                     balancerd_replicas: value.spec.balancerd_replicas,
                     console_replicas: value.spec.console_replicas,
@@ -2204,6 +2229,12 @@ pub mod v1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub balancerd_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_configmap_name: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -2400,6 +2431,7 @@ pub mod v1 {
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
                 console_replicas,
@@ -2431,6 +2463,7 @@ pub mod v1 {
                     environmentd_scratch_volume_storage_requirement,
                 ),
                 balancerd_resource_requirements: present_opt(balancerd_resource_requirements),
+                balancerd_configmap_name: present_opt(balancerd_configmap_name),
                 console_resource_requirements: present_opt(console_resource_requirements),
                 balancerd_replicas: present_opt(balancerd_replicas),
                 console_replicas: present_opt(console_replicas),
@@ -2513,6 +2546,7 @@ pub mod v1 {
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
                 console_replicas,
@@ -2555,6 +2589,7 @@ pub mod v1 {
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
                 console_replicas,
@@ -2832,6 +2867,55 @@ mod tests {
         );
         assert_ne!(mz.generate_rollout_hash(), hash);
         assert_ne!(Materialize::from(mz.clone()).force_rollout_value(), force);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn balancerd_configmap_reference_preserves_rollout_hash_and_conversion() {
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let hash = mz.generate_rollout_hash();
+        // Omitting the new field also preserves hashes calculated by older operators.
+        assert!(
+            serde_json::to_value(&mz.spec)
+                .unwrap()
+                .get("balancerdConfigmapName")
+                .is_none()
+        );
+        mz.spec.balancerd_configmap_name = Some("balancerd-settings".to_owned());
+        assert_eq!(mz.generate_rollout_hash(), hash);
+        let alpha = Materialize::from(mz.clone());
+        assert_eq!(
+            alpha.spec.balancerd_configmap_name,
+            mz.spec.balancerd_configmap_name
+        );
+        assert_eq!(
+            super::v1::Materialize::from(alpha)
+                .spec
+                .balancerd_configmap_name,
+            mz.spec.balancerd_configmap_name,
+        );
+        for value in [
+            serde_json::json!("balancerd-settings"),
+            serde_json::Value::Null,
+        ] {
+            let subset = serde_json::json!({
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {"name": "mz"},
+                "spec": {"balancerdConfigmapName": value},
+            });
+            let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
+            assert_eq!(v1["spec"]["balancerdConfigmapName"], value);
+            let roundtrip = super::convert_v1_to_v1alpha1(v1).unwrap();
+            assert_eq!(roundtrip, subset);
+        }
     }
 
     #[mz_ore::test]

@@ -111,7 +111,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `balancerd.defaultResources.limits` | Default resource limits for balancerd's CPU and memory if not set in the Materialize CR | ``{"memory":"256Mi"}`` |
 | `balancerd.defaultResources.requests` | Default resources requested for balancerd's CPU and memory if not set in the Materialize CR | ``{"cpu":"500m","memory":"256Mi"}`` |
 | `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
-| `balancerd.initialConfig` | Dynamic configuration used to seed each balancerd ConfigMap when first created. Edit the ConfigMap to change running balancers. Changes to this value do not overwrite existing ConfigMaps. | ``{}`` |
 | `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``{}`` |
@@ -272,37 +271,14 @@ To enable observability features, set `observability.enabled=true`. This will cr
 
 ### Balancer dynamic configuration
 
-Each balancer has a ConfigMap named `mz<resource-id>-balancerd-config` in its
-namespace. Its `config.json` key contains a JSON object mapping dynamic
-configuration names to values, for example:
+Create a ConfigMap containing a `config.json` entry in the Materialize
+instance's namespace and set `spec.balancerdConfigmapName` on the Materialize
+resource to its name. For a standalone Balancer resource, use
+`spec.configmapName`. The operator only mounts the referenced ConfigMap.
+You manage its contents and lifecycle.
 
-```json
-{"balancerd_max_connections": 10000}
-```
-
-Set `balancerd.initialConfig` in Helm values to seed new ConfigMaps:
-
-```yaml
-balancerd:
-  initialConfig:
-    balancerd_max_connections: 10000
-```
-
-The operator creates each ConfigMap once, using `{}` by default, and preserves
-its contents on subsequent reconciliations and Helm upgrades. To tune running
-balancers, edit the ConfigMap directly with `kubectl edit configmap
-mz<resource-id>-balancerd-config -n <namespace>`. The ConfigMap is owned by the
-Balancer resource and is deleted when that resource is deleted.
-
-Updates do not restart pods. Kubernetes first propagates the mounted ConfigMap
-according to the kubelet's sync and cache settings, then balancerd reads it on
-its next five-second tick. Allow roughly two minutes plus five seconds with
-default kubelet settings. This is not a hard upper bound. Removing a JSON key
-does not reset its current value in a running balancer. Set an explicit value
-to change it, including when restoring a default.
-
-The operator's balancers use file synchronization. Do not inject a LaunchDarkly
-SDK key into these pods: balancerd accepts only one configuration source.
+For setup, runtime updates, and verification, see
+[Configure balancerd dynamic configuration](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/#configure-balancerd-dynamic-configuration).
 
 ### Network Policies
 
