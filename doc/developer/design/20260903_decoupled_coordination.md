@@ -107,16 +107,33 @@ compaction, or authorize compaction that invalidates a committed requirement.
 Protection must cover the interval between catalog commit and cluster application,
 independently of the creating adapter's lifetime.
 
-This places maintained read requirements and permission to discard history under
-the same durable authority. Cluster-side components have an explicit limit to
-enforce and recover, without treating a process's local accounting as the
-authority to advance beyond it. The cost is ongoing catalog traffic and processing
-proportional to changing bounds and publication cadence, accepted over the
+This places maintained read requirements, retention policies, and permission to
+discard history under the same durable authority. Cluster-side components have an
+explicit limit to enforce and recover, without treating a process's local
+accounting as the authority to advance beyond it. The cost is ongoing catalog
+traffic and processing proportional to changing bounds and publication cadence,
+accepted over the
 [delegated alternative](#delegated-compaction-advancement). Coalescing or
 rate-limiting advancement may retain extra history, but must not delay protection
 until after it is needed. Choose cadence and batching from measured catalog load,
 DDL latency, and retention cost. Publication work scales with what changed, not
 with catalog size.
+
+### Object-owned retention
+
+A maintained object's retention policy constrains authorized compaction of its
+retained state and the logical inputs needed to reconstruct that history,
+independently of adapter, query-client, or replica lifetimes. This includes
+indexes with no replicas. Client and execution holds impose additional
+constraints. Reclaiming an incarnation does not remove the object's retention
+requirement.
+
+Retention advances with the relevant upper as prescribed by the policy, not
+because a process disappears. If progress cannot be established, retain the
+existing protection. With no components running, advancement may stop
+conservatively. Recovery must preserve history still required by the policy.
+This neither pins creation-time history forever nor restores history already
+discarded before protection was established.
 
 ### Applying committed permission
 
@@ -237,14 +254,16 @@ with input compaction permission.
 
 ### Index reconstruction
 
-An index's compaction bound is its published since, not a historical reconstruction
-guarantee. A fresh index has no bound until first publication. Recovery installs at
-the least readable frontier, capped by committed permission where permission is at
-or above readability. Where permission is below readability, no durable requirement
-depends on the gap, because durable protection of an index protects its inputs. The
-index is replaced at readability and its bound follows through publication.
-Installation never waits for a catalog write. Live readers of an existing trace
-remain protected by execution holds.
+An index's compaction bound is its published since, not by itself a promise to
+reconstruct at every previously published frontier. Reconstruction must preserve
+history still required by [object-owned retention](#object-owned-retention) or
+other valid read requirements. A fresh index has no bound until first publication.
+Recovery installs at the least readable frontier, capped by committed permission
+where permission is at or above readability. Where permission is below readability,
+replacement at readability is allowed only if no retention or read requirement
+depends on the gap, with the bound following through publication. Skipping required
+history is not valid recovery. Installation does not wait for a bound-publication
+write. Live readers of an existing trace remain protected by execution holds.
 
 ### Read-only prewarming
 
@@ -270,8 +289,9 @@ appends are request-scoped and stay with adapters.
 
 A replica's execution reads are protected like a client's, scoped to the
 replica's incarnation, so a slow or hydrating replica keeps the input history it
-needs and loses it when it is gone. Maintained requirements remain the recovery
-floor.
+needs until its protection is released or reclaimed. These execution requirements
+are additional to maintained recovery requirements and object-owned retention,
+which do not expire with the replica.
 
 ### Written plans
 
@@ -386,8 +406,8 @@ forever.
 
 Derive requirements from existing catalog definitions and durable progress where
 possible. Separate records per object type are not prescribed. Preserve existing
-recovery semantics without introducing creation-time history guarantees for indexes
-or metric sinks.
+recovery semantics and policy-based retention without pinning creation-time history
+for indexes or metric sinks.
 
 Evidence includes actual compaction and an input eliminated by optimization,
 fresh builtin initialization, and same-version recovery including MVs reading
@@ -415,6 +435,8 @@ without the adapter, rather than relying on a surviving sibling's progress.
 Then restart the adapter and resume queries. Include a multi-replica cluster with
 one replica still hydrating, same-batch dependencies, and concurrent or delayed
 application of committed permission. One adapter and one query client suffice.
+Verify policy-based retention independently of live client or replica grants,
+including their reclamation and subsequent reconstruction.
 
 #### 3. Independent query clients
 
