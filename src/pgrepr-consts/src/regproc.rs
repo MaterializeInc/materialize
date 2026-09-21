@@ -673,7 +673,7 @@ pub const NAMES: &[(u32, &str)] = &[
     (17073, "mz_internal.parse_catalog_create_sql"),
     (17074, "mz_internal.redact_sql"),
     (17075, "repeat_row_non_negative"),
-    (17086, "mz_internal.mz_session_role_memberships"),
+    (17086, "mz_session_role_memberships"),
     (17090, "mz_internal.parse_catalog_acl_mode"),
     (17093, "mz_unsafe.generate_series_unoptimized"),
     (17094, "mz_unsafe.generate_series_unoptimized"),

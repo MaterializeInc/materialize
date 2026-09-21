@@ -405,7 +405,8 @@ ALTER ROLE agent SET restrict_to_user_objects = true;
 COMPLETE 0
 
 # Agent reconnects with the restriction active - system tables should be blocked
-# Note: The simple protocol creates a new connection each time
+# Note: connections are cached by name, so agent_restricted is a new session
+# opened after the ALTER ROLE, while conn=agent stays unrestricted.
 simple conn=agent_restricted,user=agent
 SELECT count(*) > 0 FROM mz_catalog.mz_roles;
 ----
@@ -615,7 +616,7 @@ GRANT agent_parent TO agent;
 COMPLETE 0
 
 simple conn=agent_hierarchy,user=agent
-SELECT 'agent' = ANY(mz_internal.mz_session_role_memberships()) AND 'agent_parent' = ANY(mz_internal.mz_session_role_memberships());
+SELECT 'agent' = ANY(mz_session_role_memberships()) AND 'agent_parent' = ANY(mz_session_role_memberships());
 ----
 t
 COMPLETE 1
@@ -627,6 +628,89 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 DROP ROLE agent_parent;
+----
+COMPLETE 0
+
+# The fine-grained access control pattern from the docs: an admin-authored view
+# resolves the session's roles and data product views filter on it. Built on
+# mz_session_role_memberships() it is readable by a restricted agent. Built on
+# pg_has_role over mz_roles it is not, because the optimizer rejects
+# pg_has_role's mz_role_oid_memberships() call even in a view created by an
+# unrestricted role.
+simple conn=mz_system,user=mz_system
+CREATE ROLE region_east;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT region_east TO agent;
+----
+COMPLETE 0
+
+# Two hops, so the transitive chain is what gets pinned.
+simple conn=mz_system,user=mz_system
+CREATE ROLE region_all;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT region_all TO region_east;
+----
+COMPLETE 0
+
+statement ok
+CREATE VIEW agent_objects.session_roles AS
+    SELECT unnest(mz_session_role_memberships()) AS name;
+
+statement ok
+CREATE VIEW agent_objects.session_roles_pg_has_role AS
+    SELECT name FROM mz_catalog.mz_roles WHERE pg_has_role(current_role(), oid, 'USAGE');
+
+statement ok
+CREATE VIEW agent_objects.legs AS
+    SELECT leg_id FROM (VALUES (1, 'region_east'), (2, 'region_west'), (3, 'region_all')) AS t (leg_id, region_role)
+    WHERE region_role IN (SELECT name FROM agent_objects.session_roles);
+
+statement ok
+CREATE VIEW agent_objects.legs_pg_has_role AS
+    SELECT leg_id FROM (VALUES (1, 'region_east'), (2, 'region_west'), (3, 'region_all')) AS t (leg_id, region_role)
+    WHERE region_role IN (SELECT name FROM agent_objects.session_roles_pg_has_role);
+
+statement ok
+GRANT SELECT ON agent_objects.legs, agent_objects.legs_pg_has_role TO agent;
+
+simple conn=agent_restricted,user=agent
+SELECT leg_id FROM agent_objects.legs ORDER BY leg_id;
+----
+1
+3
+COMPLETE 2
+
+# Positive control: the agent connection opened before the restriction was set
+# is unrestricted, and the pg_has_role form works there.
+simple conn=agent,user=agent
+SELECT leg_id FROM agent_objects.legs_pg_has_role ORDER BY leg_id;
+----
+1
+3
+COMPLETE 2
+
+simple conn=agent_restricted,user=agent
+SELECT leg_id FROM agent_objects.legs_pg_has_role;
+----
+db error: ERROR: access to system object function mz_role_oid_memberships is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+statement ok
+DROP VIEW agent_objects.legs, agent_objects.legs_pg_has_role, agent_objects.session_roles, agent_objects.session_roles_pg_has_role;
+
+simple conn=mz_system,user=mz_system
+REVOKE region_east FROM agent;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE region_east, region_all;
 ----
 COMPLETE 0
 
