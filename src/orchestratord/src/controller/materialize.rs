@@ -819,6 +819,7 @@ impl k8s_controller::Context for Context {
                         None,
                     ),
                     resource_requirements: mz.spec.balancerd_resource_requirements.clone(),
+                    configmap_name: mz.spec.balancerd_configmap_name.clone(),
                     replicas: Some(mz.balancerd_replicas()),
                     external_certificate_spec: mz.spec.balancerd_external_certificate_spec.clone(),
                     internal_certificate_spec: mz.spec.internal_certificate_spec.clone(),

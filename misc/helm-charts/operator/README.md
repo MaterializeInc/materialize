@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v26.44.0-dev.0](https://img.shields.io/badge/Version-v26.44.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.44.0-dev.0](https://img.shields.io/badge/AppVersion-v26.44.0--dev.0-informational?style=flat-square)
+![Version: v26.44.0-dev.1](https://img.shields.io/badge/Version-v26.44.0--dev.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.44.0-dev.0](https://img.shields.io/badge/AppVersion-v26.44.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -268,6 +268,17 @@ The chart creates a `ClusterRole` and `ClusterRoleBinding` by default. To use an
 ### Observability
 
 To enable observability features, set `observability.enabled=true`. This will create the necessary resources for monitoring the operator. If you want to use Prometheus, also set `observability.prometheus.enabled=true`.
+
+### Balancer dynamic configuration
+
+Create a ConfigMap containing a `config.json` entry in the Materialize
+instance's namespace and set `spec.balancerdConfigmapName` on the Materialize
+resource to its name. For a standalone Balancer resource, use
+`spec.configmapName`. The operator only mounts the referenced ConfigMap.
+You manage its contents and lifecycle.
+
+For setup, runtime updates, and verification, see
+[Configure balancerd dynamic configuration](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/#configure-balancerd-dynamic-configuration).
 
 ### Network Policies
 
