@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/render/sinks.rs
-revision: 98ea0cc1cc
+revision: 0a83b723a5
 ---
 
 # mz-storage::render::sinks
