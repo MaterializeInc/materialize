@@ -443,7 +443,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     // Catalog following is replica-wide, not independently sampled per process.
-    if args.process == 0
+    let follower_config = if args.process == 0
         && let Some(cluster_id) = args.catalog_cluster_id
     {
         let environment_id = connection_context.environment_id.parse()?;
@@ -473,14 +473,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             },
             build_info: &BUILD_INFO,
         };
-        let clients = Arc::clone(&persist_clients);
-        let registry = metrics_registry.clone();
-        mz_ore::task::spawn(|| "catalog_follower", async move {
-            if let Err(error) = catalog_follower::run(config, clients, registry).await {
-                error!(%error, "catalog follower stopped");
-            }
-        });
-    }
+        Some(config)
+    } else {
+        None
+    };
 
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let cluster_server_metrics = ClusterServerMetrics::register_with(&metrics_registry);
@@ -536,12 +532,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     // Start compute server.
-    let compute_server = mz_compute::server::serve(
+    let mut compute_server = mz_compute::server::serve(
         compute_timely_config,
         ComputeRuntimeRole::Solo,
-        false,
+        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some(),
         &metrics_registry,
-        persist_clients,
+        Arc::clone(&persist_clients),
         txns_ctx,
         tracing_handle,
         ComputeInstanceContext {
@@ -552,6 +548,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         storage_log_readers,
     )
     .await?;
+    if let Some(config) = follower_config {
+        let endpoint = compute_server.take_replica();
+        let replica_owned = endpoint.is_some();
+        let registry = metrics_registry.clone();
+        mz_ore::task::spawn(|| "catalog_follower", async move {
+            if let Err(error) =
+                catalog_follower::run(config, persist_clients, registry, endpoint).await
+            {
+                if replica_owned {
+                    mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");
+                }
+                error!(%error, "catalog follower stopped");
+            }
+        });
+    }
     let compute_client_builder = compute_server.client_builder();
     info!(
         "listening for compute controller connections on {}",

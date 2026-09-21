@@ -25,7 +25,7 @@ use timely::progress::Antichain;
 
 use super::{CatalogError, CatalogState};
 use crate::durable::Transaction;
-use crate::memory::objects::{CatalogItem, TableDataSource};
+use crate::memory::objects::{CatalogItem, DataSourceDesc, TableDataSource};
 
 struct IndexRetention {
     id: GlobalId,
@@ -33,6 +33,58 @@ struct IndexRetention {
     shards: BTreeSet<ShardId>,
     policy: ReadPolicy,
     floor: Antichain<Timestamp>,
+}
+
+impl CatalogState {
+    /// Returns the index's effective retention policy, including the metrics override.
+    /// Object retention and replica execution windows use the same policy.
+    pub fn index_read_policy(&self, id: GlobalId) -> Option<ReadPolicy> {
+        if !matches!(
+            self.try_get_entry_by_global_id(&id)?.item(),
+            CatalogItem::Index(_)
+        ) {
+            return None;
+        }
+        self.collection_read_policy(id)
+    }
+
+    /// Effective collection retention, including metrics and ingestion inheritance.
+    pub fn collection_read_policy(&self, id: GlobalId) -> Option<ReadPolicy> {
+        let item = self.try_get_entry_by_global_id(&id)?.item();
+        Some(if item.is_retained_metrics_object() {
+            let duration = self.system_config().metrics_retention();
+            ReadPolicy::lag_writes_by(
+                Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
+                SINCE_GRANULARITY,
+            )
+        } else {
+            let parent = match item {
+                CatalogItem::Source(source) => match &source.data_source {
+                    DataSourceDesc::IngestionExport { ingestion_id, .. } => Some(ingestion_id),
+                    _ => None,
+                },
+                CatalogItem::Table(table) => match &table.data_source {
+                    TableDataSource::DataSource {
+                        desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
+                        ..
+                    } => Some(ingestion_id),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let window = item
+                .custom_logical_compaction_window()
+                .or_else(|| {
+                    parent
+                        .and_then(|id| self.get_entry(id).item().custom_logical_compaction_window())
+                })
+                .or_else(|| item.initial_logical_compaction_window())
+                .or_else(|| {
+                    matches!(item, CatalogItem::Sink(_)).then_some(CompactionWindow::Default)
+                })?;
+            window.into()
+        })
+    }
 }
 
 /// Clips advancing proposals against the final definitions and durable input
@@ -84,18 +136,7 @@ pub(super) async fn constrain_index_retention(
             // tables are not logs and retain the normal object-owned protection.
             continue;
         }
-        let policy: ReadPolicy = if index.is_retained_metrics_object {
-            let duration = candidate.system_config().metrics_retention();
-            ReadPolicy::lag_writes_by(
-                Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
-                SINCE_GRANULARITY,
-            )
-        } else {
-            index
-                .custom_logical_compaction_window
-                .unwrap_or(CompactionWindow::Default)
-                .into()
-        };
+        let policy = candidate.index_read_policy(id).expect("selected an index");
         let mut floor = Antichain::from_elem(Timestamp::MIN);
         let mut shards = BTreeSet::new();
         for input in &inputs {

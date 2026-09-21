@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 /// The status of a cluster.
 pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 
+/// Couples replica activation with withdrawal of controller installation authority.
+/// Both the provisioner and clusterd must use the same build-level ownership gate.
+pub const REPLICA_OWNED_COMPUTE: bool = false;
+
 /// Configures a cluster replica.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ReplicaConfig {

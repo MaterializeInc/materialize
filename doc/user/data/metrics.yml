@@ -327,6 +327,16 @@ metrics:
   - kind
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
+- name: mz_catalog_follower_failures_total
+  help: Catalog follower attempts that require retry, by phase.
+  labels:
+  - phase
+  source: src/clusterd/src/catalog_follower.rs
+  visibility: internal
+- name: mz_catalog_follower_pending_compute_installations
+  help: Compute selections awaiting replica installation.
+  source: src/clusterd/src/catalog_follower.rs
+  visibility: internal
 - name: mz_catalog_info_metrics_reconcile_seconds_bucket
   help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
   labels:
@@ -730,7 +740,7 @@ metrics:
   labels:
   - instance_id
   - replica_id
-  source: src/compute-client/src/metrics.rs
+  source: src/compute-client/src/sequential_hydration.rs
   visibility: public
   tags:
   - compute

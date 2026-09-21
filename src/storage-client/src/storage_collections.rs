@@ -716,6 +716,16 @@ impl StorageCollectionsImpl {
             handle_purpose: format!("controller data for {}", id),
         };
 
+        if self.catalog_read_protection_enabled {
+            return crate::read_protection::open_critical_handle(
+                persist_client,
+                shard,
+                diagnostics,
+            )
+            .await
+            .expect("invalid persist usage");
+        }
+
         // Construct the handle in a separate block to ensure all error paths
         // are diverging
         let since_handle = {
@@ -730,10 +740,6 @@ impl StorageCollectionsImpl {
                 )
                 .await
                 .expect("invalid persist usage");
-
-            if self.catalog_read_protection_enabled {
-                return handle;
-            }
 
             // Take the join of the handle's since and the provided `since`;
             // this lets materialized views express the since at which their
@@ -3600,9 +3606,22 @@ impl BackgroundTask {
                         .unwrap_or_default();
                 }
 
+                let protected = self.catalog_read_protection_enabled;
                 let fut = async move {
                     if id.is_user() {
                         trace!("downgrading since of {} to {:?}", id, new_since);
+                    }
+
+                    if protected {
+                        if let SinceHandleWrapper::Critical(handle) = &mut since_handle {
+                            let result =
+                                crate::read_protection::downgrade_since(handle, &new_since)
+                                    .await
+                                    .map(|result| {
+                                        result.map_err(|opaque| opaque.decode::<PersistEpoch>())
+                                    });
+                            return (id, since_handle, new_since, result);
+                        }
                     }
 
                     let epoch = since_handle.opaque().clone();

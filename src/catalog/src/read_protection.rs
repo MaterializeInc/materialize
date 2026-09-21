@@ -9,6 +9,8 @@
 
 //! Local tokens backed exclusively by acknowledged durable client grants.
 
+pub mod publication;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

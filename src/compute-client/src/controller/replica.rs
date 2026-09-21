@@ -32,12 +32,12 @@ use uuid::Uuid;
 
 use crate::controller::ReplicaId;
 use crate::controller::instance::ReplicaResponse;
-use crate::controller::sequential_hydration::SequentialHydration;
 use crate::logging::LoggingConfig;
 use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
+use crate::sequential_hydration::SequentialHydration;
 
 type Client = Partitioned<ComputeCtpClient, ComputeCommand, ComputeResponse>;
 
@@ -264,7 +264,8 @@ impl ReplicaTask {
         // The sequential hydration interceptor holds back `Schedule` commands and releases them as
         // hydration capacity frees up. It is recreated per incarnation, matching the lifetime of
         // the connection: any in-flight hydration state is reset when we reconnect.
-        let mut hydration = SequentialHydration::new(self.metrics.clone());
+        let mut hydration =
+            SequentialHydration::new(self.metrics.inner.hydration_queue_size.clone());
 
         loop {
             select! {

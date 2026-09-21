@@ -7,22 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Replica-local following through the shared committed catalog implementation.
+//! Replica-local following and enactment through the shared committed catalog.
 //!
-//! The controller is the sole installer until replica execution protection and
-//! worker sequencing are established. Observing a selection is not installation.
+//! Runtime ownership is supplied at startup. Without a native endpoint this
+//! follower only observes selections and cannot install maintained work.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use mz_catalog::catalog::Catalog;
+use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::config::ReplicaCatalogConfig;
 use mz_catalog::durable::{Metrics, persist_backed_catalog_state};
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, expression_build_version};
 use mz_catalog::memory::implications::{CatalogImplications, ParsedStateUpdate};
 use mz_catalog::memory::objects::CatalogItem;
+use mz_compute::server::ReplicaCompute;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::{PersistLocation, cache::PersistClientCache};
@@ -31,7 +32,10 @@ use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use uuid::Uuid;
 
+mod compaction;
+mod compute;
 mod storage_metadata;
+mod time_dependence;
 
 #[cfg(test)]
 mod tests;
@@ -52,10 +56,14 @@ pub(crate) struct Config {
 struct ReplicaEffects {
     pending: BTreeSet<CatalogItemId>,
     selected: BTreeMap<CatalogItemId, (GlobalId, Uuid, GlobalExpressions)>,
+    configuration_changed: bool,
 }
 
 impl ReplicaEffects {
     fn absorb(&mut self, catalog: &Catalog, cluster: ClusterId, effects: CatalogImplications) {
+        self.configuration_changed |= effects.system_config_changed
+            || effects.replica_scoped_config_changed
+            || effects.clusters.contains_key(&cluster);
         self.pending.extend(effects.items.into_keys());
         self.pending.extend(
             effects
@@ -174,7 +182,26 @@ pub(crate) async fn run(
     config: Config,
     persist_clients: Arc<PersistClientCache>,
     registry: MetricsRegistry,
+    endpoint: Option<ReplicaCompute>,
 ) -> anyhow::Result<()> {
+    let failure_counts: mz_ore::metrics::IntCounterVec = registry.register(mz_ore::metric! {
+        name: "mz_catalog_follower_failures_total",
+        help: "Catalog follower attempts that require retry, by phase.",
+        var_labels: ["phase"],
+    });
+    let failures: BTreeMap<_, _> = ["observation", "installation", "publication", "compaction"]
+        .into_iter()
+        .map(|phase| {
+            (
+                phase,
+                failure_counts.get_delete_on_drop_metric(vec![phase.to_string()]),
+            )
+        })
+        .collect();
+    let pending_installs: mz_ore::metrics::UIntGauge = registry.register(mz_ore::metric! {
+        name: "mz_catalog_follower_pending_compute_installations",
+        help: "Compute selections awaiting replica installation.",
+    });
     let persist = persist_clients
         .open(config.persist_location.clone())
         .await?;
@@ -206,30 +233,134 @@ pub(crate) async fn run(
     let build = build.to_string();
     let mut effects = ReplicaEffects::default();
     absorb_updates(&mut effects, &catalog, config.cluster_id, &build, initial);
+    let mut compute = if let Some(endpoint) = endpoint {
+        let (incarnation, publication_started) = loop {
+            let (_, updates) = catalog.sync_to_current_updates().await?;
+            absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
+            let started = std::time::Instant::now();
+            let ts = catalog.current_upper().await;
+            match catalog
+                .transact(None, ts, None, vec![Op::CreateClientIncarnation])
+                .await
+            {
+                Ok(result) => {
+                    absorb_updates(
+                        &mut effects,
+                        &catalog,
+                        config.cluster_id,
+                        &build,
+                        result.catalog_updates,
+                    );
+                    break (
+                        *result
+                            .created_client_incarnations
+                            .first()
+                            .context("created replica incarnation")?,
+                        started,
+                    );
+                }
+                Err(mz_catalog::catalog::CatalogError::Catalog(error))
+                    if matches!(
+                        error.kind,
+                        mz_catalog::memory::error::ErrorKind::Durable(
+                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                        )
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        anyhow::ensure!(
+            catalog
+                .try_get_cluster_replica(config.cluster_id, config.replica_id)
+                .is_some(),
+            "replica was removed before initialization"
+        );
+        let instance = mz_catalog::compute_config::replica_instance_config(
+            &catalog,
+            config.cluster_id,
+            config.replica_id,
+            config.persist_location.clone(),
+        );
+        Some(compute::ComputeEnactment::new(
+            endpoint,
+            instance,
+            incarnation,
+            publication_started,
+            config.cluster_id,
+            config.replica_id,
+            &registry,
+        ))
+    } else {
+        None
+    };
     let mut last_report = tokio::time::Instant::now();
     let mut last_error = None;
     let mut delay = Duration::from_secs(1);
     let mut pending_metadata = true;
+    let mut compaction = compaction::Compaction::default();
     loop {
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
-        let (_, updates) = catalog.sync_to_current_updates().await?;
+        let (_, updates) = wait(&mut compute, catalog.sync_to_current_updates()).await?;
         let changed = !updates.is_empty();
         absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
-        if !changed && effects.pending.is_empty() && !pending_metadata {
+        if let Some(compute) = &mut compute {
+            compute.ensure_live(&catalog)?;
+            if compute.renewal_due() {
+                if let Err(error) = compute
+                    .publish(
+                        &mut catalog,
+                        &mut effects,
+                        config.cluster_id,
+                        &build,
+                        true,
+                        None,
+                    )
+                    .await
+                {
+                    failures["publication"].inc();
+                    tracing::warn!(%error, "replica heartbeat pending");
+                }
+            }
+            compute.apply_progress(&catalog);
+            // Advancing permission waits for current selections and import holds.
+            // Retired definitions cannot be imported by current own-build selections:
+            // their removing transaction also repairs those written plans.
+            compute.apply_catalog(&catalog, &storage_metadata::Resolution::default(), false);
+            if effects.configuration_changed {
+                anyhow::ensure!(
+                    catalog
+                        .try_get_cluster_replica(config.cluster_id, config.replica_id)
+                        .is_some(),
+                    "replica was removed"
+                );
+                compute.configure(mz_catalog::compute_config::replica_compute_config(
+                    &catalog,
+                    config.cluster_id,
+                    config.replica_id,
+                ));
+                effects.configuration_changed = false;
+            }
+        }
+        if compute.is_none() && !changed && effects.pending.is_empty() && !pending_metadata {
             tokio::time::sleep(delay).await;
             continue;
         }
         let result: anyhow::Result<_> = async {
-            effects
-                .observe_plans(
+            wait(
+                &mut compute,
+                effects.observe_plans(
                     &catalog,
                     config.cluster_id,
                     config.replica_id,
                     &store,
                     &build,
-                )
-                .await?;
+                ),
+            )
+            .await?;
             let wanted = effects
                 .selected
                 .values()
@@ -239,14 +370,17 @@ pub(crate) async fn run(
                         .chain(plan.physical_plan.persist_sink_ids())
                 })
                 .collect();
-            storage_metadata::resolve(
-                &catalog,
-                &wanted,
-                &store,
-                &build,
-                &persist,
-                &config.persist_location,
-                txns_shard,
+            wait(
+                &mut compute,
+                storage_metadata::resolve(
+                    &catalog,
+                    &wanted,
+                    &store,
+                    &build,
+                    &persist,
+                    &config.persist_location,
+                    txns_shard,
+                ),
             )
             .await
         }
@@ -254,15 +388,89 @@ pub(crate) async fn run(
         match result {
             Ok(metadata) => {
                 pending_metadata = !metadata.pending.is_empty();
-                let pending = !effects.pending.is_empty() || pending_metadata;
+                let mut pending = !effects.pending.is_empty() || pending_metadata;
+                if let Some(compute) = &mut compute {
+                    if compute.renewal_due() {
+                        if let Err(error) = compute
+                            .publish(
+                                &mut catalog,
+                                &mut effects,
+                                config.cluster_id,
+                                &build,
+                                true,
+                                None,
+                            )
+                            .await
+                        {
+                            failures["publication"].inc();
+                            tracing::warn!(%error, "replica heartbeat pending");
+                        }
+                    }
+                    let result = compute
+                        .install(
+                            &mut catalog,
+                            &mut effects,
+                            config.cluster_id,
+                            &build,
+                            &store,
+                            &persist,
+                            &metadata,
+                        )
+                        .await;
+                    if let Err(error) = result {
+                        failures["installation"].inc();
+                        pending = true;
+                        tracing::warn!(cluster = %config.cluster_id, replica = %config.replica_id,
+                            %error, "compute installation pending");
+                    }
+                    compute.apply_progress(&catalog);
+                    compute.apply_catalog(&catalog, &metadata, effects.pending.is_empty());
+                    if let Err(error) = compute
+                        .publish(
+                            &mut catalog,
+                            &mut effects,
+                            config.cluster_id,
+                            &build,
+                            pending,
+                            Some(&metadata),
+                        )
+                        .await
+                    {
+                        failures["publication"].inc();
+                        tracing::warn!(%error, "replica protection publication pending");
+                    }
+                    let wanted = metadata.metadata.keys().copied().collect();
+                    if let Err(error) = compute
+                        .io
+                        .wait(compaction.reconcile(
+                            &persist,
+                            catalog.state().storage_metadata(),
+                            &wanted,
+                        ))
+                        .await
+                    {
+                        failures["compaction"].inc();
+                        tracing::warn!(%error, "committed storage compaction pending");
+                    }
+                    pending_installs.set(
+                        compute
+                            .pending_installations(&effects)
+                            .try_into()
+                            .expect("fits u64"),
+                    );
+                }
                 if changed
                     || last_error.is_some()
                     || (pending && last_report.elapsed() >= Duration::from_secs(60))
                 {
-                    tracing::info!(cluster = %config.cluster_id, replica = %config.replica_id,
+                    tracing::info!(
+                        cluster = %config.cluster_id, replica = %config.replica_id,
                         plans = effects.selected.len(), pending_plans = ?effects.pending,
-                        pending_metadata = ?metadata.pending, storage_inputs = metadata.metadata.len(),
-                        observed_uppers = metadata.uppers.len(), "catalog follower effects observed (not enacted)");
+                        pending_metadata = ?metadata.pending,
+                        storage_inputs = metadata.metadata.len(),
+                        observed_uppers = metadata.uppers.len(), replica_owned = compute.is_some(),
+                        "catalog follower effects processed"
+                    );
                     last_report = tokio::time::Instant::now();
                 }
                 last_error = None;
@@ -273,19 +481,47 @@ pub(crate) async fn run(
                 };
             }
             Err(error) => {
+                failures["observation"].inc();
                 pending_metadata = true;
+                if let Some(compute) = &mut compute {
+                    // Missing metadata cannot prevent renewal of existing protection.
+                    if let Err(error) = compute
+                        .publish(
+                            &mut catalog,
+                            &mut effects,
+                            config.cluster_id,
+                            &build,
+                            true,
+                            None,
+                        )
+                        .await
+                    {
+                        failures["publication"].inc();
+                        tracing::warn!(%error, "replica heartbeat pending");
+                    }
+                }
                 let error = format!("{error:#}");
                 if last_error.as_ref() != Some(&error)
                     || last_report.elapsed() >= Duration::from_secs(60)
                 {
                     tracing::warn!(cluster = %config.cluster_id, replica = %config.replica_id,
-                        %error, "catalog follower stalled (not enacted)");
+                        %error, replica_owned = compute.is_some(), "catalog follower stalled");
                     last_report = tokio::time::Instant::now();
                 }
                 last_error = Some(error);
                 delay = (delay * 2).min(Duration::from_secs(10));
             }
         }
-        tokio::time::sleep(delay).await;
+        wait(&mut compute, tokio::time::sleep(delay)).await;
+    }
+}
+
+async fn wait<F: std::future::Future>(
+    compute: &mut Option<compute::ComputeEnactment>,
+    future: F,
+) -> F::Output {
+    match compute {
+        Some(compute) => compute.io.wait(future).await,
+        None => future.await,
     }
 }

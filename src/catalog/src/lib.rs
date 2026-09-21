@@ -18,6 +18,7 @@ use mz_adapter_types::connection::ConnectionId;
 
 pub mod builtin;
 pub mod catalog;
+pub mod compute_config;
 pub mod config;
 pub mod durable;
 pub mod expr_cache;

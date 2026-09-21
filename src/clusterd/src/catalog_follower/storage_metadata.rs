@@ -108,7 +108,6 @@ pub(super) async fn resolve(
         .read_plans(selections.iter().map(|(id, rev)| (*id, *rev)).collect())
         .await?;
     let mut result = Resolution::default();
-    let mut observed_uppers = BTreeMap::new();
     for id in wanted {
         let resolved = (|| {
             let definition = definitions
@@ -192,7 +191,21 @@ pub(super) async fn resolve(
             txns_shard,
             relation_desc: desc.expect("every schema kind resolved above"),
         };
-        let upper_shard = txns_shard.unwrap_or(data_shard);
+        result.metadata.insert(*id, metadata);
+    }
+    result.uppers = uppers(persist, &result.metadata).await?;
+    Ok(result)
+}
+
+/// Captures durable progress after the caller has acquired installation grants.
+pub(super) async fn uppers(
+    persist: &PersistClient,
+    metadata: &BTreeMap<GlobalId, CollectionMetadata>,
+) -> anyhow::Result<BTreeMap<GlobalId, Antichain<Timestamp>>> {
+    let mut observed_uppers = BTreeMap::new();
+    let mut result = BTreeMap::new();
+    for (id, metadata) in metadata {
+        let upper_shard = metadata.txns_shard.unwrap_or(metadata.data_shard);
         let upper = match observed_uppers.get(&upper_shard) {
             Some(upper) => upper,
             None => {
@@ -205,8 +218,7 @@ pub(super) async fn resolve(
                 observed_uppers.entry(upper_shard).or_insert(upper)
             }
         };
-        result.uppers.insert(*id, upper.clone());
-        result.metadata.insert(*id, metadata);
+        result.insert(*id, upper.clone());
     }
     Ok(result)
 }
