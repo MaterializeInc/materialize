@@ -652,6 +652,11 @@ impl<'w> Worker<'w> {
     }
 
     fn set_nonce(&mut self, nonce: Uuid) {
+        // Query cleanup also runs during initialization. Retired exports must
+        // stop reporting before any such cleanup can use the new lifecycle nonce.
+        if let Some(state) = &mut self.compute_state {
+            state.silence_retired_frontiers();
+        }
         self.response_tx.set_nonce(nonce);
     }
 

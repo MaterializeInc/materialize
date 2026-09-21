@@ -181,7 +181,7 @@ pub struct ComputeState {
     /// First busy query served in the last sweep. Its successor gets first turn next.
     last_query_served: Option<Uuid>,
     /// Dataflows whose remaining export, import, or peek guards defer retirement.
-    retiring_dataflows: BTreeMap<usize, std::rc::Weak<usize>>,
+    retiring_dataflows: BTreeMap<usize, RetiringDataflow>,
     /// Source-event observer installed only while rendering a query dataflow.
     pub(crate) query_admission: Option<Rc<RefCell<query_execution::Admission>>>,
     /// State kept for each installed compute collection.
@@ -1017,23 +1017,47 @@ impl<'a> ActiveComputeState<'a> {
         // Importers and peeks retain the producer's scheduling guard as well as
         // its trace. Retire only when both exports and readers have released it.
         let index = *collection.dataflow_index;
-        if Rc::strong_count(&collection.dataflow_index) == 1 {
+        let retained = Rc::strong_count(&collection.dataflow_index) > 1;
+        let defer_input = retained
+            && (id.is_user() || id.is_system())
+            && !collection.is_subscribe_or_copy
+            && !collection.reported_frontiers.input_frontier.is_empty();
+        if !retained {
             self.timely_worker.drop_dataflow(index);
-            self.compute_state.retiring_dataflows.remove(&index);
+            if let Some(retired) = self.compute_state.retiring_dataflows.remove(&index) {
+                for response in retired.input_completions() {
+                    self.send_compute_response(response);
+                }
+            }
         } else {
-            self.compute_state
+            let retired = self
+                .compute_state
                 .retiring_dataflows
-                .insert(index, Rc::downgrade(&collection.dataflow_index));
+                .entry(index)
+                .or_insert_with(|| RetiringDataflow {
+                    guard: Rc::downgrade(&collection.dataflow_index),
+                    inputs: BTreeMap::new(),
+                });
+            if defer_input {
+                retired.inputs.insert(
+                    id,
+                    RetiredInput {
+                        probes: collection.input_probes,
+                        reported: collection.reported_frontiers.input_frontier.clone(),
+                    },
+                );
+            }
         }
 
-        // The compute protocol requires us to send a `Frontiers` response with empty frontiers
-        // when a collection was dropped, unless:
+        // Retire the protocol-visible export immediately. Input completion must
+        // wait if importers keep its execution alive. No response is needed if:
         //  * The frontier was already reported as empty previously, or
         //  * The collection is a subscribe or copy-to.
         if !collection.is_subscribe_or_copy {
             let reported = collection.reported_frontiers;
             let write_frontier = (!reported.write_frontier.is_empty()).then(Antichain::new);
-            let input_frontier = (!reported.input_frontier.is_empty()).then(Antichain::new);
+            let input_frontier =
+                (!defer_input && !reported.input_frontier.is_empty()).then(Antichain::new);
             let output_frontier = (!reported.output_frontier.is_empty()).then(Antichain::new);
             let read_frontier = (!reported.read_frontier.is_empty()).then(Antichain::new);
 
@@ -1231,6 +1255,29 @@ impl<'a> ActiveComputeState<'a> {
             };
             if response.has_updates() {
                 responses.push((id, response));
+            }
+        }
+
+        if self.compute_state.active_query.is_none() {
+            for retired in self.compute_state.retiring_dataflows.values_mut() {
+                for (&id, input) in &mut retired.inputs {
+                    new_frontier.clear();
+                    for probe in input.probes.values() {
+                        probe.with_frontier(|frontier| {
+                            new_frontier.extend(frontier.iter().copied())
+                        });
+                    }
+                    if input.reported.allows_reporting(&new_frontier) {
+                        input.reported = ReportedFrontier::Reported(new_frontier.clone());
+                        responses.push((
+                            id,
+                            FrontiersResponse {
+                                input_frontier: Some(new_frontier.clone()),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                }
             }
         }
 
@@ -2123,6 +2170,48 @@ impl ReportedFrontier {
         match self {
             Self::Reported(frontier) => PartialOrder::less_than(frontier, other),
             Self::NotReported { lower } => PartialOrder::less_equal(lower, other),
+        }
+    }
+}
+
+/// Reporting owns neither capabilities nor a strong scheduling guard. A retired
+/// export may still read inputs for its importers, but this bookkeeping must not
+/// itself keep execution alive.
+struct RetiringDataflow {
+    guard: std::rc::Weak<usize>,
+    inputs: BTreeMap<GlobalId, RetiredInput>,
+}
+
+struct RetiredInput {
+    probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
+    reported: ReportedFrontier,
+}
+
+impl RetiringDataflow {
+    /// Call only after dropping the actual dataflow. Destroyed probes need not
+    /// advance to empty, so final execution completion is reported explicitly.
+    fn input_completions(&self) -> impl Iterator<Item = ComputeResponse> + '_ {
+        self.inputs
+            .iter()
+            .filter(|(_, input)| !input.reported.is_empty())
+            .map(|(&id, _)| {
+                ComputeResponse::Frontiers(
+                    id,
+                    FrontiersResponse {
+                        input_frontier: Some(Antichain::new()),
+                        ..Default::default()
+                    },
+                )
+            })
+    }
+}
+
+impl ComputeState {
+    /// Retired exports belong to the previous maintained connection. Reconciliation
+    /// must not send their progress to a controller that no longer tracks them.
+    pub(crate) fn silence_retired_frontiers(&mut self) {
+        for retired in self.retiring_dataflows.values_mut() {
+            retired.inputs.clear();
         }
     }
 }

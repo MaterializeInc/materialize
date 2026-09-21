@@ -352,14 +352,24 @@ impl ComputeState {
             );
             self.queries.insert(nonce, query);
         }
-        self.retiring_dataflows.retain(|index, token| {
-            if token.strong_count() == 0 {
+        let mut completed = Vec::new();
+        self.retiring_dataflows.retain(|index, retired| {
+            if retired.guard.strong_count() == 0 {
                 worker.drop_dataflow(*index);
+                completed.extend(retired.input_completions());
                 false
             } else {
                 true
             }
         });
+        let active = ActiveComputeState {
+            timely_worker: worker,
+            compute_state: self,
+            response_tx: response_sender,
+        };
+        for response in completed {
+            active.send_compute_response(response);
+        }
     }
 
     fn report_query_catalog_frontiers(&mut self, nonce: Uuid, sender: &ResponseSender) {

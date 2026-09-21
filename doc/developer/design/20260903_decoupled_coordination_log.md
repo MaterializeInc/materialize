@@ -1087,3 +1087,13 @@ aborting publication for retry. Log-dependent indexes retain local semantics,
 including mixed views, without exempting persisted inputs' own policies. Next is
 replica grant integration for execution and live retention windows, plus recovery
 and zero-replica advancement through the runtime path.
+
+### 2026-09-21: Execution protection outlives export retirement
+
+Queries and maintained importers can keep a producer running after its catalog
+export is dropped. Their read timestamps need not protect the producer's pending
+input snapshot. Replica execution grants must follow actual input completion,
+not catalog absence or retirement of the readable export. Passive input probes
+can continue reporting without extending execution lifetime. Legacy reconnection
+must silence retired IDs at the nonce boundary, before initialization is received.
+Next: bind execution grants to these signals and add execution-relative live windows.

@@ -9,6 +9,7 @@
 
 use super::*;
 use command_channel::Origin;
+use mz_compute_client::protocol::response::PeekResponse;
 
 #[mz_ore::test]
 fn routing_retirement_without_local_endpoint_is_bounded() {
@@ -104,6 +105,74 @@ fn unfinished_lifecycle_initialization_services_queries() {
         worker.handle_deferred_queries();
         assert_eq!(worker.command_rx.deferred_queries.len(), 2);
         worker.compute_state = state;
+
+        // A pending peek keeps this producer alive across export retirement.
+        // It will finish while the replacement lifecycle is still initializing.
+        let retired_id = mz_repr::GlobalId::User(2);
+        let view_id = mz_repr::GlobalId::User(1);
+        let typ =
+            mz_repr::ReprRelationType::new(vec![mz_repr::ReprScalarType::UInt64.nullable(false)]);
+        let mut dataflow =
+            mz_compute_types::dataflows::DataflowDescription::new("retired producer".into());
+        dataflow.insert_plan(
+            view_id,
+            mz_expr::OptimizedMirRelationExpr::declare_optimized(
+                mz_expr::MirRelationExpr::Constant {
+                    rows: Ok(vec![(
+                        mz_repr::Row::pack_slice(&[mz_repr::Datum::UInt64(1)]),
+                        mz_repr::Diff::ONE,
+                    )]),
+                    typ: typ.clone(),
+                },
+            ),
+        );
+        dataflow.export_index(
+            retired_id,
+            mz_compute_types::dataflows::IndexDesc {
+                on_id: view_id,
+                key: vec![mz_expr::MirScalarExpr::Column(0, Default::default())],
+            },
+            typ,
+        );
+        dataflow.as_of = Some(timely::progress::Antichain::from_elem(
+            mz_repr::Timestamp::MIN,
+        ));
+        let dataflow = mz_compute_types::plan::LirRelationExpr::finalize_dataflow(
+            dataflow, &Default::default(), None,
+        ).expect("constant dataflow").into_render_plan::<
+            mz_storage_types::controller::CollectionMetadata, std::convert::Infallible,
+        >(|_| unreachable!("no storage inputs"), |_| unreachable!("no storage outputs"))
+        .expect("render constant dataflow");
+        worker.set_nonce(Uuid::new_v4());
+        let mut active = worker.activate_compute().expect("initialized worker");
+        active.handle_compute_command(ComputeCommand::CreateDataflow(Box::new(dataflow)));
+        active.handle_compute_command(ComputeCommand::Schedule(retired_id));
+        let reader = Uuid::new_v4();
+        let peek_id = Uuid::new_v4();
+        let mut peek = crate::compute_state::index_peek_tests::index_peek_with_uuid(peek_id, None);
+        peek.target = mz_compute_client::protocol::command::PeekTarget::Index { id: retired_id };
+        let state = worker.compute_state.as_mut().expect("initialized worker");
+        for command in [
+            ComputeCommand::HelloQuery { nonce: reader },
+            ComputeCommand::SetQueryMaxResultSize {
+                max_result_size: u64::MAX,
+            },
+            ComputeCommand::Peek(Box::new(peek)),
+        ] {
+            state.handle_query_command(
+                worker.timely_worker,
+                Some(command),
+                reader,
+                &mut worker.response_tx,
+            );
+        }
+        worker
+            .activate_compute()
+            .expect("initialized worker")
+            .handle_compute_command(ComputeCommand::AllowCompaction {
+                id: retired_id,
+                frontier: timely::progress::Antichain::new(),
+            });
         let lifecycle = Uuid::new_v4();
         worker.command_rx.nonce = Some(lifecycle);
         worker.set_nonce(lifecycle);
@@ -120,16 +189,47 @@ fn unfinished_lifecycle_initialization_services_queries() {
                     Origin::Query(query),
                 ));
                 let result = tokio::time::timeout(Duration::from_secs(10), async {
-                    while !matches!(
-                        response_rx.recv().await,
-                        Some(ResponseEvent::Response(ComputeResponse::QueryReady, n))
-                            if n == query
-                    ) {}
+                    let mut ready = false;
+                    let mut peek_finished = false;
+                    while !(ready && peek_finished) {
+                        let event = response_rx
+                            .recv()
+                            .await
+                            .ok_or("worker response channel closed")?;
+                        if matches!(&event,
+                            ResponseEvent::Response(ComputeResponse::Frontiers(id, _), n)
+                                if *id == retired_id && *n == lifecycle
+                        ) {
+                            return Err("retired progress crossed the lifecycle nonce boundary");
+                        }
+                        ready |= matches!(
+                            &event,
+                            ResponseEvent::Response(ComputeResponse::QueryReady, n) if *n == query
+                        );
+                        peek_finished |= matches!(&event,
+                            ResponseEvent::Response(
+                                ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _), n
+                            )
+                                if *id == peek_id && *n == reader
+                        );
+                    }
                     commands.send((None, Origin::Query(query)));
-                    while !matches!(
-                        response_rx.recv().await,
-                        Some(ResponseEvent::QueryRetired(n)) if n == query
-                    ) {}
+                    loop {
+                        let event = response_rx
+                            .recv()
+                            .await
+                            .ok_or("worker response channel closed")?;
+                        if matches!(&event,
+                            ResponseEvent::Response(ComputeResponse::Frontiers(id, _), n)
+                                if *id == retired_id && *n == lifecycle
+                        ) {
+                            return Err("retired progress crossed the lifecycle nonce boundary");
+                        }
+                        if matches!(event, ResponseEvent::QueryRetired(n) if n == query) {
+                            break;
+                        }
+                    }
+                    Ok(())
                 })
                 .await;
                 // End the wait without ever completing the pending initialization.
@@ -137,7 +237,9 @@ fn unfinished_lifecycle_initialization_services_queries() {
                     Some(ComputeCommand::InitializationComplete),
                     Origin::Lifecycle(replacement),
                 ));
-                result.unwrap();
+                result
+                    .expect("queries complete during initialization")
+                    .expect("retirement stays within its lifecycle");
             });
         assert!(matches!(worker.reconcile(), Err(NonceChange(n)) if n == replacement));
         handle.block_on(task);

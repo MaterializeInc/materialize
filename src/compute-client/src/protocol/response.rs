@@ -163,16 +163,17 @@ pub struct FrontiersResponse {
     /// The collection's new write frontier, if any.
     ///
     /// Upon receiving an updated `write_frontier`, the controller may assume that the contents of the
-    /// collection are sealed for all times less than that frontier. Once it has reported the
-    /// `write_frontier` as the empty frontier, the replica must no longer change the contents of the
-    /// collection.
+    /// collection are sealed for all times less than that frontier. After an empty frontier,
+    /// the contents available through this export must no longer change. Retiring an export
+    /// does not stop a producer retained by existing importers.
     pub write_frontier: Option<Antichain<Timestamp>>,
     /// The collection's new input frontier, if any.
     ///
     /// Upon receiving an updated `input_frontier`, the controller may assume that the replica has
     /// finished reading from the collection’s inputs up to that frontier. Once it has reported the
     /// `input_frontier` as the empty frontier, the replica must no longer read from the
-    /// collection's inputs.
+    /// collection's inputs. Dropping an export does not complete these reads if its producer
+    /// remains alive for importers. Input reports may therefore outlive export retirement.
     pub input_frontier: Option<Antichain<Timestamp>>,
     /// The collection's new output frontier, if any.
     ///

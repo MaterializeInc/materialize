@@ -525,7 +525,17 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
         }
         .drop_collection(id);
     }
-    h.drain();
+    let dropped = h.drain();
+    assert!(
+        dropped.iter().any(|(response, nonce)| {
+            *nonce == Uuid::nil()
+                && matches!(response, ComputeResponse::Frontiers(id, frontiers)
+                if *id == UPSTREAM
+                    && frontiers.read_frontier.as_ref().is_some_and(|f| f.is_empty())
+                    && !frontiers.input_frontier.as_ref().is_some_and(|f| f.is_empty()))
+        }),
+        "DROP must retire admission without claiming that retained execution has stopped"
+    );
     // Write only after lifecycle deletion. A saved snapshot cannot satisfy this read.
     let row = crate::compute_state::index_peek_tests::ok_row(42);
     writer
@@ -542,13 +552,37 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
     peek.timestamp = Timestamp::MIN;
     h.command(A, ComputeCommand::Peek(Box::new(peek)));
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut peek_response = None;
+    let mut input_progressed = false;
     let response = loop {
         h.worker.step();
         h.poll();
-        if let Some(response) = h.drain().into_iter().find_map(|(r, n)| match r {
-            ComputeResponse::PeekResponse(id, response, _) if n == A && id == B => Some(response),
-            _ => None,
-        }) {
+        ActiveComputeState {
+            timely_worker: &mut h.worker,
+            compute_state: &mut h.state,
+            response_tx: &mut h.sender,
+        }
+        .report_frontiers();
+        for (response, nonce) in h.drain() {
+            match response {
+                ComputeResponse::PeekResponse(id, response, _) if nonce == A && id == B => {
+                    peek_response = Some(response);
+                }
+                ComputeResponse::Frontiers(id, frontiers)
+                    if nonce == Uuid::nil() && id == UPSTREAM =>
+                {
+                    if let Some(input) = frontiers.input_frontier {
+                        assert!(
+                            !input.is_empty(),
+                            "retained producer is still reading inputs"
+                        );
+                        input_progressed |= !input.less_than(&Timestamp::from(100));
+                    }
+                }
+                _ => (),
+            }
+        }
+        if input_progressed && let Some(response) = peek_response.take() {
             break response;
         }
         assert!(
@@ -569,10 +603,30 @@ async fn maintained_import_chain_progresses_after_lifecycle_drops() {
     );
     h.state
         .handle_query_command(&mut h.worker, None, A, &mut h.sender);
+    let mut completed = 0;
     for _ in 0..10 {
         h.worker.step();
         h.poll();
+        completed += h
+            .drain()
+            .into_iter()
+            .filter(|(response, nonce)| match response {
+                ComputeResponse::Frontiers(id, frontiers)
+                    if *nonce == Uuid::nil() && *id == UPSTREAM =>
+                {
+                    frontiers
+                        .input_frontier
+                        .as_ref()
+                        .is_some_and(|f| f.is_empty())
+                }
+                _ => false,
+            })
+            .count();
     }
+    assert_eq!(
+        completed, 1,
+        "execution completes once after the final reader closes"
+    );
     assert!(h.worker.installed_dataflows().is_empty());
 }
 
@@ -825,9 +879,10 @@ async fn query_peek_ids_and_cancellation_are_connection_owned() {
     h.command(A, ComputeCommand::CancelPeek { uuid: A });
     let responses = h.drain();
     assert_eq!(responses.len(), 1);
-    assert!(
-        matches!(&responses[0], (ComputeResponse::PeekResponse(_, PeekResponse::Canceled, _), n) if *n == A)
-    );
+    assert!(matches!(
+        &responses[0],
+        (ComputeResponse::PeekResponse(_, PeekResponse::Canceled, _), n) if *n == A
+    ));
     h.state
         .handle_query_command(&mut h.worker, None, A, &mut h.sender);
     h.command(B, ComputeCommand::CancelPeek { uuid: A });
@@ -906,7 +961,11 @@ async fn query_source_failure_poison_survives_admission_and_is_owned() {
     h.poll();
     let responses = h.drain();
     for uuid in [A, B] {
-        assert!(responses.iter().any(|(r, n)| *n == A && matches!(r, ComputeResponse::PeekResponse(id, PeekResponse::Error(_), _) if *id == uuid)));
+        assert!(responses.iter().any(|(r, n)| *n == A
+            && matches!(
+                r,
+                ComputeResponse::PeekResponse(id, PeekResponse::Error(_), _) if *id == uuid
+            )));
     }
     assert!(responses.iter().any(|(r, n)| *n == B
         && matches!(
