@@ -722,9 +722,6 @@ impl Coordinator {
                 CollectionType::Storage => self.controller.storage.collection_hydrated(id)?,
             };
 
-            // The leader reports write frontiers, including REFRESH jumps. Comparing
-            // those with local output frontiers would wait for computation through
-            // the next refresh time even when the deployments are equally caught up.
             let readiness = CollectionReadiness::classify(
                 collection_hydrated,
                 &write_frontier,

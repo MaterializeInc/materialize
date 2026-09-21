@@ -165,16 +165,9 @@ immediately.
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
-   [hydrate](/fundamentals/concepts/hydration/).
+   [hydrate](/fundamentals/concepts/hydration/) and for their compute collections
+   to catch up to the outgoing replicas within the configured lag allowance.
 3. Retires the old replicas.
-
-{{< warn-if-unreleased "v26.44" >}}
-
-Starting in v26.44, deployments with the catch-up check enabled also wait for
-each required new replica's compute collections to catch up to the replicas
-the resize will retire, with a default allowance of 60 seconds per collection.
-This bounds lag at cutover, but does not guarantee zero lag. Source ingestion
-still waits for hydration only. The check is disabled by default during rollout.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
 then from both sets as the new replicas come up, so the resize incurs no
@@ -188,10 +181,7 @@ The resize still proceeds in the background.
 - `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
   resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
   replicas and proceed with the new ones even if they are not ready) or
-  `ROLLBACK` (keep the current size). Default: `ROLLBACK`. A forced cutover can
-  cause downtime or increased query latency. Strict-serializable queries wait
-  for the required progress. Queries using isolation levels that permit stale
-  reads may return older results.
+  `ROLLBACK` (keep the current size). Default: `ROLLBACK`.
 
   ```mzsql
   ALTER CLUSTER c1

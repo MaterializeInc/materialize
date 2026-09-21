@@ -469,10 +469,10 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
 /// Whether a replica must be caught up, not merely hydrated, before a graceful
 /// reconfiguration cuts over to it.
 ///
-/// Disabled by default for rollout. With this off the cut-over gate is hydration alone.
+/// Enabled by default.
 pub const ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE: Config<bool> = Config::new(
     "enable_cluster_reconfiguration_lag_gate",
-    false,
+    true,
     "Whether a graceful reconfiguration requires its target replicas to be within \
     cluster_reconfiguration_allowed_lag of the replicas they replace, on top of being hydrated.",
     ParameterScope::Environment,
@@ -480,13 +480,6 @@ pub const ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE: Config<bool> = Config::new(
 
 /// How far behind a graceful reconfiguration's target replicas may be and still
 /// be cut over to.
-///
-/// Measured per collection against the furthest output frontier among the
-/// replicas the cut-over will drop, the realized-shape set; replicas that
-/// survive the cut-over are not part of the reference. The duration is applied
-/// as that many milliseconds of the
-/// collection's timestamp domain, which is exact on the epoch-milliseconds
-/// timeline and a raw tick count on any other.
 pub const CLUSTER_RECONFIGURATION_ALLOWED_LAG: Config<Duration> = Config::new(
     "cluster_reconfiguration_allowed_lag",
     Duration::from_secs(60),
