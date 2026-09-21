@@ -1061,3 +1061,16 @@ the existing paused-cluster behavior as the baseline. Losing replicas neither
 releases the policy nor freezes its frontier. Verify advancement without query
 or replica grants. Upper semantics for live, lagging indexes and the retention
 contract for replica-local compute logs remain separate open questions.
+
+### 2026-09-21: Index retention upper and compute-log scope agreed with Aljoscha
+
+The object-owned index requirement follows durable logical-input progress with or
+without replicas. Replica grants additionally protect running indexes' retention
+windows relative to execution progress, preserving admission of historical reads
+even when inputs run ahead. Extra retention for lagging replicas is accepted.
+
+Compute logs and indexes over them keep replica-local history semantics. This work
+does not persist those logs or recover their history after replica loss. Persisted
+system-catalog collections remain under the normal guarantees. These decisions
+resolve both pending retention questions. Next: integrate and verify both retention
+constraints before replica cutover, without assuming additional durable state.

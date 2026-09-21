@@ -128,14 +128,23 @@ indexes with no replicas. Client and execution holds impose additional
 constraints. Reclaiming an incarnation does not remove the object's retention
 requirement.
 
-Retention advances with the relevant upper as prescribed by the policy, not
-because a process disappears. For an index with no replicas, policy-based retention
-continues to advance from input progress, subject to other valid read requirements.
-Having zero replicas must neither release retention nor freeze its advancement.
+An index's object-owned requirement applies its retention policy to durable
+progress of its logical inputs, with or without replicas. Live replicas also
+protect their running indexes' retention windows relative to execution progress.
+That history must remain admissible for new reads. Protecting only unfinished
+execution is insufficient. Lagging replicas may retain extra history. Zero replicas
+must neither release the object-owned retention requirement nor freeze its
+advancement from input progress.
+
 If progress cannot be established, retain the existing protection. With no
 components running, advancement may stop conservatively. Recovery must preserve
 history still required by the policy. This neither pins creation-time history
 forever nor restores history already discarded before protection was established.
+
+Replica-local compute logs remain volatile. Their retention policies, including
+those of indexes over them, apply within the replica incarnation and do not
+promise reconstruction after loss of the replica. This work does not persist
+those logs. Persisted system-catalog collections retain the normal guarantees.
 
 ### Applying committed permission
 
@@ -289,11 +298,11 @@ committed retirement permission idempotently. Adapters perform finalization for
 this deliverable. Creating replica processes stays with envd for now. DDL and table
 appends are request-scoped and stay with adapters.
 
-A replica's execution reads are protected like a client's, scoped to the
-replica's incarnation, so a slow or hydrating replica keeps the input history it
-needs until its protection is released or reclaimed. These execution requirements
-are additional to maintained recovery requirements and object-owned retention,
-which do not expire with the replica.
+A replica's execution reads and live-index retention windows use incarnation-scoped
+client protection. A slow or hydrating replica keeps the input history it needs
+until its protection is released or reclaimed. These requirements are additional
+to maintained recovery requirements and object-owned retention, which do not
+expire with the replica.
 
 ### Written plans
 
