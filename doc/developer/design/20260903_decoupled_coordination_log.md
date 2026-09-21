@@ -1074,3 +1074,16 @@ does not persist those logs or recover their history after replica loss. Persist
 system-catalog collections remain under the normal guarantees. These decisions
 resolve both pending retention questions. Next: integrate and verify both retention
 constraints before replica cutover, without assuming additional durable state.
+
+### 2026-09-21: Derived retention at the native catalog boundary
+
+Object retention needs no additional index record. The native commit path can
+derive it from final definitions, durable logical-input uppers, and the transaction
+base's readable floor. Proposals cannot supply their own floor. First index-bound
+publication records installed readability rather than advancing it.
+
+Progress sampling has bounded fanout. Failure retains committed permission by
+aborting publication for retry. Log-dependent indexes retain local semantics,
+including mixed views, without exempting persisted inputs' own policies. Next is
+replica grant integration for execution and live retention windows, plus recovery
+and zero-replica advancement through the runtime path.

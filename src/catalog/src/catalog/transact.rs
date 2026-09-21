@@ -317,7 +317,8 @@ pub enum Op {
     /// Stages changed read requirements and compaction bounds.
     ///
     /// Either vector may be empty. See [`Transaction::set_read_protection`] for
-    /// the readability and recovery contracts.
+    /// the readability and recovery contracts. Bound proposals are clipped at
+    /// commit by object-owned retention and may retain more history than requested.
     SetReadProtection {
         requirements: Vec<MaintainedReadRequirement>,
         bounds: Vec<CollectionCompactionBound>,
@@ -808,6 +809,7 @@ impl Catalog {
 
         let new_state = Self::transact_inner(
             TransactInnerMode::Commit,
+            &self.diagnostic_config.persist_client,
             storage_collections,
             commit_ts,
             session,
@@ -910,6 +912,7 @@ impl Catalog {
         // Process only the new ops against the accumulated state in dry-run mode.
         let new_state = Self::transact_inner(
             TransactInnerMode::DryRun,
+            &self.diagnostic_config.persist_client,
             None,
             oracle_write_ts,
             session,
@@ -996,6 +999,7 @@ impl Catalog {
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
         mode: TransactInnerMode,
+        persist_client: &mz_persist_client::PersistClient,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&TransactionContext<'_>>,
@@ -1227,6 +1231,19 @@ impl Catalog {
         // Admission failures must return before entering the fatal commit path.
         // Batch extraction repeats this check for other durable callers.
         tx.finalize_index_compaction_bounds();
+        if matches!(mode, TransactInnerMode::Commit) {
+            // A dry run has synthetic storage identities and grants no compaction
+            // permission. Observe durable progress only at the commit boundary.
+            let changed = tx.changed_compaction_bounds().collect();
+            super::retention::constrain_index_retention(
+                persist_client,
+                tx,
+                &state,
+                &preliminary_state,
+                &changed,
+            )
+            .await?;
+        }
         tx.validate_read_protection()?;
 
         // Storage preparation can retract permission staged by an earlier op
