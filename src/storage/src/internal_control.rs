@@ -66,6 +66,8 @@ impl DataflowParameters {
 /// on them.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum InternalStorageCommand {
+    /// Native maintained ingress, ordered before worker bookkeeping and async work.
+    Replica(mz_storage_client::client::StorageCommand),
     /// Worker zero sequences query opens, commands and retirement together, so a
     /// delayed process endpoint cannot resurrect retired work.
     Query {

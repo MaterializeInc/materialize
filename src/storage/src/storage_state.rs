@@ -163,6 +163,8 @@ pub struct Worker<'w> {
     initialization: Option<Vec<StorageCommand>>,
     queries: BTreeMap<Uuid, Query>,
     query_ready: bool,
+    replica_commands: Option<CommandReceiver>,
+    replica_progress: Option<mz_cluster::replica_progress::Sender<StorageResponse>>,
 }
 
 impl<'w> Worker<'w> {
@@ -280,7 +282,27 @@ impl<'w> Worker<'w> {
             initialization: None,
             queries: BTreeMap::new(),
             query_ready: false,
+            replica_commands: None,
+            replica_progress: None,
         }
+    }
+
+    /// Installs native ingress and progress in the existing worker runtime.
+    /// Call once on every worker, before running or accepting connections.
+    pub(crate) fn enable_replica(
+        &mut self,
+    ) -> (
+        mpsc::UnboundedSender<StorageCommand>,
+        mpsc::UnboundedReceiver<(usize, StorageResponse)>,
+    ) {
+        assert!(self.replica_progress.is_none());
+        let (progress, responses) = mz_cluster::replica_progress::render(self.timely_worker);
+        self.replica_progress = Some(progress);
+        let (commands, receiver) = mpsc::unbounded_channel();
+        if self.timely_worker.index() == 0 {
+            self.replica_commands = Some(receiver);
+        }
+        (commands, responses)
     }
 }
 
@@ -457,10 +479,28 @@ impl<'w> Worker<'w> {
         let (discard_responses, _) = mpsc::unbounded_channel();
 
         loop {
+            // Native ingress joins the same global order as queries, restarts,
+            // and async worker responses before mutating worker bookkeeping.
+            if let Some(commands) = &mut self.replica_commands {
+                for _ in 0..commands.len() + 1 {
+                    match commands.try_recv() {
+                        Ok(command) => self
+                            .storage_state
+                            .internal_cmd_tx
+                            .send(InternalStorageCommand::Replica(command)),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => panic!("replica storage ingress lost"),
+                    }
+                }
+            }
             self.poll_clients();
             // Client disconnection alone must not stop maintained work. Closing the
             // container's endpoint channel, with no clients left, ends the worker.
-            if self.client_rx.is_closed() && self.client_rx.is_empty() && self.peers.is_empty() {
+            if self.replica_progress.is_none()
+                && self.client_rx.is_closed()
+                && self.client_rx.is_empty()
+                && self.peers.is_empty()
+            {
                 return;
             }
             // A disconnected lifecycle may ignore responses. Query results are routed
@@ -504,6 +544,10 @@ impl<'w> Worker<'w> {
             // consumed by the call to `client_rx.recv`. See:
             // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
             if self.client_rx.is_empty()
+                && self
+                    .replica_commands
+                    .as_ref()
+                    .is_none_or(|rx| rx.is_empty())
                 && self.peers.values().all(|p| p.commands.is_empty())
                 && self.storage_state.async_worker.is_empty()
             {
@@ -575,6 +619,10 @@ impl<'w> Worker<'w> {
                         break;
                     };
                     let query = matches!(first, StorageCommand::HelloQuery { .. });
+                    if self.replica_progress.is_some() && !query {
+                        self.peers.remove(&nonce);
+                        break;
+                    }
                     peer.query = Some(query);
                     if !query {
                         if let Some(old) = self.lifecycle.replace(nonce) {
@@ -766,6 +814,21 @@ impl<'w> Worker<'w> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(&mut self, internal_cmd: InternalStorageCommand) {
         match internal_cmd {
+            InternalStorageCommand::Replica(command) => {
+                assert!(self.replica_progress.is_some());
+                if matches!(command, StorageCommand::InitializationComplete) {
+                    // Configuration's rendering-stage command was enqueued by
+                    // worker zero while processing preceding native ingress.
+                    // Put readiness behind it, not at this first-stage barrier.
+                    if self.timely_worker.index() == 0 {
+                        self.storage_state
+                            .internal_cmd_tx
+                            .send(InternalStorageCommand::QueryReady);
+                    }
+                } else {
+                    self.storage_state.handle_storage_command(command);
+                }
+            }
             InternalStorageCommand::Query { nonce, command } => self.handle_query(nonce, command),
             InternalStorageCommand::QueryFinished {
                 nonce,
@@ -1210,6 +1273,10 @@ impl<'w> Worker<'w> {
 
     /// Send a response to the coordinator.
     fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
+        if let Some(progress) = &self.replica_progress {
+            progress.send(response);
+            return;
+        }
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = response_tx.send(response);
