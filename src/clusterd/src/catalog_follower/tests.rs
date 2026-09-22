@@ -244,6 +244,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
             expected_revision: None,
             revision: Some(revision),
             imports: BTreeSet::new(),
+            replica_owner: None,
         }],
     )
     .await;
@@ -282,6 +283,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
             expected_revision: Some(revision),
             revision: Some(replacement),
             imports: BTreeSet::new(),
+            replica_owner: None,
         }],
     )
     .await;
@@ -317,6 +319,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
             expected_revision: Some(replacement),
             revision: None,
             imports: BTreeSet::new(),
+            replica_owner: None,
         }],
     )
     .await;

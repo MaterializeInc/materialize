@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Replica-owned installation and protection of written compute dataflows.
+//! Replica-owned execution, read protection, and progress publication.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -44,29 +44,45 @@ use super::{ReplicaEffects, absorb_updates, storage_metadata, time_dependence};
 
 type Plan = DataflowDescription<LirRelationExpr, ()>;
 
+mod storage;
+
 #[cfg(test)]
 mod lag_tests;
 #[cfg(test)]
 mod liveness_tests;
+#[cfg(test)]
+mod metric_tests;
+#[cfg(test)]
+mod source_tests;
 #[cfg(test)]
 mod tests;
 
 /// Drains runtime progress even while catalog/Persist operations are outstanding.
 /// Frontiers coalesce by field, so slow metadata I/O does not accumulate a queue
 /// proportional to elapsed time. Unobserved fields remain unknown.
-pub(super) struct ComputeIo {
+pub(super) struct ReplicaIo {
     endpoint: ReplicaCompute,
+    storage: Option<storage::StorageIo>,
     frontiers: BTreeMap<GlobalId, FrontiersResponse>,
     hydration: SequentialHydration,
     config: mz_dyncfg::ConfigSet,
 }
 
-impl ComputeIo {
+impl ReplicaIo {
     pub async fn wait<F: Future>(&mut self, future: F) -> F::Output {
         tokio::pin!(future);
         loop {
             tokio::select! {
                 result = &mut future => return result,
+                response = async {
+                    match &mut self.storage {
+                        Some(storage) => storage.endpoint.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match response {
+                    Ok(Some(response)) => self.storage.as_mut().expect("storage endpoint").absorb(response),
+                    result => mz_ore::halt!("replica storage progress lost: {result:?}"),
+                },
                 response = self.endpoint.recv() => match response {
                     Ok(Some(response)) => {
                         for command in self.hydration.observe_response(&response, &self.config) {
@@ -166,18 +182,21 @@ struct Installed {
     time_dependence: Option<TimeDependence>,
 }
 
-pub(super) struct ComputeEnactment {
-    pub io: ComputeIo,
+pub(super) struct ReplicaEnactment {
+    pub io: ReplicaIo,
+    cluster: ClusterId,
+    replica: ReplicaId,
     protection: ClientReadProtection,
     local: LocalReadProtection,
     installed: BTreeMap<GlobalId, Installed>,
     pending_grants: BTreeMap<GlobalId, ReadHold>,
     pending_imports: BTreeMap<(GlobalId, uuid::Uuid), BTreeMap<GlobalId, ReadHold>>,
+    storage_state: storage::StorageState,
     reclaimer: ClientProtectionReclaimer,
     published_at: Instant,
 }
 
-impl ComputeEnactment {
+impl ReplicaEnactment {
     pub fn new(
         endpoint: ReplicaCompute,
         config: InstanceConfig,
@@ -186,6 +205,7 @@ impl ComputeEnactment {
         cluster: ClusterId,
         replica: ReplicaId,
         registry: &MetricsRegistry,
+        storage_endpoint: Option<mz_storage::server::ReplicaStorage>,
     ) -> Self {
         let logs = config
             .logging
@@ -197,8 +217,9 @@ impl ComputeEnactment {
         let hydration = SequentialHydration::new(
             gauge.get_delete_on_drop_metric(vec![cluster.to_string(), replica.to_string()]),
         );
-        let mut io = ComputeIo {
+        let mut io = ReplicaIo {
             endpoint,
+            storage: storage_endpoint.map(storage::StorageIo::new),
             frontiers: BTreeMap::new(),
             hydration,
             config: mz_dyncfgs::all_dyncfgs(),
@@ -206,11 +227,14 @@ impl ComputeEnactment {
         io.send(ComputeCommand::CreateInstance(Box::new(config)));
         let mut result = Self {
             io,
+            cluster,
+            replica,
             protection: ClientReadProtection::new(incarnation),
             local: LocalReadProtection::default(),
             installed: BTreeMap::new(),
             pending_grants: BTreeMap::new(),
             pending_imports: BTreeMap::new(),
+            storage_state: storage::StorageState::default(),
             reclaimer: ClientProtectionReclaimer::default(),
             published_at: publication_started,
         };
@@ -260,6 +284,7 @@ impl ComputeEnactment {
         compute: &BTreeSet<GlobalId>,
         requested: &BTreeMap<GlobalId, Timestamp>,
     ) -> anyhow::Result<BTreeMap<GlobalId, ReadHold>> {
+        self.ensure_live(catalog)?;
         self.ensure_recent_protection()?;
         let dependencies = compute
             .iter()
@@ -301,8 +326,9 @@ impl ComputeEnactment {
             .context("acknowledged replica protection was not acquired")
     }
 
-    /// Installs a complete pending DAG. Source and live-window grants precede
-    /// selection. Local index tokens cover selection through ordered rendering.
+    /// Installs the ready portion of the pending DAG. Source and live-window
+    /// grants precede selection. Missing prerequisites block their consumers,
+    /// not independent execution. Publication still waits for every installation.
     pub async fn install(
         &mut self,
         catalog: &mut Catalog,
@@ -314,13 +340,7 @@ impl ComputeEnactment {
         metadata: &storage_metadata::Resolution,
     ) -> anyhow::Result<()> {
         self.capture_pending_imports(effects);
-        ensure!(
-            catalog
-                .state()
-                .client_incarnations()
-                .contains_key(&self.protection.incarnation()),
-            "replica incarnation was reclaimed"
-        );
+        self.ensure_live(catalog)?;
         let windows: BTreeSet<_> = self
             .installed
             .iter()
@@ -357,19 +377,44 @@ impl ComputeEnactment {
                 self.installed.get_mut(&id).expect("logging index").window = Some(hold);
             }
         }
-        let mut plans: Vec<Plan> = effects
+        let mut candidates: Vec<Plan> = effects
             .selected
             .values()
-            .filter(|(id, _, _)| !self.installed.contains_key(id))
+            .filter(|(id, revision, _)| {
+                // Renewal can refresh the catalog after the plan-byte fetch.
+                // Only a still-selected revision is installation authority.
+                !self.installed.contains_key(id)
+                    && catalog.state().written_plan(*id, build) == Some(*revision)
+            })
             .map(|(id, _, plan)| {
                 let mut plan = plan.physical_plan.clone();
-                if let CatalogItem::MaterializedView(mv) = catalog.get_entry_by_global_id(id).item()
+                if let Some(entry) = catalog.try_get_entry_by_global_id(id)
+                    && let CatalogItem::MaterializedView(mv) = entry.item()
                 {
                     mv.apply_execution_bounds(&mut plan);
                 }
                 plan
             })
             .collect();
+        let mut ready: BTreeSet<_> = self
+            .installed
+            .iter()
+            .filter_map(|(id, collection)| {
+                (!collection.retired && collection.progress.write_frontier.is_some()).then_some(*id)
+            })
+            .collect();
+        let mut plans = Vec::new();
+        while let Some(position) = candidates.iter().position(|plan| {
+            plan.index_imports.keys().all(|id| ready.contains(id))
+                && plan
+                    .imported_source_ids()
+                    .chain(plan.persist_sink_ids())
+                    .all(|id| metadata.metadata.contains_key(&id))
+        }) {
+            let plan = candidates.remove(position);
+            ready.extend(plan.export_ids());
+            plans.push(plan);
+        }
         if plans.is_empty() {
             self.pending_grants.clear();
             return Ok(());
@@ -388,10 +433,6 @@ impl ComputeEnactment {
                 &dependencies,
             ))
             .await?;
-        ensure!(
-            effects.pending.is_empty() && metadata.pending.is_empty(),
-            "installation prerequisites pending"
-        );
         let storage: BTreeSet<_> = plans
             .iter()
             .flat_map(|p| p.source_imports.keys().copied())
@@ -534,7 +575,7 @@ impl ComputeEnactment {
             .iter()
             .flat_map(|p| p.export_ids())
             .filter_map(|id| {
-                let entry = catalog.get_entry_by_global_id(&id);
+                let entry = catalog.try_get_entry_by_global_id(&id)?;
                 let CatalogItem::MaterializedView(mv) = entry.item() else {
                     return None;
                 };
@@ -667,12 +708,20 @@ impl ComputeEnactment {
     }
 
     pub fn ensure_live(&self, catalog: &Catalog) -> anyhow::Result<()> {
+        let participant = catalog
+            .state()
+            .client_incarnations()
+            .get(&self.protection.incarnation())
+            .context("replica incarnation was reclaimed")?;
+        ensure!(
+            participant.replica_id == Some(self.replica),
+            "replica incarnation identity mismatch"
+        );
         ensure!(
             catalog
-                .state()
-                .client_incarnations()
-                .contains_key(&self.protection.incarnation()),
-            "replica incarnation was reclaimed"
+                .try_get_cluster_replica(self.cluster, self.replica)
+                .is_some(),
+            "replica was removed"
         );
         Ok(())
     }
@@ -738,6 +787,14 @@ impl ComputeEnactment {
             .send(ComputeCommand::UpdateConfiguration(Box::new(parameters)));
     }
 
+    pub fn configure_storage(&mut self, catalog: &Catalog, cluster: ClusterId, replica: ReplicaId) {
+        if let Some(storage) = &mut self.io.storage {
+            storage.configure(mz_catalog::storage_config::replica_storage_config(
+                catalog, cluster, replica,
+            ));
+        }
+    }
+
     pub fn apply_progress(&mut self, catalog: &Catalog) {
         for (id, update) in std::mem::take(&mut self.io.frontiers) {
             let Some(collection) = self.installed.get_mut(&id) else {
@@ -798,6 +855,8 @@ impl ComputeEnactment {
         metadata: &storage_metadata::Resolution,
         apply_permissions: bool,
     ) {
+        let build = mz_catalog::expr_cache::expression_build_version(catalog.config().build_info)
+            .to_string();
         let ready: BTreeSet<_> = self
             .installed
             .iter()
@@ -807,8 +866,12 @@ impl ComputeEnactment {
             if collection.retired {
                 continue;
             }
-            let live =
-                catalog
+            let live = (id.is_transient()
+                && catalog
+                    .state()
+                    .written_plan_replica_owner(*id, &build)
+                    .is_some_and(|owner| owner.replica_id == self.replica))
+                || catalog
                     .try_get_entry_by_global_id(id)
                     .is_some_and(|entry| match entry.item() {
                         CatalogItem::MaterializedView(mv) => mv.global_id_writes() == *id,
@@ -994,7 +1057,7 @@ impl ComputeEnactment {
                 .state()
                 .client_incarnations()
                 .iter()
-                .map(|(id, hb)| (*id, *hb)),
+                .map(|(id, value)| (*id, value.heartbeat)),
             Instant::now(),
         );
         ops.extend(

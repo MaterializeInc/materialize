@@ -78,7 +78,7 @@ pub fn replica_dyncfg_overrides(
     overrides
 }
 
-fn replica_dyncfg_override(catalog: &Catalog, replica_id: ReplicaId) -> ConfigUpdates {
+pub(crate) fn replica_dyncfg_override(catalog: &Catalog, replica_id: ReplicaId) -> ConfigUpdates {
     let mut updates = ConfigUpdates::default();
     let Some(values) = catalog
         .state()

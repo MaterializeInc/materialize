@@ -55,13 +55,15 @@ pub type ComputeEventBuilder = ColumnBuilder<(Duration, ComputeEvent)>;
 pub struct Export {
     /// Identifier of the export.
     pub export_id: GlobalId,
-    /// Timely worker index of the exporting dataflow.
+    /// Worker-local index of the exporting dataflow.
     pub dataflow_index: usize,
 }
 
 /// The export for a global id was dropped.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ExportDropped {
+    /// Worker-local index of the exporting dataflow.
+    pub dataflow_index: usize,
     /// Identifier of the export.
     pub export_id: GlobalId,
 }
@@ -152,6 +154,8 @@ pub struct DataflowShutdown {
 /// Error count update event.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ErrorCount {
+    /// Worker-local index of the exporting dataflow.
+    pub dataflow_index: usize,
     /// Identifier of the export.
     pub export_id: GlobalId,
     /// The change in error count.
@@ -161,6 +165,8 @@ pub struct ErrorCount {
 /// An export started hydrating.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct HydrationStart {
+    /// Worker-local index of the exporting dataflow.
+    pub dataflow_index: usize,
     /// Identifier of the export.
     pub export_id: GlobalId,
 }
@@ -168,6 +174,8 @@ pub struct HydrationStart {
 /// An export is hydrated.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct Hydration {
+    /// Worker-local index of the exporting dataflow.
+    pub dataflow_index: usize,
     /// Identifier of the export.
     pub export_id: GlobalId,
 }
@@ -175,6 +183,8 @@ pub struct Hydration {
 /// An operator's hydration status changed.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct OperatorHydration {
+    /// Worker-local index of the exporting dataflow.
+    pub dataflow_index: usize,
     /// Identifier of the export.
     pub export_id: GlobalId,
     /// Identifier of the operator's LIR node.
@@ -504,8 +514,10 @@ struct DemuxState {
     scratch_string_a: String,
     /// A reusable scratch string for formatting IDs.
     scratch_string_b: String,
-    /// State tracked per dataflow export.
-    exports: BTreeMap<GlobalId, ExportState>,
+    /// State tracked per export instance. Transient global IDs can repeat across
+    /// query scopes and maintained dataflows. The worker-unique dataflow index
+    /// distinguishes their lifetimes, including events arriving after a drop.
+    exports: BTreeMap<(usize, GlobalId), ExportState>,
     /// Maps pending peeks to their installation time.
     peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash.
@@ -780,8 +792,6 @@ struct HydrationTimestamps {
 
 /// State tracked for each dataflow export.
 struct ExportState {
-    /// The ID of the dataflow maintaining this export.
-    dataflow_index: usize,
     /// Number of errors in this export.
     ///
     /// This must be a signed integer, since per-worker error counts can be negative, only the
@@ -802,9 +812,8 @@ struct ExportState {
 }
 
 impl ExportState {
-    fn new(dataflow_index: usize, installed_at: Duration) -> Self {
+    fn new(installed_at: Duration) -> Self {
         Self {
-            dataflow_index,
             error_count: Diff::ZERO,
             created_at: Instant::now(),
             hydration_time_ns: None,
@@ -913,9 +922,9 @@ impl DemuxHandler<'_, '_, '_> {
         let existing = self
             .state
             .exports
-            .insert(export_id, ExportState::new(dataflow_index, installed_at));
+            .insert((dataflow_index, export_id), ExportState::new(installed_at));
         if existing.is_some() {
-            error!(%export_id, "export already registered");
+            error!(%export_id, %dataflow_index, "export already registered");
         }
 
         // Insert hydration time logging for this export.
@@ -932,16 +941,18 @@ impl DemuxHandler<'_, '_, '_> {
 
     fn handle_export_dropped(
         &mut self,
-        ExportDroppedReference { export_id }: Ref<'_, ExportDropped>,
+        ExportDroppedReference {
+            export_id,
+            dataflow_index,
+        }: Ref<'_, ExportDropped>,
     ) {
         let export_id = Columnar::into_owned(export_id);
-        let Some(export) = self.state.exports.remove(&export_id) else {
-            error!(%export_id, "missing exports entry at time of export drop");
+        let Some(export) = self.state.exports.remove(&(dataflow_index, export_id)) else {
+            error!(%export_id, %dataflow_index, "missing exports entry at time of export drop");
             return;
         };
 
         let ts = self.ts();
-        let dataflow_index = export.dataflow_index;
 
         let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
@@ -1019,11 +1030,18 @@ impl DemuxHandler<'_, '_, '_> {
         }
     }
 
-    fn handle_error_count(&mut self, ErrorCountReference { export_id, diff }: Ref<'_, ErrorCount>) {
+    fn handle_error_count(
+        &mut self,
+        ErrorCountReference {
+            export_id,
+            dataflow_index,
+            diff,
+        }: Ref<'_, ErrorCount>,
+    ) {
         let ts = self.ts();
         let export_id = Columnar::into_owned(export_id);
 
-        let Some(export) = self.state.exports.get_mut(&export_id) else {
+        let Some(export) = self.state.exports.get_mut(&(dataflow_index, export_id)) else {
             // The export might have already been dropped, in which case we are no longer
             // interested in its errors.
             return;
@@ -1045,15 +1063,18 @@ impl DemuxHandler<'_, '_, '_> {
 
     fn handle_hydration_start(
         &mut self,
-        HydrationStartReference { export_id }: Ref<'_, HydrationStart>,
+        HydrationStartReference {
+            export_id,
+            dataflow_index,
+        }: Ref<'_, HydrationStart>,
     ) {
         let ts = self.ts();
         // Stamp the event time rather than `ts`, as in `handle_export`.
         let started_at = self.time;
         let export_id = Columnar::into_owned(export_id);
 
-        let Some(export) = self.state.exports.get_mut(&export_id) else {
-            error!(%export_id, "hydration start event for unknown export");
+        let Some(export) = self.state.exports.get_mut(&(dataflow_index, export_id)) else {
+            error!(%export_id, %dataflow_index, "hydration start event for unknown export");
             return;
         };
         if export.hydration_timestamps.started_at.is_some() {
@@ -1080,14 +1101,20 @@ impl DemuxHandler<'_, '_, '_> {
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
     }
 
-    fn handle_hydration(&mut self, HydrationReference { export_id }: Ref<'_, Hydration>) {
+    fn handle_hydration(
+        &mut self,
+        HydrationReference {
+            export_id,
+            dataflow_index,
+        }: Ref<'_, Hydration>,
+    ) {
         let ts = self.ts();
         // Stamp the event time rather than `ts`, as in `handle_export`.
         let hydrated_at = self.time;
         let export_id = Columnar::into_owned(export_id);
 
-        let Some(export) = self.state.exports.get_mut(&export_id) else {
-            error!(%export_id, "hydration event for unknown export");
+        let Some(export) = self.state.exports.get_mut(&(dataflow_index, export_id)) else {
+            error!(%export_id, %dataflow_index, "hydration event for unknown export");
             return;
         };
         if export.hydration_time_ns.is_some() {
@@ -1132,6 +1159,7 @@ impl DemuxHandler<'_, '_, '_> {
         &mut self,
         OperatorHydrationReference {
             export_id,
+            dataflow_index,
             lir_id,
             hydrated,
         }: Ref<'_, OperatorHydration>,
@@ -1141,7 +1169,7 @@ impl DemuxHandler<'_, '_, '_> {
         let lir_id = Columnar::into_owned(lir_id);
         let hydrated = Columnar::into_owned(hydrated);
 
-        let Some(export) = self.state.exports.get_mut(&export_id) else {
+        let Some(export) = self.state.exports.get_mut(&(dataflow_index, export_id)) else {
             // The export might have already been dropped, in which case we are no longer
             // interested in its operator hydration events.
             return;
@@ -1442,6 +1470,7 @@ impl DemuxHandler<'_, '_, '_> {
 /// state, e.g. frontiers, and to produce cleanup events when a collection is dropped.
 pub struct CollectionLogging {
     export_id: GlobalId,
+    dataflow_index: usize,
     logger: Logger,
 
     logged_frontier: Option<Timestamp>,
@@ -1463,6 +1492,7 @@ impl CollectionLogging {
 
         let mut self_ = Self {
             export_id,
+            dataflow_index,
             logger,
             logged_frontier: None,
             logged_import_frontiers: Default::default(),
@@ -1541,6 +1571,7 @@ impl CollectionLogging {
         self.logger
             .log(&ComputeEvent::HydrationStart(HydrationStart {
                 export_id: self.export_id,
+                dataflow_index: self.dataflow_index,
             }));
     }
 
@@ -1548,6 +1579,7 @@ impl CollectionLogging {
     pub fn set_hydrated(&self) {
         self.logger.log(&ComputeEvent::Hydration(Hydration {
             export_id: self.export_id,
+            dataflow_index: self.dataflow_index,
         }));
     }
 
@@ -1569,6 +1601,7 @@ impl Drop for CollectionLogging {
 
         self.logger.log(&ComputeEvent::ExportDropped(ExportDropped {
             export_id: self.export_id,
+            dataflow_index: self.dataflow_index,
         }));
     }
 }
@@ -1576,7 +1609,12 @@ impl Drop for CollectionLogging {
 /// Extension trait to attach `ComputeEvent::DataflowError` logging operators to collections and
 /// batch streams.
 pub(crate) trait LogDataflowErrors {
-    fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self;
+    fn log_dataflow_errors(
+        self,
+        logger: Logger,
+        export_id: GlobalId,
+        dataflow_index: usize,
+    ) -> Self;
 }
 
 impl<'scope, T, D> LogDataflowErrors for VecCollection<'scope, T, D, Diff>
@@ -1584,13 +1622,22 @@ where
     T: timely::progress::Timestamp,
     D: Clone + 'static,
 {
-    fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
+    fn log_dataflow_errors(
+        self,
+        logger: Logger,
+        export_id: GlobalId,
+        dataflow_index: usize,
+    ) -> Self {
         self.inner
             .unary(Pipeline, "LogDataflowErrorsCollection", |_cap, _info| {
                 move |input, output| {
                     input.for_each(|cap, data| {
                         let diff = data.iter().map(|(_d, _t, r)| *r).sum::<Diff>();
-                        logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
+                        logger.log(&ComputeEvent::ErrorCount(ErrorCount {
+                            export_id,
+                            dataflow_index,
+                            diff,
+                        }));
 
                         output.session(&cap).give_container(data);
                     });
@@ -1606,12 +1653,21 @@ where
     B: BatchReader + Navigable + Clone + 'static,
     for<'a> B::Cursor: Cursor<DiffGat<'a> = &'a Diff>,
 {
-    fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
+    fn log_dataflow_errors(
+        self,
+        logger: Logger,
+        export_id: GlobalId,
+        dataflow_index: usize,
+    ) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
             move |input, output| {
                 input.for_each(|cap, data| {
                     let diff = data.iter().map(sum_batch_diffs).sum::<Diff>();
-                    logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
+                    logger.log(&ComputeEvent::ErrorCount(ErrorCount {
+                        export_id,
+                        dataflow_index,
+                        diff,
+                    }));
 
                     output.session(&cap).give_container(data);
                 });

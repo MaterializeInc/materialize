@@ -18,7 +18,7 @@ import re
 import socket
 import struct
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from contextlib import ExitStack
 from copy import copy
 from datetime import UTC, datetime, timedelta
@@ -83,6 +83,8 @@ SERVICES = [
     Postgres(),
     Redpanda(),
     Toxiproxy(),
+    Persistcli(),
+    Testdrive(name="adapter-loss-testdrive"),
     Testdrive(
         volume_workdir="../testdrive:/workdir/testdrive",
         volumes_extra=[".:/workdir/smoke"],
@@ -8770,6 +8772,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
             "persist_inline_writes_single_max_bytes": "0",
             "persist_compaction_heuristic_min_inputs": "2",
+            "enable_metric_sink": "true",
         },
     )
     replicas = ("clusterd1", "clusterd2", "clusterd3")
@@ -8858,7 +8861,58 @@ def workflow_adapter_loss(c: Composition) -> None:
         for replica in running_replicas:
             assert c.is_running(replica), f"replica stopped: {replica}"
 
-    with c.override(adapter, td, Persistcli()), ExitStack() as replica_overrides:
+    def curated_frontiers(replica: str) -> dict[str, float]:
+        response = requests.get(
+            f"http://localhost:{c.port(replica, 6878)}/metrics", timeout=5
+        )
+        response.raise_for_status()
+        return {
+            name: float(value)
+            for name, value in re.findall(
+                r'^mz_compute_metric_sink_frontier_ms\{sink="([^"]+)"\} ([^\s]+)$',
+                response.text,
+                re.MULTILINE,
+            )
+        }
+
+    def observers_advanced(replica: str, before: dict[str, float]) -> bool:
+        current = curated_frontiers(replica)
+        return bool(before) and all(
+            0 < frontier < current.get(name, 0) < float(2**64 - 1)
+            for name, frontier in before.items()
+        )
+
+    def successive_observer_progress(replicas: Collection[str]) -> None:
+        before = {replica: curated_frontiers(replica) for replica in replicas}
+        deadline = time.monotonic() + timeout
+        for _ in range(2):
+            while True:
+                absent()
+                current = {replica: curated_frontiers(replica) for replica in replicas}
+                if all(
+                    metric_names <= before[replica].keys()
+                    and all(
+                        0
+                        < before[replica][name]
+                        < current[replica].get(name, 0)
+                        < float(2**64 - 1)
+                        for name in metric_names
+                    )
+                    for replica in replicas
+                ):
+                    print(f"Curated outage progress: before={before}, after={current}")
+                    before = current
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"Curated frontiers did not keep advancing: {before=}, {current=}"
+                    )
+                time.sleep(0.25)
+
+    with (
+        c.override(adapter, td, Minio(setup_materialize=True)),
+        ExitStack() as replica_overrides,
+    ):
         c.up("kafka", adapter.name)
         # Reuse the environment's actual reconstruction context from a managed
         # replica. This keeps unmanaged replicas on the same size map, defaults,
@@ -9020,6 +9074,23 @@ def workflow_adapter_loss(c: Composition) -> None:
             )
         )
         assert set(shards) == {"al_input", "al_source_mv"}, shards
+        metric_names = {"mz_metric_arrangement_sizes", "mz_metric_dataflow_errors"}
+        deadline = time.monotonic() + timeout
+        while True:
+            metric_baselines = {
+                replica: curated_frontiers(replica) for replica in replicas
+            }
+            if all(
+                metric_names <= frontiers.keys()
+                and all(0 < frontiers[name] < float(2**64 - 1) for name in metric_names)
+                for frontiers in metric_baselines.values()
+            ):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"Curated observers did not initialize: {metric_baselines}"
+                )
+            time.sleep(0.25)
         c.kill(adapter.name)
         try:
             absent()
@@ -9040,7 +9111,14 @@ def workflow_adapter_loss(c: Composition) -> None:
                 progressed = all(
                     compacted_past(after[name], thresholds[name]) for name in shards
                 )
-                if actual == expected and progressed:
+                if (
+                    actual == expected
+                    and progressed
+                    and all(
+                        observers_advanced(replica, metric_baselines[replica])
+                        for replica in running_replicas
+                    )
+                ):
                     print(f"Adapter absent: Kafka MV/sink rows={sorted(actual)}")
                     print(f"Compacted past outage timestamps: {thresholds}")
                     break
@@ -9050,6 +9128,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                         f"compactions before={before}, after={after}"
                     )
 
+            successive_observer_progress(running_replicas)
             # Reconstruct after actual history compaction, with no SQL ingress.
             # Stop the surviving compute sibling before producing a fresh value:
             # its shared Persist upper cannot stand in for restarted-replica work.
@@ -9070,7 +9149,9 @@ def workflow_adapter_loss(c: Composition) -> None:
                 actual = consume("source", len(expected))
                 absent()
                 assert not c.is_running("clusterd2"), "compute sibling restarted"
-                if actual == expected:
+                if actual == expected and observers_advanced(
+                    "clusterd3", metric_baselines["clusterd3"]
+                ):
                     print(
                         f"Restarted replica alone, adapter absent: "
                         f"fresh Kafka MV/sink value={n * 10}"
@@ -9082,6 +9163,33 @@ def workflow_adapter_loss(c: Composition) -> None:
                         f"expected={expected}, Kafka={actual}"
                     )
 
+            successive_observer_progress({"clusterd3"})
+            # This replica is the only source and sink executor in cluster1.
+            # A new incarnation may wait for the abandoned Kafka writer's grace,
+            # but must then reconstruct both sides without SQL ingress.
+            c.kill("clusterd1")
+            running_replicas.remove("clusterd1")
+            absent()
+            c.up("clusterd1")
+            running_replicas.add("clusterd1")
+            n += 1
+            produce(n)
+            expected.add(n * 10)
+            deadline = time.monotonic() + timeout
+            while True:
+                absent()
+                actual = consume("source", len(expected))
+                if actual == expected and observers_advanced(
+                    "clusterd1", metric_baselines["clusterd1"]
+                ):
+                    print(f"Restarted source and Kafka sink, adapter absent: {n * 10}")
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"Storage replica did not reconstruct: expected={expected}, Kafka={actual}"
+                    )
+
+            successive_observer_progress({"clusterd1"})
             for name in ("table", "webhook"):
                 actual = consume(name, len(expected))
                 assert {0} <= actual <= expected, (name, actual)

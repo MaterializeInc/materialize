@@ -490,7 +490,10 @@ impl CatalogState {
                 apply_inverted_lookup(
                     &mut self.written_plans,
                     &(plan.id, plan.build_version),
-                    plan.revision,
+                    crate::durable::objects::WrittenPlanValue {
+                        revision: plan.revision,
+                        replica_owner: plan.replica_owner,
+                    },
                     diff,
                 );
             }
@@ -498,7 +501,10 @@ impl CatalogState {
                 apply_inverted_lookup(
                     &mut self.client_incarnations,
                     &incarnation.id,
-                    incarnation.heartbeat,
+                    crate::durable::objects::ClientIncarnationValue {
+                        heartbeat: incarnation.heartbeat,
+                        replica_id: incarnation.replica_id,
+                    },
                     diff,
                 );
             }

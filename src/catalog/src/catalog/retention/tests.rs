@@ -330,7 +330,12 @@ async fn closing_client_incarnation_preserves_index_object_retention() {
     let ts = f.catalog.current_upper().await;
     let incarnation = f
         .catalog
-        .transact(None, ts, None, vec![Op::CreateClientIncarnation])
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation { replica_id: None }],
+        )
         .await
         .expect("create client")
         .created_client_incarnations[0];
@@ -341,7 +346,7 @@ async fn closing_client_incarnation_preserves_index_object_retention() {
     .await;
     f.propose_bounds(&[input], 80_000, 80_000).await;
 
-    let heartbeat = f.catalog.state().client_incarnations()[&incarnation];
+    let heartbeat = f.catalog.state().client_incarnations()[&incarnation].heartbeat;
     f.transact(vec![Op::ReclaimClientIncarnation {
         incarnation,
         expected_heartbeat: heartbeat,

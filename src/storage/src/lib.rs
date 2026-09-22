@@ -18,6 +18,7 @@ pub mod decode;
 pub mod internal_control;
 pub mod metrics;
 pub mod render;
+mod replica;
 pub mod server;
 pub mod sink;
 pub mod source;

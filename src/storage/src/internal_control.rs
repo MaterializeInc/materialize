@@ -67,7 +67,7 @@ impl DataflowParameters {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum InternalStorageCommand {
     /// Native maintained ingress, ordered before worker bookkeeping and async work.
-    Replica(mz_storage_client::client::StorageCommand),
+    Replica(u64, mz_storage_client::client::StorageCommand),
     /// Worker zero sequences query opens, commands and retirement together, so a
     /// delayed process endpoint cannot resurrect retired work.
     Query {
@@ -90,6 +90,8 @@ pub enum InternalStorageCommand {
 
     /// Suspend and restart the dataflow identified by the `GlobalId`.
     SuspendAndRestart {
+        /// Native execution that observed the failure. None in controller mode.
+        execution: Option<u64>,
         /// The id of the dataflow that should be restarted.
         id: GlobalId,
         /// The reason for the restart request.
@@ -97,6 +99,8 @@ pub enum InternalStorageCommand {
     },
     /// Render an ingestion dataflow at the given resumption frontier.
     CreateIngestionDataflow {
+        /// Native admission sequence, retained across async startup.
+        execution: Option<u64>,
         /// ID of the ingestion/sourve.
         id: GlobalId,
         /// The description of the ingestion/source.
@@ -127,6 +131,7 @@ pub enum InternalStorageCommand {
     CancelOneshotIngestion(uuid::Uuid),
     /// Render a sink dataflow.
     RunSinkDataflow(
+        Option<u64>,
         GlobalId,
         StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
     ),

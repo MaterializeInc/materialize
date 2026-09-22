@@ -40,7 +40,9 @@ mz-controller-types = { path = "../controller-types" }
 mz-durable-cache = { path = "../durable-cache" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
+mz-kafka-util = { path = "../kafka-util" }
 mz-license-keys = { path = "../license-keys" }
+mz-mysql-util = { path = "../mysql-util" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
@@ -49,11 +51,13 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-pgtz = { path = "../pgtz" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
+mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
+mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }

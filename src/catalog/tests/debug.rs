@@ -404,7 +404,7 @@ async fn test_debug_live_mutations(heartbeat: bool, protected: bool) {
             .unwrap();
     }
     if heartbeat {
-        let id = txn.create_client_incarnation().unwrap();
+        let id = txn.create_client_incarnation(None).unwrap();
         assert_eq!(
             txn.publish_client_read_requirements(id, Default::default())
                 .unwrap(),
@@ -564,7 +564,7 @@ async fn test_persist_debug_unreclaimed_heartbeat_requires_force() {
         .unwrap();
     state.sync_to_current_updates().await.unwrap();
     let mut txn = state.transaction().await.unwrap();
-    let id = txn.create_client_incarnation().unwrap();
+    let id = txn.create_client_incarnation(None).unwrap();
     txn.publish_client_read_requirements(id, Default::default())
         .unwrap();
     let ts = txn.upper();

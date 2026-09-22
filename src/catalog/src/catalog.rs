@@ -1796,6 +1796,7 @@ impl Catalog {
                 expected_revision,
                 revision: Some(revision),
                 imports,
+                replica_owner: None,
             });
         }
         store

@@ -1378,6 +1378,8 @@ impl DurableType for MaintainedReadRequirement {
 pub struct ClientIncarnation {
     pub id: u64,
     pub heartbeat: u64,
+    /// Immutable participant identity, not write ownership or fencing authority.
+    pub replica_id: Option<ReplicaId>,
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
@@ -1385,9 +1387,10 @@ pub struct ClientIncarnationKey {
     pub(crate) id: u64,
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
 pub struct ClientIncarnationValue {
-    pub(crate) heartbeat: u64,
+    pub heartbeat: u64,
+    pub replica_id: Option<ReplicaId>,
 }
 
 impl DurableType for ClientIncarnation {
@@ -1398,6 +1401,7 @@ impl DurableType for ClientIncarnation {
             ClientIncarnationKey { id: self.id },
             ClientIncarnationValue {
                 heartbeat: self.heartbeat,
+                replica_id: self.replica_id,
             },
         )
     }
@@ -1405,6 +1409,7 @@ impl DurableType for ClientIncarnation {
         Self {
             id: key.id,
             heartbeat: value.heartbeat,
+            replica_id: value.replica_id,
         }
     }
     fn key(&self) -> Self::Key {
@@ -2138,6 +2143,15 @@ pub struct WrittenPlan {
     pub id: GlobalId,
     pub build_version: String,
     pub revision: Uuid,
+    pub replica_owner: Option<ReplicaPlanOwner>,
+}
+
+/// Replica-local maintained work without a SQL catalog item. Presence of the
+/// selection records admission, independently of the writer's lifetime.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
+pub struct ReplicaPlanOwner {
+    pub replica_id: ReplicaId,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
@@ -2149,6 +2163,7 @@ pub struct WrittenPlanKey {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct WrittenPlanValue {
     pub revision: Uuid,
+    pub replica_owner: Option<ReplicaPlanOwner>,
 }
 
 impl DurableType for WrittenPlan {
@@ -2163,6 +2178,7 @@ impl DurableType for WrittenPlan {
             },
             WrittenPlanValue {
                 revision: self.revision,
+                replica_owner: self.replica_owner,
             },
         )
     }
@@ -2172,6 +2188,7 @@ impl DurableType for WrittenPlan {
             id: key.id,
             build_version: key.build_version,
             revision: value.revision,
+            replica_owner: value.replica_owner,
         }
     }
 

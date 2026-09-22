@@ -44,7 +44,7 @@ impl Coordinator {
     async fn transact_client_protection(&mut self, op: Op) -> Result<Vec<u64>, AdapterError> {
         assert!(matches!(
             &op,
-            Op::CreateClientIncarnation | Op::PublishClientReadRequirements { .. }
+            Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
         ));
         let Some(catalog) = &mut self.client_protection_catalog else {
             return self
@@ -106,7 +106,7 @@ impl Coordinator {
         use mz_ore::collections::CollectionExt;
 
         let incarnation = self
-            .transact_client_protection(Op::CreateClientIncarnation)
+            .transact_client_protection(Op::CreateClientIncarnation { replica_id: None })
             .await?
             .into_element();
         let txns_shard = self.catalog().txn_wal_shard().await?;
@@ -372,7 +372,7 @@ impl Coordinator {
             .state()
             .client_incarnations()
             .iter()
-            .map(|(&id, &heartbeat)| (id, heartbeat))
+            .map(|(&id, value)| (id, value.heartbeat))
             .collect();
         let expired = self
             .client_protection_reclaimer

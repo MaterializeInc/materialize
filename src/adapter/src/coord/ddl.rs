@@ -44,7 +44,6 @@ use mz_sql::session::vars::{
     MAX_TABLES, SystemVars, Var,
 };
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
-use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
@@ -418,7 +417,7 @@ impl Coordinator {
         let retry_after_planning_change = ops.iter().all(|op| {
             matches!(
                 op,
-                catalog::Op::CreateClientIncarnation
+                catalog::Op::CreateClientIncarnation { .. }
                     | catalog::Op::PublishClientReadRequirements { .. }
                     | catalog::Op::ReclaimClientIncarnation { .. }
             )
@@ -527,7 +526,7 @@ impl Coordinator {
             .written_plans()
             .iter()
             .filter(|((_, version), _)| version == &build)
-            .map(|((id, _), revision)| (*id, *revision))
+            .map(|((id, _), selection)| (*id, selection.revision))
             .collect();
         for op in ops.iter() {
             if let Op::SetWrittenPlan {
@@ -581,6 +580,7 @@ impl Coordinator {
                     expected_revision: Some(revisions[&id]),
                     revision: None,
                     imports: BTreeSet::new(),
+                    replica_owner: None,
                 });
                 continue;
             }
@@ -891,6 +891,8 @@ impl Coordinator {
         let (_written_plan_protection, rewritten_objects) =
             Box::pin(self.prepare_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
                 .await?;
+
+        Box::pin(self.prepare_replica_metric_sinks(conn_id, &mut ops, oracle_write_ts)).await?;
 
         let Coordinator {
             catalog,
@@ -1377,30 +1379,13 @@ impl Coordinator {
             as_of.join_assign(&committed);
         }
 
-        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
-        let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
-            from: sink.from,
-            from_desc: storage_sink_from_entry
-                .relation_desc()
-                .expect("sinks can only be built on items with descs")
-                .into_owned(),
-            connection: sink
-                .connection
-                .clone()
-                .into_inline_connection(self.catalog().state()),
-            envelope: sink.envelope,
-            as_of,
-            with_snapshot: sink.with_snapshot,
-            version: sink.version,
-            from_storage_metadata: (),
-            to_storage_metadata: (),
-            commit_interval: sink.commit_interval,
-        };
+        let (storage_sink_desc, cluster_id) =
+            self.catalog().state().storage_sink_description(sink, as_of);
 
         Ok((
             ExportDescription {
                 sink: storage_sink_desc,
-                instance_id: sink.cluster_id,
+                instance_id: cluster_id,
             },
             read_holds,
         ))
@@ -1632,7 +1617,7 @@ impl Coordinator {
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::SetReadProtection { .. }
                 | Op::SetWrittenPlan { .. }
-                | Op::CreateClientIncarnation
+                | Op::CreateClientIncarnation { .. }
                 | Op::PublishClientReadRequirements { .. }
                 | Op::ReclaimClientIncarnation { .. }
                 | Op::Comment { .. }

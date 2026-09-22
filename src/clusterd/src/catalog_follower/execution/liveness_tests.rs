@@ -28,13 +28,13 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use super::tests::{Fixture, assert_rows, in_child};
-use super::{ComputeEnactment, ReplicaEffects, absorb_updates, storage_metadata};
+use super::{ReplicaEffects, ReplicaEnactment, absorb_updates, storage_metadata};
 
 #[mz_ore::test(tokio::test)]
 async fn stale_protection_blocks_install_until_renewed() {
     if !in_child(
         "MZ_CLUSTERD_PROTECTION_LIVENESS_TEST_CHILD",
-        "catalog_follower::compute::liveness_tests::stale_protection_blocks_install_until_renewed",
+        "catalog_follower::execution::liveness_tests::stale_protection_blocks_install_until_renewed",
         Duration::from_secs(120),
     )
     .await
@@ -42,7 +42,11 @@ async fn stale_protection_blocks_install_until_renewed() {
         return;
     }
 
-    let fixture = Fixture::new((1, 15_000), 20_000, false).await;
+    Box::pin(exercise_liveness()).await;
+}
+
+async fn exercise_liveness() {
+    let fixture = Box::pin(Fixture::new((1, 15_000), 20_000, false)).await;
     let config = &fixture.config;
     let cluster = config.cluster_id;
     let replica = config.replica_id;
@@ -80,7 +84,14 @@ async fn stale_protection_blocks_install_until_renewed() {
     let publication_started = Instant::now();
     let ts = catalog.current_upper().await;
     let created = catalog
-        .transact(None, ts, None, vec![Op::CreateClientIncarnation])
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation {
+                replica_id: Some(replica),
+            }],
+        )
         .await
         .unwrap();
     let incarnation = created.created_client_incarnations[0];
@@ -123,7 +134,7 @@ async fn stale_protection_blocks_install_until_renewed() {
         replica,
         config.persist_location.clone(),
     );
-    let mut driver = ComputeEnactment::new(
+    let mut driver = ReplicaEnactment::new(
         endpoint,
         instance,
         incarnation,
@@ -131,6 +142,7 @@ async fn stale_protection_blocks_install_until_renewed() {
         cluster,
         replica,
         &registry,
+        None,
     );
     driver.configure(mz_catalog::compute_config::replica_compute_config(
         &catalog, cluster, replica,
@@ -220,12 +232,12 @@ async fn stale_protection_blocks_install_until_renewed() {
         })
         .await;
 
-    let heartbeat = catalog.state().client_incarnations()[&incarnation];
+    let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
     driver
         .publish(&mut catalog, &mut effects, cluster, &build, true, None)
         .await
         .unwrap();
-    assert!(catalog.state().client_incarnations()[&incarnation] > heartbeat);
+    assert!(catalog.state().client_incarnations()[&incarnation].heartbeat > heartbeat);
     driver
         .install(
             &mut catalog,
@@ -273,7 +285,7 @@ async fn stale_protection_blocks_install_until_renewed() {
 
     // Durable reclamation, unlike mere local staleness, cannot be repaired by
     // renewing the same incarnation. The heartbeat CAS is the catalog boundary.
-    let expected_heartbeat = catalog.state().client_incarnations()[&incarnation];
+    let expected_heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
     driver
         .transact(
             &mut catalog,

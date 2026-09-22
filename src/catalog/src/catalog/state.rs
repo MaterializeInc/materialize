@@ -160,8 +160,10 @@ pub struct CatalogState {
     #[serde(serialize_with = "serialize_maintained_read_requirements")]
     pub(super) maintained_read_requirements: imbl::OrdMap<GlobalId, MaintainedReadRequirement>,
     #[serde(serialize_with = "serialize_written_plans")]
-    pub(super) written_plans: imbl::OrdMap<(GlobalId, String), uuid::Uuid>,
-    pub(super) client_incarnations: imbl::OrdMap<u64, u64>,
+    pub(super) written_plans:
+        imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue>,
+    pub(super) client_incarnations:
+        imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue>,
     #[serde(serialize_with = "serialize_client_read_requirements")]
     pub(super) client_read_requirements: imbl::OrdMap<(u64, GlobalId), Timestamp>,
     /// Client requirements ordered by collection, frontier, and incarnation.
@@ -2890,16 +2892,32 @@ impl CatalogState {
     pub fn written_plan(&self, id: GlobalId, build_version: &str) -> Option<uuid::Uuid> {
         self.written_plans
             .get(&(id, build_version.to_owned()))
-            .copied()
+            .map(|selection| selection.revision)
+    }
+
+    /// Replica ownership is distinct from SQL catalog membership.
+    pub fn written_plan_replica_owner(
+        &self,
+        id: GlobalId,
+        build_version: &str,
+    ) -> Option<&crate::durable::objects::ReplicaPlanOwner> {
+        self.written_plans
+            .get(&(id, build_version.to_owned()))?
+            .replica_owner
+            .as_ref()
     }
 
     /// All durable plan selections, including other builds.
-    pub fn written_plans(&self) -> &imbl::OrdMap<(GlobalId, String), uuid::Uuid> {
+    pub fn written_plans(
+        &self,
+    ) -> &imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue> {
         &self.written_plans
     }
 
-    /// Returns the durable client incarnations and their heartbeat sequences.
-    pub fn client_incarnations(&self) -> &imbl::OrdMap<u64, u64> {
+    /// Returns durable incarnation heartbeats and immutable replica identities.
+    pub fn client_incarnations(
+        &self,
+    ) -> &imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue> {
         &self.client_incarnations
     }
 
@@ -3126,13 +3144,13 @@ fn serialize_maintained_read_requirements<S: serde::Serializer>(
 }
 
 fn serialize_written_plans<S: serde::Serializer>(
-    plans: &imbl::OrdMap<(GlobalId, String), uuid::Uuid>,
+    plans: &imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.collect_seq(
-        plans
-            .iter()
-            .map(|((id, build), revision)| (id, build, revision)),
+        plans.iter().map(|((id, build), selection)| {
+            (id, build, selection.revision, &selection.replica_owner)
+        }),
     )
 }
 
@@ -3217,6 +3235,7 @@ mod tests {
                         id,
                         build_version: "build-a".into(),
                         revision,
+                        replica_owner: None,
                     }),
                     ts: Timestamp::MIN,
                     diff,
@@ -3245,7 +3264,7 @@ mod tests {
         let dump = serde_json::to_value(&state).expect("serialize catalog with written selections");
         assert_eq!(
             dump["written_plans"],
-            serde_json::json!([[id, "build-a", replacement]])
+            serde_json::json!([[id, "build-a", replacement, null]])
         );
     }
 
@@ -3256,8 +3275,13 @@ mod tests {
 
         let id = GlobalId::User(2);
         let other = GlobalId::User(4);
-        let incarnation =
-            |id, heartbeat| StateUpdateKind::ClientIncarnation(ClientIncarnation { id, heartbeat });
+        let incarnation = |id, heartbeat| {
+            StateUpdateKind::ClientIncarnation(ClientIncarnation {
+                id,
+                heartbeat,
+                replica_id: None,
+            })
+        };
         let requirement = |incarnation, id, frontier| {
             StateUpdateKind::ClientReadRequirement(ClientReadRequirement {
                 incarnation,
@@ -3350,12 +3374,18 @@ mod tests {
         );
         assert_eq!(
             snapshot.client_incarnations(),
-            &imbl::OrdMap::from_iter([(1u64, 0u64), (2u64, 0u64)])
+            &imbl::OrdMap::from_iter([1u64, 2u64].map(|id| (
+                id,
+                crate::durable::objects::ClientIncarnationValue {
+                    heartbeat: 0,
+                    replica_id: None
+                }
+            )))
         );
         let dump = serde_json::to_value(&snapshot).expect("can serialize catalog state");
         assert_eq!(
             dump["client_incarnations"],
-            serde_json::json!({"1": 0, "2": 0})
+            serde_json::json!({"1": {"heartbeat": 0, "replica_id": null}, "2": {"heartbeat": 0, "replica_id": null}})
         );
         assert_eq!(
             dump["client_read_requirements"],

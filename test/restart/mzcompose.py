@@ -1597,14 +1597,21 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                     query("UPDATE protected_eliminated SET a = a + 1")
                     query("UPDATE protected_control SET a = a + 1")
                 print(f"Waiting for {description}")
-                td(
-                    f"""
-                    > SELECT (v->>'frontier')::numeric > {control_bound}
-                      FROM ({control_sql}) AS r(v);
-                    true
-                    """,
-                    timeout=max(1, deadline - time.monotonic()),
-                )
+                try:
+                    td(
+                        f"""
+                        > SELECT (v->>'frontier')::numeric > {control_bound}
+                          FROM ({control_sql}) AS r(v);
+                        true
+                        """,
+                        timeout=max(1, deadline - time.monotonic()),
+                    )
+                except Exception:
+                    try:
+                        sample(f"publication failure: {description}")
+                    except Exception as error:
+                        print(f"Additional protection diagnostics failed: {error}")
+                    raise
 
         def batches(state: dict) -> list[dict]:
             return [*state["batches"], *state["hollow_batches"].values()]
@@ -1654,6 +1661,14 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 "catalog_metrics": catalog_metrics,
                 "catalog_seqno": catalog_state["seqno"],
                 "catalog_counters": counters,
+                "client_protection": [
+                    row[0]
+                    for row in query(
+                        "SELECT data FROM mz_internal.mz_catalog_raw "
+                        "WHERE data->>'kind' IN ('ClientIncarnation', 'ClientReadRequirement') "
+                        "ORDER BY data::text"
+                    )
+                ],
                 "collections": {},
             }
             for name, global_id in ids.items():

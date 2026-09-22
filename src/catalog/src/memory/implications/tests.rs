@@ -245,6 +245,7 @@ fn selection_changes_include_unselects_and_filter_the_build() {
             id,
             build_version: build.into(),
             revision: uuid::Uuid::new_v4(),
+            replica_owner: None,
         }),
         ts: Timestamp::MIN,
         diff,

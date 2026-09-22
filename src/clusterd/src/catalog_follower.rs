@@ -33,7 +33,7 @@ use mz_storage_types::connections::ConnectionContext;
 use uuid::Uuid;
 
 mod compaction;
-mod compute;
+mod execution;
 mod storage_metadata;
 mod time_dependence;
 
@@ -63,14 +63,16 @@ impl ReplicaEffects {
     fn absorb(&mut self, catalog: &Catalog, cluster: ClusterId, effects: CatalogImplications) {
         self.configuration_changed |= effects.system_config_changed
             || effects.replica_scoped_config_changed
+            || effects.replicas.keys().any(|(id, _)| *id == cluster)
             || effects.clusters.contains_key(&cluster);
         self.pending.extend(effects.items.into_keys());
-        self.pending.extend(
-            effects
-                .written_plans
-                .into_iter()
-                .filter_map(|id| catalog.try_resolve_item_id(&id)),
-        );
+        self.pending
+            .extend(effects.written_plans.into_iter().filter_map(|id| {
+                catalog.try_resolve_item_id(&id).or(match id {
+                    GlobalId::Transient(id) => Some(CatalogItemId::Transient(id)),
+                    _ => None,
+                })
+            }));
         if effects.clusters.contains_key(&cluster) {
             if catalog.try_get_cluster(cluster).is_some() {
                 // Cluster bound_objects contains user objects only. Bootstrap
@@ -110,6 +112,19 @@ impl ReplicaEffects {
             // This cache describes the current selection, not installed work.
             // A replacement that is not available must not expose stale bytes.
             self.selected.remove(item_id);
+            if let CatalogItemId::Transient(value) = item_id {
+                let id = GlobalId::Transient(*value);
+                if let Some(owner) = catalog.state().written_plan_replica_owner(id, build) {
+                    if owner.replica_id != replica {
+                        return false;
+                    }
+                    if let Some(revision) = catalog.state().written_plan(id, build) {
+                        revisions.push((id, revision));
+                        candidates.insert(*item_id, (id, revision, RelationVersion::root()));
+                    }
+                    return true;
+                }
+            }
             let candidate = catalog.try_get_entry(item_id).and_then(|entry| {
                 let item = entry.item();
                 if item.cluster_id() != Some(cluster) {
@@ -148,6 +163,25 @@ impl ReplicaEffects {
                 && plan.item_version == version
                 && plan.physical_plan.export_ids().any(|export| export == id)
             {
+                if let Some(owner) = catalog.state().written_plan_replica_owner(id, build) {
+                    let matching_sink =
+                        plan.physical_plan
+                            .sink_exports
+                            .get(&id)
+                            .is_some_and(|sink| match &sink.connection {
+                                mz_compute_types::sinks::ComputeSinkConnection::MetricSink(
+                                    connection,
+                                ) => connection.label == owner.name,
+                                _ => false,
+                            });
+                    anyhow::ensure!(
+                        plan.physical_plan.source_imports.is_empty()
+                            && plan.physical_plan.index_exports.is_empty()
+                            && plan.physical_plan.sink_exports.len() == 1
+                            && matching_sink,
+                        "invalid replica-owned metric plan {id}"
+                    );
+                }
                 self.selected.insert(item, (id, revision, plan));
                 self.pending.remove(&item);
             }
@@ -183,6 +217,7 @@ pub(crate) async fn run(
     persist_clients: Arc<PersistClientCache>,
     registry: MetricsRegistry,
     endpoint: Option<ReplicaCompute>,
+    storage_endpoint: Option<mz_storage::server::ReplicaStorage>,
 ) -> anyhow::Result<()> {
     let failure_counts: mz_ore::metrics::IntCounterVec = registry.register(mz_ore::metric! {
         name: "mz_catalog_follower_failures_total",
@@ -233,14 +268,21 @@ pub(crate) async fn run(
     let build = build.to_string();
     let mut effects = ReplicaEffects::default();
     absorb_updates(&mut effects, &catalog, config.cluster_id, &build, initial);
-    let mut compute = if let Some(endpoint) = endpoint {
+    let mut execution = if let Some(endpoint) = endpoint {
         let (incarnation, publication_started) = loop {
             let (_, updates) = catalog.sync_to_current_updates().await?;
             absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
             let started = std::time::Instant::now();
             let ts = catalog.current_upper().await;
             match catalog
-                .transact(None, ts, None, vec![Op::CreateClientIncarnation])
+                .transact(
+                    None,
+                    ts,
+                    None,
+                    vec![Op::CreateClientIncarnation {
+                        replica_id: Some(config.replica_id),
+                    }],
+                )
                 .await
             {
                 Ok(result) => {
@@ -284,7 +326,7 @@ pub(crate) async fn run(
             config.replica_id,
             config.persist_location.clone(),
         );
-        Some(compute::ComputeEnactment::new(
+        Some(execution::ReplicaEnactment::new(
             endpoint,
             instance,
             incarnation,
@@ -292,6 +334,7 @@ pub(crate) async fn run(
             config.cluster_id,
             config.replica_id,
             &registry,
+            storage_endpoint,
         ))
     } else {
         None
@@ -304,13 +347,13 @@ pub(crate) async fn run(
     loop {
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
-        let (_, updates) = wait(&mut compute, catalog.sync_to_current_updates()).await?;
+        let (_, updates) = wait(&mut execution, catalog.sync_to_current_updates()).await?;
         let changed = !updates.is_empty();
         absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
-        if let Some(compute) = &mut compute {
-            compute.ensure_live(&catalog)?;
-            if compute.renewal_due() {
-                if let Err(error) = compute
+        if let Some(execution) = &mut execution {
+            execution.ensure_live(&catalog)?;
+            if execution.renewal_due() {
+                if let Err(error) = execution
                     .publish(
                         &mut catalog,
                         &mut effects,
@@ -325,11 +368,12 @@ pub(crate) async fn run(
                     tracing::warn!(%error, "replica heartbeat pending");
                 }
             }
-            compute.apply_progress(&catalog);
+            execution.apply_progress(&catalog);
+            execution.apply_storage_progress();
             // Advancing permission waits for current selections and import holds.
             // Retired definitions cannot be imported by current own-build selections:
             // their removing transaction also repairs those written plans.
-            compute.apply_catalog(&catalog, &storage_metadata::Resolution::default(), false);
+            execution.apply_catalog(&catalog, &storage_metadata::Resolution::default(), false);
             if effects.configuration_changed {
                 anyhow::ensure!(
                     catalog
@@ -337,7 +381,8 @@ pub(crate) async fn run(
                         .is_some(),
                     "replica was removed"
                 );
-                compute.configure(mz_catalog::compute_config::replica_compute_config(
+                execution.configure_storage(&catalog, config.cluster_id, config.replica_id);
+                execution.configure(mz_catalog::compute_config::replica_compute_config(
                     &catalog,
                     config.cluster_id,
                     config.replica_id,
@@ -345,13 +390,13 @@ pub(crate) async fn run(
                 effects.configuration_changed = false;
             }
         }
-        if compute.is_none() && !changed && effects.pending.is_empty() && !pending_metadata {
+        if execution.is_none() && !changed && effects.pending.is_empty() && !pending_metadata {
             tokio::time::sleep(delay).await;
             continue;
         }
         let result: anyhow::Result<_> = async {
             wait(
-                &mut compute,
+                &mut execution,
                 effects.observe_plans(
                     &catalog,
                     config.cluster_id,
@@ -361,7 +406,7 @@ pub(crate) async fn run(
                 ),
             )
             .await?;
-            let wanted = effects
+            let mut wanted: BTreeSet<_> = effects
                 .selected
                 .values()
                 .flat_map(|(_, _, plan)| {
@@ -370,8 +415,15 @@ pub(crate) async fn run(
                         .chain(plan.physical_plan.persist_sink_ids())
                 })
                 .collect();
-            wait(
-                &mut compute,
+            if let Some(execution) = &execution {
+                wanted.extend(execution.storage_wanted(
+                    &catalog,
+                    config.cluster_id,
+                    config.replica_id,
+                ));
+            }
+            let metadata = wait(
+                &mut execution,
                 storage_metadata::resolve(
                     &catalog,
                     &wanted,
@@ -382,16 +434,17 @@ pub(crate) async fn run(
                     txns_shard,
                 ),
             )
-            .await
+            .await?;
+            Ok((catalog.transient_revision(), metadata))
         }
         .await;
         match result {
-            Ok(metadata) => {
+            Ok((metadata_revision, metadata)) => {
                 pending_metadata = !metadata.pending.is_empty();
                 let mut pending = !effects.pending.is_empty() || pending_metadata;
-                if let Some(compute) = &mut compute {
-                    if compute.renewal_due() {
-                        if let Err(error) = compute
+                if let Some(execution) = &mut execution {
+                    if execution.renewal_due() {
+                        if let Err(error) = execution
                             .publish(
                                 &mut catalog,
                                 &mut effects,
@@ -406,7 +459,30 @@ pub(crate) async fn run(
                             tracing::warn!(%error, "replica heartbeat pending");
                         }
                     }
-                    let result = compute
+                    // Renewal can consume peer DDL. Resolve schemas and selected
+                    // producers again rather than combine metadata from two prefixes.
+                    if catalog.transient_revision() != metadata_revision {
+                        continue;
+                    }
+                    match execution
+                        .install_sources(
+                            &mut catalog,
+                            &mut effects,
+                            config.cluster_id,
+                            config.replica_id,
+                            &build,
+                            &metadata,
+                        )
+                        .await
+                    {
+                        Ok(source_pending) => pending |= source_pending,
+                        Err(error) => {
+                            failures["installation"].inc();
+                            pending = true;
+                            tracing::warn!(%error, "source installation pending");
+                        }
+                    }
+                    let result = execution
                         .install(
                             &mut catalog,
                             &mut effects,
@@ -421,11 +497,12 @@ pub(crate) async fn run(
                         failures["installation"].inc();
                         pending = true;
                         tracing::warn!(cluster = %config.cluster_id, replica = %config.replica_id,
-                            %error, "compute installation pending");
+                            %error, "execution installation pending");
                     }
-                    compute.apply_progress(&catalog);
-                    compute.apply_catalog(&catalog, &metadata, effects.pending.is_empty());
-                    if let Err(error) = compute
+                    pending |= execution.pending_installations(&effects) > 0;
+                    execution.apply_progress(&catalog);
+                    execution.apply_catalog(&catalog, &metadata, effects.pending.is_empty());
+                    if let Err(error) = execution
                         .publish(
                             &mut catalog,
                             &mut effects,
@@ -440,7 +517,7 @@ pub(crate) async fn run(
                         tracing::warn!(%error, "replica protection publication pending");
                     }
                     let wanted = metadata.metadata.keys().copied().collect();
-                    if let Err(error) = compute
+                    if let Err(error) = execution
                         .io
                         .wait(compaction.reconcile(
                             &persist,
@@ -453,7 +530,7 @@ pub(crate) async fn run(
                         tracing::warn!(%error, "committed storage compaction pending");
                     }
                     pending_installs.set(
-                        compute
+                        execution
                             .pending_installations(&effects)
                             .try_into()
                             .expect("fits u64"),
@@ -468,7 +545,8 @@ pub(crate) async fn run(
                         plans = effects.selected.len(), pending_plans = ?effects.pending,
                         pending_metadata = ?metadata.pending,
                         storage_inputs = metadata.metadata.len(),
-                        observed_uppers = metadata.uppers.len(), replica_owned = compute.is_some(),
+                        observed_uppers = metadata.uppers.len(),
+                        replica_owned = execution.is_some(),
                         "catalog follower effects processed"
                     );
                     last_report = tokio::time::Instant::now();
@@ -483,9 +561,9 @@ pub(crate) async fn run(
             Err(error) => {
                 failures["observation"].inc();
                 pending_metadata = true;
-                if let Some(compute) = &mut compute {
+                if let Some(execution) = &mut execution {
                     // Missing metadata cannot prevent renewal of existing protection.
-                    if let Err(error) = compute
+                    if let Err(error) = execution
                         .publish(
                             &mut catalog,
                             &mut effects,
@@ -505,23 +583,23 @@ pub(crate) async fn run(
                     || last_report.elapsed() >= Duration::from_secs(60)
                 {
                     tracing::warn!(cluster = %config.cluster_id, replica = %config.replica_id,
-                        %error, replica_owned = compute.is_some(), "catalog follower stalled");
+                        %error, replica_owned = execution.is_some(), "catalog follower stalled");
                     last_report = tokio::time::Instant::now();
                 }
                 last_error = Some(error);
                 delay = (delay * 2).min(Duration::from_secs(10));
             }
         }
-        wait(&mut compute, tokio::time::sleep(delay)).await;
+        wait(&mut execution, tokio::time::sleep(delay)).await;
     }
 }
 
 async fn wait<F: std::future::Future>(
-    compute: &mut Option<compute::ComputeEnactment>,
+    execution: &mut Option<execution::ReplicaEnactment>,
     future: F,
 ) -> F::Output {
-    match compute {
-        Some(compute) => compute.io.wait(future).await,
+    match execution {
+        Some(execution) => execution.io.wait(future).await,
         None => future.await,
     }
 }
