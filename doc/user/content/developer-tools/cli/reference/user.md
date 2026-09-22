@@ -1,4 +1,5 @@
 ---
+draft: true
 title: mz user
 description: The `mz user` command manages users in your organization.
 menu:

@@ -1,4 +1,5 @@
 ---
+draft: true
 title: mz Reference
 description: "Reference section for `mz`, Materialize command-line interface (CLI)."
 menu:
