@@ -279,9 +279,12 @@ impl Coordinator {
         // Collect optimizer parameters.
         let catalog = self.owned_catalog();
         let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
-        let compute_instance = self
-            .query_instance_snapshot(cluster.id())
-            .expect("compute instance does not exist");
+        let compute_instance = if explain_ctx.needs_cluster() {
+            self.query_instance_snapshot(cluster.id())
+                .expect("compute instance does not exist")
+        } else {
+            optimize::dataflows::ComputeInstanceSnapshot::new_without_collections(cluster.id())
+        };
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&self.cluster_scoped_optimizer_overrides(cluster.id()))

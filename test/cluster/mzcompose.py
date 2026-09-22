@@ -9367,3 +9367,58 @@ def workflow_adapter_loss(c: Composition) -> None:
                 service=td.name,
             )
             assert consume(name, len(expected)) == expected, name
+
+
+def workflow_test_explain_pending_index(c: Composition) -> None:
+    """EXPLAIN plans a declared index without requiring an installed trace."""
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_catalog_read_protection": "true",
+                "enable_frontend_peek_sequencing": "true",
+            }
+        )
+    ):
+        c.up("materialized")
+        for statement in (
+            "CREATE TABLE explain_pending_t (a int)",
+            "INSERT INTO explain_pending_t VALUES (1), (2)",
+            "CREATE CLUSTER explain_pending REPLICAS ()",
+            "CREATE INDEX explain_pending_idx IN CLUSTER explain_pending ON explain_pending_t (a)",
+        ):
+            c.sql(statement)
+        with c.sql_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET cluster = explain_pending")
+                cursor.execute("SET statement_timeout = '120s'")
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT a FROM explain_pending_t"
+                )
+                plan = "\n".join(str(row[0]) for row in cursor.fetchall())
+                assert re.search(r"ReadIndex[^\n]*explain_pending_idx", plan), plan
+                cursor.execute("COMMIT")
+                c.sql("""
+                    CREATE CLUSTER REPLICA explain_pending.r SIZE 'scale=1,workers=1'
+                """)
+                deadline = time.monotonic() + 120
+                while c.sql_query("""
+                    SELECT bool_and(h.hydrated)
+                    FROM mz_internal.mz_compute_hydration_statuses h
+                    JOIN mz_indexes i ON i.id = h.object_id
+                    WHERE i.name = 'explain_pending_idx'
+                """) != [(True,)]:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("Pending index did not hydrate")
+                    time.sleep(0.25)
+                # An EXPLAIN against an available index must establish the same
+                # transaction read inputs as the following SELECT.
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT a FROM explain_pending_t"
+                )
+                plan = "\n".join(str(row[0]) for row in cursor.fetchall())
+                assert re.search(r"ReadIndex[^\n]*explain_pending_idx", plan), plan
+                cursor.execute("SELECT a FROM explain_pending_t ORDER BY a")
+                assert cursor.fetchall() == [(1,), (2,)]
+                cursor.execute("COMMIT")

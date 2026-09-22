@@ -490,10 +490,14 @@ impl PeekClient {
 
         // # From peek_validate
 
-        let compute_instance_snapshot = if let Some(client) = &self.query_client
-            && explain_ctx.needs_cluster()
-        {
-            client.instance_snapshot(&catalog, cluster.id())
+        let observed_compute = self
+            .query_client
+            .as_ref()
+            .map(|client| client.instance_snapshot(&catalog, cluster.id()));
+        let compute_instance_snapshot = if explain_ctx.needs_cluster() {
+            observed_compute
+                .clone()
+                .unwrap_or_else(|| ComputeInstanceSnapshot::new_without_collections(cluster.id()))
         } else {
             ComputeInstanceSnapshot::new_without_collections(cluster.id())
         };
@@ -587,8 +591,13 @@ impl PeekClient {
 
         // # From peek_timestamp_read_hold
 
-        let dataflow_builder =
-            DataflowBuilder::new(catalog.state(), compute_instance_snapshot.clone());
+        // EXPLAIN may describe a declared index before its trace is installed.
+        // Actual timestamp/statistics reads use observed access paths, as SELECT
+        // does, without changing the optimizer's catalog-declared candidates.
+        let dataflow_builder = DataflowBuilder::new(
+            catalog.state(),
+            observed_compute.unwrap_or_else(|| compute_instance_snapshot.clone()),
+        );
         let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
 
         // ## From sequence_peek_timestamp
