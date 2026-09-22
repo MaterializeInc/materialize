@@ -21,69 +21,44 @@ Current steering
 Recheck these priorities against the code and latest handoff. Flag resolved
 steering for removal rather than accumulating a checklist.
 
-Milestone 2 is active. Following and enactment belong in clusterd replicas for
-compute and storage alike, not a separate lifecycle process or connection.
-Adapter and clusterd share the committed catalog path, and the native runtime
-endpoint and selector are in place. Replica enactment remains disabled pending
-protection and publication integration. The next integration is:
+Milestone 2 is active. The ownership cutover is enabled: clusterd replicas enact
+compute and storage from the shared committed catalog. Keep the architecture stable
+and the native gate enabled. Adapter inventory and SQL observations are passive,
+not a second installer. Table/WAL work, webhook ticking, introspection writers and
+shard finalization remain adapter-owned and may pause during adapter absence.
 
-1. Implement the design's Object-owned retention contract using durable logical-input
-   progress with or without replicas. Reclaiming every client and replica grant
-   must still leave the object-owned requirement constraining compaction and
-   recovery. Preserve zero-replica advancement from input progress rather than
-   freezing at the last execution upper.
-   Derive requirements from catalog definitions and durable progress where possible,
-   without assuming a new record per index or persisting its execution upper.
-   Bring ambiguity or disproportionate cost before adding durable state or
-   weakening the contract.
-2. Enact from the replica's committed state. Acquire incarnation-scoped import
-   protection before choosing as_of and installing written plans, then apply
-   bounds and propose them from replica progress. Replica grants must cover both
-   execution needs and the running index's execution-relative retention window.
-   Faster input progress must not make that retained window unavailable to new
-   historical reads. Holding only unfinished execution is not sufficient.
-   Finish bootstrap installation from selections too, without installer replanning
-   or durable physical-import requirements. Keep the controller as sole installer
-   until the replica path can replace it. Retire the superseded path at cutover.
-3. Complete direct query routing and response merging in the query client, and
-   storage enactment through the same follower. Split StorageCollections by its
-   responsibilities: critical handles follow bounds, table registration and
-   finalization stay adapter-owned. Finalization may pause during adapter loss,
-   as may table and webhook ticking. Compute is a slice, not milestone completion.
+Finish the cluster/adapter-loss demonstration and the bounded multi-replica
+measurements. Fix demonstrated regressions at their owning boundaries. Review the
+complete acceptance setup against actual service configuration and batch related
+plumbing corrections. Prefer targeted acceptance runs against available binaries
+where practical. Passing unit tests and preparatory cleanup do not replace the
+remaining end-to-end proof.
 
-Use cluster/adapter-loss as the acceptance target, including replica reconstruction
-during adapter absence. Show that the restarted replica progresses, not just its
-surviving sibling. Exercise slow hydration, same-batch dependencies, pending
-replacements, and fixed-plan recovery from logical inputs after actual compaction.
-Test retention with no query holds and no index replicas, including incarnation
-reclamation, total shutdown/recovery, and a historical read still covered by the
-policy. Verify input uppers and permitted compaction advancing while the index
-cluster has zero replicas, rather than pinning creation history indefinitely.
-Also cover a live index lagging its inputs, with a new historical read inside its
-running retention window. Independent reader holds still constrain advancement.
-Compute logs and indexes over them retain replica-local history semantics, not
-shutdown persistence. This exception does not cover persisted catalog collections.
-Unavailable diagnostics may remain unknown. Do not let a diagnostic audit block
-the ownership change.
+Show compute and storage reconstruction and progress during adapter absence,
+including progress by the restarted replica rather than only its surviving sibling.
+Preserve physical compaction, successive autonomous curated metrics, resumed queries,
+and zero-replica historical recovery assertions. Independent reader holds still
+constrain advancement. Compute logs and indexes over them retain replica-local
+history semantics, not shutdown persistence. Unavailable diagnostics may remain
+unknown, but must not be invented or become execution prerequisites.
 
-The publisher defers all bounds and client reclamation while any installation is
-pending. Execution, catalog effects, sources, sinks, and queries continue. Pending
-must be transient within one build. Retry with backoff, log and count failures, and
-surface stalls. Re-establish this ordering argument with replica-owned protection
-and a slow replica, rather than relying on controller-held imports. Do not build
-dependency-scoped publication exceptions. Bring concrete counterexamples or stalls.
+EXPLAIN can describe declared indexes before their traces are installed. Keep its
+planning candidates separate from actual read admission without weakening read
+protection. Surface consequential transaction behavior changes separately.
 
-Storage steering: finalization ownership is settled in the 2026-09-14 log entry.
-Kafka uses the lowest live replica incarnation, transactional fencing and versioned
-progress, without a sink lease. Re-evaluate eligibility and the committed definition
-before producer restarts, rather than blindly restarting a stale local definition.
-Two questions remain for the storage cutover:
-- Does tying takeover to the five-minute reclamation grace give acceptable sink
-  recovery latency? Bring that tradeoff before choosing a faster closure rule.
-- Iceberg's conflict retry can append an overlapping same-version batch after
-  another writer commits part of it. Reproduce the competing-writer case and bring
-  a narrow commit-boundary solution before enabling independent sink followers.
-Do not silently exclude a sink type or introduce a general lifecycle leader.
+Distinguish the agreed five-minute reclamation grace from leaks. Observe abandoned
+incarnations being reclaimed, then assert release. Do not shorten production grace
+or broadly reclaim clients to make tests pass. Pending installation defers bounds
+and reclamation, so check its interaction with Kafka takeover against the restart
+proof. Bring concrete stalls before proposing coordination machinery. Kafka keeps
+its incarnation-based eligibility, local pre-open admission, transactional fencing
+and versioned progress, without another lease. Iceberg retains its guarded commit
+and fail-closed missing-progress boundaries.
+
+Current-status recovery and live observations are the immediate target. Do not add
+durable outage-status history or redesign replica failure detection. Prove the
+native path first, then integrate upstream in a separate review boundary unless an
+upstream change actually blocks acceptance.
 
 Keep per-build selection keys, but defer cross-build follower repair, version
 upgrades, and prewarming-owned selections. Retired-build cleanup is also deferred.
