@@ -107,10 +107,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
         # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
         # and slow-seqno-hold are slow, run in separate CI step
+        # adapter-loss has its own native acceptance job and reclamation budget.
         # concurrent-connections is too flaky
         # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
             "default",
+            "adapter-loss",
             "test-concurrent-connections",
             "test-memory-limiter",
         ):

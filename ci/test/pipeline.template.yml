@@ -316,6 +316,27 @@ steps:
     agents:
       queue: hetzner-aarch64-16cpu-32gb
 
+  - id: adapter-loss-native
+    topics: [kafka, kafka-sink, postgres]
+    label: Native adapter-loss recovery
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs:
+      - test/cluster
+      - src/adapter
+      - src/catalog
+      - src/clusterd
+      - src/compute
+      - src/storage
+      - src/storage-controller
+      - src/controller-types
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: adapter-loss
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
   - id: iceberg-overlap-recovery
     topics: [iceberg, postgres]
     label: Iceberg overlap recovery
