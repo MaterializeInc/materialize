@@ -20,8 +20,12 @@ The mapping has three layers:
 | Layer | Example | Managed in |
 |-------|---------|------------|
 | IdP group | `analytics-team` | Your identity provider |
-| Custom organization role | `analytics_reader` | Terraform |
+| Custom organization role | `analytics_reader` | Materialize Console (**Roles**) or Terraform |
 | Database role | `analytics_reader` | SQL or Terraform |
+
+Custom organization roles live in Materialize's identity provider and are scoped
+to your organization. You can manage them through the Materialize Console or
+Terraform.
 
 SCIM provisions the group and its members. You assign the group a custom
 organization role. When a member connects, Materialize reads their organization
@@ -45,7 +49,8 @@ to grant limited database access.
 $TODO: Before publishing this setup, specify the first provider release with
 `materialize_organization_role` and custom-role mapping support, confirm
 organization role management is enabled, and verify the production JWT claim
-configuration used for database role sync.
+configuration used for database role sync. Confirm how to obtain the JWT key
+for a role created in the Console.
 {{< /note >}}
 
 ## Before you begin
@@ -126,9 +131,10 @@ synced.
 
 ## Step 3. Create custom organization roles
 
-Create a custom organization role for each database access role using the
-[Terraform configuration below](#manage-with-terraform). For example, create
-`analytics_reader` with `base_role_name = "Member"`.
+Create a custom organization role for each database access role in the
+Materialize Console's **Roles** page or using the
+[Terraform configuration below](#manage-with-terraform). For example, with
+Terraform, create `analytics_reader` with `base_role_name = "Member"`.
 
 If you apply the complete Terraform example, it also creates the group
 assignment and database role described in Steps 4 and 5. Continue with database
