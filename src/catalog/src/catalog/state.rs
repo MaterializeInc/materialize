@@ -155,6 +155,10 @@ pub struct CatalogState {
     /// omitted from the session-visible entries. Multiple items can alias an ID.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) durable_item_ids: imbl::OrdMap<GlobalId, imbl::OrdSet<CatalogItemId>>,
+    /// Items whose additions were omitted from this process's SQL projection.
+    /// Their comments follow the same visibility, including later retractions.
+    #[serde(skip)]
+    pub(super) nonlocal_ephemeral_items: imbl::OrdSet<CatalogItemId>,
     #[serde(serialize_with = "serialize_collection_compaction_bounds")]
     pub(super) collection_compaction_bounds: imbl::OrdMap<GlobalId, Antichain<Timestamp>>,
     #[serde(serialize_with = "serialize_maintained_read_requirements")]
@@ -463,6 +467,7 @@ impl CatalogState {
             entry_by_id: Default::default(),
             entry_by_global_id: Default::default(),
             durable_item_ids: Default::default(),
+            nonlocal_ephemeral_items: Default::default(),
             notices_by_dep_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
@@ -2649,6 +2654,30 @@ impl CatalogState {
             for gid in temporary_gids {
                 gids.remove(&gid.to_string());
             }
+        }
+        // A session-free reconstruction omits temporary entries and their
+        // comments. Keep ordinary and genuinely orphaned comments comparable.
+        let temporary_comments = self
+            .comments
+            .iter()
+            .filter_map(|(object, _, _)| match ObjectId::from(object) {
+                ObjectId::Item(id)
+                    if self
+                        .try_get_entry(&id)
+                        .is_some_and(|entry| entry.conn_id().is_some()) =>
+                {
+                    Some(object)
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        if !temporary_comments.is_empty() {
+            let mut comments = self.comments.as_ref().clone();
+            comments.drop_comments(&temporary_comments);
+            dump_obj.insert(
+                "comments".into(),
+                serde_json::to_value(comments).expect("comments can be serialized"),
+            );
         }
         // We exclude role_auth_by_id because it contains password information
         // which should not be included in the dump.

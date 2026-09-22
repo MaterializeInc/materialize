@@ -286,10 +286,10 @@ impl CatalogState {
             // Do not apply temporary item updates from other processes, since
             // temporary items are scoped per session, which must be in the
             // same process.
-            if self.is_nonlocal_ephemeral_item_update(&state_update) {
+            if self.skip_nonlocal_ephemeral_update(&state_update) {
                 tracing::debug!(
                     ?state_update,
-                    "skipping ephemeral item update for non-local session"
+                    "skipping ephemeral metadata for non-local session"
                 );
                 continue;
             }
@@ -1300,9 +1300,14 @@ impl CatalogState {
         }
     }
 
-    /// Whether `update` concerns an ephemeral item whose owning session is not
-    /// connected to this process, in which case applying it must be a no-op.
-    fn is_nonlocal_ephemeral_item_update(&self, update: &StateUpdate) -> bool {
+    /// Tracks skipped Item additions so their comments have the same local
+    /// visibility. Sorting applies comment retractions before Item retractions
+    /// and comment additions after Items. Unknown targets remain consistency errors.
+    fn skip_nonlocal_ephemeral_update(&mut self, update: &StateUpdate) -> bool {
+        if let StateUpdateKind::Comment(comment) = &update.kind {
+            return matches!(mz_sql::names::ObjectId::from(comment.object_id),
+                mz_sql::names::ObjectId::Item(id) if self.nonlocal_ephemeral_items.contains(&id));
+        }
         let StateUpdateKind::Item(item) = &update.kind else {
             return false;
         };
@@ -1310,13 +1315,24 @@ impl CatalogState {
         let Some(owner) = item.ephemeral_owner_session else {
             return false;
         };
-        match update.diff {
+        let nonlocal = match update.diff {
             // An addition is local when the owning session is connected here.
             StateDiff::Addition => !self.temporary_namespaces.contains_uuid(&owner),
             // A retraction must be applied iff the matching addition above
             // was applied here, and entry presence records exactly that.
             StateDiff::Retraction => !self.entry_by_id.contains_key(&item.id),
+        };
+        if nonlocal {
+            match update.diff {
+                StateDiff::Addition => {
+                    self.nonlocal_ephemeral_items.insert(item.id);
+                }
+                StateDiff::Retraction => {
+                    self.nonlocal_ephemeral_items.remove(&item.id);
+                }
+            }
         }
+        nonlocal
     }
 
     #[instrument(level = "debug")]

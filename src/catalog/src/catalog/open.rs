@@ -266,6 +266,7 @@ impl Catalog {
             entry_by_id: imbl::OrdMap::new(),
             entry_by_global_id: imbl::OrdMap::new(),
             durable_item_ids: Default::default(),
+            nonlocal_ephemeral_items: Default::default(),
             notices_by_dep_id: imbl::OrdMap::new(),
             ambient_schemas_by_name: imbl::OrdMap::new(),
             ambient_schemas_by_id: imbl::OrdMap::new(),
