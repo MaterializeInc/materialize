@@ -2343,6 +2343,8 @@ pub struct ClientIncarnationKey {
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClientIncarnationValue {
     pub heartbeat: u64,
+    #[serde(default)]
+    pub replica_id: Option<ReplicaId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2384,6 +2386,15 @@ pub struct WrittenPlanKey {
 pub struct WrittenPlanValue {
     #[cfg_attr(any(test, feature = "proptest"), proptest(strategy = "any_uuid()"))]
     pub revision: Uuid,
+    #[serde(default)]
+    pub replica_owner: Option<ReplicaPlanOwner>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ReplicaPlanOwner {
+    pub replica_id: ReplicaId,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
