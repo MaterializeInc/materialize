@@ -31,7 +31,7 @@ BYOC is set up together with the Materialize team. This guide describes the step
 ## How it works
 
 Your environment runs entirely in a dedicated GCP project that you create for Materialize. The project is the isolation boundary. Materialize provisions and operates the environment using an identity to which you grant admin on that project, accessed through Workload Identity Federation. Operational telemetry (logs and metrics) leaves your project so Materialize can monitor and support the deployment. Sensitive data is excluded at the application level, so it is never written into a log or a metric in the first place.
-![BYOC on GCP architecture](/images/byoc-gcp-architecture.svg)
+![BYOC on GCP architecture](/images/byoc-gcp-architecture-v2.svg)
 
 ## Prerequisites
 
