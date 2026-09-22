@@ -1,4 +1,5 @@
 ---
+draft: true
 title: "Materialize CLI Configuration"
 description: "An authentication profile..."
 menu:
