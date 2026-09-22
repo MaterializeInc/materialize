@@ -424,7 +424,7 @@ impl Coordinator {
 
     /// Apply the committed prefix exposed by a retryable catalog conflict.
     /// Structural changes are checked by the caller against its planning revision.
-    async fn refresh_catalog_after_conflict(&mut self) -> Result<(), AdapterError> {
+    pub(super) async fn refresh_catalog_after_conflict(&mut self) -> Result<(), AdapterError> {
         let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
         let builtin = self
             .catalog()

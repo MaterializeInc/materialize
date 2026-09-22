@@ -857,31 +857,46 @@ impl Coordinator {
         // alone cannot preserve an index trace at the chosen historical AS OF.
         let physical_read_holds = if let Some(client) = self.query_client.clone() {
             let planning_revision = self.catalog().transient_revision();
-            let (candidate, _) = match self
-                .catalog()
-                .transact_incremental_dry_run(
-                    self.catalog().state(),
-                    ops.clone(),
-                    None,
-                    None,
-                    initial_as_of.as_option().copied().unwrap_or(Timestamp::MIN),
-                )
-                .await
-            {
-                Ok(candidate) => candidate,
-                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                    kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-                })) if if_not_exists => {
-                    ctx.session()
-                        .add_notice(AdapterNotice::ObjectAlreadyExists {
-                            name: name.item,
-                            ty: "materialized view",
-                        });
-                    return Ok(StageResult::Response(
-                        ExecuteResponse::CreatedMaterializedView,
-                    ));
+            let (candidate, _) = loop {
+                match self
+                    .catalog()
+                    .transact_incremental_dry_run(
+                        self.catalog().state(),
+                        ops.clone(),
+                        None,
+                        None,
+                        initial_as_of.as_option().copied().unwrap_or(Timestamp::MIN),
+                    )
+                    .await
+                {
+                    Ok(candidate) => break candidate,
+                    Err(AdapterError::Catalog(error))
+                        if matches!(
+                            &error.kind,
+                            ErrorKind::Durable(
+                                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                            )
+                        ) =>
+                    {
+                        self.refresh_catalog_after_conflict().await?;
+                        if self.catalog().transient_revision() != planning_revision {
+                            return Err(AdapterError::DDLTransactionRace);
+                        }
+                    }
+                    Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                        kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                    })) if if_not_exists => {
+                        ctx.session()
+                            .add_notice(AdapterNotice::ObjectAlreadyExists {
+                                name: name.item,
+                                ty: "materialized view",
+                            });
+                        return Ok(StageResult::Response(
+                            ExecuteResponse::CreatedMaterializedView,
+                        ));
+                    }
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
             };
             let candidate = Arc::new(candidate);
             let mv = candidate
