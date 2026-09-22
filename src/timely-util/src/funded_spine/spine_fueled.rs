@@ -99,7 +99,32 @@ pub struct Spine<B: Batch> {
     exert_logic_param: Vec<(usize, usize, usize)>,
     /// Logic to indicate whether and how many records we should introduce in the absence of actual updates.
     exert_logic: Option<ExertionLogic>,
+    /// Fuel that inserted updates have funded for policy-requested effort and that
+    /// `exert` has not yet spent.
+    consolidation_credit: usize,
+    /// Policy allowances funded by inserted batches, one per frontier advance, and not yet spent.
+    progress_grants: usize,
 }
+
+/// Policy-requested effort that each inserted update funds, in fuel units.
+///
+/// Introducing a batch already funds `8 << level` fuel for active merges. The same
+/// multiple bounds policy-requested effort while input flows, so it stays
+/// proportional to inserted updates however often the operator is scheduled. Per
+/// scheduling turn the policy would otherwise lift each new batch into the largest
+/// one. Unfunded requests wait for more credit or a closed input.
+const CONSOLIDATION_CREDIT_PER_UPDATE: usize = 8;
+
+/// Policy allowances one inserted batch funds regardless of its size.
+///
+/// `arrange_core` seals one batch per input frontier advance, so a quiet input
+/// still converges to the policy's reduced form at a rate set by upstream
+/// progress rather than by scheduling.
+const CONSOLIDATION_GRANTS_PER_PROGRESS: usize = 8;
+
+/// Most progress-funded allowances held back, so a long quiet spell does not bank
+/// a burst of forced consolidation for the moment input returns.
+const MAX_BANKED_PROGRESS_GRANTS: usize = 8 * CONSOLIDATION_GRANTS_PER_PROGRESS;
 
 impl<B: Batch+Clone+'static> TraceReader for Spine<B> {
 
@@ -246,21 +271,19 @@ impl<B: Batch+Clone+'static> Trace for Spine<B> {
         self.tidy_layers();
         // Determine whether we should apply effort independent of updates.
         if let Some(effort) = self.exert_effort() {
-
-            // If any merges exist, we can directly call `apply_fuel`.
-            if self.merging.iter().any(|b| b.is_double()) {
-                self.apply_fuel(&mut (effort as isize));
+            // Optional effort is paid for by inserted updates and frontier advances
+            // while the input is open; only a closed input lifts that bound.
+            if !self.upper.borrow().is_empty() {
+                if self.consolidation_credit >= effort {
+                    self.consolidation_credit -= effort;
+                } else if self.progress_grants > 0 {
+                    self.progress_grants -= 1;
+                } else {
+                    // Unfunded: stay quiet until an insert pays.
+                    return;
+                }
             }
-            // Otherwise, we'll need to introduce fake updates to move merges along.
-            else {
-                // Introduce an empty batch with roughly *effort number of virtual updates.
-                let level = effort.next_power_of_two().trailing_zeros() as usize;
-                self.introduce_batch(None, level);
-            }
-            // We were not in reduced form, so let's check again in the future.
-            if let Some(activator) = &self.activator {
-                activator.activate();
-            }
+            self.grant(effort);
         }
     }
 
@@ -283,6 +306,11 @@ impl<B: Batch+Clone+'static> Trace for Spine<B> {
         assert_eq!(batch.lower(), &self.upper);
 
         self.upper.clone_from(batch.upper());
+        self.consolidation_credit = self.consolidation_credit.saturating_add(
+            batch.len().saturating_mul(CONSOLIDATION_CREDIT_PER_UPDATE).saturating_mul(self.effort),
+        );
+        self.progress_grants = (self.progress_grants + CONSOLIDATION_GRANTS_PER_PROGRESS)
+            .min(MAX_BANKED_PROGRESS_GRANTS);
 
         // TODO: Consolidate or discard empty batches.
         self.pending.push(batch);
@@ -393,6 +421,26 @@ impl<B: Batch> Spine<B> {
             activator,
             exert_logic_param: Vec::default(),
             exert_logic: None,
+            consolidation_credit: 0,
+            progress_grants: 0,
+        }
+    }
+
+    /// Apply one policy allowance: fuel for active merges, or a virtual introduction.
+    fn grant(&mut self, effort: usize) {
+        // If any merges exist, we can directly call `apply_fuel`.
+        if self.merging.iter().any(|b| b.is_double()) {
+            self.apply_fuel(&mut (effort as isize));
+        }
+        // Otherwise, we'll need to introduce fake updates to move merges along.
+        else {
+            // Introduce an empty batch with roughly *effort number of virtual updates.
+            let level = effort.next_power_of_two().trailing_zeros() as usize;
+            self.introduce_batch(None, level);
+        }
+        // We were not in reduced form, so let's check again in the future.
+        if let Some(activator) = &self.activator {
+            activator.activate();
         }
     }
 

@@ -96,7 +96,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::{Arranged, arrange_core};
-use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder, ChunkSpine};
+use differential_dataflow::trace::chunk::{ChunkBatch, ChunkBatcher, ChunkBuilder};
 use differential_dataflow::trace::{BatchReader, Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_dyncfg::ConfigSet;
@@ -104,7 +104,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 // Only the fuzzing-gated `datum_seq_to_upsert_value` takes a `DatumSeq`.
 #[cfg(feature = "fuzzing")]
 use mz_row_spine::DatumSeq;
-use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
+use mz_row_spine::{FundedValRowSpine, ValRowColPagedBuilder};
 use mz_storage_types::dyncfgs::ENABLE_UPSERT_CHUNKED_STASH;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
@@ -224,7 +224,11 @@ type FeedbackUpdate<T> = ((UpsertKey, Row), T, Diff);
 type FeedbackChunk<T> = ColumnChunk<(UpsertKey, Row), T, Diff>;
 
 /// The feedback arrangement's trace: a spine of `Rc`-shared chunk batches.
-type FeedbackSpine<T> = ChunkSpine<FeedbackChunk<T>>;
+/// The feedback trace: differential's fueled spine over chunk batches, with
+/// optional exertion funded by inserted updates so compaction work stays
+/// proportional to input rather than to scheduling turns.
+type FeedbackSpine<T> =
+    mz_timely_util::funded_spine::Spine<std::rc::Rc<ChunkBatch<FeedbackChunk<T>>>>;
 
 // The source stash carries the upsert payload in a custom diff type so the
 // merge batcher consolidates by (key, time), keeping the update with the
@@ -477,7 +481,7 @@ where
                 ColumnChunker<((UpsertKey, Row), T, Diff)>,
                 UpsertFeedbackBatcher<T>,
                 ValRowColPagedBuilder<UpsertKey, T, Diff>,
-                ValRowSpine<UpsertKey, T, Diff>,
+                FundedValRowSpine<UpsertKey, T, Diff>,
             >(encoded, Pipeline, "Persist feedback");
             build_upsert_operator::<PagedArm, _, _>(
                 input,
@@ -992,7 +996,7 @@ where
     O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
-    type Spine = ValRowSpine<UpsertKey, T, Diff>;
+    type Spine = FundedValRowSpine<UpsertKey, T, Diff>;
     type Batcher = UpsertPagedBatcher<T, O>;
 
     fn new_batcher() -> Self::Batcher {
@@ -1313,7 +1317,7 @@ async fn drain_sealed_input_paged<T, O>(
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
+    trace: &mut TraceAgent<FundedValRowSpine<UpsertKey, T, Diff>>,
     worker_id: usize,
     source_id: GlobalId,
 ) -> DrainStats
