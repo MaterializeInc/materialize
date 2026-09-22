@@ -100,7 +100,7 @@ use futures::StreamExt;
 use iceberg::ErrorKind;
 use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
 use iceberg::spec::{
-    DataFile, FormatVersion, Snapshot, StructType, read_data_files_from_avro,
+    DataFile, FormatVersion, StructType, TableMetadata, read_data_files_from_avro,
     write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
@@ -781,15 +781,14 @@ async fn reload_table(
 }
 
 /// A prepared batch may only extend exactly the durable Materialize upper.
-/// Absence of progress is the initial snapshot case: its lower is the input
+/// A table without snapshot history permits an initial snapshot: its lower is the input
 /// as_of, which need not be the minimum timestamp.
 fn validate_commit_progress(
     table: &Table,
     sink_version: u64,
     batch_lower: &Antichain<Timestamp>,
 ) -> anyhow::Result<()> {
-    let mut snapshots = table.metadata().snapshots().cloned().collect::<Vec<_>>();
-    if let Some((upper, version)) = retrieve_upper_from_snapshots(&mut snapshots)? {
+    if let Some((upper, version)) = retrieve_upper_from_snapshots(table.metadata())? {
         if version > sink_version {
             anyhow::bail!(
                 "Fenced off by newer sink version: resume_version {}, sink_version {}",
@@ -965,10 +964,12 @@ async fn load_or_create_table(
 /// Find the most recent Materialize frontier from Iceberg snapshots.
 /// We store the frontier in snapshot metadata to track where we left off after restarts.
 /// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
-/// The input slice will be sorted by sequence number in descending order.
+/// Returns None only when metadata contains no evidence of prior snapshots.
+/// Missing progress after snapshot expiration is an error, not an initial frontier.
 fn retrieve_upper_from_snapshots(
-    snapshots: &mut [Arc<Snapshot>],
+    metadata: &TableMetadata,
 ) -> anyhow::Result<Option<(Antichain<Timestamp>, u64)>> {
+    let mut snapshots = metadata.snapshots().collect::<Vec<_>>();
     snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
     for snapshot in snapshots {
@@ -999,6 +1000,17 @@ fn retrieve_upper_from_snapshots(
         }
     }
 
+    // Sequence numbers survive snapshot expiration in v2+ tables. Retained
+    // snapshots and the snapshot log also establish history, including in v1.
+    // The metadata log alone is not evidence of writes (e.g. property changes).
+    if metadata.snapshots().len() != 0
+        || !metadata.history().is_empty()
+        || metadata.last_sequence_number() != 0
+    {
+        anyhow::bail!(
+            "Iceberg table has prior snapshot history but no retained Materialize progress ('mz-frontier' and 'mz-sink-version'). Cannot safely recover or commit."
+        );
+    }
     Ok(None)
 }
 
@@ -1166,8 +1178,7 @@ fn mint_batch_descriptions<'scope>(
 
             *table_ready_capset = CapabilitySet::new();
 
-            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
-            let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
+            let resume = retrieve_upper_from_snapshots(table.metadata())?;
             let (resume_upper, resume_version) = match resume {
                 Some((f, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),

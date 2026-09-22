@@ -19,8 +19,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
-use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct};
-use iceberg::{CatalogBuilder, MemoryCatalog, Namespace, TableCommit};
+use iceberg::spec::{
+    DataContentType, DataFileBuilder, DataFileFormat, Operation, Snapshot, SnapshotReference,
+    SnapshotRetention, Struct,
+};
+use iceberg::{CatalogBuilder, MemoryCatalog, Namespace, TableCommit, TableUpdate};
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::SqlScalarType;
 
@@ -257,8 +260,7 @@ async fn overlapping_batch_retry_does_not_duplicate_records() {
     let records: u64 = snapshot.summary().additional_properties["total-records"]
         .parse()
         .unwrap();
-    let mut snapshots = table.metadata().snapshots().cloned().collect::<Vec<_>>();
-    let (upper, version) = retrieve_upper_from_snapshots(&mut snapshots)
+    let (upper, version) = retrieve_upper_from_snapshots(table.metadata())
         .unwrap()
         .unwrap();
     assert_eq!(version, 1);
@@ -292,9 +294,8 @@ async fn overlapping_batch_retry_does_not_duplicate_records() {
 }
 
 fn assert_progress(table: &Table, upper: u64, version: u64, records: u64) {
-    let mut snapshots = table.metadata().snapshots().cloned().collect::<Vec<_>>();
     assert_eq!(
-        retrieve_upper_from_snapshots(&mut snapshots).unwrap(),
+        retrieve_upper_from_snapshots(table.metadata()).unwrap(),
         Some((Antichain::from_elem(Timestamp::new(upper)), version))
     );
     assert_eq!(
@@ -336,8 +337,29 @@ async fn initial_snapshot_nonzero_as_of_is_cas_protected() {
     assert!(matches!(result, RetryResult::FatalErr(_)), "{result:?}");
     assert_progress(&table, 15, 1, 5);
 
-    // A fresh table accepts an initial snapshot at a nonzero input as_of.
+    // Metadata-only changes do not prevent initialization at a nonzero as_of.
     let (catalog, table, metrics) = setup().await;
+    assert_eq!(
+        retrieve_upper_from_snapshots(table.metadata()).unwrap(),
+        None
+    );
+    let table = catalog
+        .update_table(
+            TableCommit::builder()
+                .ident(table.identifier().clone())
+                .requirements(vec![])
+                .updates(vec![TableUpdate::SetProperties {
+                    updates: HashMap::from([("test-property".into(), "value".into())]),
+                }])
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert!(!table.metadata().metadata_log().is_empty());
+    assert_eq!(
+        retrieve_upper_from_snapshots(table.metadata()).unwrap(),
+        None
+    );
     let initial = data_file(&table, "initial", 5);
     let (table, result) = try_commit_batch(
         table,
@@ -354,6 +376,148 @@ async fn initial_snapshot_nonzero_as_of_is_cas_protected() {
     .await;
     assert!(matches!(result, RetryResult::Ok(())), "{result:?}");
     assert_progress(&table, 15, 1, 5);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn expired_materialize_progress_behind_replace_fails_closed() {
+    let (catalog, table, metrics) = setup().await;
+    let initial = data_file(&table, "initial", 5);
+    let lower = Antichain::from_elem(Timestamp::new(14));
+    let (table, result) = try_commit_batch(
+        table,
+        properties(15),
+        vec![initial],
+        vec![],
+        &catalog,
+        "test",
+        "sink",
+        1,
+        &lower,
+        &metrics,
+    )
+    .await;
+    assert!(matches!(result, RetryResult::Ok(())), "{result:?}");
+
+    // Publish a no-op replacement of the same real manifests without MZ
+    // properties, then expire its progress-bearing parent through the catalog.
+    let parent = table.metadata().current_snapshot().unwrap();
+    let parent_id = parent.snapshot_id();
+    let replacement_id = parent_id ^ 1;
+    let mut summary = parent.summary().clone();
+    summary.operation = Operation::Replace;
+    summary
+        .additional_properties
+        .retain(|k, _| !k.starts_with("mz-"));
+    let replacement = Snapshot::builder()
+        .with_snapshot_id(replacement_id)
+        .with_parent_snapshot_id(Some(parent_id))
+        .with_sequence_number(table.metadata().next_sequence_number())
+        .with_timestamp_ms(parent.timestamp_ms())
+        .with_manifest_list(parent.manifest_list())
+        .with_summary(summary)
+        .with_schema_id(table.metadata().current_schema_id())
+        .build();
+    let table = catalog
+        .update_table(
+            TableCommit::builder()
+                .ident(table.identifier().clone())
+                .requirements(vec![])
+                .updates(vec![
+                    TableUpdate::AddSnapshot {
+                        snapshot: replacement,
+                    },
+                    TableUpdate::SetSnapshotRef {
+                        ref_name: "main".into(),
+                        reference: SnapshotReference::new(
+                            replacement_id,
+                            SnapshotRetention::branch(None, None, None),
+                        ),
+                    },
+                ])
+                .build(),
+        )
+        .await
+        .unwrap();
+    // A replacement alone must not hide retained Materialize progress.
+    assert_progress(&table, 15, 1, 5);
+    let stale = table.clone();
+    let table = catalog
+        .update_table(
+            TableCommit::builder()
+                .ident(table.identifier().clone())
+                .requirements(vec![])
+                .updates(vec![TableUpdate::RemoveSnapshots {
+                    snapshot_ids: vec![parent_id],
+                }])
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(table.metadata().snapshots().len(), 1);
+    assert_eq!(table.metadata().current_snapshot_id(), Some(replacement_id));
+    assert!(!table.metadata().history().is_empty());
+    assert!(table.metadata().snapshot_by_id(parent_id).is_none());
+
+    // Recovery cannot reinterpret the retained replacement as initialization.
+    let err = retrieve_upper_from_snapshots(table.metadata()).unwrap_err();
+    assert!(
+        err.to_string().contains("no retained Materialize progress"),
+        "{err:#}"
+    );
+
+    // A prepared batch that matched the durable upper before expiration must
+    // also stop after its transaction refresh, without publishing its files.
+    let file = data_file(&stale, "15-20", 5);
+    let (_, result) = try_commit_batch(
+        stale,
+        properties(20),
+        vec![file],
+        vec![],
+        &catalog,
+        "test",
+        "sink",
+        1,
+        &Antichain::from_elem(Timestamp::new(15)),
+        &metrics,
+    )
+    .await;
+    let RetryResult::FatalErr(err) = result else {
+        panic!("missing progress must stop prepared files: {result:?}");
+    };
+    assert!(
+        err.to_string().contains("no retained Materialize progress"),
+        "{err:#}"
+    );
+    let reloaded = catalog.load_table(table.identifier()).await.unwrap();
+    assert_eq!(reloaded.metadata(), table.metadata());
+
+    // Even removing all snapshots and their log cannot make a v2 table fresh:
+    // its last sequence number still records prior writes.
+    let table = catalog
+        .update_table(
+            TableCommit::builder()
+                .ident(table.identifier().clone())
+                .requirements(vec![])
+                .updates(vec![
+                    TableUpdate::RemoveSnapshotRef {
+                        ref_name: "main".into(),
+                    },
+                    TableUpdate::RemoveSnapshots {
+                        snapshot_ids: vec![replacement_id],
+                    },
+                ])
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(table.metadata().snapshots().len(), 0);
+    assert!(table.metadata().history().is_empty());
+    assert!(table.metadata().last_sequence_number() > 0);
+    let err = retrieve_upper_from_snapshots(table.metadata()).unwrap_err();
+    assert!(
+        err.to_string().contains("no retained Materialize progress"),
+        "{err:#}"
+    );
 }
 
 #[mz_ore::test(tokio::test)]
