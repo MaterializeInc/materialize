@@ -14,6 +14,7 @@ annotate-snippets = { workspace = true }
 async-stream = { workspace = true }
 aws-sdk-secretsmanager = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 rayon = { workspace = true }
