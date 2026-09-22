@@ -1,5 +1,5 @@
 ---
-title: "Cluster memory spike troubleshooting"
+title: "Troubleshoot anomalies in memory usage"
 description: "Find what caused a cluster's memory to spike, and how to prevent it recurring."
 menu:
   main:
