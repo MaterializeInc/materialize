@@ -1209,5 +1209,11 @@ metadata-only contention without repeating plan loading, provided its planning
 revision and client incarnation remain valid and commit validation runs against
 the refreshed prefix. Structural changes retain the planning-conflict policy.
 Next: verify this boundary against the unchanged bounded workload and finish the
-native outage demonstration. Upstream integration ordering remains a separate
-question for Aljoscha.
+native outage demonstration. Native acceptance precedes upstream integration in
+a separate review boundary unless an upstream change blocks that acceptance.
+
+Native index frontier diagnostics use actual observations from current query
+connections, independently of permission publication. Unknown observations are
+omitted, not reported as completed frontiers. Disconnect and DROP retract them.
+This reporting owns no installation or read capabilities. Persisted collections'
+global frontier reporting remains storage-owned.

@@ -29,6 +29,7 @@
 //!   by reinstalling the failed introspection subscribes.
 
 use std::collections::BTreeSet;
+
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
@@ -56,6 +57,8 @@ use crate::coord::{
 };
 use crate::optimize::Optimize;
 use crate::{AdapterError, ExecuteResponse, optimize};
+
+pub(super) mod frontiers;
 
 // State tracked about an active introspection subscribe.
 #[derive(Derivative)]
