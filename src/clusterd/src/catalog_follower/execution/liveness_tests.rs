@@ -46,7 +46,7 @@ async fn stale_protection_blocks_install_until_renewed() {
 }
 
 async fn exercise_liveness() {
-    let fixture = Box::pin(Fixture::new((1, 15_000), 20_000, false)).await;
+    let mut fixture = Box::pin(Fixture::new((1, 15_000), 20_000, false)).await;
     let config = &fixture.config;
     let cluster = config.cluster_id;
     let replica = config.replica_id;
@@ -238,6 +238,21 @@ async fn exercise_liveness() {
         .await
         .unwrap();
     assert!(catalog.state().client_incarnations()[&incarnation].heartbeat > heartbeat);
+    // A peer advances metadata after the follower's snapshot. Admission must
+    // absorb that prefix and retry its grant, without another outer install tick.
+    fixture.writer.sync_to_current_updates().await.unwrap();
+    let ts = fixture.writer.current_upper().await;
+    let peer = fixture
+        .writer
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation { replica_id: None }],
+        )
+        .await
+        .unwrap()
+        .created_client_incarnations[0];
     driver
         .install(
             &mut catalog,
@@ -251,6 +266,7 @@ async fn exercise_liveness() {
         .await
         .unwrap();
     assert_eq!(driver.pending_installations(&effects), 0);
+    assert!(catalog.state().client_incarnations().contains_key(&peer));
     timeout(Duration::from_secs(30), async {
         loop {
             driver.apply_progress(&catalog);

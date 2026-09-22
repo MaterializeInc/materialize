@@ -44,6 +44,18 @@ use super::{ReplicaEffects, absorb_updates, storage_metadata, time_dependence};
 
 type Plan = DataflowDescription<LirRelationExpr, ()>;
 
+fn is_catalog_conflict(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<mz_catalog::catalog::CatalogError>()
+        .is_some_and(|error| {
+            matches!(error,
+            mz_catalog::catalog::CatalogError::Catalog(error) if matches!(&error.kind,
+                mz_catalog::memory::error::ErrorKind::Durable(
+                    mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                )))
+        })
+}
+
 mod storage;
 
 #[cfg(test)]
@@ -320,12 +332,32 @@ impl ReplicaEnactment {
             return Ok(holds);
         }
         let incarnation = self.protection.incarnation();
-        let extra = catalog
-            .state()
-            .expand_client_read_requirements(incarnation, requested.clone())?;
-        let requirements = self.protection.prepare_publication(extra);
-        self.commit_grants(catalog, effects, cluster, build, requirements)
-            .await?;
+        let revision = catalog.transient_revision();
+        loop {
+            let extra = catalog
+                .state()
+                .expand_client_read_requirements(incarnation, requested.clone())?;
+            let requirements = self.protection.prepare_publication(extra);
+            match self
+                .commit_grants(catalog, effects, cluster, build, requirements)
+                .await
+            {
+                Ok(()) => break,
+                Err(error) if is_catalog_conflict(&error) => {
+                    // Metadata contention must not restart schema/plan preparation
+                    // on every follower tick. Absorb the committed prefix before
+                    // recomputing admission. Structural changes require the caller
+                    // to reconstruct its inputs and executable definition instead.
+                    let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
+                    absorb_updates(effects, catalog, cluster, build, updates);
+                    self.ensure_live(catalog)?;
+                    if catalog.transient_revision() != revision {
+                        return Err(error);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
         self.ensure_recent_protection()?;
         self.protection
             .try_acquire(storage, compute, requested, &dependencies)?
@@ -958,14 +990,12 @@ impl ReplicaEnactment {
             .protection
             .prepare_publication_if_needed(self.published_at.elapsed())
         {
-            match self.commit_grants(catalog, effects, cluster, build, requirements).await {
+            match self
+                .commit_grants(catalog, effects, cluster, build, requirements)
+                .await
+            {
                 Ok(()) => break,
-                Err(error) if error.downcast_ref::<mz_catalog::catalog::CatalogError>()
-                    .is_some_and(|error| matches!(error,
-                        mz_catalog::catalog::CatalogError::Catalog(error) if matches!(&error.kind,
-                            mz_catalog::memory::error::ErrorKind::Durable(
-                                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
-                            )))) => {
+                Err(error) if is_catalog_conflict(&error) => {
                     let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
                     absorb_updates(effects, catalog, cluster, build, updates);
                     self.ensure_live(catalog)?;
