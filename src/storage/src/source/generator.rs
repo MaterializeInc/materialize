@@ -38,6 +38,7 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::Stage;
 use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
@@ -230,12 +231,16 @@ impl SourceRender for LoadGeneratorSourceConnection {
         let (updates, progress, health, button) =
             generator_kind.render(scope, config, committed_uppers, start_signal);
 
-        let probe_stream = synthesize_probes(
-            config.id,
-            progress,
-            config.timestamp_interval,
-            config.now_fn.clone(),
-        );
+        let probe_stream = config
+            .stage_logger
+            .shared(scope.worker(), Stage::Reader, || {
+                synthesize_probes(
+                    config.id,
+                    progress,
+                    config.timestamp_interval,
+                    config.now_fn.clone(),
+                )
+            });
 
         (updates, health, probe_stream, button)
     }
@@ -256,7 +261,15 @@ fn render_simple_generator<'scope>(
     StreamVec<'scope, MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
-    let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
+    let stages = &config.stage_logger;
+    let worker = scope.worker();
+
+    // NOTE: The bracket covers only the builder's construction. Timely reserves the operator's
+    // identifier when the builder is created, not when it is built, so the operator falls in
+    // the `Reader` range.
+    let mut builder = stages.shared(worker, Stage::Reader, || {
+        AsyncOperatorBuilder::new(config.name.clone(), scope.clone())
+    });
 
     let (data_output, stream) = builder.new_output::<FueledBuilder<
         CapacityContainerBuilder<
@@ -268,22 +281,25 @@ fn render_simple_generator<'scope>(
         >,
     >>();
     let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
-    let partition_count = u64::cast_from(export_ids.len());
-    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
-        partition_count,
-        |((output, data), time, diff): (
-            (usize, Result<SourceMessage, DataflowError>),
-            MzOffset,
-            Diff,
-        )| {
-            let output = u64::cast_from(output);
-            (output, (data, time, diff))
-        },
-    );
-    let mut data_collections = BTreeMap::new();
-    for (id, data_stream) in export_ids.iter().zip_eq(data_streams) {
-        data_collections.insert(*id, data_stream.as_collection());
-    }
+    let data_collections = stages.shared(worker, Stage::Partition, || {
+        let partition_count = u64::cast_from(export_ids.len());
+        let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
+            partition_count,
+            |((output, data), time, diff): (
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            )| {
+                let output = u64::cast_from(output);
+                (output, (data, time, diff))
+            },
+        );
+        let mut data_collections = BTreeMap::new();
+        for (id, data_stream) in export_ids.iter().zip_eq(data_streams) {
+            data_collections.insert(*id, data_stream.as_collection());
+        }
+        data_collections
+    });
 
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
