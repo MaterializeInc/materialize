@@ -79,8 +79,8 @@ use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, MAX_CONNECTIONS, SIGTERM_CONNECTION_WAIT,
-    SIGTERM_LISTEN_WAIT, has_tracing_config_update, tracing_config,
+    INJECT_PROXY_PROTOCOL_HEADER_HTTP, MAX_CONNECTIONS, PRE_RESOLVED_TIMEOUT,
+    SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT, has_tracing_config_update, tracing_config,
 };
 
 /// Balancer build information.
@@ -342,6 +342,7 @@ impl BalancerService {
                 internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
                 limiter: Arc::clone(&limiter),
+                configs: self.configs.clone(),
                 now: SYSTEM_TIME.clone(),
             };
             let (handle, stream) = self.pgwire;
@@ -507,6 +508,8 @@ impl Drop for GaugeGuard {
 struct ServerMetricsConfig {
     connection_status: IntCounterVec,
     active_connections: IntGaugeVec,
+    pre_resolved_connections: IntGaugeVec,
+    pre_resolved_timeouts: IntCounterVec,
     tenant_connections: IntGaugeVec,
     tenant_connection_rx: IntCounterVec,
     tenant_connection_tx: IntCounterVec,
@@ -523,6 +526,16 @@ impl ServerMetricsConfig {
         let active_connections = registry.register(metric!(
             name: "mz_balancer_connection_active",
             help: "Count of currently open network connections.",
+            var_labels: ["source"],
+        ));
+        let pre_resolved_connections = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_connection_active",
+            help: "Count of open network connections that have not yet resolved a backend.",
+            var_labels: ["source"],
+        ));
+        let pre_resolved_timeouts = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_timeout_total",
+            help: "Count of connections closed for not resolving a backend within the pre-resolved timeout.",
             var_labels: ["source"],
         ));
         let tenant_connections = registry.register(metric!(
@@ -548,6 +561,8 @@ impl ServerMetricsConfig {
         Self {
             connection_status,
             active_connections,
+            pre_resolved_connections,
+            pre_resolved_timeouts,
             tenant_connections,
             tenant_connection_rx,
             tenant_connection_tx,
@@ -586,6 +601,19 @@ impl ServerMetrics {
             .active_connections
             .with_label_values(&[self.source])
             .into()
+    }
+
+    fn pre_resolved_connections(&self) -> GaugeGuard {
+        self.inner
+            .pre_resolved_connections
+            .with_label_values(&[self.source])
+            .into()
+    }
+
+    fn pre_resolved_timeout(&self) -> IntCounter {
+        self.inner
+            .pre_resolved_timeouts
+            .with_label_values(&[self.source])
     }
 
     fn tenant_connections(&self, tenant: &str) -> GaugeGuard {
@@ -703,12 +731,58 @@ impl Drop for ConnectionGuard {
     }
 }
 
+/// Answers the client with a final message and flushes it.
+///
+/// [`FramedConn::send`] only enqueues into a buffer, so a rejection that is not flushed reaches
+/// the client as a bare socket close rather than the error it was given. Every path that answers
+/// the client and then stops has to flush, because the connection is dropped as soon as it
+/// returns.
+async fn reject<A>(conn: &mut FramedConn<A>, err: ErrorResponse) -> Result<(), io::Error>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    conn.send(err).await?;
+    conn.flush().await
+}
+
+/// Runs the pre-resolved phase under [`PRE_RESOLVED_TIMEOUT`], counting an overrun.
+///
+/// `fut` must cover TLS negotiation, startup, authentication, and backend resolution.
+/// Proxying must run after it completes, outside the deadline. A zero timeout leaves
+/// `fut` unbounded.
+async fn under_pre_resolved_timeout<F, T, E>(
+    timeout: Duration,
+    metrics: &ServerMetrics,
+    fut: F,
+) -> Result<T, E>
+where
+    F: Future<Output = Result<T, E>>,
+    E: From<io::Error>,
+{
+    if timeout.is_zero() {
+        return fut.await;
+    }
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(result) => result,
+        Err(_) => {
+            metrics.pre_resolved_timeout().inc();
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out before resolving a backend",
+            )
+            .into())
+        }
+    }
+}
+
 pub enum CancellationResolver {
     Directory(PathBuf),
     Static(String),
 }
 
 struct PgwireBalancer {
+    /// Read for [`PRE_RESOLVED_TIMEOUT`] at connection time.
+    configs: ConfigSet,
     tls: Option<ReloadingTlsConfig>,
     internal_tls: bool,
     cancellation_resolver: Arc<CancellationResolver>,
@@ -719,50 +793,180 @@ struct PgwireBalancer {
 }
 
 impl PgwireBalancer {
+    /// Negotiates pgwire startup and resolves a backend.
+    ///
+    /// Returns `None` after a client disconnect, a flushed rejection, or a dispatched
+    /// cancellation request.
+    async fn pre_resolve(
+        conn: Connection,
+        tls: Option<ReloadingTlsConfig>,
+        resolver: &BalancerResolver,
+        cancellation_resolver: Arc<CancellationResolver>,
+        conn_uuid: Uuid,
+        metrics: &ServerMetrics,
+    ) -> Result<
+        Option<(
+            FramedConn<Connection>,
+            ResolvedAddr,
+            BTreeMap<String, String>,
+        )>,
+        anyhow::Error,
+    > {
+        let peer_addr = conn.peer_addr();
+        let mut conn = Conn::Unencrypted(conn);
+        loop {
+            let message = decode_startup(&mut conn, MAX_STARTUP_FRAME_SIZE).await?;
+            conn = match message {
+                // Clients sometimes hang up during the startup sequence, e.g.
+                // because they receive an unacceptable response to an
+                // `SslRequest`. This is considered a graceful termination.
+                None => return Ok(None),
+
+                Some(FrontendStartupMessage::Startup {
+                    version,
+                    mut params,
+                }) => {
+                    let mut conn = FramedConn::new(conn);
+                    let rejected = SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
+                    let peer_addr = match peer_addr {
+                        Ok(addr) => addr.ip(),
+                        Err(e) => {
+                            error!("Invalid peer_addr {:?}", e);
+                            reject(
+                                &mut conn,
+                                ErrorResponse::fatal(rejected, "invalid peer address"),
+                            )
+                            .await?;
+                            return Ok(None);
+                        }
+                    };
+                    debug!(
+                        %conn_uuid, %peer_addr,
+                        "starting new pgwire connection in balancer",
+                    );
+                    let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
+                    if prev.is_some() {
+                        reject(
+                            &mut conn,
+                            ErrorResponse::fatal(
+                                rejected,
+                                format!("invalid parameter '{CONN_UUID_KEY}'"),
+                            ),
+                        )
+                        .await?;
+                        return Ok(None);
+                    }
+
+                    let forwarded_for = params.insert(
+                        MZ_FORWARDED_FOR_KEY.to_string(),
+                        peer_addr.to_string().clone(),
+                    );
+                    if let Some(_) = forwarded_for {
+                        reject(
+                            &mut conn,
+                            ErrorResponse::fatal(
+                                rejected,
+                                format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
+                            ),
+                        )
+                        .await?;
+                        return Ok(None);
+                    };
+
+                    let Some(resolved) = Self::resolve_destination(
+                        &mut conn,
+                        version,
+                        &params,
+                        resolver,
+                        tls.map(|tls| tls.mode),
+                        metrics,
+                    )
+                    .await?
+                    else {
+                        return Ok(None);
+                    };
+                    return Ok(Some((conn, resolved, params)));
+                }
+
+                Some(FrontendStartupMessage::CancelRequest {
+                    conn_id,
+                    secret_key,
+                }) => {
+                    spawn(|| "cancel request", async move {
+                        cancel_request(conn_id, secret_key, &cancellation_resolver).await;
+                    });
+                    // Do not wait on cancel requests to return because cancellation is best
+                    // effort.
+                    return Ok(None);
+                }
+
+                Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
+                    (Conn::Unencrypted(mut conn), Some(tls)) => {
+                        conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
+                        let mut ssl_stream = SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
+                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            let _ = ssl_stream.get_mut().shutdown().await;
+                            return Err(e.into());
+                        }
+                        Conn::Ssl(ssl_stream)
+                    }
+                    (mut conn, _) => {
+                        conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                        conn
+                    }
+                },
+
+                Some(FrontendStartupMessage::GssEncRequest) => {
+                    conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                    conn
+                }
+            }
+        }
+    }
+
     #[mz_ore::instrument(level = "debug")]
-    async fn run<'a, A>(
+    /// Resolves a destination for the connection, or answers the client saying why it cannot.
+    ///
+    /// `Ok(None)` means the rejection has been flushed and the connection is finished.
+    async fn resolve_destination<'a, A>(
         conn: &'a mut FramedConn<A>,
         version: i32,
-        params: BTreeMap<String, String>,
+        params: &BTreeMap<String, String>,
         resolver: &BalancerResolver,
         tls_mode: Option<TlsMode>,
-        internal_tls: bool,
         metrics: &ServerMetrics,
-        limiter: &Arc<ConnectionLimiter>,
-    ) -> Result<(), io::Error>
+    ) -> Result<Option<ResolvedAddr>, io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
         if version != VERSION_3 {
-            return conn
-                .send(ErrorResponse::fatal(
+            reject(
+                conn,
+                ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "server does not support the client's requested protocol version",
-                ))
-                .await;
+                ),
+            )
+            .await?;
+            return Ok(None);
         }
 
         let Some(user) = params.get("user") else {
-            return conn
-                .send(ErrorResponse::fatal(
+            reject(
+                conn,
+                ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "user parameter required",
-                ))
-                .await;
+                ),
+            )
+            .await?;
+            return Ok(None);
         };
 
         if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
-            return conn.send(err).await;
+            reject(conn, err).await?;
+            return Ok(None);
         }
-
-        let Some(_conn_guard) = limiter.acquire() else {
-            return conn
-                .send(ErrorResponse::fatal(
-                    SqlState::TOO_MANY_CONNECTIONS,
-                    "balancer is at its connection limit",
-                ))
-                .await;
-        };
 
         let resolved = match resolver.resolve(conn, user, metrics).await {
             Ok(v) => v,
@@ -782,12 +986,25 @@ impl PgwireBalancer {
                         SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
                     }
                 };
-                return conn
-                    .send(ErrorResponse::fatal(sql_state, err.to_string()))
-                    .await;
+                reject(conn, ErrorResponse::fatal(sql_state, err.to_string())).await?;
+                return Ok(None);
             }
         };
 
+        Ok(Some(resolved))
+    }
+
+    /// Proxies a resolved connection until either side closes.
+    async fn proxy<'a, A>(
+        conn: &'a mut FramedConn<A>,
+        resolved: ResolvedAddr,
+        params: BTreeMap<String, String>,
+        internal_tls: bool,
+        metrics: &ServerMetrics,
+    ) -> Result<(), io::Error>
+    where
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+    {
         let _active_guard = resolved
             .tenant
             .as_ref()
@@ -939,121 +1156,43 @@ impl mz_server_core::Server for PgwireBalancer {
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
         let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
         let conn_uuid = epoch_to_uuid_v7(&(self.now)());
-        let peer_addr = conn.peer_addr();
         conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
             let active_guard = outer_metrics.active_connections();
             let result: Result<(), anyhow::Error> = async move {
-                let mut conn = Conn::Unencrypted(conn);
-                loop {
-                    let message = decode_startup(&mut conn, MAX_STARTUP_FRAME_SIZE).await?;
-                    conn = match message {
-                        // Clients sometimes hang up during the startup sequence, e.g.
-                        // because they receive an unacceptable response to an
-                        // `SslRequest`. This is considered a graceful termination.
-                        None => return Ok(()),
+                let Some(_conn_guard) = limiter.acquire() else {
+                    return Ok(());
+                };
+                let pre_resolved = inner_metrics.pre_resolved_connections();
 
-                        Some(FrontendStartupMessage::Startup {
-                            version,
-                            mut params,
-                        }) => {
-                            let mut conn = FramedConn::new(conn);
-                            let rejected =
-                                SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
-                            let peer_addr = match peer_addr {
-                                Ok(addr) => addr.ip(),
-                                Err(e) => {
-                                    error!("Invalid peer_addr {:?}", e);
-                                    return Ok(conn
-                                        .send(ErrorResponse::fatal(
-                                            rejected,
-                                            "invalid peer address",
-                                        ))
-                                        .await?);
-                                }
-                            };
-                            debug!(
-                                %conn_uuid, %peer_addr,
-                                "starting new pgwire connection in balancer",
-                            );
-                            let prev =
-                                params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
-                            if prev.is_some() {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        rejected,
-                                        format!("invalid parameter '{CONN_UUID_KEY}'"),
-                                    ))
-                                    .await?);
-                            }
+                let destination = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &inner_metrics,
+                    Self::pre_resolve(
+                        conn,
+                        tls,
+                        &resolver,
+                        cancellation_resolver,
+                        conn_uuid,
+                        &inner_metrics,
+                    ),
+                )
+                .await?;
 
-                            let forwarded_for = params.insert(
-                                MZ_FORWARDED_FOR_KEY.to_string(),
-                                peer_addr.to_string().clone(),
-                            );
-                            if let Some(_) = forwarded_for {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        rejected,
-                                        format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
-                                    ))
-                                    .await?);
-                            };
+                let Some((mut conn, resolved, params)) = destination else {
+                    return Ok(());
+                };
+                drop(pre_resolved);
 
-                            Self::run(
-                                &mut conn,
-                                version,
-                                params,
-                                &resolver,
-                                tls.map(|tls| tls.mode),
-                                internal_tls,
-                                &inner_metrics,
-                                &limiter,
-                            )
-                            .await?;
-                            conn.flush().await?;
-                            return Ok(());
-                        }
-
-                        Some(FrontendStartupMessage::CancelRequest {
-                            conn_id,
-                            secret_key,
-                        }) => {
-                            spawn(|| "cancel request", async move {
-                                cancel_request(conn_id, secret_key, &cancellation_resolver).await;
-                            });
-                            // Do not wait on cancel requests to return because cancellation is best
-                            // effort.
-                            return Ok(());
-                        }
-
-                        Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
-                            (Conn::Unencrypted(mut conn), Some(tls)) => {
-                                conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                                let mut ssl_stream =
-                                    SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
-                                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                    let _ = ssl_stream.get_mut().shutdown().await;
-                                    return Err(e.into());
-                                }
-                                Conn::Ssl(ssl_stream)
-                            }
-                            (mut conn, _) => {
-                                conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                                conn
-                            }
-                        },
-
-                        Some(FrontendStartupMessage::GssEncRequest) => {
-                            conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                            conn
-                        }
-                    }
-                }
+                PgwireBalancer::proxy(&mut conn, resolved, params, internal_tls, &inner_metrics)
+                    .await?;
+                conn.flush().await?;
+                Ok(())
             }
             .await;
             drop(active_guard);
@@ -1240,6 +1379,41 @@ struct HttpsBalancer {
 }
 
 impl HttpsBalancer {
+    /// Negotiates TLS and resolves a backend using the client's SNI hostname.
+    async fn pre_resolve(
+        conn: Connection,
+        tls_context: Option<ReloadingSslContext>,
+        resolver: &TenantDnsResolver,
+        resolve_template: &str,
+        port: u16,
+    ) -> Result<(Box<dyn ClientStream>, ResolvedAddr, SocketAddr), anyhow::Error> {
+        let peer_addr = conn.peer_addr().context("fetching peer addr")?;
+        let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) = match tls_context
+        {
+            Some(tls_context) => {
+                let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
+                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                    let _ = ssl_stream.get_mut().shutdown().await;
+                    return Err(e.into());
+                }
+                let servername: Option<String> =
+                    ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                        match sn.split_once('.') {
+                            Some((left, _right)) => left,
+                            None => sn,
+                        }
+                        .into()
+                    });
+                debug!("Found sni servername: {servername:?} (https)");
+                (Box::new(ssl_stream), servername)
+            }
+            _ => (Box::new(conn), None),
+        };
+        let resolved =
+            Self::resolve(resolver, resolve_template, port, servername.as_deref()).await?;
+        Ok((client_stream, resolved, peer_addr))
+    }
+
     async fn resolve(
         resolver: &TenantDnsResolver,
         resolve_template: &str,
@@ -1326,47 +1500,23 @@ impl mz_server_core::Server for HttpsBalancer {
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
         let limiter = Arc::clone(&self.limiter);
-        let peer_addr = conn.peer_addr();
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
-                let peer_addr = peer_addr.context("fetching peer addr")?;
-                let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
-                    match tls_context {
-                        Some(tls_context) => {
-                            let mut ssl_stream =
-                                SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
-                            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                let _ = ssl_stream.get_mut().shutdown().await;
-                                return Err(e.into());
-                            }
-                            let servername: Option<String> =
-                                ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                                    match sn.split_once('.') {
-                                        Some((left, _right)) => left,
-                                        None => sn,
-                                    }
-                                    .into()
-                                });
-                            debug!("Found sni servername: {servername:?} (https)");
-                            (Box::new(ssl_stream), servername)
-                        }
-                        _ => (Box::new(conn), None),
-                    };
                 let Some(_conn_guard) = limiter.acquire() else {
-                    send_http_error(
-                        &mut client_stream,
-                        "503 Service Unavailable",
-                        "balancer is at its connection limit",
-                    )
-                    .await;
                     return Ok(());
                 };
+                let pre_resolved = inner_metrics.pre_resolved_connections();
 
-                let resolved =
-                    Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
-                        .await?;
+                let (mut client_stream, resolved, peer_addr) = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &inner_metrics,
+                    Self::pre_resolve(conn, tls_context, &resolver, &resolve_template, port),
+                )
+                .await?;
+                drop(pre_resolved);
                 let inner_active_guard = resolved
                     .tenant
                     .as_ref()
@@ -1879,5 +2029,34 @@ mod tests {
         // Zero disables the limit.
         set_max(0);
         assert!(limiter.acquire().is_some());
+    }
+
+    /// A zero timeout disables the deadline, which is what leaves the phase unbounded.
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_pre_resolved_timeout_zero_disables() {
+        let metrics = ServerMetrics::new(
+            ServerMetricsConfig::register_into(&MetricsRegistry::new()),
+            "pgwire",
+        );
+
+        // Zero lets the phase run as long as it likes. The paused clock makes the hour free.
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+            Ok::<(), io::Error>(())
+        };
+        assert!(
+            under_pre_resolved_timeout(Duration::ZERO, &metrics, slow)
+                .await
+                .is_ok()
+        );
+        assert_eq!(metrics.pre_resolved_timeout().get(), 0);
+
+        // Anything else bounds it, and the overrun is counted.
+        let stalled = std::future::pending::<Result<(), io::Error>>();
+        let err = under_pre_resolved_timeout(Duration::from_secs(30), &metrics, stalled)
+            .await
+            .expect_err("a phase that never finishes must be cut short");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(metrics.pre_resolved_timeout().get(), 1);
     }
 }
