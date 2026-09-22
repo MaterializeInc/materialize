@@ -1052,16 +1052,22 @@ def workflow_selected_plan_explain(c: Composition) -> None:
                 > CREATE INDEX selected_import ON selected_t ();
                 """),
         )
-        # The writer only offers an index after query-protocol observations arrive.
-        # Wait for that production planning path before freezing consumers' plans.
+        # EXPLAIN may describe an index before it is installed. Wait for actual
+        # query observations before freezing consumers' executable plans.
         deadline = time.monotonic() + 60
         while True:
-            plan = c.sql_query(
-                "EXPLAIN SELECT a FROM selected_t", reuse_connection=False
-            )[0][0]
-            if "selected_import" in plan:
+            observed = c.sql_query(
+                """SELECT EXISTS (
+                    SELECT 1 FROM mz_internal.mz_frontiers f
+                    JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id
+                    JOIN mz_indexes i ON i.id = g.id
+                    WHERE i.name = 'selected_import' AND f.read_frontier IS NOT NULL
+                )""",
+                reuse_connection=False,
+            )
+            if observed == [(True,)]:
                 break
-            assert time.monotonic() < deadline, plan
+            assert time.monotonic() < deadline, observed
             time.sleep(0.1)
         c.testdrive(
             service="testdrive_no_reset",
@@ -1124,6 +1130,14 @@ def workflow_selected_plan_explain(c: Composition) -> None:
             }
 
         original = plans()
+        # Unused views cannot invalidate imports or notices in maintained plans.
+        assert sql_notices("CREATE VIEW selected_unused AS SELECT 1") == []
+        assert sql_notices("DROP VIEW selected_unused") == []
+        assert plans() == original
+        assert sql_notices("CREATE VIEW selected_unused AS SELECT 1") == []
+        assert sql_notices("CREATE OR REPLACE VIEW selected_unused AS SELECT 2") == []
+        assert plans() == original
+        assert sql_notices("DROP VIEW selected_unused") == []
         for (object_name, stage), plan in original.items():
             if stage == "OPTIMIZED":
                 assert re.search(
@@ -1420,24 +1434,52 @@ def workflow_catalog_read_protection(c: Composition) -> None:
         def index_permission() -> dict | None:
             return catalog_snapshot()["collection_compaction_bounds"].get(index)
 
+        def peek_strategy_counts() -> dict[str, float]:
+            response = requests.get(
+                f"http://localhost:{c.port('materialized', 6878)}/metrics", timeout=10
+            )
+            response.raise_for_status()
+            counts = {"fast-path": 0.0, "persist-fast-path": 0.0}
+            for line in response.text.splitlines():
+                if not line.startswith("mz_time_to_first_row_seconds_count{"):
+                    continue
+                if not re.search(r'(?:\{|,)application_name="psql"(?:,|\})', line):
+                    continue
+                strategy = re.search(r'(?:\{|,)strategy="([^"]+)"', line)
+                assert strategy is not None, line
+                if strategy[1] in counts:
+                    counts[strategy[1]] += float(line.rsplit(" ", 1)[1])
+            return counts
+
+        def indexed_read_before_publication(phase: str) -> None:
+            td(f"""
+                > SELECT read_frontier > 0 FROM ({index_frontier_sql}) f;
+                true
+            """)
+            before = peek_strategy_counts()
+            # No other connection in this fixture uses this metric label. The
+            # pgwire latency metric receives the actual execution strategy and
+            # distinguishes index peeks from Persist fallback.
+            td("""
+                > SET application_name = 'psql';
+                > SELECT a FROM protected_index_input;
+                1
+            """)
+            after = peek_strategy_counts()
+            assert after["fast-path"] == before["fast-path"] + 1, (phase, before, after)
+            assert after["persist-fast-path"] == before["persist-fast-path"], (
+                phase,
+                before,
+                after,
+            )
+            assert index_permission() is None
+
         assert index_permission() is None
-        td(f"""
-            > SELECT read_frontier > 0 FROM ({index_frontier_sql}) f;
-            true
-            > SELECT a FROM protected_index_input;
-            1
-        """)
-        assert index_permission() is None
+        indexed_read_before_publication("initial")
         c.kill("materialized")
         c.up("materialized")
         assert gid("protected_index") == index
-        td(f"""
-            > SELECT read_frontier > 0 FROM ({index_frontier_sql}) f;
-            true
-            > SELECT a FROM protected_index_input;
-            1
-        """)
-        assert index_permission() is None
+        indexed_read_before_publication("restarted")
         assert time.monotonic() - unpublished_start < 300
         query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'")
         td(f"""

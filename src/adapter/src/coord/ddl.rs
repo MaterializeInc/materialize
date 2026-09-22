@@ -515,7 +515,20 @@ impl Coordinator {
 
         if !self.catalog().state().catalog_read_protection_enabled()
             || !ops.iter().any(|op| match op {
-                Op::DropObjects(objects) => !objects.is_empty(),
+                Op::DropObjects(objects) => objects.iter().any(|object| {
+                    // Written-plan and notice dependencies are indexes or items used by
+                    // a plan owner. An unused view cannot affect either, and
+                    // owns no selection itself. Keep all other drops conservative.
+                    match object {
+                        catalog::DropObjectInfo::Item(id) => {
+                            !self.catalog().try_get_entry(id).is_some_and(|entry| {
+                                matches!(entry.item(), CatalogItem::View(_))
+                                    && entry.used_by().is_empty()
+                            })
+                        }
+                        _ => true,
+                    }
+                }),
                 Op::AlterMaterializedViewApplyReplacement { .. } => true,
                 _ => false,
             })
