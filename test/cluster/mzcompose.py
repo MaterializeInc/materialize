@@ -8734,6 +8734,10 @@ def workflow_adapter_loss(c: Composition) -> None:
         external_blob_store=True,
         use_default_volumes=False,
         support_external_clusterd=True,
+        # The workflow verifies restart with the native catalog context intact.
+        # A harness restart after the overrides unwind would use another blob
+        # store and omit the replicas' reconstruction configuration.
+        sanity_restart=False,
         additional_system_parameter_defaults={
             "enable_catalog_read_protection": "true",
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
@@ -8795,7 +8799,6 @@ def workflow_adapter_loss(c: Composition) -> None:
     def inspect(shard: str) -> dict:
         result = c.run(
             "persistcli",
-            "persistcli",
             "inspect",
             "state",
             "--shard-id",
@@ -8807,11 +8810,49 @@ def workflow_adapter_loss(c: Composition) -> None:
             capture=True,
             rm=True,
         )
-        return json.loads(result.stdout)
+
+        # CLI inspection serializes ProtoRollup, not SQL INSPECT SHARD's State.
+        # Timestamp codecs store u64 bits in signed protobuf int64 elements.
+        def frontier(proto: dict) -> list[int]:
+            elements = proto["elements"]
+            assert len(elements) <= 1, elements
+            return [element % (2**64) for element in elements]
+
+        trace = json.loads(result.stdout)["trace"]
+        physical = [
+            *trace["legacy_batches"],
+            *(entry["batch"] for entry in trace["hollow_batches"]),
+        ]
+        # Spine descriptions include empty intervals omitted from hollow batches.
+        # An empty upper means the shard is closed, not timestamp zero.
+        logical = (
+            [entry["batch"] for entry in trace["spine_batches"]]
+            if trace["spine_batches"]
+            else trace["legacy_batches"]
+        )
+        uppers = [frontier(batch["desc"]["upper"]) for batch in logical]
+        upper = (
+            []
+            if any(not upper for upper in uppers)
+            else [max((u[0] for u in uppers), default=0)]
+        )
+        return {
+            "since": frontier(trace["since"]),
+            "upper": upper,
+            "batches": [
+                {
+                    "len": batch["len"],
+                    **{
+                        name: frontier(batch["desc"][name])
+                        for name in ("lower", "upper", "since")
+                    },
+                }
+                for batch in physical
+            ],
+        }
 
     def compacted_past(state: dict, timestamp: int) -> bool:
         # Require persisted history compaction, not just new batches or permission.
-        batches = [*state["batches"], *state["hollow_batches"].values()]
         return (
             bool(state["since"])
             and state["since"][0] > timestamp
@@ -8820,7 +8861,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                 and batch["lower"][0] <= timestamp
                 and batch["since"]
                 and batch["since"][0] > timestamp
-                for batch in batches
+                for batch in state["batches"]
             )
         )
 
@@ -9034,7 +9075,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             service=td.name,
         )
         webhook_url = (
-            f"http://localhost:{c.port(adapter.name, 6874)}"
+            f"http://localhost:{c.port(adapter.name, 6876)}"
             "/api/webhook/materialize/public/al_webhook"
         )
         requests.post(webhook_url, data="1", timeout=10).raise_for_status()
@@ -9204,12 +9245,14 @@ def workflow_adapter_loss(c: Composition) -> None:
         # No executor has ever existed for this index. Observe its retention
         # window across advancing permissions, without an arrangement or reader
         # protecting the historical points being tested.
+        # Post-restart SQL must not reuse sockets cached before the adapter died.
         assert (
             c.sql_query(
                 """SELECT count(*) FROM mz_cluster_replicas r
                JOIN mz_clusters c ON c.id = r.cluster_id
                WHERE c.name = 'al_history'""",
                 service=adapter.name,
+                reuse_connection=False,
             )
             == [(0,)]
         )
@@ -9219,6 +9262,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                    JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
                    WHERE o.name IN ('al_input', 'al_history_idx')""",
                 service=adapter.name,
+                reuse_connection=False,
             )
         )
         assert set(history_ids) == {"al_input", "al_history_idx"}, history_ids
@@ -9330,6 +9374,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                 c.sql(
                     "CREATE CLUSTER REPLICA al_history.first SIZE 'scale=1,workers=1'",
                     service=adapter.name,
+                    reuse_connection=False,
                 )
                 with c.sql_connection(service=adapter.name) as index_conn:
                     with index_conn.cursor() as indexed:
