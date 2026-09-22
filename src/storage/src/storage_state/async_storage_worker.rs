@@ -55,6 +55,7 @@ pub struct AsyncStorageWorker<T: Timestamp + Lattice + Codec64> {
 pub enum AsyncStorageWorkerCommand<T> {
     /// Calculate a recent resumption frontier for the ingestion.
     UpdateIngestionFrontiers(
+        Option<u64>,
         GlobalId,
         IngestionDescription<CollectionMetadata>,
         Option<Antichain<T>>,
@@ -73,6 +74,8 @@ pub enum AsyncStorageWorkerCommand<T> {
 pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
     /// An `IngestionDescription` with recent as-of and resume upper frontiers.
     IngestionFrontiersUpdated {
+        /// Native admission sequence.
+        execution: Option<u64>,
         /// ID of the ingestion/source.
         id: GlobalId,
         /// The description of the ingestion/source.
@@ -222,6 +225,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
             while let Some(command) = command_rx.recv().await {
                 match command {
                     AsyncStorageWorkerCommand::UpdateIngestionFrontiers(
+                        execution,
                         id,
                         ingestion_description,
                         remap_compaction_bound,
@@ -384,6 +388,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
 
                         let res = response_tx.send(
                             AsyncStorageWorkerResponse::IngestionFrontiersUpdated {
+                                execution,
                                 id,
                                 ingestion_description,
                                 as_of,
@@ -466,6 +471,17 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
     where
         T: From<mz_repr::Timestamp>,
     {
+        self.update_ingestion_frontiers_for(ingestion, None);
+    }
+
+    /// Calculates frontiers without losing the native admission identity.
+    pub fn update_ingestion_frontiers_for(
+        &self,
+        ingestion: RunIngestionCommand,
+        execution: Option<u64>,
+    ) where
+        T: From<mz_repr::Timestamp>,
+    {
         let RunIngestionCommand {
             id,
             description,
@@ -474,6 +490,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
         let remap_compaction_bound =
             remap_compaction_bound.map(|bound| bound.into_iter().map(T::from).collect());
         self.send(AsyncStorageWorkerCommand::UpdateIngestionFrontiers(
+            execution,
             id,
             description,
             remap_compaction_bound,

@@ -175,22 +175,36 @@ async fn native_storage_outlives_queries() {
     let mut dropped = std::collections::BTreeSet::new();
     while dropped.len() < 2 {
         match replica.recv().await.unwrap().unwrap() {
-            StorageResponse::DroppedId(id) => {
+            ReplicaStorageResponse::ExecutionInput { .. }
+            | ReplicaStorageResponse::ExecutionStarted { .. } => continue,
+            ReplicaStorageResponse::Response(StorageResponse::DroppedId(id)) => {
                 assert!(dropped.insert(id));
             }
-            StorageResponse::FrontierUpper(id, _) => assert!(!dropped.contains(&id)),
-            StorageResponse::StatisticsUpdates(..) | StorageResponse::StatusUpdate(_) => (),
+            ReplicaStorageResponse::Response(StorageResponse::FrontierUpper(id, _)) => {
+                assert!(!dropped.contains(&id))
+            }
+            ReplicaStorageResponse::Response(
+                StorageResponse::StatisticsUpdates(..) | StorageResponse::StatusUpdate(_),
+            ) => (),
             response => panic!("query response leaked: {response:?}"),
         }
     }
     assert_eq!(dropped, [id, remap].into());
+    runtime_tests::attempts(&mut replica).await;
     std::process::exit(0);
 }
+
+#[path = "runtime_tests.rs"]
+mod runtime_tests;
 
 async fn progress(replica: &mut ReplicaStorage, id: GlobalId, after: Timestamp) -> Timestamp {
     loop {
         match replica.recv().await.unwrap().unwrap() {
-            StorageResponse::FrontierUpper(actual, upper) if actual == id => {
+            ReplicaStorageResponse::ExecutionInput { .. }
+            | ReplicaStorageResponse::ExecutionStarted { .. } => continue,
+            ReplicaStorageResponse::Response(StorageResponse::FrontierUpper(actual, upper))
+                if actual == id =>
+            {
                 let [time] = upper.elements() else {
                     panic!("counter completed")
                 };
@@ -198,9 +212,11 @@ async fn progress(replica: &mut ReplicaStorage, id: GlobalId, after: Timestamp) 
                     return *time;
                 }
             }
-            StorageResponse::FrontierUpper(..)
-            | StorageResponse::StatisticsUpdates(..)
-            | StorageResponse::StatusUpdate(_) => (),
+            ReplicaStorageResponse::Response(
+                StorageResponse::FrontierUpper(..)
+                | StorageResponse::StatisticsUpdates(..)
+                | StorageResponse::StatusUpdate(_),
+            ) => (),
             response => panic!("unexpected maintained response: {response:?}"),
         }
     }
@@ -218,7 +234,7 @@ fn metadata(desc: mz_repr::RelationDesc) -> CollectionMetadata {
     }
 }
 
-fn ingestion(id: GlobalId, remap: GlobalId) -> StorageCommand {
+pub(crate) fn ingestion(id: GlobalId, remap: GlobalId) -> StorageCommand {
     let connection = LoadGeneratorSourceConnection {
         load_generator: LoadGenerator::Counter {
             max_cardinality: None,

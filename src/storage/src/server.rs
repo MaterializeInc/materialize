@@ -9,6 +9,7 @@
 
 //! An interactive dataflow server.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,22 +19,25 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
-use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_storage_client::client::{
-    PartitionedStorageState, StorageClient, StorageCommand, StorageResponse,
-};
+use mz_service::client::GenericClient;
+use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
+use timely::PartialOrder;
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ScheduleEvent, ShutdownEvent, TimelyEvent,
 };
+use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::metrics::StorageMetrics;
+pub use crate::replica::ReplicaStorageResponse;
+use crate::replica::{OutputFrontier, OutputGenerations, WorkerResponse};
 use crate::storage_state::{StorageInstanceContext, Worker};
 
 /// The process-local storage runtime and its connection factory.
@@ -75,16 +79,24 @@ impl StorageServer {
 /// is fatal. This endpoint has no reconnect or reconciliation handshake.
 pub struct ReplicaStorage {
     _runtime: Arc<Mutex<TimelyContainer<Config>>>,
-    commands: mpsc::UnboundedSender<StorageCommand>,
+    commands: mpsc::UnboundedSender<(u64, StorageCommand)>,
     worker: std::thread::Thread,
-    responses: mpsc::UnboundedReceiver<(usize, StorageResponse)>,
-    aggregation: PartitionedStorageState,
+    responses: mpsc::UnboundedReceiver<(usize, WorkerResponse)>,
+    next_sequence: u64,
+    peers: usize,
+    inputs: BTreeMap<(u64, GlobalId), (Vec<Antichain<Timestamp>>, Antichain<Timestamp>)>,
+    current: BTreeMap<GlobalId, u64>,
+    restarts: BTreeSet<u64>,
+    starts: BTreeMap<u64, BTreeSet<usize>>,
+    output_generations: OutputGenerations,
+    outputs: BTreeMap<(u64, GlobalId), OutputFrontier>,
 }
 
 impl ReplicaStorage {
     /// Enqueues a maintained command before worker bookkeeping and async resume
     /// observation. Query commands and handshakes belong on query connections.
-    pub fn send(&mut self, command: StorageCommand) {
+    /// Returns a unique monotone sequence, identifying the attempt for Run commands.
+    pub fn send(&mut self, command: StorageCommand) -> u64 {
         assert!(
             !matches!(
                 command,
@@ -95,29 +107,132 @@ impl ReplicaStorage {
             ),
             "query and transport commands must use query connections"
         );
-        self.aggregation.observe_command(&command);
+        let sequence = self.next_sequence;
+        self.next_sequence = sequence.checked_add(1).expect("native sequence exhausted");
+        if let Some((id, inputs)) = crate::replica::inputs(&command) {
+            self.starts.insert(sequence, BTreeSet::new());
+            if let Some(previous) = self.current.insert(id, sequence) {
+                self.restarts.remove(&previous);
+            }
+            for input in inputs {
+                let minimum = Antichain::from_elem(Timestamp::MIN);
+                self.inputs.insert(
+                    (sequence, input),
+                    (vec![minimum.clone(); self.peers], minimum),
+                );
+            }
+        }
+        if let StorageCommand::AllowCompaction(id, frontier) = &command {
+            if frontier.is_empty() {
+                if let Some(previous) = self.current.remove(id) {
+                    self.restarts.remove(&previous);
+                }
+            }
+        }
+        for (id, generation) in self.output_generations.observe(sequence, &command) {
+            self.outputs
+                .entry((generation, id))
+                .or_insert_with(|| OutputFrontier::new(self.peers));
+        }
         self.commands
-            .send(command)
+            .send((sequence, command))
             .expect("replica storage ingress lost");
         self.worker.unpark();
+        sequence
     }
 
     /// Receives a replica-wide maintained response. Cancel safe, retaining partial
     /// worker responses in the aggregation state. Progress channel loss is fatal.
-    pub async fn recv(&mut self) -> Result<Option<StorageResponse>, anyhow::Error> {
+    pub async fn recv(&mut self) -> Result<Option<ReplicaStorageResponse>, anyhow::Error> {
         loop {
             let (worker, response) = self.responses.recv().await.expect("replica progress lost");
-            if let Some(response) = self.aggregation.absorb_response(worker, response) {
-                return response.map(Some);
+            let WorkerResponse {
+                output_generation,
+                response,
+            } = response;
+            match response {
+                ReplicaStorageResponse::ExecutionStarted { execution } => {
+                    let workers = self.starts.get_mut(&execution).expect("admitted execution");
+                    assert!(
+                        workers.insert(worker),
+                        "duplicate installation acknowledgement"
+                    );
+                    if workers.len() == self.peers {
+                        self.starts.remove(&execution);
+                        return Ok(Some(ReplicaStorageResponse::ExecutionStarted { execution }));
+                    }
+                }
+                ReplicaStorageResponse::Response(StorageResponse::FrontierUpper(id, upper)) => {
+                    let generation = output_generation.expect("tagged output");
+                    let output = self
+                        .outputs
+                        .get_mut(&(generation, id))
+                        .expect("admitted output");
+                    if let Some(upper) = output.update(worker, upper) {
+                        return Ok(Some(ReplicaStorageResponse::Response(
+                            StorageResponse::FrontierUpper(id, upper),
+                        )));
+                    }
+                }
+                ReplicaStorageResponse::Response(StorageResponse::DroppedId(id)) => {
+                    let generation = output_generation.expect("tagged drop");
+                    let output = self
+                        .outputs
+                        .get_mut(&(generation, id))
+                        .expect("admitted output");
+                    if output.drop_worker(worker) {
+                        self.outputs.remove(&(generation, id));
+                        return Ok(Some(ReplicaStorageResponse::Response(
+                            StorageResponse::DroppedId(id),
+                        )));
+                    }
+                }
+                ReplicaStorageResponse::Response(response) => {
+                    return Ok(Some(ReplicaStorageResponse::Response(response)));
+                }
+                ReplicaStorageResponse::ExecutionInput {
+                    execution,
+                    input,
+                    frontier,
+                } => {
+                    let (workers, reported) = self
+                        .inputs
+                        .get_mut(&(execution, input))
+                        .expect("progress for admitted input");
+                    assert!(PartialOrder::less_equal(&workers[worker], &frontier));
+                    workers[worker] = frontier;
+                    let frontier: Antichain<_> =
+                        workers.iter().flat_map(|f| f.iter().copied()).collect();
+                    if *reported != frontier {
+                        *reported = frontier.clone();
+                        if frontier.is_empty() {
+                            self.inputs.remove(&(execution, input));
+                        }
+                        return Ok(Some(ReplicaStorageResponse::ExecutionInput {
+                            execution,
+                            input,
+                            frontier,
+                        }));
+                    }
+                }
+                ReplicaStorageResponse::RestartRequested { execution, id } => {
+                    if self.current.get(&id) == Some(&execution) && self.restarts.insert(execution)
+                    {
+                        return Ok(Some(ReplicaStorageResponse::RestartRequested {
+                            execution,
+                            id,
+                        }));
+                    }
+                }
             }
         }
     }
 }
 
 type ReplicaChannels = (
-    mpsc::UnboundedSender<StorageCommand>,
+    mpsc::UnboundedSender<(u64, StorageCommand)>,
     std::thread::Thread,
-    mpsc::UnboundedReceiver<(usize, StorageResponse)>,
+    mpsc::UnboundedReceiver<(usize, WorkerResponse)>,
     usize,
 );
 
@@ -267,7 +382,14 @@ pub async fn serve_with_replica(
                 commands,
                 worker,
                 responses,
-                aggregation: <(StorageCommand, StorageResponse) as Partitionable<_, _>>::new(peers),
+                next_sequence: 1,
+                peers,
+                inputs: BTreeMap::new(),
+                current: BTreeMap::new(),
+                restarts: BTreeSet::new(),
+                starts: BTreeMap::new(),
+                output_generations: OutputGenerations::default(),
+                outputs: BTreeMap::new(),
             })
         }
         None => None,
@@ -439,4 +561,4 @@ fn remap_timely_event_ids(event: &mut TimelyEvent) {
 }
 
 #[cfg(test)]
-mod replica_tests;
+pub(crate) mod replica_tests;

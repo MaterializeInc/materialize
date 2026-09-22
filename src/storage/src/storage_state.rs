@@ -163,8 +163,8 @@ pub struct Worker<'w> {
     initialization: Option<Vec<StorageCommand>>,
     queries: BTreeMap<Uuid, Query>,
     query_ready: bool,
-    replica_commands: Option<CommandReceiver>,
-    replica_progress: Option<mz_cluster::replica_progress::Sender<StorageResponse>>,
+    replica_commands: Option<mpsc::UnboundedReceiver<(u64, StorageCommand)>>,
+    replica_progress: Option<mz_cluster::replica_progress::Sender<crate::replica::WorkerResponse>>,
 }
 
 impl<'w> Worker<'w> {
@@ -229,6 +229,7 @@ impl<'w> Worker<'w> {
         let cluster_memory_limit = instance_context.cluster_memory_limit;
 
         let storage_state = StorageState {
+            executions: None,
             source_uppers: BTreeMap::new(),
             source_tokens: BTreeMap::new(),
             metrics,
@@ -292,12 +293,13 @@ impl<'w> Worker<'w> {
     pub(crate) fn enable_replica(
         &mut self,
     ) -> (
-        mpsc::UnboundedSender<StorageCommand>,
-        mpsc::UnboundedReceiver<(usize, StorageResponse)>,
+        mpsc::UnboundedSender<(u64, StorageCommand)>,
+        mpsc::UnboundedReceiver<(usize, crate::replica::WorkerResponse)>,
     ) {
         assert!(self.replica_progress.is_none());
         let (progress, responses) = mz_cluster::replica_progress::render(self.timely_worker);
         self.replica_progress = Some(progress);
+        self.storage_state.executions = Some(Default::default());
         let (commands, receiver) = mpsc::unbounded_channel();
         if self.timely_worker.index() == 0 {
             self.replica_commands = Some(receiver);
@@ -308,6 +310,7 @@ impl<'w> Worker<'w> {
 
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
+    pub(crate) executions: Option<crate::replica::Executions>,
     /// The highest observed upper frontier for collection.
     ///
     /// This is shared among all source instances, so that they can jointly advance the
@@ -416,12 +419,49 @@ pub struct StorageState {
 }
 
 impl StorageState {
+    /// Resolve export errors to the ingestion attempt that owns their readers.
+    pub(crate) fn execution_owner(&self, id: GlobalId) -> GlobalId {
+        self.ingestions
+            .iter()
+            .find_map(|(owner, run)| {
+                run.description
+                    .source_exports
+                    .contains_key(&id)
+                    .then_some(*owner)
+            })
+            .unwrap_or(id)
+    }
+
+    pub(crate) fn execution(&self, id: GlobalId) -> Option<u64> {
+        self.executions
+            .as_ref()?
+            .current
+            .get(&self.execution_owner(id))
+            .copied()
+    }
+
+    fn finish_startup(&mut self, execution: Option<u64>) {
+        if let Some(execution) = execution {
+            self.executions
+                .as_mut()
+                .expect("native execution")
+                .started(execution);
+        }
+    }
+
     /// Return an error handler that triggers a suspend and restart of the corresponding storage
     /// dataflow.
     pub fn error_handler(&self, context: &'static str, id: GlobalId) -> ErrorHandler {
         let tx = self.internal_cmd_tx.clone();
+        let execution = self.execution(id);
+        let id = if execution.is_some() {
+            self.execution_owner(id)
+        } else {
+            id
+        };
         ErrorHandler::signal(move |e| {
             tx.send(InternalStorageCommand::SuspendAndRestart {
+                execution,
                 id,
                 reason: format!("{context}: {e:#}"),
             })
@@ -484,10 +524,10 @@ impl<'w> Worker<'w> {
             if let Some(commands) = &mut self.replica_commands {
                 for _ in 0..commands.len() + 1 {
                     match commands.try_recv() {
-                        Ok(command) => self
+                        Ok((sequence, command)) => self
                             .storage_state
                             .internal_cmd_tx
-                            .send(InternalStorageCommand::Replica(command)),
+                            .send(InternalStorageCommand::Replica(sequence, command)),
                         Err(TryRecvError::Empty) => break,
                         Err(TryRecvError::Disconnected) => panic!("replica storage ingress lost"),
                     }
@@ -525,6 +565,14 @@ impl<'w> Worker<'w> {
                 sleep_duration = None;
 
                 self.report_frontier_progress(&response_tx);
+                if let Some(executions) = &mut self.storage_state.executions {
+                    for response in executions.report() {
+                        self.replica_progress
+                            .as_ref()
+                            .expect("native progress")
+                            .send(response.into());
+                    }
+                }
             } else {
                 // We didn't perform maintenance, sleep until the next maintenance interval.
                 let next_maintenance = last_maintenance + maintenance_interval;
@@ -562,9 +610,7 @@ impl<'w> Worker<'w> {
             }
 
             // Rerport any dropped ids
-            for id in std::mem::take(&mut self.storage_state.dropped_ids) {
-                self.send_storage_response(&response_tx, StorageResponse::DroppedId(id));
-            }
+            self.report_dropped_ids(&response_tx);
 
             self.process_oneshot_ingestions(&response_tx);
 
@@ -782,6 +828,7 @@ impl<'w> Worker<'w> {
         );
         match async_response {
             AsyncStorageWorkerResponse::IngestionFrontiersUpdated {
+                execution,
                 id,
                 ingestion_description,
                 as_of,
@@ -790,6 +837,7 @@ impl<'w> Worker<'w> {
             } => {
                 self.storage_state.internal_cmd_tx.send(
                     InternalStorageCommand::CreateIngestionDataflow {
+                        execution,
                         id,
                         ingestion_description,
                         as_of,
@@ -799,9 +847,15 @@ impl<'w> Worker<'w> {
                 );
             }
             AsyncStorageWorkerResponse::ExportFrontiersUpdated { id, description } => {
+                // Native reconstruction requires a newly authorized Run command.
+                assert!(self.storage_state.executions.is_none());
                 self.storage_state
                     .internal_cmd_tx
-                    .send(InternalStorageCommand::RunSinkDataflow(id, description));
+                    .send(InternalStorageCommand::RunSinkDataflow(
+                        None,
+                        id,
+                        description,
+                    ));
             }
             AsyncStorageWorkerResponse::DropDataflow(id) => {
                 self.storage_state
@@ -814,8 +868,29 @@ impl<'w> Worker<'w> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(&mut self, internal_cmd: InternalStorageCommand) {
         match internal_cmd {
-            InternalStorageCommand::Replica(command) => {
+            InternalStorageCommand::Replica(sequence, command) => {
                 assert!(self.replica_progress.is_some());
+                let dropping = match &command {
+                    StorageCommand::AllowCompaction(_, frontier) => frontier.is_empty(),
+                    _ => false,
+                };
+                if !dropping {
+                    self.storage_state
+                        .executions
+                        .as_mut()
+                        .unwrap()
+                        .outputs
+                        .observe(sequence, &command);
+                }
+                if let Some((id, inputs)) = crate::replica::inputs(&command) {
+                    // Keep existing execution during preparation. Rendering the
+                    // replacement drops its tokens, without releasing old reads.
+                    self.storage_state
+                        .executions
+                        .as_mut()
+                        .unwrap()
+                        .start(sequence, id, inputs);
+                }
                 if matches!(command, StorageCommand::InitializationComplete) {
                     // Configuration's rendering-stage command was enqueued by
                     // worker zero while processing preceding native ingress.
@@ -860,12 +935,33 @@ impl<'w> Worker<'w> {
                     self.flush_query_responses();
                 }
             }
-            InternalStorageCommand::SuspendAndRestart { id, reason } => {
+            InternalStorageCommand::SuspendAndRestart {
+                execution,
+                id,
+                reason,
+            } => {
                 info!(
+                    ?execution,
                     "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
                 );
+                if let Some(executions) = &mut self.storage_state.executions {
+                    let Some(execution) = execution else { return };
+                    if executions.current.get(&id) != Some(&execution) {
+                        return;
+                    }
+                    // Removing admission fences late startup and coalesces all
+                    // workers' requests for this attempt. Only a new Run can restart.
+                    executions.current.remove(&id);
+                    self.storage_state.source_tokens.remove(&id);
+                    self.storage_state.sink_tokens.remove(&id);
+                    self.replica_progress.as_ref().unwrap().send(
+                        crate::server::ReplicaStorageResponse::RestartRequested { execution, id }
+                            .into(),
+                    );
+                    return;
+                }
 
                 let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
                 if let Some(ingestion) = maybe_ingestion {
@@ -951,12 +1047,20 @@ impl<'w> Worker<'w> {
                 }
             }
             InternalStorageCommand::CreateIngestionDataflow {
+                execution,
                 id: ingestion_id,
                 mut ingestion_description,
                 as_of,
                 mut resume_uppers,
                 mut source_resume_uppers,
             } => {
+                if execution.is_some() && self.storage_state.execution(ingestion_id) != execution {
+                    self.storage_state.finish_startup(execution);
+                    return;
+                }
+                if execution.is_some() {
+                    self.storage_state.source_tokens.remove(&ingestion_id);
+                }
                 info!(
                     ?as_of,
                     ?resume_uppers,
@@ -970,6 +1074,11 @@ impl<'w> Worker<'w> {
                 // machinery will get confused if there are not at least
                 // statistics for the "main" source.
                 for (export_id, export) in ingestion_description.source_exports.iter() {
+                    if execution.is_some() && self.timely_worker.index() == 0 {
+                        self.storage_state
+                            .aggregated_statistics
+                            .advance_global_epoch(*export_id);
+                    }
                     let resume_upper = resume_uppers[export_id].clone();
                     self.storage_state.aggregated_statistics.initialize_source(
                         *export_id,
@@ -1036,6 +1145,7 @@ impl<'w> Worker<'w> {
                         self.timely_worker.index(),
                         self.timely_worker.peers(),
                     );
+                    self.storage_state.finish_startup(execution);
                     return;
                 }
 
@@ -1048,6 +1158,7 @@ impl<'w> Worker<'w> {
                     resume_uppers,
                     source_resume_uppers,
                 );
+                self.storage_state.finish_startup(execution);
             }
             InternalStorageCommand::RunOneshotIngestion {
                 ingestion_id,
@@ -1067,7 +1178,14 @@ impl<'w> Worker<'w> {
                     request,
                 );
             }
-            InternalStorageCommand::RunSinkDataflow(sink_id, sink_description) => {
+            InternalStorageCommand::RunSinkDataflow(execution, sink_id, sink_description) => {
+                if execution.is_some() && self.storage_state.execution(sink_id) != execution {
+                    self.storage_state.finish_startup(execution);
+                    return;
+                }
+                if execution.is_some() {
+                    self.storage_state.sink_tokens.remove(&sink_id);
+                }
                 info!(
                     "worker {}/{} trying to (re-)start sink {sink_id}",
                     self.timely_worker.index(),
@@ -1088,6 +1206,11 @@ impl<'w> Worker<'w> {
                     sink_write_frontier.clear();
                     sink_write_frontier.insert(mz_repr::Timestamp::minimum());
                 }
+                if execution.is_some() && self.timely_worker.index() == 0 {
+                    self.storage_state
+                        .aggregated_statistics
+                        .advance_global_epoch(sink_id);
+                }
                 self.storage_state
                     .aggregated_statistics
                     .initialize_sink(sink_id, || {
@@ -1104,6 +1227,7 @@ impl<'w> Worker<'w> {
                     sink_id,
                     sink_description,
                 );
+                self.storage_state.finish_startup(execution);
             }
             InternalStorageCommand::DropDataflow(ids) => {
                 for id in &ids {
@@ -1271,10 +1395,39 @@ impl<'w> Worker<'w> {
         }
     }
 
+    fn report_dropped_ids(&mut self, response_tx: &ResponseSender) {
+        if let Some(executions) = &mut self.storage_state.executions {
+            self.storage_state.dropped_ids.clear();
+            for (id, generation) in std::mem::take(&mut executions.dropped_outputs) {
+                self.replica_progress
+                    .as_ref()
+                    .unwrap()
+                    .send(crate::replica::WorkerResponse {
+                        output_generation: Some(generation),
+                        response: crate::server::ReplicaStorageResponse::Response(
+                            StorageResponse::DroppedId(id),
+                        ),
+                    });
+            }
+        } else {
+            for id in std::mem::take(&mut self.storage_state.dropped_ids) {
+                self.send_storage_response(response_tx, StorageResponse::DroppedId(id));
+            }
+        }
+    }
+
     /// Send a response to the coordinator.
     fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
         if let Some(progress) = &self.replica_progress {
-            progress.send(response);
+            let output_generation = if let StorageResponse::FrontierUpper(id, _) = &response {
+                Some(self.storage_state.executions.as_ref().unwrap().outputs.0[id])
+            } else {
+                None
+            };
+            progress.send(crate::replica::WorkerResponse {
+                output_generation,
+                response: crate::server::ReplicaStorageResponse::Response(response),
+            });
             return;
         }
         // Ignore send errors because the coordinator is free to ignore our
@@ -1682,7 +1835,9 @@ impl StorageState {
                 // ingestion in the local storage state. This is something we might have
                 // interest in fixing in the future, e.g. materialize#19907
                 if self.timely_worker_index == 0 {
-                    self.async_worker.update_ingestion_frontiers(*ingestion);
+                    let execution = self.execution(ingestion.id);
+                    self.async_worker
+                        .update_ingestion_frontiers_for(*ingestion, execution);
                 }
             }
             StorageCommand::RunOneshotIngestion(oneshot) => {
@@ -1724,6 +1879,7 @@ impl StorageState {
                 if self.timely_worker_index == 0 {
                     self.internal_cmd_tx
                         .send(InternalStorageCommand::RunSinkDataflow(
+                            self.execution(export.id),
                             export.id,
                             export.description,
                         ));
@@ -1746,6 +1902,18 @@ impl StorageState {
     /// Drop the identified storage collection from the storage state.
     fn drop_collection(&mut self, id: GlobalId) {
         fail_point!("crash_on_drop");
+
+        if let Some(executions) = &mut self.executions {
+            executions.current.remove(&id);
+            if let Some(generation) = executions.outputs.0.remove(&id) {
+                executions.dropped_outputs.push((id, generation));
+            }
+            self.source_tokens.remove(&id);
+            self.sink_tokens.remove(&id);
+            self.source_uppers.remove(&id);
+            self.sink_write_frontiers.remove(&id);
+            self.aggregated_statistics.deinitialize(id);
+        }
 
         self.ingestions.remove(&id);
         self.exports.remove(&id);
@@ -1777,7 +1945,7 @@ impl StorageState {
 
         // Send through async worker for correct ordering with RunIngestion, and
         // dropping the dataflow is done on async worker response.
-        if self.timely_worker_index == 0 {
+        if self.timely_worker_index == 0 && self.executions.is_none() {
             self.async_worker.drop_dataflow(id);
         }
     }
@@ -1790,6 +1958,10 @@ impl StorageState {
 }
 
 #[cfg(test)]
+#[path = "storage_state/runtime_tests.rs"]
+mod native_runtime_tests;
+
+#[cfg(test)]
 mod query_tests {
     use super::*;
     use mz_ore::metrics::MetricsRegistry;
@@ -1797,7 +1969,7 @@ mod query_tests {
         ContentFilter, ContentFormat, ContentShape, ContentSource, OneshotIngestionRequest,
     };
 
-    fn worker<'w>(
+    pub(super) fn worker<'w>(
         timely: &'w mut TimelyWorker,
         clients: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
     ) -> Worker<'w> {

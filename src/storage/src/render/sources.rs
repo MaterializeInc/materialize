@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
 use timely::dataflow::operators::vec::Map;
-use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, OkErr};
+use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, OkErr, Probe};
 use timely::dataflow::scope::Scope;
 use timely::progress::{Antichain, Timestamp};
 
@@ -302,7 +302,7 @@ where
                         let error_handler =
                             storage_state.error_handler("upsert_rehydration", export_id);
 
-                        let (stream, tok) = persist_source::persist_source_core(
+                        let (mut stream, tok) = persist_source::persist_source_core(
                             outer_mz_scope,
                             scope,
                             export_id,
@@ -318,6 +318,19 @@ where
                             async {},
                             error_handler,
                         );
+                        if let Some(executions) = &storage_state.executions {
+                            let probe = timely::dataflow::operators::probe::Handle::new();
+                            stream = stream.probe_with(&probe);
+                            executions.observe(
+                                base_source_config.id,
+                                export_id,
+                                Box::new(move || {
+                                    probe.with_frontier(|frontier| {
+                                        frontier.iter().map(|time| time.0).collect()
+                                    })
+                                }),
+                            );
+                        }
                         (
                             stream.as_collection(),
                             Some(tok),

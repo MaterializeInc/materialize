@@ -416,6 +416,7 @@ pub fn build_ingestion_dataflow(
                 "source",
                 health_stream,
                 crate::healthcheck::DefaultWriter {
+                    execution: storage_state.execution(primary_source_id),
                     command_tx: storage_state.internal_cmd_tx.clone(),
                     updates: Rc::clone(&storage_state.shared_status_updates),
                 },
@@ -463,6 +464,7 @@ pub fn build_export_dataflow(
             "sink",
             health_stream,
             crate::healthcheck::DefaultWriter {
+                execution: storage_state.execution(id),
                 command_tx: storage_state.internal_cmd_tx.clone(),
                 updates: Rc::clone(&storage_state.shared_status_updates),
             },
