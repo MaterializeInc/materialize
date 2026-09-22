@@ -194,6 +194,7 @@ pub(super) struct ReplicaEnactment {
     storage_state: storage::StorageState,
     reclaimer: ClientProtectionReclaimer,
     published_at: Instant,
+    publication_seconds: mz_ore::metrics::Histogram,
 }
 
 impl ReplicaEnactment {
@@ -237,6 +238,11 @@ impl ReplicaEnactment {
             storage_state: storage::StorageState::default(),
             reclaimer: ClientProtectionReclaimer::default(),
             published_at: publication_started,
+            publication_seconds: registry.register(mz_ore::metric! {
+                name: "mz_catalog_follower_publication_seconds",
+                help: "Wall time for replica protection publication attempts, including derivation, catalog I/O, and retries.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+            }),
         };
         for id in logs {
             result.installed.insert(
@@ -933,6 +939,9 @@ impl ReplicaEnactment {
         }
     }
 
+    /// Renew protection and, when installation is complete, reclaim abandoned
+    /// incarnations. Bounds are proposed only when metadata is supplied, allowing
+    /// their configured cadence to differ from heartbeat and reclamation cadence.
     pub async fn publish(
         &mut self,
         catalog: &mut Catalog,
@@ -942,6 +951,7 @@ impl ReplicaEnactment {
         pending: bool,
         metadata: Option<&storage_metadata::Resolution>,
     ) -> anyhow::Result<()> {
+        let _timer = self.publication_seconds.start_timer();
         let incarnation = self.protection.incarnation();
         let mut refreshed = false;
         while let Some(requirements) = self
@@ -969,37 +979,38 @@ impl ReplicaEnactment {
         if pending || refreshed {
             return Ok(());
         }
-        let mut compute_proposals = BTreeMap::new();
-        for (id, collection) in &self.installed {
-            if collection.retired || !collection.index {
-                continue;
-            }
-            let Some(policy) = catalog.state().index_read_policy(*id) else {
-                continue;
-            };
-            let Some(upper) = &collection.progress.write_frontier else {
-                continue;
-            };
-            let proposal = if catalog
-                .state()
-                .collection_compaction_bounds()
-                .contains_key(id)
-            {
-                policy.frontier(upper.borrow())
-            } else {
-                // Logical inputs can be absent from the physical plan. First
-                // permission respects their protected reconstruction floor too.
-                collection
-                    .window
-                    .as_ref()
-                    .map(|window| collection.as_of.join(window.since()))
-                    .unwrap_or_else(|| collection.as_of.clone())
-            };
-            compute_proposals.insert(*id, proposal);
-        }
-        let mut frontiers = Vec::new();
-        let mut storage_proposals = BTreeMap::new();
+        let mut ops = Vec::new();
         if let Some(metadata) = metadata {
+            let mut compute_proposals = BTreeMap::new();
+            for (id, collection) in &self.installed {
+                if collection.retired || !collection.index {
+                    continue;
+                }
+                let Some(policy) = catalog.state().index_read_policy(*id) else {
+                    continue;
+                };
+                let Some(upper) = &collection.progress.write_frontier else {
+                    continue;
+                };
+                let proposal = if catalog
+                    .state()
+                    .collection_compaction_bounds()
+                    .contains_key(id)
+                {
+                    policy.frontier(upper.borrow())
+                } else {
+                    // Logical inputs can be absent from the physical plan. First
+                    // permission respects their protected reconstruction floor too.
+                    collection
+                        .window
+                        .as_ref()
+                        .map(|window| collection.as_of.join(window.since()))
+                        .unwrap_or_else(|| collection.as_of.clone())
+                };
+                compute_proposals.insert(*id, proposal);
+            }
+            let mut frontiers = Vec::new();
+            let mut storage_proposals = BTreeMap::new();
             for (id, upper) in &metadata.uppers {
                 let Some(policy) = catalog.state().collection_read_policy(*id) else {
                     continue;
@@ -1016,41 +1027,40 @@ impl ReplicaEnactment {
                     read_capabilities: since.clone(),
                 });
             }
-        }
-        let candidates = publication_candidates(
-            catalog.state().maintained_read_requirements(),
-            catalog.state().collection_compaction_bounds(),
-            &frontiers,
-            &storage_proposals,
-            &compute_proposals,
-            |id| {
-                catalog
-                    .try_get_entry_by_global_id(&id)
-                    .is_some_and(|entry| match entry.item() {
-                        CatalogItem::MaterializedView(mv) => {
-                            mv.replacement_target.is_none() && mv.global_id_writes() == id
-                        }
-                        CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::Sink(_) => {
-                            true
-                        }
-                        _ => false,
-                    })
-            },
-            |id, excluding| {
-                catalog
-                    .state()
-                    .maintained_read_frontier(id, excluding)
-                    .into_iter()
-                    .chain(catalog.state().client_read_frontier(id))
-                    .min()
-            },
-        );
-        let mut ops = Vec::new();
-        if !candidates.bounds.is_empty() || !candidates.requirements.is_empty() {
-            ops.push(Op::SetReadProtection {
-                requirements: candidates.requirements,
-                bounds: candidates.bounds,
-            });
+            let candidates = publication_candidates(
+                catalog.state().maintained_read_requirements(),
+                catalog.state().collection_compaction_bounds(),
+                &frontiers,
+                &storage_proposals,
+                &compute_proposals,
+                |id| {
+                    catalog
+                        .try_get_entry_by_global_id(&id)
+                        .is_some_and(|entry| match entry.item() {
+                            CatalogItem::MaterializedView(mv) => {
+                                mv.replacement_target.is_none() && mv.global_id_writes() == id
+                            }
+                            CatalogItem::Table(_)
+                            | CatalogItem::Source(_)
+                            | CatalogItem::Sink(_) => true,
+                            _ => false,
+                        })
+                },
+                |id, excluding| {
+                    catalog
+                        .state()
+                        .maintained_read_frontier(id, excluding)
+                        .into_iter()
+                        .chain(catalog.state().client_read_frontier(id))
+                        .min()
+                },
+            );
+            if !candidates.bounds.is_empty() || !candidates.requirements.is_empty() {
+                ops.push(Op::SetReadProtection {
+                    requirements: candidates.requirements,
+                    bounds: candidates.bounds,
+                });
+            }
         }
         let expired = self.reclaimer.observe(
             catalog

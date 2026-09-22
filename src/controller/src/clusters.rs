@@ -177,9 +177,11 @@ impl Controller {
             }
         }
 
-        self.storage
-            .connect_replica(cluster_id, replica_id, storage_location);
-        if !self.replica_owned_compute() {
+        if self.replica_owned_compute() {
+            self.storage.register_replica(cluster_id, replica_id);
+        } else {
+            self.storage
+                .connect_replica(cluster_id, replica_id, storage_location);
             self.compute.add_replica_to_instance(
                 cluster_id,
                 replica_id,

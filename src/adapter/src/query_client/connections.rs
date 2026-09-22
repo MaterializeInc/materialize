@@ -40,6 +40,7 @@ pub(crate) struct QueryReplicaConnectionsConfig {
     pub orchestrator: Arc<dyn NamespacedOrchestrator>,
     pub deploy_generation: u64,
     pub build_info: &'static BuildInfo,
+    pub observations: Option<mz_storage_client::controller::ReplicaObservationSender>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +131,7 @@ struct Replica {
     state: Arc<Mutex<ReplicaState>>,
     settings_changed: watch::Sender<()>,
     _task: AbortOnDropHandle<()>,
+    _storage_task: Option<AbortOnDropHandle<()>>,
 }
 
 /// A desired replica remains in the pool while it is connecting or reconnecting.
@@ -227,6 +229,19 @@ impl QueryReplicaConnections {
                     client: None,
                 }));
                 let (settings_changed, rx) = watch::channel(());
+                let storage_task = config.observations.as_ref().map(|_| {
+                    mz_ore::task::spawn(
+                        || format!("storage-observations-{}-{}", key.0, key.1),
+                        observe_storage(
+                            Arc::downgrade(&state),
+                            key,
+                            endpoint.clone(),
+                            Arc::clone(&config),
+                            settings_changed.subscribe(),
+                        ),
+                    )
+                    .abort_on_drop()
+                });
                 let task = mz_ore::task::spawn(
                     || format!("query-replica-{}-{}", key.0, key.1),
                     run(
@@ -244,6 +259,7 @@ impl QueryReplicaConnections {
                     state,
                     settings_changed,
                     _task: task,
+                    _storage_task: storage_task,
                 }
             });
             let mut state = replica.state.lock().expect("query replica mutex poisoned");
@@ -315,6 +331,75 @@ impl QueryReplicaConnections {
             }
         }
         (desired, clients)
+    }
+}
+
+/// Reconnect observations, not execution. No maintained command is sent on this
+/// connection, and losing it cannot stop ingestion or sink reconstruction.
+async fn observe_storage(
+    replica: Weak<Mutex<ReplicaState>>,
+    key: ReplicaKey,
+    endpoint: Endpoint,
+    config: Arc<QueryReplicaConnectionsConfig>,
+    mut settings_changed: watch::Receiver<()>,
+) {
+    use mz_storage_client::client::{StorageCommand, StorageResponse};
+
+    let sender = config.observations.as_ref().expect("observation consumer");
+    let mut backoff = Duration::from_millis(100);
+    loop {
+        let Some(settings) = replica
+            .upgrade()
+            .map(|state| state.lock().expect("query replica mutex poisoned").settings)
+        else {
+            return;
+        };
+        let target = StorageReplicaTarget {
+            replica_id: key.1,
+            retired: settings_changed.clone(),
+            endpoint: endpoint.clone(),
+            settings,
+            config: Arc::clone(&config),
+        };
+        let observe = async {
+            let mut client = target.connect().await?;
+            client
+                .send(StorageCommand::HelloQuery {
+                    nonce: uuid::Uuid::new_v4(),
+                })
+                .await?;
+            anyhow::ensure!(
+                matches!(client.recv().await?, Some(StorageResponse::QueryReady)),
+                "storage observer did not receive QueryReady"
+            );
+            sender.send(key.1, StorageResponse::QueryReady)?;
+            // Subscribe after every partition is ready. COPY-only connections
+            // remain unsubscribed and receive only their own execution results.
+            client.send(StorageCommand::SubscribeObservations).await?;
+            while let Some(response) = client.recv().await? {
+                sender.send(key.1, response)?;
+            }
+            Err::<(), _>(anyhow::anyhow!("storage observer disconnected"))
+        };
+        tokio::select! {
+            result = observe => {
+                if let Err(error) = result {
+                    tracing::warn!(cluster = %key.0, replica = %key.1,
+                        "storage observation connection failed: {error:#}");
+                }
+            }
+            result = settings_changed.changed() => {
+                if result.is_err() { return; }
+                continue;
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(backoff) => {}
+            result = settings_changed.changed() => {
+                if result.is_err() { return; }
+            }
+        }
+        backoff = (backoff * 2).min(Duration::from_secs(1));
     }
 }
 

@@ -23,7 +23,8 @@ pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 
 /// Couples replica activation with withdrawal of controller installation authority.
 /// Both the provisioner and clusterd must use the same build-level ownership gate.
-pub const REPLICA_OWNED_COMPUTE: bool = false;
+/// Compute and storage share this gate in protected writable environments.
+pub const REPLICA_OWNED_COMPUTE: bool = true;
 
 /// Configures a cluster replica.
 #[derive(Clone, Debug, Serialize, PartialEq)]

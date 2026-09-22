@@ -26,6 +26,8 @@ use timely::progress::Antichain;
 
 use super::{ReplicaEffects, ReplicaEnactment, storage_metadata};
 
+mod sinks;
+
 pub(super) struct StorageIo {
     pub endpoint: ReplicaStorage,
     pub inputs: BTreeMap<(u64, GlobalId), Antichain<Timestamp>>,
@@ -102,6 +104,7 @@ struct Ingestion {
 #[derive(Default)]
 pub(super) struct StorageState {
     ingestions: BTreeMap<GlobalId, Ingestion>,
+    sinks: BTreeMap<GlobalId, sinks::Sink>,
     // Includes retired attempts until their actual readers finish.
     reads: BTreeMap<u64, BTreeMap<GlobalId, ReadHold>>,
     starting: BTreeSet<u64>,
@@ -131,6 +134,12 @@ impl StorageState {
                 && ingestion.execution == execution
             {
                 ingestion.restart = true;
+                self.starting.remove(&execution);
+            }
+            if let Some(sink) = self.sinks.get_mut(&id)
+                && sink.execution == execution
+            {
+                sink.restart = true;
                 self.starting.remove(&execution);
             }
         }
@@ -172,6 +181,11 @@ impl ReplicaEnactment {
         ingestions(catalog, cluster, replica)
             .values()
             .flat_map(|i| i.collection_ids())
+            .chain(
+                self.desired_sinks(catalog, cluster)
+                    .into_iter()
+                    .flat_map(|(id, sink)| [id, sink.from]),
+            )
             .collect()
     }
 
@@ -271,6 +285,30 @@ impl ReplicaEnactment {
                     &requested,
                 )
                 .await?;
+            self.ensure_live(catalog)?;
+            let current = catalog
+                .try_get_entry_by_global_id(&id)
+                .and_then(|entry| catalog.state().ingestion_description(entry.id()));
+            if current.as_ref() != Some(&definition)
+                || (definition.desc.connection.prefers_single_replica()
+                    && catalog
+                        .get_cluster(cluster)
+                        .replicas()
+                        .map(|r| r.replica_id)
+                        .min()
+                        != Some(replica))
+                || definition.collection_ids().any(|output| {
+                    catalog
+                        .state()
+                        .storage_metadata()
+                        .collection_metadata
+                        .get(&output)
+                        != Some(&metadata.metadata[&output].data_shard)
+                })
+            {
+                pending = true;
+                continue;
+            }
             let description = IngestionDescription {
                 desc: definition.desc.clone(),
                 instance_id: cluster,

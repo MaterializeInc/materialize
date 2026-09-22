@@ -337,6 +337,20 @@ metrics:
   help: Compute selections awaiting replica installation.
   source: src/clusterd/src/catalog_follower.rs
   visibility: internal
+- name: mz_catalog_follower_publication_seconds_bucket
+  help: Wall time for replica protection publication attempts, including derivation, catalog I/O, and retries.
+  labels:
+  - le
+  source: src/clusterd/src/catalog_follower/execution.rs
+  visibility: internal
+- name: mz_catalog_follower_publication_seconds_count
+  help: Wall time for replica protection publication attempts, including derivation, catalog I/O, and retries.
+  source: src/clusterd/src/catalog_follower/execution.rs
+  visibility: internal
+- name: mz_catalog_follower_publication_seconds_sum
+  help: Wall time for replica protection publication attempts, including derivation, catalog I/O, and retries.
+  source: src/clusterd/src/catalog_follower/execution.rs
+  visibility: internal
 - name: mz_catalog_info_metrics_reconcile_seconds_bucket
   help: Time taken to rebuild the catalog info metrics from a catalog snapshot.
   labels:

@@ -1322,7 +1322,7 @@ impl Coordinator {
             .storage
             .create_collections(storage_metadata, None, vec![(id, collection_desc)])
             .await;
-        // The controller owns dependency protection after installation.
+        // Legacy installation takes over these temporary dependency holds.
         drop(read_holds);
         Ok(res?)
     }
@@ -1338,8 +1338,8 @@ impl Coordinator {
         Ok(res?)
     }
 
-    /// Reconstructs an export from committed state and protects its inputs until
-    /// the controller takes over their protection during installation.
+    /// Reconstructs an export registration from committed state. Only legacy
+    /// controller installation needs temporary adapter-owned dependency holds.
     fn storage_export_description(
         &self,
         id: GlobalId,
@@ -1356,9 +1356,13 @@ impl Coordinator {
             compute_ids: btreemap! {},
         };
 
-        // Keep dependencies readable while constructing the description and
-        // until the controller acquires its own dependency holds.
-        let read_holds = self.acquire_read_holds(&id_bundle);
+        // Native replicas acquire their own execution protection. Registration
+        // must not retain a second, adapter-owned installer hold.
+        let read_holds = if self.controller.replica_owned_compute() {
+            crate::ReadHolds::default()
+        } else {
+            self.acquire_read_holds(&id_bundle)
+        };
         let mut as_of = read_holds.least_valid_read();
         if self.catalog().state().catalog_read_protection_enabled() {
             let requirement = &self.catalog().state().maintained_read_requirements()[&id];

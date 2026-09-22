@@ -57,7 +57,35 @@ use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{AppendOnlyUpdate, StatusUpdate};
+use crate::client::{AppendOnlyUpdate, StatusUpdate, StorageResponse};
+
+/// Passive replica observations for the existing SQL introspection writers.
+/// This input cannot advance collection frontiers or acknowledge lifecycle work.
+#[derive(Clone, Debug)]
+pub struct ReplicaObservationSender(mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>);
+
+impl ReplicaObservationSender {
+    /// Wrap the controller's response queue without granting lifecycle authority.
+    pub fn new(sender: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>) -> Self {
+        Self(sender)
+    }
+
+    /// Submit query readiness, status, or statistics from the identified replica.
+    /// Query readiness invalidates cached hydration before a fresh status snapshot.
+    pub fn send(&self, replica: ReplicaId, response: StorageResponse) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            matches!(
+                response,
+                StorageResponse::QueryReady
+                    | StorageResponse::StatusUpdate(_)
+                    | StorageResponse::StatisticsUpdates(..)
+            ),
+            "not a passive storage observation"
+        );
+        self.0.send((Some(replica), response))?;
+        Ok(())
+    }
+}
 
 #[derive(
     Clone,
@@ -466,6 +494,13 @@ pub trait StorageController: Debug {
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
     );
+
+    /// Registers native replica membership without constructing a lifecycle transport.
+    /// Only valid when maintained execution is replica-owned.
+    fn register_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
+
+    /// Accept passive query-protocol observations without attaching a lifecycle client.
+    fn replica_observations(&self) -> ReplicaObservationSender;
 
     /// Disconnects the storage instance from the specified replica.
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);

@@ -718,6 +718,10 @@ impl Controller {
 
         let collections_ctl: Arc<dyn StorageCollections + Send + Sync> = Arc::new(collections_ctl);
 
+        let catalog_persist_location = (catalog_read_protection_enabled && !read_only)
+            .then(|| config.persist_location.clone());
+        let replica_owned = mz_controller_types::clusters::REPLICA_OWNED_COMPUTE
+            && catalog_persist_location.is_some();
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
             config.persist_location.clone(),
@@ -726,6 +730,7 @@ impl Controller {
             wallclock_lag_fn.clone(),
             Arc::clone(&txns_metrics),
             read_only,
+            replica_owned,
             &config.metrics_registry,
             controller_metrics.clone(),
             config.connection_context,
@@ -735,8 +740,6 @@ impl Controller {
         .await;
 
         let storage_collections = Arc::clone(&collections_ctl);
-        let catalog_persist_location = (catalog_read_protection_enabled && !read_only)
-            .then(|| config.persist_location.clone());
         let compute_controller = ComputeController::new(
             config.build_info,
             storage_collections,
