@@ -810,7 +810,9 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
+                    errs.stream = errs
+                        .stream
+                        .log_dataflow_errors(logger, idx_id, self.dataflow_id);
                 }
 
                 compute_state.traces.set(
@@ -921,7 +923,9 @@ where
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
+                    errs.stream = errs
+                        .stream
+                        .log_dataflow_errors(logger, idx_id, self.dataflow_id);
                 }
 
                 compute_state.traces.set(
@@ -1621,6 +1625,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         };
 
         let export_ids = self.export_ids.clone();
+        let dataflow_index = self.dataflow_id;
 
         // Convert the dataflow as-of into a frontier we can compare with input frontiers.
         //
@@ -1643,6 +1648,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             for &export_id in &export_ids {
                 logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
                     export_id,
+                    dataflow_index,
                     lir_id,
                     hydrated,
                 }));
@@ -1664,6 +1670,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     for &export_id in &export_ids {
                         logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
                             export_id,
+                            dataflow_index,
                             lir_id,
                             hydrated,
                         }));

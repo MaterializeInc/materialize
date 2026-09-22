@@ -27,6 +27,9 @@ const EXPORT: GlobalId = GlobalId::Transient(1);
 const A: Uuid = Uuid::from_u128(1);
 const B: Uuid = Uuid::from_u128(2);
 
+#[path = "logging_tests.rs"]
+mod logging_tests;
+
 struct Harness {
     state: ComputeState,
     worker: TimelyWorker,
