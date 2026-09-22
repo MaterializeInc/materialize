@@ -31,6 +31,18 @@ FOR INDEX <name> | MATERIALIZED VIEW <name>
 [ AS SQL ]
 ;
 
+EXPLAIN ANALYZE
+      CPU [, MEMORY] [WITH SKEW]
+    | MEMORY [, CPU] [WITH SKEW]
+FOR SOURCE <name> | TABLE <name> | SINK <name>
+[ AS SQL ]
+;
+
+EXPLAIN ANALYZE INGESTION
+FOR SOURCE <name> | TABLE <name>
+[ AS SQL ]
+;
+
 EXPLAIN ANALYZE CLUSTER
       CPU [, MEMORY] [WITH SKEW]
     | MEMORY [, CPU] [WITH SKEW]
@@ -48,6 +60,8 @@ Parameter    | Description
 **MEMORY**   | Reports consumed memory information `total_memory` and number of records `total_records` for each operator (not including child operators; `FOR INDEX`, `FOR MATERIALIZED VIEW`) or for each object in the current cluster (`CLUSTER`).
 **WITH SKEW** | *Optional.* If specified, includes additional information about average and per-worker consumption and ratios (of `CPU` and/or `MEMORY`).
 **HINTS**    | Annotates the LIR plan with [TopK hints] (`FOR INDEX`, `FOR MATERIALIZED VIEW`).
+**INGESTION** | Reports ingestion progress for a source and each of its subsources and tables (`FOR SOURCE`), or for one table created from a source or one subsource (`FOR TABLE`): status, snapshot progress, upstream offset lag (source row only), received and committed counts, envelope state size, rehydration latency, and wallclock lag.
+**SOURCE**, **TABLE**, **SINK** | Reports `CPU` and `MEMORY` per pipeline stage of the object's storage dataflow. A stage includes the cost of the stages nested under it. `FOR SOURCE` and `FOR SINK` start with a row for the whole dataflow. `FOR TABLE` accepts a table created from a source or a subsource, and labels stages shared with the source's other tables `(shared)`. `WITH SKEW` also reports `active_workers`, the number of workers that scheduled the stage. These forms require the active cluster to be the object's cluster, and return no rows unless the cluster runs storage and compute dataflows on the same replicas.
 **AS SQL**   | *Optional.* If specified, returns the SQL associated with the specified `EXPLAIN ANALYZE` command without executing it. You can modify this SQL as a starting point to create customized queries.
 
 ## Privileges

@@ -28,7 +28,7 @@ use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{CatalogItemId, ColumnName, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
+use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
 use mz_sql_server_util::SqlServerError;
 use mz_storage_types::connections::InvalidAwsPrivatelinkServiceName;
@@ -327,6 +327,12 @@ pub enum PlanError {
         replacement_type: CatalogItemType,
         replacement_name: PartialItemName,
     },
+    /// `EXPLAIN ANALYZE` of a storage object whose cluster is not the active cluster.
+    ExplainAnalyzeWrongCluster {
+        item_name: String,
+        cluster_name: String,
+        active_cluster: String,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -524,6 +530,9 @@ impl PlanError {
             }
             Self::InvalidSchemaName => {
                 Some("Use SET schema = name to select a schema.  Use SHOW SCHEMAS to list available schemas.  Use SHOW search_path to show the schema names that we looked for, but none of them existed.".into())
+            }
+            Self::ExplainAnalyzeWrongCluster { cluster_name, .. } => {
+                Some(format!("Use SET cluster = {} to explain it.", Ident::new_unchecked(cluster_name.as_str()).to_ast_string_simple()))
             }
             _ => None,
         }
@@ -900,6 +909,14 @@ impl fmt::Display for PlanError {
                     f,
                     "cannot replace {item_type} {item_name} \
                      with {replacement_type} {replacement_name}",
+                )
+            }
+            Self::ExplainAnalyzeWrongCluster { item_name, cluster_name, active_cluster } => {
+                write!(
+                    f,
+                    "{item_name} runs on cluster {}, but the active cluster is {}",
+                    cluster_name.quoted(),
+                    active_cluster.quoted(),
                 )
             }
         }

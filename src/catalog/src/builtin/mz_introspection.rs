@@ -849,13 +849,12 @@ FROM      mz_catalog.mz_objects mo
           JOIN mz_introspection.mz_dataflow_global_ids mgi ON (mce.dataflow_id = mgi.id)
      LEFT JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id)
 UNION ALL
-SELECT COALESCE(md.name || '.', '') || ms.name || '.' || mo.name AS name, dgi.global_id AS global_id
+SELECT COALESCE(md.name || '.', '') || ms.name || '.' || mo.name AS name, mogi.global_id AS global_id
 FROM      mz_catalog.mz_objects mo
           JOIN mz_internal.mz_object_global_ids mogi ON (mo.id = mogi.id)
-          JOIN mz_introspection.mz_storage_dataflow_global_ids sgi ON (mogi.global_id = sgi.global_id)
           JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)
-          JOIN mz_introspection.mz_storage_dataflow_global_ids dgi ON (sgi.id = dgi.id)
-     LEFT JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id);",
+     LEFT JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id)
+WHERE mogi.global_id IN (SELECT global_id FROM mz_introspection.mz_storage_dataflow_global_ids);",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "mappable_object",

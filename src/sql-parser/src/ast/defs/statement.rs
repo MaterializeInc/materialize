@@ -4332,6 +4332,7 @@ pub enum ExplainAnalyzeComputationProperty {
 pub enum ExplainAnalyzeProperty {
     Computation(ExplainAnalyzeComputationProperties),
     Hints,
+    Ingestion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -4340,11 +4341,50 @@ pub struct ExplainAnalyzeComputationProperties {
     pub properties: Vec<ExplainAnalyzeComputationProperty>,
     pub skew: bool,
 }
+
+/// The object an `EXPLAIN ANALYZE` statement reports on.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainAnalyzeExplainee<T: AstInfo> {
+    Index(T::ItemName),
+    MaterializedView(T::ItemName),
+    Source(T::ItemName),
+    /// A table created from a source, or a subsource.
+    Table(T::ItemName),
+    Sink(T::ItemName),
+}
+
+impl<T: AstInfo> ExplainAnalyzeExplainee<T> {
+    pub fn name(&self) -> &T::ItemName {
+        match self {
+            Self::Index(name)
+            | Self::MaterializedView(name)
+            | Self::Source(name)
+            | Self::Table(name)
+            | Self::Sink(name) => name,
+        }
+    }
+}
+
+impl<T: AstInfo> AstDisplay for ExplainAnalyzeExplainee<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        let (kind, name) = match self {
+            Self::Index(name) => ("INDEX", name),
+            Self::MaterializedView(name) => ("MATERIALIZED VIEW", name),
+            Self::Source(name) => ("SOURCE", name),
+            Self::Table(name) => ("TABLE", name),
+            Self::Sink(name) => ("SINK", name),
+        };
+        f.write_str(kind);
+        f.write_str(" ");
+        f.write_node(name);
+    }
+}
+impl_display_t!(ExplainAnalyzeExplainee);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainAnalyzeObjectStatement<T: AstInfo> {
     pub properties: ExplainAnalyzeProperty,
-    /// Should only be `Explainee::Index` or `Explainee::MaterializedView`
-    pub explainee: Explainee<T>,
+    pub explainee: ExplainAnalyzeExplainee<T>,
     pub as_sql: bool,
 }
 
@@ -4373,6 +4413,7 @@ impl<T: AstInfo> AstDisplay for ExplainAnalyzeObjectStatement<T> {
                 }
             }
             ExplainAnalyzeProperty::Hints => f.write_str(" HINTS"),
+            ExplainAnalyzeProperty::Ingestion => f.write_str(" INGESTION"),
         }
         f.write_str(" FOR ");
         f.write_node(&self.explainee);

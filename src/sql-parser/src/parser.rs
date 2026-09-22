@@ -9449,10 +9449,14 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        // EXPLAIN ANALYZE ((MEMORY | CPU) [WITH SKEW] | HINTS) FOR (INDEX ... | MATERIALIZED VIEW ...) [AS SQL]
+        // EXPLAIN ANALYZE ((MEMORY | CPU) [WITH SKEW] | HINTS | INGESTION)
+        //     FOR (INDEX | MATERIALIZED VIEW | SOURCE | TABLE | SINK) <name> [AS SQL]
+        // The planner rejects property and explainee combinations it does not support.
 
         let properties = if self.parse_keyword(HINTS) {
             ExplainAnalyzeProperty::Hints
+        } else if self.parse_keyword(INGESTION) {
+            ExplainAnalyzeProperty::Ingestion
         } else {
             ExplainAnalyzeProperty::Computation(
                 self.parse_explain_analyze_computation_properties()?,
@@ -9461,14 +9465,18 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(FOR)?;
 
-        let explainee = match self.expect_one_of_keywords(&[INDEX, MATERIALIZED])? {
-            INDEX => Explainee::Index(self.parse_raw_name()?),
-            MATERIALIZED => {
-                self.expect_keyword(VIEW)?;
-                Explainee::MaterializedView(self.parse_raw_name()?)
-            }
-            _ => unreachable!(),
-        };
+        let explainee =
+            match self.expect_one_of_keywords(&[INDEX, MATERIALIZED, SOURCE, TABLE, SINK])? {
+                INDEX => ExplainAnalyzeExplainee::Index(self.parse_raw_name()?),
+                MATERIALIZED => {
+                    self.expect_keyword(VIEW)?;
+                    ExplainAnalyzeExplainee::MaterializedView(self.parse_raw_name()?)
+                }
+                SOURCE => ExplainAnalyzeExplainee::Source(self.parse_raw_name()?),
+                TABLE => ExplainAnalyzeExplainee::Table(self.parse_raw_name()?),
+                SINK => ExplainAnalyzeExplainee::Sink(self.parse_raw_name()?),
+                _ => unreachable!(),
+            };
 
         let as_sql = self.parse_keywords(&[AS, SQL]);
 
