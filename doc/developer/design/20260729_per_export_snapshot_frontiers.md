@@ -179,8 +179,8 @@ Committing early is safe because a description does not assert completeness eith
 only once `desired_frontier` reaches the upper.
 
 A ceiling has to reach the writers before the rows it covers, since a builder only takes rows at
-times it was opened for and cannot be finished at an upper below a row it holds. The first is
-committed the moment the frontier pins, before any row arrives, on the knowledge that the
+times it was opened for and cannot be finished at an upper below a row it holds. The first ceiling
+is committed the moment the frontier pins, before any row arrives, on the knowledge that the
 snapshot's rows are about to land at `T:c`. The minter sees the largest timestamp any worker's data
 has reached and re-commits a fixed lookahead past it, so the ceiling keeps a constant head start
 over the rows. `storage_persist_sink_description_lookahead` is that lookahead, floored at the
@@ -188,13 +188,10 @@ source's `timestamp_interval`.
 
 The minter has two rules.
 - Emit `[current_upper, desired_frontier)` whenever the frontier is ahead and no outstanding
-  ceiling sits above it. This is steady state and commits to nothing.
+  ceiling sits above it. Where `current_upper` is the upper the mint operator tracks,
+  and `desired_frontier` is the frontier of the data stream. This is driven only by the frontier.
 - Commit `max_seen + lookahead` whenever that is past the current ceiling, while the export's
-  snapshot is in progress.
-
-Committing costs the minter the coupling between the upper it emits and the frontier it observes.
-It mints nothing while a ceiling is outstanding, so `current_upper` behind `desired_frontier`
-becomes a state it has to expect.
+  snapshot is in progress. This doesn't affect the `current_upper`.
 
 The rules interleave in three phases. `F` is the frontier, `M` the largest timestamp the data has
 reached and `C` the committed ceiling, with the snapshot pinned at `c` and a lookahead of `w`, so
@@ -203,8 +200,8 @@ minted:
 
 ```
              F                          M    C
-MZ time  ----c--------------------------+----+---→   F pinned at c, C recommitted as M moves
-             ┼─── one open builder ─────┼            nothing is minted for the whole snapshot
+MZ time  ----c--------------------------+----+---→   F pinned at c, C recommitted as M moves.
+             ┼─── one open builder ─────┼            Nothing is minted for the whole snapshot.
 ```
 
 When the snapshot ends, `F` jumps to wherever the source has reached and then climbs to `C`. The
@@ -213,48 +210,60 @@ because the last commitment was made a lookahead past the last row:
 
 ```
                                         F   M    C
-MZ time  ----c--------------------------+---+----+---→   F jumps to where the source reached
-                                        ┼────tail─┼      shard upper waits at c until F = C
+MZ time  ----c--------------------------+---+----+---→   F jumps to where the source reached.
+                                        ┼────tail─┼      Shard upper waits at c until F = C.
 ```
+
+While `F` is in the tail, that is `c < F < C`, the frontier advances without minting anything and
+`current_upper` trails it. The coupling returns once `C <= F`, when the description that retires
+the ceiling ends at `F`.
 
 Once `F` passes `C`, the whole snapshot and the catch-up behind it go out as one description,
 appended in one `compare_and_append`, and the first rule takes over from then on:
 
 ```
                                              F1   F2   F3
-MZ time  ----c-------------------------------+----+----+--→   one description for the whole
+MZ time  ----c-------------------------------+----+----+--→   One description for the whole
              ┼──────── [c, F1) ──────────────┼                snapshot, appended in one call,
-                                             [F1, F2)         then each derived from F
+                                             [F1, F2)         then each derived from F.
 ```
 
-An export snapshots when its resume upper is the minimum from-time, and this is passed into the
-persist sink. The test has to be made in the from-time domain. Reclocking a resume upper maps any
-MZ time at or below the as_of back to the minimum, which keeps a restart during a snapshot reading
-as snapshotting even though its shard upper has moved past `T:min`. The frontier alone cannot tell,
-since any restart would look like a snapshot.
+An export snapshots when its resume upper is at or below the `as_of`. The controller uses the same
+test to hand the connector a minimum from-time resume upper, so the sink and the connector agree on
+which tables snapshot. A restart mid-snapshot continues to be treated as a snapshot, since the shard
+upper has moved past `T:min` but not past the `as_of`. The frontier alone cannot tell, any restart
+looks like a snapshot. The sink gets the `as_of` for such an export. That is `T:c`, the time its
+snapshot lands at.
 
-Only the OLTP sources take part, the ones that snapshot alongside their CDC stream. They are what
-pins an export's frontier for the length of its snapshot, so they are the only sources with rows
-staged behind a pin to group. Kafka and the load generators commit no ceiling.
+Only the OLTP sources take part.
+- Kafka pins its frontier too. Its first binding maps `T:min` to the high watermarks of its first
+  probe, so the backlog reclocks to one time and the frontier holds there until every partition
+  has been read past that probe. A partition that finishes its backlog early emits rows at later
+  times behind the pin, so an unevenly loaded topic has rows to group. Its concurrent snapshot and
+  CDC implementation is deferred pending other cleanup.
+- A load generator pins its frontier while it emits its snapshot, but emits nothing at later times
+  until the snapshot completes. Every row behind the pin shares one timestamp, so a ceiling would
+  group nothing and still cost the tail.
 
-Confining it to those sources also keeps the upsert envelope out, which a ceiling would deadlock
-against. Upsert emits an update only once the shard upper has reached that update's time, and a
-ceiling holds the upper below the data until the frontier reaches the ceiling, so the export's
-frontier stops below the ceiling the minter is waiting on and neither side moves. The CDCv2
-envelope stays out for a reason of its own, as its MZ times come from the data rather than from
-reclocking, so a wall-clock lookahead means nothing there and a ceiling the frontier never reaches
-would hold the shard upper forever.
+Confining it to those sources also keeps out two envelopes that a ceiling would break.
+- Upsert emits an update only once the shard upper has reached that update's time, and a ceiling
+  holds the shard upper back until the frontier reaches the ceiling. Each waits on the other.
+- CDCv2 takes its MZ times from the data rather than from reclocking. A wall-clock lookahead means
+  nothing there, and a ceiling the frontier never reaches would hold the shard upper forever.
 
 The frontier determines when the snapshot ends, which relies on a snapshot occupying a single MZ
 time. Sources that rewind emit theirs at `F:min`, so it reclocks to `T:c` and the frontier holds
 there until the snapshot port closes and the replication port downgrades past the snapshot offset.
-The minter keeps the first non-minimum frontier a snapshotting export takes and permits the second
-rule only while `desired_frontier` equals it, never before that frontier arrives. Timely does not
-order progress ahead of data, so a row can reach the minter under a frontier still at the minimum,
-and committing on it would anchor the ceiling at the shard upper, which on a fresh shard is the
-whole gap from zero to the wall clock.
+The minter permits the lookahead rule only while `desired_frontier` equals `T:c`, and it is told
+`T:c` rather than left to infer it. A fresh source mints its first remap binding at the minimum, so
+its snapshot lands at `T:min` and the frontier sits there for the whole snapshot. Nothing
+distinguishes that from a frontier that has not moved yet, and no progress statement is coming.
+With the `as_of` in hand the fresh case is in progress from the first activation. A restart or an
+added table has a later `as_of`, and nothing is committed until the frontier gets there. Timely
+does not order progress ahead of data, so a row can arrive first, and committing on it would anchor
+the ceiling at the shard upper instead of `T:c`.
 
-Catching up costs one append, whatever the snapshot's length, and the snapshot's rows and the
+Catching up costs one append, whatever the snapshot's duration, and the snapshot's rows and the
 replication rows staged behind the pin are one batch in it. The cost is the tail: a commitment is
 binding, so the shard upper waits for the frontier to reach the ceiling rather than advancing to
 where the frontier actually is. The snapshot gate confines this to exports that are snapshotting,
@@ -264,7 +273,7 @@ where the frontier is not advancing anyway. A collection keeping up lags the dat
 Leaving the lookahead at zero mints descriptions from the frontier alone, so the sink writes one
 batch per timestamp exactly as it does today.
 
-#### Commit timing across workers
+#### Determining max data time across workers
 
 The collection is pre-sharded, so any one worker sees a share of it and its largest timestamp can
 trail the collection's. Every worker reports its largest timestamp to the minting worker.
