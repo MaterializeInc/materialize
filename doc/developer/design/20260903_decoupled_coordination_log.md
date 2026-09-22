@@ -1217,3 +1217,13 @@ connections, independently of permission publication. Unknown observations are
 omitted, not reported as completed frontiers. Disconnect and DROP retract them.
 This reporting owns no installation or read capabilities. Persisted collections'
 global frontier reporting remains storage-owned.
+
+Unused unmaterialized views have no plan owners and cannot invalidate written
+imports or notices. Drops with dependents still take the full repair path. This
+eligibility distinction does not add a plan cache or broaden notice optimization.
+
+Runtime-immutable WAL identity is read from a fenced durable snapshot without
+requiring the SQL projection to consume unrelated replica updates. Those updates
+remain queued for normal application. Temporary comments follow their items'
+local SQL visibility, independently of durable membership and reclamation. The
+same-generation restart cleanup expectation remains a separate open question.

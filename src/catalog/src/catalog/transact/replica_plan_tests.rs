@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Native selection metadata contracts. These tests do not exercise expression
+//! Native catalog metadata contracts. These tests do not exercise expression
 //! bytes or controller writer ordering.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,10 +23,12 @@ use crate::durable::objects::ReplicaPlanOwner;
 use crate::memory::error::{Error, ErrorKind};
 
 async fn protected_catalog() -> (Catalog, PersistClient, Uuid) {
+    use mz_storage_client::controller::StorageTxn;
+
     let persist = PersistClient::new_for_tests().await;
     let organization = Uuid::new_v4();
     let bootstrap = crate::catalog::test_bootstrap_args();
-    let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+    let mut storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
         .with_organization_id(organization)
         .with_default_deploy_generation()
         .unwrap_build()
@@ -34,6 +36,33 @@ async fn protected_catalog() -> (Catalog, PersistClient, Uuid) {
         .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
         .await
         .expect("open durable catalog");
+    // Runtime identity is frozen when the SQL catalog finishes opening.
+    // Establish the WAL before that boundary, as storage initialization does.
+    storage
+        .sync_to_current_updates()
+        .await
+        .expect("consume bootstrap snapshot");
+    {
+        let mut tx = storage
+            .transaction()
+            .await
+            .expect("start WAL initialization");
+        tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+            .expect("latch protected mode at catalog birth");
+        tx.write_txn_wal_shard(mz_persist_client::ShardId::new())
+            .expect("initialize WAL identity");
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("commit WAL identity");
+    }
+    storage.expire().await;
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("open initialized catalog snapshot");
     let catalog = Catalog::open_debug_catalog_inner(
         persist.clone(),
         storage,
@@ -52,6 +81,58 @@ async fn protected_catalog() -> (Catalog, PersistClient, Uuid) {
     .await
     .expect("open protected catalog");
     (catalog, persist, organization)
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn wal_identity_read_preserves_pending_replica_updates() {
+    let (mut catalog, persist, organization) = protected_catalog().await;
+    let shard = catalog.txn_wal_shard().await.expect("initialized WAL");
+
+    let mut peer = crate::durable::TestCatalogStateBuilder::new(persist)
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("join peer writer");
+    peer.sync_to_current_updates()
+        .await
+        .expect("consume peer snapshot");
+    let incarnation = {
+        let mut tx = peer.transaction().await.expect("start peer publication");
+        let incarnation = tx.create_client_incarnation(None).expect("register peer");
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("commit peer publication");
+        incarnation
+    };
+    assert_eq!(
+        catalog
+            .txn_wal_shard()
+            .await
+            .expect("read WAL despite pending metadata"),
+        shard
+    );
+    assert!(
+        !catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+    );
+    catalog
+        .sync_to_current_updates()
+        .await
+        .expect("apply pending replica metadata");
+    assert!(
+        catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+    );
+    catalog.expire().await;
+    peer.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]

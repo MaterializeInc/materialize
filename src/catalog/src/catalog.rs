@@ -811,15 +811,20 @@ impl Catalog {
 
     /// Returns the catalog-owned transaction WAL identity after storage initialization.
     pub async fn txn_wal_shard(&self) -> Result<mz_persist_client::ShardId, CatalogError> {
-        use mz_storage_client::controller::StorageTxn;
-        let mut storage = self.storage().await;
-        let transaction = storage.transaction().await?;
-        transaction.get_txn_wal_shard().ok_or_else(|| {
+        // This identity is immutable during runtime. Reading it requires a
+        // fenced durable snapshot, not an up-to-date SQL working copy. Snapshot
+        // reads leave peer updates queued for normal catalog application.
+        let snapshot = self.storage().await.snapshot().await?;
+        let value = snapshot.txn_wal_shard.get(&()).ok_or_else(|| {
             CatalogError::internal(
                 "query client initialization",
                 "transaction WAL has not been initialized",
             )
-        })
+        })?;
+        value
+            .shard
+            .parse()
+            .map_err(|error| CatalogError::internal("transaction WAL identity", error))
     }
 
     /// Certifies a durable prefix while the caller serializes catalog snapshot capture.
