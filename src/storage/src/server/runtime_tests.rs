@@ -144,7 +144,8 @@ async fn wait_for_input(
             | ReplicaStorageResponse::ExecutionStarted { .. } => (),
             // The parent test can still have retired inputs in the gather.
             ReplicaStorageResponse::ExecutionInput { .. } => (),
-            response @ ReplicaStorageResponse::RestartRequested { .. } => {
+            response @ (ReplicaStorageResponse::RestartRequested { .. }
+            | ReplicaStorageResponse::KafkaPreOpen { .. }) => {
                 panic!("unexpected response: {response:?}")
             }
         }

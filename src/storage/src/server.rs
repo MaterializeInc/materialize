@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 use crate::metrics::StorageMetrics;
 pub use crate::replica::ReplicaStorageResponse;
-use crate::replica::{OutputFrontier, OutputGenerations, WorkerResponse};
+use crate::replica::{OutputFrontier, OutputGenerations, ReplicaCommand, WorkerResponse};
 use crate::storage_state::{StorageInstanceContext, Worker};
 
 /// The process-local storage runtime and its connection factory.
@@ -74,7 +74,7 @@ impl StorageServer {
 /// is fatal. This endpoint has no reconnect or reconciliation handshake.
 pub struct ReplicaStorage {
     _runtime: Arc<Mutex<TimelyContainer<Config>>>,
-    commands: mpsc::UnboundedSender<(u64, StorageCommand)>,
+    commands: mpsc::UnboundedSender<ReplicaCommand>,
     worker: std::thread::Thread,
     responses: mpsc::UnboundedReceiver<(usize, WorkerResponse)>,
     next_sequence: u64,
@@ -97,6 +97,7 @@ impl ReplicaStorage {
                 command,
                 StorageCommand::Hello { .. }
                     | StorageCommand::HelloQuery { .. }
+                    | StorageCommand::SubscribeObservations
                     | StorageCommand::RunOneshotIngestion(_)
                     | StorageCommand::CancelOneshotIngestion(_)
             ),
@@ -130,10 +131,36 @@ impl ReplicaStorage {
                 .or_insert_with(|| OutputFrontier::new(self.peers));
         }
         self.commands
-            .send((sequence, command))
+            .send(ReplicaCommand::Storage(sequence, command))
             .expect("replica storage ingress lost");
         self.worker.unpark();
         sequence
+    }
+
+    /// Replies once to an attempt-scoped Kafka pre-open request. `None` denies.
+    /// The follower must recheck definition, eligibility and input protection.
+    /// `max_age` must not exceed unchanged protection grace minus heartbeat margin
+    /// and any age already consumed by the protection proof. It is measured from
+    /// the worker's request start, including response and blocking-pool delays.
+    pub fn reply_kafka_pre_open(
+        &mut self,
+        request: uuid::Uuid,
+        execution: u64,
+        id: GlobalId,
+        max_age: Option<Duration>,
+    ) {
+        let max_age = max_age.filter(|_| {
+            self.current.get(&id) == Some(&execution) && !self.restarts.contains(&execution)
+        });
+        self.commands
+            .send(ReplicaCommand::KafkaPreOpenReply {
+                request,
+                execution,
+                id,
+                max_age,
+            })
+            .expect("replica storage ingress lost");
+        self.worker.unpark();
     }
 
     /// Receives a replica-wide maintained response. Cancel safe, retaining partial
@@ -146,6 +173,9 @@ impl ReplicaStorage {
                 response,
             } = response;
             match response {
+                response @ ReplicaStorageResponse::KafkaPreOpen { .. } => {
+                    return Ok(Some(response));
+                }
                 ReplicaStorageResponse::ExecutionStarted { execution } => {
                     let workers = self.starts.get_mut(&execution).expect("admitted execution");
                     assert!(
@@ -225,7 +255,7 @@ impl ReplicaStorage {
 }
 
 type ReplicaChannels = (
-    mpsc::UnboundedSender<(u64, StorageCommand)>,
+    mpsc::UnboundedSender<ReplicaCommand>,
     std::thread::Thread,
     mpsc::UnboundedReceiver<(usize, WorkerResponse)>,
     usize,
@@ -243,6 +273,7 @@ impl<C: StorageClient> GenericClient<StorageCommand, StorageResponse> for QueryO
             matches!(
                 command,
                 StorageCommand::HelloQuery { .. }
+                    | StorageCommand::SubscribeObservations
                     | StorageCommand::RunOneshotIngestion(_)
                     | StorageCommand::CancelOneshotIngestion(_)
             ),

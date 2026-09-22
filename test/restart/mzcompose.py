@@ -1771,7 +1771,13 @@ def workflow_catalog_read_protection(c: Composition) -> None:
             > UPDATE protected_control SET a = 2;
             > ALTER TABLE protected_catalog_probe RENAME TO protected_catalog_probe_renamed;
         """)
-        await_state("control physically compacted past first refresh", verify_pending)
+        # The restarted adapter cannot release its predecessor's valid grants.
+        # Include ordinary reclamation grace, as in index-permission release.
+        await_state(
+            "control physically compacted past first refresh",
+            verify_pending,
+            timeout=420,
+        )
         after = sample("pending-after-compaction")
         assert (
             before["catalog_metrics"]["series"].keys()
@@ -1867,7 +1873,11 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 and compacted_past(eliminated, first_refresh)
             )
 
-        await_state("completed requirement releasing input history", history_released)
+        await_state(
+            "completed requirement releasing input history",
+            history_released,
+            timeout=420,
+        )
         sample("completed-without-dropping-mv")
 
         td("""
@@ -2312,6 +2322,12 @@ def workflow_catalog_publication_measurement(
         "--filler-kind", choices=("views", "indexes"), default="indexes"
     )
     parser.add_argument(
+        "--filler-replicas",
+        type=int,
+        default=0,
+        help="Replica followers executing the shared-view filler indexes",
+    )
+    parser.add_argument(
         "--ddl-rate-hz",
         type=float,
         default=2,
@@ -2334,13 +2350,19 @@ def workflow_catalog_publication_measurement(
         or args.observation_seconds <= 0
         or not math.isfinite(args.ddl_rate_hz)
         or args.ddl_rate_hz < 0
+        or args.filler_replicas < 0
+        or (
+            args.filler_replicas > 0
+            and (args.active_collections is None or args.filler_kind != "indexes")
+        )
         or (
             args.active_collections is not None
             and not 0 < args.active_collections <= counts[0]
         )
     ):
         parser.error(
-            "counts, rounds, durations must be positive, DDL rate nonnegative, active collections in 1..min(counts)"
+            "counts, rounds, durations must be positive, DDL rate nonnegative, "
+            "active collections in 1..min(counts), filler replicas require index fillers"
         )
 
     def query(sql: str) -> list[tuple]:
@@ -2416,11 +2438,45 @@ def workflow_catalog_publication_measurement(
         response = requests.get(
             f"http://localhost:{c.port('materialized', 6878)}/metrics", timeout=10
         )
-        end = time.monotonic()
+        environmentd_end = time.monotonic()
         response.raise_for_status()
+        follower_samples = {}
+        for replica_id, url in follower_metrics.items():
+            replica_start = time.monotonic()
+            replica_response = requests.get(url, timeout=10)
+            replica_end = time.monotonic()
+            replica_response.raise_for_status()
+            counters = {}
+            for line in replica_response.text.splitlines():
+                if not line or line.startswith("#"):
+                    continue
+                labels, value = line.rsplit(" ", 1)
+                name = labels.split("{", 1)[0]
+                if name.startswith(("mz_catalog_", "mz_persist_shard_")):
+                    number = float(value)
+                    assert math.isfinite(number), (replica_id, labels, number)
+                    counters[labels] = number
+            assert "mz_catalog_follower_pending_compute_installations" in counters, (
+                replica_id,
+                "missing native follower metrics",
+            )
+            follower_samples[replica_id] = {
+                "start": replica_start,
+                "end": replica_end,
+                "catalog_committed_updates": _catalog_committed_update_metrics(
+                    replica_response.text
+                ),
+                "catalog_shard": _catalog_protection_metrics(
+                    replica_response.text, shards["catalog"]
+                ),
+                "catalog_and_persist_series": counters,
+            }
+        end = time.monotonic()
         return {
             "start": start,
             "end": end,
+            "environmentd_end": environmentd_end,
+            "followers": follower_samples,
             "catalog_committed_updates": _catalog_committed_update_metrics(
                 response.text
             ),
@@ -2564,20 +2620,32 @@ def workflow_catalog_publication_measurement(
     ):
         c.up("materialized", Service("testdrive_no_reset", idle=True))
         shared_setup_start = time.monotonic()
+        follower_metrics: dict[str, str] = {}
         if args.active_collections is not None and args.filler_kind == "indexes":
             execute_each(
                 [
-                    "CREATE CLUSTER publication_idle SIZE 'scale=1,workers=1', REPLICATION FACTOR 0",
+                    "CREATE CLUSTER publication_idle SIZE 'scale=1,workers=1', "
+                    f"REPLICATION FACTOR {args.filler_replicas}",
                     "CREATE VIEW publication_constant AS SELECT 1 AS a",
                 ]
             )
+            for cluster_id, replica_id in query("""
+                SELECT c.id, r.id FROM mz_cluster_replicas r
+                JOIN mz_clusters c ON c.id = r.cluster_id
+                WHERE c.name = 'publication_idle' ORDER BY r.id
+            """):
+                follower_metrics[replica_id] = (
+                    f"http://localhost:{c.port('materialized', 6878)}"
+                    f"/api/cluster/{cluster_id}/replica/{replica_id}/process/0/metrics"
+                )
+            assert len(follower_metrics) == args.filler_replicas
         shared_setup_end = time.monotonic()
         created = 0
         for count in counts:
             active = args.active_collections or count
             setup_start = time.monotonic()
-            # Tables advance without DML. Zero-replica indexes must demonstrate
-            # stable governed bounds, while views measure only catalog item size.
+            # Tables advance without DML. Constant indexes retain stable governed
+            # bounds, with or without replicas; views measure only catalog item size.
             execute_each(
                 [
                     statement
@@ -2627,7 +2695,7 @@ def workflow_catalog_publication_measurement(
                     SELECT count(*) FROM mz_cluster_replicas r
                     JOIN mz_clusters c ON c.id = r.cluster_id
                     WHERE c.name = 'publication_idle'
-                """) == [(0,)]
+                """) == [(args.filler_replicas,)]
             deadline = time.monotonic() + args.timeout_seconds
             while True:
                 bounds = catalog_bounds()
@@ -2648,6 +2716,30 @@ def workflow_catalog_publication_measurement(
                     )
                 time.sleep(0.5)
             filler = {gid: bounds[gid] for gid in filler_gids}
+            if args.filler_replicas:
+                deadline = time.monotonic() + args.timeout_seconds
+                expected_hydrated = len(filler_gids) * args.filler_replicas
+                while True:
+                    [(hydrated,)] = query("""
+                        SELECT count(*)
+                        FROM mz_internal.mz_compute_hydration_statuses h
+                        JOIN mz_objects o ON o.id = h.object_id
+                        WHERE o.name LIKE 'publication_filler_%' AND h.hydrated
+                    """)
+                    if hydrated == expected_hydrated:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise UIError(
+                            f"Replica filler hydration: {hydrated}, expected {expected_hydrated}"
+                        )
+                    time.sleep(0.5)
+                assert query("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM mz_internal.mz_catalog_raw
+                        WHERE data->>'kind' = 'ClientIncarnation'
+                          AND data->'value'->>'replica_id' IS NOT NULL
+                    )
+                """) == [(True,)], "measurement requires native replica execution"
             bound_count_before = len(bounds)
             [(catalog_id,)] = query(
                 "SELECT id FROM mz_objects WHERE name = 'mz_catalog_raw'"
@@ -2816,19 +2908,22 @@ def workflow_catalog_publication_measurement(
                 json.dumps(
                     {
                         "workflow": "catalog-publication-measurement",
-                        "schema_version": 3,
+                        "schema_version": 4,
                         "clock": "time.monotonic seconds",
                         "cost_scope": "committed catalog row payload by kind and combined Persist consensus state-metadata traffic",
                         "metric_units": {
                             "mz_catalog_committed_updates": "row updates including retractions",
                             "mz_catalog_committed_update_bytes": "packed catalog rows, excluding timestamps, diffs, compression, and network framing",
                             "mz_persist_shard_diff_size_bytes": "encoded Persist consensus state diffs, not catalog row payload",
+                            "follower_samples": "per-process counters and sampling intervals; shared current-state bytes are not additive disk usage",
                         },
                         "common_observers": "boundary metrics, out-of-window SQL/INSPECT/catalog dump, EXPLAIN TIMESTAMP per update",
                         "generated_object_count": len(table_rows) + len(filler_rows),
                         "advancing_table_count": len(table_rows),
                         "filler_kind": args.filler_kind if filler_rows else None,
                         "filler_count": len(filler_rows),
+                        "filler_replicas": args.filler_replicas,
+                        "follower_metrics_endpoints": follower_metrics,
                         "governed_filler_count": len(filler),
                         "collection_count": len(table_rows) + len(filler),
                         "object_counts_by_type": object_counts,

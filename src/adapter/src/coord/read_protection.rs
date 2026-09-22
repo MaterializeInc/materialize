@@ -115,6 +115,10 @@ impl Coordinator {
                 orchestrator: std::sync::Arc::clone(&self.query_orchestrator),
                 deploy_generation: self.query_deploy_generation,
                 build_info: self.catalog().config().build_info,
+                observations: self
+                    .controller
+                    .replica_owned_compute()
+                    .then(|| self.controller.storage.replica_observations()),
             },
         ));
         connections.sync_catalog(self.catalog());

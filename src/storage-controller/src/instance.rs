@@ -43,6 +43,39 @@ use uuid::Uuid;
 
 use crate::history::CommandHistory;
 
+/// Passive cluster inventory, with execution present only for controller-owned storage.
+#[derive(Debug)]
+pub(crate) struct Instance {
+    pub workload_class: Option<String>,
+    replicas: BTreeSet<ReplicaId>,
+    pub legacy: Option<LegacyInstance>,
+}
+
+impl Instance {
+    pub fn new(workload_class: Option<String>, legacy: Option<LegacyInstance>) -> Self {
+        Self {
+            workload_class,
+            replicas: BTreeSet::new(),
+            legacy,
+        }
+    }
+
+    pub fn replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+        self.replicas.iter().copied()
+    }
+
+    pub fn register_replica(&mut self, id: ReplicaId) {
+        self.replicas.insert(id);
+    }
+
+    pub fn drop_replica(&mut self, id: ReplicaId) {
+        self.replicas.remove(&id);
+        if let Some(legacy) = &mut self.legacy {
+            legacy.drop_replica(id);
+        }
+    }
+}
+
 /// A controller for a storage instance.
 ///
 /// Encapsulates communication with replicas in this instance, and their rehydration.
@@ -52,11 +85,7 @@ use crate::history::CommandHistory;
 /// all sinks) are scheduled on the replica with the lowest `ReplicaId` and move only when that
 /// replica goes away; all other objects run on every replica. See `update_scheduling`.
 #[derive(Debug)]
-pub(crate) struct Instance {
-    /// The workload class of this instance.
-    ///
-    /// This is currently only used to annotate metrics.
-    pub workload_class: Option<String>,
+pub(crate) struct LegacyInstance {
     /// The replicas connected to this storage instance.
     replicas: BTreeMap<ReplicaId, Replica>,
     /// The ingestions currently running on this instance.
@@ -106,7 +135,7 @@ struct ActiveExport {
 }
 
 /// Which replicas actively run a given object, as resolved by
-/// [`Instance::active_replica_ids`].
+/// [`LegacyInstance::active_replica_ids`].
 enum ActiveReplicas<'a> {
     /// The object has per-replica scheduling and runs on exactly these
     /// replicas. The set is empty when it currently runs nowhere, e.g. it has
@@ -116,10 +145,9 @@ enum ActiveReplicas<'a> {
     All,
 }
 
-impl Instance {
-    /// Creates a new [`Instance`].
+impl LegacyInstance {
+    /// Creates a new [`LegacyInstance`].
     pub fn new(
-        workload_class: Option<String>,
         metrics: InstanceMetrics,
         now: NowFn,
         instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
@@ -127,7 +155,6 @@ impl Instance {
         let history = CommandHistory::new(metrics.for_history());
 
         let mut instance = Self {
-            workload_class,
             replicas: Default::default(),
             active_ingestions: Default::default(),
             ingestion_exports: Default::default(),
@@ -146,11 +173,6 @@ impl Instance {
         });
 
         instance
-    }
-
-    /// Returns the IDs of all replicas connected to this storage instance.
-    pub fn replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
-        self.replicas.keys().copied()
     }
 
     /// Adds a new replica to this storage instance.
@@ -998,7 +1020,7 @@ mod tests {
     use mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL;
     use mz_storage_types::parameters::StorageParameters;
 
-    use super::{Instance, ReplicaId, StorageCommand};
+    use super::{LegacyInstance, ReplicaId, StorageCommand};
 
     fn update_configuration_command() -> StorageCommand {
         StorageCommand::UpdateConfiguration(Box::new(StorageParameters::default()))
@@ -1020,7 +1042,7 @@ mod tests {
         over.add(&ENABLE_UPSERT_PAGED_SPILL, true);
         let overrides = BTreeMap::from([(ReplicaId::User(1), over)]);
 
-        let command = Instance::specialize_command_for_replica(
+        let command = LegacyInstance::specialize_command_for_replica(
             update_configuration_command(),
             ReplicaId::User(1),
             &overrides,
@@ -1032,7 +1054,7 @@ mod tests {
             Some(&ConfigVal::Bool(true)),
         );
 
-        let command = Instance::specialize_command_for_replica(
+        let command = LegacyInstance::specialize_command_for_replica(
             update_configuration_command(),
             ReplicaId::User(2),
             &overrides,

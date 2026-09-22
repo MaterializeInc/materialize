@@ -1155,3 +1155,44 @@ all Materialize progress snapshots have expired behind an Iceberg compaction
 snapshot. No additional lease is proposed. Curated metrics still need replica-owned
 written selections. Their transient execution scopes are isolated from queries,
 but compute logging must also distinguish exports with colliding scoped IDs.
+
+### 2026-09-14: Curated replica ownership
+
+Curated admission uses replica/name ownership on existing per-build written
+selections, without SQL catalog items or another plan store. The writer prepares
+new replicas' selections in their creating transaction. Native execution preserves
+the distinction between live flag changes and bootstrap reconciliation.
+
+Maintained and query transient IDs have separate execution scopes. Logging must
+key export instances by dataflow identity as well as export ID. Collector labels
+select a stable worker, so an ordered drop and replacement cannot race registry
+ownership across workers. Next: finish verification, native sink admission, and the
+coupled production cutover. The Kafka pre-open and expired-progress questions above
+remain unresolved.
+
+### 2026-09-14: Sink admission and missing progress decisions
+
+Aljoscha approved attempt-scoped Kafka pre-open admission through the existing
+replica endpoint after slow initialization. It rechecks current eligibility,
+definition and protection, without replacing Kafka fencing or reusing approvals
+across retries and replacements. Read grace and provisional takeover delay stay
+unchanged.
+
+Iceberg must fail closed when prior table history remains without Materialize
+progress. Genuine initialization stays valid. This is a bounded correctness fix,
+not metadata repair. Next: complete native sink enactment and genuine status and
+statistics observations, then coupled cutover and the adapter-loss demonstration.
+Curated progress must remain nonterminal and advance across successive samples.
+
+Native storage retains passive inventory and introspection writers in the adapter,
+not installation holds, command history or lifecycle transports. Query observers
+subscribe after aggregate readiness and restore current status. Counter aggregation
+continues without observers, but reported deltas are not reset until one subscribes.
+This does not promise complete outage history across replica loss. A health stall
+does not undo source hydration; a new attempt or observer snapshot re-establishes it.
+
+Bounds honor the configured publication interval independently of protection
+renewal and reclamation. An abandoned query incarnation can pin input compaction
+through the same five-minute grace as any other client. Read-only provisioning
+omits native follower arguments and retains legacy prewarming. The legacy sink-drop
+path's stale shard-mapping rows remain outside the native inventory cleanup change.

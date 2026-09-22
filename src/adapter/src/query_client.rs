@@ -1228,6 +1228,7 @@ mod tests {
                     orchestrator: Arc::new(NoReplicas),
                     deploy_generation: 0,
                     build_info: &mz_build_info::DUMMY_BUILD_INFO,
+                    observations: None,
                 },
             )),
         );

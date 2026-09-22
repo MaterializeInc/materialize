@@ -344,6 +344,10 @@ pub(crate) async fn run(
     let mut delay = Duration::from_secs(1);
     let mut pending_metadata = true;
     let mut compaction = compaction::Compaction::default();
+    let mut publication_interval = catalog
+        .system_config()
+        .catalog_read_protection_publish_interval();
+    let mut publication_after = tokio::time::Instant::now() + publication_interval;
     loop {
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
@@ -370,6 +374,14 @@ pub(crate) async fn run(
             }
             execution.apply_progress(&catalog);
             execution.apply_storage_progress();
+            if let Err(error) = execution
+                .admit_kafka_preopens(&mut catalog, &mut effects, config.cluster_id, &build)
+                .await
+            {
+                failures["installation"].inc();
+                tracing::warn!(%error, "Kafka pre-open admission denied");
+            }
+            execution.ensure_live(&catalog)?;
             // Advancing permission waits for current selections and import holds.
             // Retired definitions cannot be imported by current own-build selections:
             // their removing transaction also repairs those written plans.
@@ -482,6 +494,23 @@ pub(crate) async fn run(
                             tracing::warn!(%error, "source installation pending");
                         }
                     }
+                    match execution
+                        .install_sinks(
+                            &mut catalog,
+                            &mut effects,
+                            config.cluster_id,
+                            &build,
+                            &metadata,
+                        )
+                        .await
+                    {
+                        Ok(sink_pending) => pending |= sink_pending,
+                        Err(error) => {
+                            failures["installation"].inc();
+                            pending = true;
+                            tracing::warn!(%error, "sink installation pending");
+                        }
+                    }
                     let result = execution
                         .install(
                             &mut catalog,
@@ -502,6 +531,14 @@ pub(crate) async fn run(
                     pending |= execution.pending_installations(&effects) > 0;
                     execution.apply_progress(&catalog);
                     execution.apply_catalog(&catalog, &metadata, effects.pending.is_empty());
+                    let interval = catalog
+                        .system_config()
+                        .catalog_read_protection_publish_interval();
+                    if interval != publication_interval {
+                        publication_interval = interval;
+                        publication_after = tokio::time::Instant::now() + interval;
+                    }
+                    let publish_bounds = tokio::time::Instant::now() >= publication_after;
                     if let Err(error) = execution
                         .publish(
                             &mut catalog,
@@ -509,12 +546,14 @@ pub(crate) async fn run(
                             config.cluster_id,
                             &build,
                             pending,
-                            Some(&metadata),
+                            publish_bounds.then_some(&metadata),
                         )
                         .await
                     {
                         failures["publication"].inc();
                         tracing::warn!(%error, "replica protection publication pending");
+                    } else if publish_bounds && !pending {
+                        publication_after = tokio::time::Instant::now() + publication_interval;
                     }
                     let wanted = metadata.metadata.keys().copied().collect();
                     if let Err(error) = execution

@@ -90,7 +90,9 @@ impl CommandHistory {
 
         for command in self.commands.drain(..) {
             match command {
-                HelloQuery { .. } => panic!("query handshake in lifecycle history"),
+                HelloQuery { .. } | SubscribeObservations => {
+                    panic!("query command in lifecycle history")
+                }
                 cmd @ Hello { .. } => hello_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
