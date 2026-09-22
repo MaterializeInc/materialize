@@ -6497,6 +6497,86 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                 """))
 
 
+def workflow_test_unified_storage_before_compute_connect(c: Composition) -> None:
+    """
+    Test that an ingestion on a fresh unified replica whose storage controller
+    connects before its compute controller still appears in introspection.
+    """
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            },
+            support_external_clusterd=True,
+        ),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=[
+                # Disable GRPC host checking. The compute controller connects
+                # through a proxy, so the host in the request URI doesn't
+                # match clusterd's fqdn.
+                "CLUSTERD_GRPC_HOST=",
+            ],
+        ),
+        Testdrive(
+            no_reset=True,
+            default_timeout="60s",
+        ),
+    ):
+        c.up(
+            "materialized",
+            "clusterd1",
+            "toxiproxy",
+            Service("testdrive", idle=True),
+        )
+
+        # Route only the compute controller through a proxy, and keep it
+        # disabled so that the storage controller connects first.
+        toxi_url = "http://toxiproxy:8474/proxies"
+        c.testdrive(dedent(f"""
+                $ http-request method=POST url={toxi_url} content-type=application/json
+                {{
+                  "name": "clusterd_compute",
+                  "listen": "0.0.0.0:2101",
+                  "upstream": "clusterd1:2101"
+                }}
+                $ http-request method=POST url={toxi_url}/clusterd_compute content-type=application/json
+                {{"enabled": false}}
+                """))
+
+        c.sql("""
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            CREATE SOURCE s IN CLUSTER cluster1
+              FROM LOAD GENERATOR AUCTION (TICK INTERVAL '100ms')
+              FOR ALL TABLES;
+            """)
+
+        # Give the storage controller time to send the ingestion to the
+        # replica while compute is still disconnected.
+        time.sleep(10)
+
+        c.testdrive(dedent(f"""
+                $ http-request method=POST url={toxi_url}/clusterd_compute content-type=application/json
+                {{"enabled": true}}
+                """))
+
+        c.testdrive(dedent("""
+                > SET cluster = cluster1
+                > SELECT count(*)
+                  FROM mz_introspection.mz_dataflows d
+                  JOIN mz_sources s ON d.name = 'Source dataflow: ' || s.id
+                  WHERE s.name = 's'
+                1
+                """))
+
+
 def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
     c.up("materialized")
     c.sql(
