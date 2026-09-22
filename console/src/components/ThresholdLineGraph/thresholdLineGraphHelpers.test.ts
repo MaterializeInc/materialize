@@ -10,11 +10,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  assignHighlightColors,
+  assignLineColors,
   generateRainbowPalette,
   isBreaching,
   quantizeThreshold,
-  spreadIndices,
 } from "./thresholdLineGraphHelpers";
 import { ThresholdLineSeries } from "./types";
 
@@ -37,14 +36,45 @@ describe("isBreaching", () => {
   });
 });
 
+/** The integer hue out of an `hsl(...)` string. */
+function hue(color: string) {
+  return parseInt(/hsl\((\d+)/.exec(color)?.[1] ?? "", 10);
+}
+
 describe("generateRainbowPalette", () => {
-  it("spreads hues evenly around the wheel", () => {
-    expect(generateRainbowPalette(4)).toEqual([
-      "hsl(0, 90%, 50%)",
-      "hsl(90, 90%, 50%)",
-      "hsl(180, 90%, 50%)",
-      "hsl(270, 90%, 50%)",
+  it("puts the first four hues a quarter turn apart", () => {
+    expect(
+      generateRainbowPalette(4)
+        .map(hue)
+        .sort((a, b) => a - b),
+    ).toEqual([0, 90, 180, 270]);
+  });
+
+  it("halves the spacing as the palette grows", () => {
+    const spacing = (count: number) => {
+      const hues = generateRainbowPalette(count)
+        .map(hue)
+        .sort((a, b) => a - b);
+      return Math.min(...hues.slice(1).map((h, i) => h - hues[i]));
+    };
+    expect(spacing(2)).toBe(180);
+    expect(spacing(4)).toBe(90);
+    expect(spacing(8)).toBe(45);
+    // 22.5 degrees, which alternates 23 and 22 on a whole-degree grid.
+    expect(spacing(16)).toBe(22);
+  });
+
+  it("orders hues furthest-apart first", () => {
+    expect(generateRainbowPalette(8).map(hue)).toEqual([
+      0, 180, 90, 270, 45, 225, 135, 315,
     ]);
+  });
+
+  it("never recolors an earlier entry when the palette grows", () => {
+    // A line's color must not depend on how many other lines exist.
+    expect(generateRainbowPalette(64).slice(0, 5)).toEqual(
+      generateRainbowPalette(5),
+    );
   });
 
   it("honors saturation and lightness overrides", () => {
@@ -57,131 +87,66 @@ describe("generateRainbowPalette", () => {
   it("returns nothing for an empty set", () => {
     expect(generateRainbowPalette(0)).toEqual([]);
   });
-});
 
-describe("spreadIndices", () => {
-  it("visits every index exactly once", () => {
-    for (const count of [1, 2, 3, 4, 5, 7, 12, 16, 46, 47, 100]) {
-      const order = spreadIndices(count);
-      expect(order).toHaveLength(count);
-      expect(new Set(order).size).toBe(count);
-      expect(Math.max(...order)).toBe(count - 1);
-    }
-  });
-
-  it("returns nothing for an empty set", () => {
-    expect(spreadIndices(0)).toEqual([]);
-  });
-
-  it("separates neighbouring ranks in a large set", () => {
-    // The regression this exists for: sequential order put the four worst
-    // breaches within 24 degrees of each other out of 360.
-    const count = 46;
-    const order = spreadIndices(count);
-    const degrees = order.slice(0, 4).map((slot) => (slot * 360) / count);
-    const gaps = degrees
-      .slice(1)
-      .map((d, i) => Math.abs(d - degrees[i]))
-      .map((gap) => Math.min(gap, 360 - gap));
-    for (const gap of gaps) {
-      expect(gap).toBeGreaterThan(60);
-    }
-  });
-
-  it("leaves a small set in its natural order", () => {
-    // Three hues are already 120 degrees apart; striding would gain nothing.
-    expect(spreadIndices(3)).toEqual([0, 1, 2]);
+  it("stays distinct up to a whole wheel of hues, then repeats", () => {
+    expect(new Set(generateRainbowPalette(256)).size).toBe(256);
+    expect(new Set(generateRainbowPalette(2048)).size).toBeLessThan(2048);
   });
 });
 
-describe("assignHighlightColors", () => {
-  it("colors breaching lines worst first", () => {
-    const colors = assignHighlightColors({
-      lines: [line("low", 3), line("high", 9), line("mid", 5)],
-      threshold: 2,
-    });
+describe("assignLineColors", () => {
+  it("colors every line, breached or not", () => {
+    const colors = assignLineColors([
+      line("over", 9),
+      line("under", 1),
+      line("nothing", null),
+    ]);
+    expect([...colors.keys()].sort()).toEqual(["nothing", "over", "under"]);
+  });
+
+  it("ranks the worst breach first", () => {
+    const colors = assignLineColors([
+      line("low", 3),
+      line("high", 9),
+      line("mid", 5),
+    ]);
     expect([...colors]).toEqual([
       ["high", "hsl(0, 90%, 50%)"],
-      ["mid", "hsl(120, 90%, 50%)"],
-      ["low", "hsl(240, 90%, 50%)"],
+      ["mid", "hsl(180, 90%, 50%)"],
+      ["low", "hsl(90, 90%, 50%)"],
     ]);
   });
 
-  it("leaves lines under the threshold uncolored", () => {
-    const colors = assignHighlightColors({
-      lines: [line("over", 3), line("under", 1), line("nothing", null)],
-      threshold: 2,
-    });
-    expect([...colors.keys()]).toEqual(["over"]);
+  it("does not depend on the order the lines arrive in", () => {
+    // The regression this exists for: colors used to come partly from input
+    // order, so re-sorting a table reshuffled them.
+    const lines = [line("a", 5), line("b", 5), line("c", 3), line("d", null)];
+    const forward = assignLineColors(lines);
+    const backward = assignLineColors([...lines].reverse());
+    expect([...forward].sort()).toEqual([...backward].sort());
   });
 
-  it("colors every breaching line however many there are", () => {
-    // The regression this exists for: a fixed palette used to run out here and
-    // leave the remainder looking like context.
-    const lines = Array.from({ length: 46 }, (_unused, i) =>
-      line(`k${String(i).padStart(2, "0")}`, i + 1),
+  it("takes no threshold, so no threshold can recolor a line", () => {
+    // Guards the property by signature: there is nothing to pass.
+    expect(assignLineColors.length).toBe(1);
+  });
+
+  it("gives no two lines the same color, below the wheel's ceiling", () => {
+    const lines = Array.from({ length: 12 }, (_unused, i) => line(`k${i}`, i));
+    expect(new Set(assignLineColors(lines).values()).size).toBe(12);
+  });
+
+  it("separates the worst breaches, which are the ones a threshold picks", () => {
+    // Any threshold highlights a prefix of the ranking, so the prefix is what
+    // has to be spread. The first four land a quarter turn apart.
+    const lines = Array.from({ length: 47 }, (_unused, i) =>
+      line(`k${String(i).padStart(2, "0")}`, 100 - i),
     );
-    const colors = assignHighlightColors({ lines, threshold: 0 });
-    expect(colors.size).toBe(46);
-    expect(new Set(colors.values()).size).toBe(46);
-  });
-
-  it("gives no two lines the same color", () => {
-    const lines = Array.from({ length: 12 }, (_unused, i) => line(`k${i}`, 9));
-    const colors = assignHighlightColors({ lines, threshold: 0 });
-    expect(new Set(colors.values()).size).toBe(12);
-  });
-
-  it("does not put the two worst breaches in neighbouring hues", () => {
-    const lines = Array.from({ length: 46 }, (_unused, i) =>
-      line(`k${String(i).padStart(2, "0")}`, i + 1),
+    const colors = assignLineColors(lines);
+    const worstFour = ["k00", "k01", "k02", "k03"].map((k) =>
+      hue(colors.get(k) ?? ""),
     );
-    const colors = assignHighlightColors({ lines, threshold: 0 });
-    const hueOf = (key: string) =>
-      parseInt(/hsl\((\d+)/.exec(colors.get(key) ?? "")?.[1] ?? "", 10);
-
-    const worst = hueOf("k45");
-    const secondWorst = hueOf("k44");
-    const gap = Math.abs(worst - secondWorst);
-    expect(Math.min(gap, 360 - gap)).toBeGreaterThan(60);
-  });
-
-  it("adds a hand-picked line to the breaching set rather than replacing it", () => {
-    const colors = assignHighlightColors({
-      lines: [line("breaching", 9), line("picked", 1), line("ignored", 1)],
-      threshold: 2,
-      selectedKeys: new Set(["picked"]),
-    });
-    expect([...colors.keys()]).toEqual(["breaching", "picked"]);
-  });
-
-  it("does not spend two colors on a line that is both picked and breaching", () => {
-    const colors = assignHighlightColors({
-      lines: [line("both", 9)],
-      threshold: 2,
-      selectedKeys: new Set(["both"]),
-    });
-    expect([...colors.keys()]).toEqual(["both"]);
-  });
-
-  it("assigns the same colors to equal breach values on every call", () => {
-    const lines = [line("b", 5), line("a", 5), line("c", 5)];
-    const first = assignHighlightColors({ lines, threshold: 0 });
-    const second = assignHighlightColors({
-      lines: [...lines].reverse(),
-      threshold: 0,
-    });
-    expect([...first]).toEqual([...second]);
-  });
-
-  it("passes saturation and lightness through to the palette", () => {
-    const colors = assignHighlightColors({
-      lines: [line("a", 9)],
-      threshold: 0,
-      saturation: 55,
-      lightness: 70,
-    });
-    expect(colors.get("a")).toBe("hsl(0, 55%, 70%)");
+    expect([...worstFour].sort((a, b) => a - b)).toEqual([0, 90, 180, 270]);
   });
 });
 
