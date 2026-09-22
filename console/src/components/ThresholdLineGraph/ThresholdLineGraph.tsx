@@ -25,7 +25,8 @@ import {
 } from "~/utils/graph";
 
 import {
-  assignHighlightColors,
+  assignLineColors,
+  isBreaching,
   quantizeThreshold,
 } from "./thresholdLineGraphHelpers";
 import { ThresholdLineSeries } from "./types";
@@ -83,10 +84,6 @@ export interface ThresholdLineGraphProps<Datum> {
    * set, not a replacement.
    */
   selectedKeys?: ReadonlySet<string>;
-  /** Saturation percentage for the generated line colors. */
-  colorSaturation?: number;
-  /** Lightness percentage for the generated line colors. */
-  colorLightness?: number;
   height?: number;
 }
 
@@ -96,15 +93,15 @@ export interface ThresholdLineGraphProps<Datum> {
  * The threshold is the graph's organizing idea rather than an annotation on
  * it: every line whose `breachValue` sits above it gets a color of its own,
  * against the rest in grey, so moving the handle re-sorts the picture into
- * "over" and "under" without a query or a redraw of the page. Colors are
- * generated to fit however many lines are over the line, so the set is never
- * truncated and no two lines share a color.
+ * "over" and "under" without a query or a redraw of the page. A line's color
+ * comes from its `breachValue` alone, so it keeps that color as the handle
+ * moves; the threshold decides only whether the line is drawn in it.
  *
  * Controlled. The caller owns `threshold` and re-renders with each change.
  *
  * Carries no tooltip or legend. A caller that wants either can label its own
- * rows to match the lines by calling `assignHighlightColors` with the same
- * arguments, which is deterministic.
+ * rows to match the lines by calling `assignLineColors` with the same lines,
+ * which is deterministic.
  */
 export const ThresholdLineGraph = <Datum,>(
   props: ThresholdLineGraphProps<Datum>,
@@ -203,29 +200,20 @@ const ThresholdLineGraphInner = <Datum,>(
     [domainTop, yScaleRange],
   );
 
-  const highlightColors = React.useMemo(
-    () =>
-      assignHighlightColors({
-        lines,
-        threshold,
-        selectedKeys,
-        saturation: props.colorSaturation,
-        lightness: props.colorLightness,
-      }),
-    [
-      lines,
-      threshold,
-      selectedKeys,
-      props.colorSaturation,
-      props.colorLightness,
-    ],
+  // Keyed off the data alone, so dragging the threshold never recolors a line.
+  const lineColors = React.useMemo(() => assignLineColors(lines), [lines]);
+
+  const isHighlighted = React.useCallback(
+    (line: ThresholdLineSeries<Datum>) =>
+      isBreaching(line, threshold) || (selectedKeys?.has(line.key) ?? false),
+    [threshold, selectedKeys],
   );
 
   // Context first, highlights after, so a colored line is never buried under a
   // grey one. Within the highlights the worst breach is drawn last, on top.
   const orderedLines = [
-    ...lines.filter((line) => !highlightColors.has(line.key)),
-    ...lines.filter((line) => highlightColors.has(line.key)).reverse(),
+    ...lines.filter((line) => !isHighlighted(line)),
+    ...lines.filter((line) => isHighlighted(line)).reverse(),
   ];
 
   const commitThreshold = React.useCallback(
@@ -360,13 +348,15 @@ const ThresholdLineGraphInner = <Datum,>(
       />
 
       {orderedLines.map((line) => {
-        const color = highlightColors.get(line.key);
+        const highlighted = isHighlighted(line);
         return (
           <LinePath
             key={line.key}
             data={data}
-            stroke={color ?? colors.border.secondary}
-            strokeWidth={color ? 2 : 1}
+            stroke={
+              highlighted ? lineColors.get(line.key) : colors.border.secondary
+            }
+            strokeWidth={highlighted ? 2 : 1}
             strokeLinejoin="round"
             defined={(d) => line.yAccessor(d) !== null}
             x={(d) => xScale(xAccessor(d))}

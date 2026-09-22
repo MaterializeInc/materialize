@@ -105,6 +105,21 @@ describe("ThresholdLineGraph", () => {
     expect(new Set(strokes).size).toBe(2);
   });
 
+  it("keeps a line's color as the threshold moves", async () => {
+    const low = await renderGraph({ threshold: 0 });
+    const lowStrokes = linePaths(low.container).map((p) =>
+      p.getAttribute("stroke"),
+    );
+    low.unmount();
+
+    // At 2 only the taller line is highlighted, but it keeps the color it had.
+    const high = await renderGraph({ threshold: 2 });
+    const highlighted = linePaths(high.container).find(
+      (p) => p.getAttribute("stroke-width") === "2",
+    );
+    expect(lowStrokes).toContain(highlighted?.getAttribute("stroke"));
+  });
+
   it("exposes the threshold as a slider carrying its formatted value", async () => {
     await renderGraph({ threshold: 2 });
 
