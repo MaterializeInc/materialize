@@ -8934,7 +8934,13 @@ def workflow_adapter_loss(c: Composition) -> None:
         # Controls ingest the same Kafka records into a separate shard. Their
         # permitted stalls must not hold back the source-only compaction check.
         c.testdrive(
-            f"""
+            dedent(f"""
+            > SELECT EXISTS (
+                SELECT 1 FROM mz_internal.mz_catalog_raw
+                WHERE data->>'kind' = 'ClientIncarnation'
+                  AND data->'value'->>'replica_id' IS NOT NULL
+              )
+            true
             > CREATE CONNECTION al_kafka TO KAFKA
               (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT)
             > CREATE SOURCE al_source IN CLUSTER cluster1
@@ -8942,6 +8948,9 @@ def workflow_adapter_loss(c: Composition) -> None:
             > CREATE TABLE al_input FROM SOURCE al_source
               (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
               WITH (RETAIN HISTORY = FOR '1s')
+            > CREATE CLUSTER al_history REPLICAS ()
+            > CREATE INDEX al_history_idx IN CLUSTER al_history ON al_input (text)
+              WITH (RETAIN HISTORY = FOR '30s')
             > CREATE SOURCE al_control_source IN CLUSTER cluster1
               FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
             > CREATE TABLE al_control_input FROM SOURCE al_control_source
@@ -8959,7 +8968,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             > CREATE MATERIALIZED VIEW al_webhook_mv IN CLUSTER compute_cluster AS
               SELECT text::bigint * 10 * body::bigint AS v
               FROM al_control_input CROSS JOIN al_webhook
-            """,
+            """),
             service=td.name,
         )
         webhook_url = (
@@ -8969,13 +8978,13 @@ def workflow_adapter_loss(c: Composition) -> None:
         requests.post(webhook_url, data="1", timeout=10).raise_for_status()
         for name, topic in outputs.items():
             c.testdrive(
-                f"""
+                dedent(f"""
                 > CREATE SINK al_{name}_sink IN CLUSTER cluster1
                   FROM al_{name}_mv INTO KAFKA CONNECTION al_kafka (TOPIC '{topic}')
                   KEY (v) NOT ENFORCED FORMAT JSON ENVELOPE UPSERT
                 > SELECT * FROM al_{name}_mv
                 0
-                """,
+                """),
                 service=td.name,
             )
             assert consume(name, 1) == {0}, f"{name} sink failed warmup"
@@ -9130,12 +9139,148 @@ def workflow_adapter_loss(c: Composition) -> None:
             c.up(*replicas)
             c.up(adapter.name)
 
+        # No executor has ever existed for this index. Its object policy, rather
+        # than an installed arrangement or an old reader, must retain its inputs.
+        assert (
+            c.sql_query(
+                """SELECT count(*) FROM mz_cluster_replicas r
+               JOIN mz_clusters c ON c.id = r.cluster_id
+               WHERE c.name = 'al_history'""",
+                service=adapter.name,
+            )
+            == [(0,)]
+        )
+        history_ids = dict(
+            c.sql_query(
+                """SELECT o.name, g.global_id FROM mz_objects o
+                   JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+                   WHERE o.name IN ('al_input', 'al_history_idx')""",
+                service=adapter.name,
+            )
+        )
+        assert set(history_ids) == {"al_input", "al_history_idx"}, history_ids
+        input_id = history_ids["al_input"]
+        index_id = history_ids["al_history_idx"]
+        assert input_id.startswith("u"), input_id
+        input_json_id = {"User": int(input_id[1:])}
+        deadline = time.monotonic() + timeout
+        while True:
+            # Observe Persist first, so this timestamp is strictly historical at
+            # the catalog snapshot. Leave room on both sides of the 30s window.
+            state = inspect(shards["al_input"])
+            response = requests.get(
+                f"http://localhost:{c.port(adapter.name, 6878)}/api/catalog/dump",
+                timeout=10,
+            )
+            response.raise_for_status()
+            snapshot = response.json()
+            bounds = snapshot["collection_compaction_bounds"]
+            clients = [
+                (incarnation, frontier)
+                for incarnation, gid, frontier in snapshot["client_read_requirements"]
+                if gid == input_json_id
+            ]
+            maintained = {
+                output: frontier
+                for output, (inputs, frontier) in snapshot[
+                    "maintained_read_requirements"
+                ].items()
+                if input_json_id in inputs and frontier is not None
+            }
+            assert len(state["upper"]) == len(state["since"]) == 1, state
+            historical_ts = state["upper"][0] - 15_000
+            input_since = bounds[input_id]["elements"]
+            # A fresh index can lack its own published since. Its logical-input
+            # retention still constrains the input's committed permission.
+            index_since = bounds.get(index_id, {}).get("elements")
+            # Include *all* outstanding grants, even unreclaimed incarnations.
+            # Startup replica holds may need ordinary progress before this can
+            # pass. The input's own 1s policy cannot account for this history.
+            if (
+                len(input_since) == 1
+                and thresholds["al_input"] < state["since"][0] <= historical_ts
+                and input_since[0] <= historical_ts
+                and (
+                    index_since is None
+                    or (len(index_since) == 1 and index_since[0] <= historical_ts)
+                )
+                and all(historical_ts < frontier for _, frontier in clients)
+                and all(historical_ts < frontier for frontier in maintained.values())
+            ):
+                print(
+                    f"Zero-replica history: {historical_ts=}, upper={state['upper']}, "
+                    f"since={state['since']}, {input_since=}, {index_since=}, "
+                    f"{clients=}, {maintained=}"
+                )
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"No unmasked index-policy history: {historical_ts=}, "
+                    f"upper={state['upper']}, since={state['since']}, "
+                    f"{input_since=}, {index_since=}, {clients=}, {maintained=}"
+                )
+            time.sleep(0.25)
+
+        # Only now introduce a reader. Keep its logical-input hold through
+        # hydration, without a manual reclaim or an artificial grace period.
+        historical_query = sql.SQL(
+            "SELECT text FROM al_input ORDER BY text AS OF {}"
+        ).format(sql.Literal(historical_ts))
+        with c.sql_connection(service=adapter.name) as reference_conn:
+            with reference_conn.cursor() as reference:
+                reference.execute(
+                    sql.SQL("SET statement_timeout = {}").format(
+                        sql.Literal(f"{timeout}s")
+                    )
+                )
+                reference.execute("SET cluster = compute_cluster")
+                reference.execute("BEGIN")
+                reference.execute(historical_query)
+                historical_rows = reference.fetchall()
+                assert historical_rows, "historical reference must include warmup data"
+                # Make current contents observably different from the reference.
+                # The final source/MV/sink checks require this fresh value too.
+                n += 1
+                assert (str(n),) not in historical_rows, historical_rows
+                produce(n)
+                expected.add(n * 10)
+                c.sql(
+                    "CREATE CLUSTER REPLICA al_history.first SIZE 'scale=1,workers=1'",
+                    service=adapter.name,
+                )
+                with c.sql_connection(service=adapter.name) as index_conn:
+                    with index_conn.cursor() as indexed:
+                        indexed.execute(
+                            sql.SQL("SET statement_timeout = {}").format(
+                                sql.Literal(f"{timeout}s")
+                            )
+                        )
+                        indexed.execute("SET cluster = al_history")
+                        deadline = time.monotonic() + timeout
+                        while True:
+                            indexed.execute(
+                                sql.SQL("EXPLAIN OPTIMIZED PLAN FOR {}").format(
+                                    historical_query
+                                )
+                            )
+                            plan = "\n".join(str(row[0]) for row in indexed.fetchall())
+                            if re.search(r"ReadIndex[^\n]*al_history_idx", plan):
+                                break
+                            if time.monotonic() >= deadline:
+                                raise AssertionError(
+                                    f"Historical read must use the reconstructed index: {plan}"
+                                )
+                            time.sleep(0.25)
+                        indexed.execute(historical_query)
+                        assert indexed.fetchall() == historical_rows
+                reference.execute("COMMIT")
+
         for name in outputs:
             c.testdrive(
-                f"""
+                dedent(f"""
                 > SELECT count(*), max(v) FROM al_{name}_mv
                 {len(expected)} {n * 10}
-                """,
+                """),
                 service=td.name,
             )
             assert consume(name, len(expected)) == expected, name
