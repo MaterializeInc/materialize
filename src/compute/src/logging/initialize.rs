@@ -17,6 +17,7 @@ use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
+use mz_storage::logging::{StorageEvent, StorageEventBuilder};
 use mz_storage_operators::persist_source::Subtime;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -68,6 +69,7 @@ pub fn initialize(
         r_event_queue: EventQueue::new("r"),
         d_event_queue: EventQueue::new("d"),
         c_event_queue: EventQueue::new("c"),
+        s_event_queue: EventQueue::new("s"),
         shared_state: Default::default(),
         metrics_registry,
         worker_config,
@@ -106,6 +108,7 @@ struct LoggingContext<'a> {
     r_event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
+    s_event_queue: EventQueue<Column<(Duration, StorageEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
@@ -163,6 +166,11 @@ impl LoggingContext<'_> {
                 Rc::clone(&self.shared_state),
             );
             collections.extend(compute_collections);
+
+            let super::storage::Return {
+                collections: storage_collections,
+            } = super::storage::construct(scope, self.config, self.s_event_queue.clone());
+            collections.extend(storage_collections);
 
             let super::prometheus::Return {
                 collections: prometheus_collections,
@@ -226,11 +234,12 @@ impl LoggingContext<'_> {
 
     /// Register all loggers with the timely worker.
     ///
-    /// Registers the timely, differential, compute, and reachability loggers.
+    /// Registers the timely, differential, compute, storage, and reachability loggers.
     fn register_loggers(&self) {
         let t_logger = self.simple_logger::<TimelyEventBuilder>(self.t_event_queue.clone());
         let d_logger = self.simple_logger::<DifferentialEventBuilder>(self.d_event_queue.clone());
         let c_logger = self.simple_logger::<ComputeEventBuilder>(self.c_event_queue.clone());
+        let s_logger = self.simple_logger::<StorageEventBuilder>(self.s_event_queue.clone());
 
         let mut register = self.worker.log_register().expect("Logging must be enabled");
         register.insert_logger("timely", t_logger);
@@ -241,8 +250,13 @@ impl LoggingContext<'_> {
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
         register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
+        // Storage looks this logger up with `logger_for::<StorageEventBuilder>`, which yields
+        // nothing if the registered builder type differs.
+        register.insert_logger(mz_storage::logging::LOGGER_NAME, s_logger.clone());
 
-        self.shared_state.borrow_mut().compute_logger = Some(c_logger);
+        let mut shared_state = self.shared_state.borrow_mut();
+        shared_state.compute_logger = Some(c_logger);
+        shared_state.storage_logger = Some(s_logger);
     }
 
     fn simple_logger<CB: ContainerBuilder>(

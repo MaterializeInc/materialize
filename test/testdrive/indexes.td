@@ -359,6 +359,8 @@ mz_recent_storage_usage_ind                                 mz_recent_storage_us
 mz_roles_ind                                                mz_roles                                     mz_catalog_server    {id}                                        ""
 mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_catalog_server    {id,worker_id}                              ""
 mz_scheduling_parks_histogram_raw_s2_primary_idx            mz_scheduling_parks_histogram_raw            mz_catalog_server    {worker_id,slept_for_ns,requested_ns}       ""
+mz_storage_dataflow_global_ids_per_worker_s2_primary_idx mz_storage_dataflow_global_ids_per_worker mz_catalog_server {id,worker_id,global_id} ""
+mz_storage_stage_mapping_per_worker_s2_primary_idx mz_storage_stage_mapping_per_worker mz_catalog_server {dataflow_id,global_id,stage_id,worker_id,stage,parent_stage_id,nesting,operator_id_start,operator_id_end} ""
 mz_schemas_ind                                              mz_schemas                                   mz_catalog_server    {database_id}                               ""
 mz_secrets_ind                                              mz_secrets                                   mz_catalog_server    {name}                                      ""
 mz_show_all_objects_ind                                     mz_show_all_objects                          mz_catalog_server    {schema_id}                                 ""

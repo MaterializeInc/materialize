@@ -478,6 +478,23 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_replica_hydration_history",
         ),
+        // Required because we added the `mz_storage_dataflow_global_ids_per_worker` and
+        // `mz_storage_stage_mapping_per_worker` builtin logs. make_mz_indexes and
+        // make_mz_sources inline the builtin-log set as VALUES, so adding one changes both
+        // MVs' SQL fingerprints. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.44.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.44.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
     ]
 });
 

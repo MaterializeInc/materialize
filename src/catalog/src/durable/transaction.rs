@@ -16,7 +16,7 @@ use anyhow::anyhow;
 use derivative::Derivative;
 use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
-use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
+use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, StorageLog, TimelyLog};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -1022,6 +1022,8 @@ impl<'a> Transaction<'a> {
             LogVariant::Compute(ComputeLog::OperatorHydrationStatus) => 32,
             LogVariant::Compute(ComputeLog::PrometheusMetrics) => 33,
             LogVariant::Compute(ComputeLog::ResourceUsage) => 34,
+            LogVariant::Storage(StorageLog::DataflowGlobal) => 35,
+            LogVariant::Storage(StorageLog::StageMapping) => 36,
         };
 
         let mut id: u64 = u64::from(cluster_variant) << 56;

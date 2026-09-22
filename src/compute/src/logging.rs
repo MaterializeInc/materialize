@@ -15,6 +15,7 @@ pub(super) mod initialize;
 mod prometheus;
 mod reachability;
 mod resource_usage;
+mod storage;
 mod timely;
 
 use std::any::Any;
@@ -158,6 +159,8 @@ struct SharedLoggingState {
     arrangement_size_activators: BTreeMap<usize, Activator>,
     /// Shared compute logger.
     compute_logger: Option<ComputeLogger>,
+    /// Shared storage logger.
+    storage_logger: Option<mz_storage::logging::Logger>,
 }
 
 /// Helper to pack collections of [`Datum`]s into key and value row.

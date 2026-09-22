@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
+use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, StorageLog, TimelyLog};
 use mz_pgrepr::oid;
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::namespaces::MZ_INTROSPECTION_SCHEMA;
@@ -425,6 +425,61 @@ pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::n
     }),
 });
 
+pub static MZ_STORAGE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_storage_dataflow_global_ids_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_STORAGE_DATAFLOW_GLOBAL_IDS_PER_WORKER_OID,
+        variant: LogVariant::Storage(StorageLog::DataflowGlobal),
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "storage_dataflow_global_id_per_worker",
+            description: "Mapping from internal storage dataflow IDs to GlobalIds per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "global_id_of",
+                    target: "object_global_id",
+                    properties: LinkProperties::MapsTo {
+                        source_column: "global_id",
+                        target_column: "global_id",
+                        via: None,
+                        from_type: Some(SemanticType::GlobalId),
+                        to_type: Some(SemanticType::GlobalId),
+                        note: None,
+                    },
+                }]
+            },
+            column_semantic_types: &[("global_id", SemanticType::GlobalId)],
+        }),
+    });
+
+pub static MZ_STORAGE_STAGE_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| {
+    BuiltinLog {
+        name: "mz_storage_stage_mapping_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_STORAGE_STAGE_MAPPING_PER_WORKER_OID,
+        variant: LogVariant::Storage(StorageLog::StageMapping),
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "storage_stage_mapping_per_worker",
+            description: "Mapping from storage rendering stages to dataflow operator ID ranges per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "stage_of",
+                    target: "storage_dataflow_global_id_per_worker",
+                    properties: LinkProperties::fk_composite(
+                        "global_id",
+                        "global_id",
+                        Cardinality::ManyToOne,
+                        &[("worker_id", "worker_id")],
+                    ),
+                }]
+            },
+            column_semantic_types: &[("global_id", SemanticType::GlobalId)],
+        }),
+    }
+});
+
 pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_peek_durations_histogram_raw",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -701,12 +756,77 @@ pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     sql: "
 SELECT id, global_id
 FROM mz_introspection.mz_compute_dataflow_global_ids_per_worker
+WHERE worker_id = 0::uint8
+UNION ALL
+SELECT id, global_id
+FROM mz_introspection.mz_storage_dataflow_global_ids_per_worker
 WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });
 
-pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+pub static MZ_STORAGE_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_storage_dataflow_global_ids",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_STORAGE_DATAFLOW_GLOBAL_IDS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::UInt64.nullable(false))
+        .with_column("global_id", SqlScalarType::String.nullable(false))
+        .with_key(vec![0, 1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "id",
+            "The ID of the storage dataflow. Corresponds to `mz_dataflows.id`.",
+        ),
+        (
+            "global_id",
+            "The global ID of a source, table, subsource, or sink rendered by that dataflow.",
+        ),
+    ]),
+    sql: "
+SELECT id, global_id
+FROM mz_introspection.mz_storage_dataflow_global_ids_per_worker
+WHERE worker_id = 0::uint8",
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "storage_dataflow_global_id",
+        description: "Mapping from storage dataflows to the GlobalIds they render",
+        links: &const {
+            [
+                OntologyLink {
+                    name: "global_id_of",
+                    target: "object",
+                    properties: LinkProperties::fk_mapped(
+                        "global_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::GlobalId,
+                        "mz_internal.mz_object_global_ids",
+                    ),
+                },
+                OntologyLink {
+                    name: "introspection_uses_global_id",
+                    target: "object_global_id",
+                    properties: LinkProperties::MapsTo {
+                        source_column: "global_id",
+                        target_column: "global_id",
+                        via: None,
+                        from_type: None,
+                        to_type: None,
+                        note: Some(
+                            "mz_introspection tables use GlobalId. To join with mz_catalog tables (which use CatalogItemId), go through mz_internal.mz_object_global_ids.",
+                        ),
+                    },
+                },
+            ]
+        },
+        column_semantic_types: &[("global_id", SemanticType::GlobalId)],
+    }),
+});
+
+pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_mappable_objects",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_MAPPABLE_OBJECTS_OID,
@@ -727,6 +847,14 @@ FROM      mz_catalog.mz_objects mo
           JOIN mz_introspection.mz_compute_exports mce ON (mo.id = mce.export_id)
           JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)
           JOIN mz_introspection.mz_dataflow_global_ids mgi ON (mce.dataflow_id = mgi.id)
+     LEFT JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id)
+UNION ALL
+SELECT COALESCE(md.name || '.', '') || ms.name || '.' || mo.name AS name, dgi.global_id AS global_id
+FROM      mz_catalog.mz_objects mo
+          JOIN mz_internal.mz_object_global_ids mogi ON (mo.id = mogi.id)
+          JOIN mz_introspection.mz_storage_dataflow_global_ids sgi ON (mogi.global_id = sgi.global_id)
+          JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)
+          JOIN mz_introspection.mz_storage_dataflow_global_ids dgi ON (sgi.id = dgi.id)
      LEFT JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id);",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -735,6 +863,7 @@ FROM      mz_catalog.mz_objects mo
         links: &const { [] },
         column_semantic_types: &[("global_id", SemanticType::GlobalId)],
     }),
+}
 });
 
 pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -783,6 +912,63 @@ WHERE worker_id = 0::uint8",
         links: &const { [] },
         column_semantic_types: &[("global_id", SemanticType::GlobalId)],
     }),
+});
+
+pub static MZ_STORAGE_STAGE_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+    name: "mz_storage_stage_mapping",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_STORAGE_STAGE_MAPPING_OID,
+    desc: RelationDesc::builder()
+        .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
+        .with_column("global_id", SqlScalarType::String.nullable(false))
+        .with_column("stage_id", SqlScalarType::UInt64.nullable(false))
+        .with_column("parent_stage_id", SqlScalarType::UInt64.nullable(true))
+        .with_column("nesting", SqlScalarType::UInt16.nullable(false))
+        .with_column("stage", SqlScalarType::String.nullable(false))
+        .with_column("operator_id_start", SqlScalarType::UInt64.nullable(false))
+        .with_column("operator_id_end", SqlScalarType::UInt64.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "dataflow_id",
+            "The ID of the storage dataflow. Corresponds to `mz_dataflows.id`.",
+        ),
+        (
+            "global_id",
+            "The global ID of the object the stage belongs to. Stages shared by all exports of a source belong to the source.",
+        ),
+        (
+            "stage_id",
+            "The ID of the stage, unique within its dataflow. Ordering by it lists every stage after its parent.",
+        ),
+        (
+            "parent_stage_id",
+            "The ID of the enclosing stage. `NULL` for a top-level stage.",
+        ),
+        ("nesting", "The nesting level of the stage."),
+        ("stage", "The name of the stage."),
+        (
+            "operator_id_start",
+            "The first dataflow operator ID of this range of the stage (inclusive).",
+        ),
+        (
+            "operator_id_end",
+            "The first dataflow operator ID _after_ this range of the stage (exclusive).",
+        ),
+    ]),
+    sql: "
+SELECT dataflow_id, global_id, stage_id, parent_stage_id, nesting, stage, operator_id_start, operator_id_end
+FROM mz_introspection.mz_storage_stage_mapping_per_worker
+WHERE worker_id = 0::uint8",
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "storage_stage_mapping",
+        description: "Storage rendering stage to dataflow operator mapping",
+        links: &const { [] },
+        column_semantic_types: &[("global_id", SemanticType::GlobalId)],
+    }),
+}
 });
 
 pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: LazyLock<BuiltinView> =
