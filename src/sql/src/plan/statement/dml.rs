@@ -28,7 +28,7 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlRelationType, SqlScalarType};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlRelationType, SqlScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainAnalyzeClusterStatement, ExplainAnalyzeComputationProperties,
     ExplainAnalyzeComputationProperty, ExplainAnalyzeExplainee, ExplainAnalyzeObjectStatement,
@@ -367,6 +367,13 @@ pub fn describe_explain_analyze_object(
         return Ok(StatementDesc::new(Some(relation_desc)));
     }
 
+    let is_storage_explainee = matches!(
+        statement.explainee,
+        ExplainAnalyzeExplainee::Source(_)
+            | ExplainAnalyzeExplainee::Table(_)
+            | ExplainAnalyzeExplainee::Sink(_)
+    );
+
     match statement.properties {
         ExplainAnalyzeProperty::Computation(ExplainAnalyzeComputationProperties {
             properties,
@@ -378,6 +385,10 @@ pub fn describe_explain_analyze_object(
             if skew {
                 relation_desc =
                     relation_desc.with_column("worker_id", SqlScalarType::UInt64.nullable(true));
+                if is_storage_explainee {
+                    relation_desc = relation_desc
+                        .with_column("active_workers", SqlScalarType::Int64.nullable(true));
+                }
             }
 
             let mut seen_properties = BTreeSet::new();
@@ -921,7 +932,9 @@ pub fn plan_explain_analyze_object(
     let explainee: Explainee<Aug> = match statement.explainee {
         ExplainAnalyzeExplainee::Index(name) => Explainee::Index(name),
         ExplainAnalyzeExplainee::MaterializedView(name) => Explainee::MaterializedView(name),
-        explainee @ (ExplainAnalyzeExplainee::Source(_) | ExplainAnalyzeExplainee::Table(_)) => {
+        explainee @ (ExplainAnalyzeExplainee::Source(_)
+        | ExplainAnalyzeExplainee::Table(_)
+        | ExplainAnalyzeExplainee::Sink(_)) => {
             return plan_explain_analyze_storage_object(
                 scx,
                 statement.properties,
@@ -1186,9 +1199,10 @@ enum StorageExplainee {
     Source,
     /// A table created from a source, or a subsource.
     Table,
+    Sink,
 }
 
-/// Plans `EXPLAIN ANALYZE` for a source or a table from a source.
+/// Plans `EXPLAIN ANALYZE` for a source, a table from a source, or a sink.
 fn plan_explain_analyze_storage_object(
     scx: &StatementContext,
     properties: ExplainAnalyzeProperty,
@@ -1201,7 +1215,7 @@ fn plan_explain_analyze_storage_object(
 
     scx.require_feature_flag(&vars::ENABLE_EXPLAIN_ANALYZE_STORAGE_OBJECTS)?;
 
-    let kind = match explainee {
+    let (kind, cluster_id) = match explainee {
         ExplainAnalyzeExplainee::Source(_) => {
             if item_type != CatalogItemType::Source {
                 sql_bail!("{item_type} {full_name} is not a source");
@@ -1214,18 +1228,31 @@ fn plan_explain_analyze_storage_object(
             if item.is_progress_source() {
                 sql_bail!("{full_name} is a progress source, which has no dataflow of its own");
             }
-            StorageExplainee::Source
+            (StorageExplainee::Source, item.cluster_id())
         }
         ExplainAnalyzeExplainee::Table(_) => {
-            let from_source = matches!(item_type, CatalogItemType::Table | CatalogItemType::Source)
-                && item.source_export_details().is_some();
-            if !from_source {
+            let ingestion_id = match item_type {
+                CatalogItemType::Table | CatalogItemType::Source => item
+                    .source_export_details()
+                    .map(|(ingestion_id, ..)| ingestion_id),
+                _ => None,
+            };
+            let Some(ingestion_id) = ingestion_id else {
                 sql_bail!(
                     "EXPLAIN ANALYZE ... FOR TABLE requires a table created from a source \
                      or a subsource, but {full_name} is not"
                 );
+            };
+            (
+                StorageExplainee::Table,
+                scx.catalog.get_item(&ingestion_id).cluster_id(),
+            )
+        }
+        ExplainAnalyzeExplainee::Sink(_) => {
+            if item_type != CatalogItemType::Sink {
+                sql_bail!("{item_type} {full_name} is not a sink");
             }
-            StorageExplainee::Table
+            (StorageExplainee::Sink, item.cluster_id())
         }
         ExplainAnalyzeExplainee::Index(_) | ExplainAnalyzeExplainee::MaterializedView(_) => {
             bail_internal!("{full_name} is not a storage object")
@@ -1239,12 +1266,37 @@ fn plan_explain_analyze_storage_object(
         .catalog
         .restrict_to_user_objects()
         .then(|| *scx.catalog.active_role_id());
+    let global_ids: Vec<GlobalId> = item.global_ids().collect();
 
     let query = match properties {
-        ExplainAnalyzeProperty::Computation(_) => {
-            bail_unsupported!("EXPLAIN ANALYZE CPU and MEMORY for sources and tables")
+        ExplainAnalyzeProperty::Computation(properties) => {
+            // Operator introspection is read from the active cluster. A storage object's
+            // operators run on its own cluster only, so any other cluster yields an empty tree.
+            // `AS SQL` reads no introspection and is independent of the active cluster.
+            if let (Some(cluster_id), false) = (cluster_id, as_sql) {
+                let cluster_name = scx.catalog.get_cluster(cluster_id).name();
+                let active_cluster = scx.catalog.active_cluster();
+                if cluster_name != active_cluster {
+                    return Err(PlanError::ExplainAnalyzeWrongCluster {
+                        item_name: full_name.to_string(),
+                        cluster_name: cluster_name.to_string(),
+                        active_cluster: active_cluster.to_string(),
+                    });
+                }
+            }
+            let display_name = scx.catalog.minimal_qualification(item.name()).to_string();
+            explain_analyze_storage_computation_query(
+                kind,
+                &global_ids,
+                export_owner,
+                &display_name,
+                properties,
+            )
         }
         ExplainAnalyzeProperty::Ingestion => {
+            if kind == StorageExplainee::Sink {
+                return Err(PlanError::ExplainAnalyzeIngestionUnsupported);
+            }
             explain_analyze_ingestion_query(kind, item.id(), export_owner)
         }
         ExplainAnalyzeProperty::Hints => {
@@ -1253,6 +1305,345 @@ fn plan_explain_analyze_storage_object(
     };
 
     plan_explain_analyze_query(scx, query, as_sql)
+}
+
+/// Generates the `CPU` and `MEMORY` query for a storage object.
+///
+/// The output is the object's stage tree from `mz_storage_stage_mapping`, ordered by
+/// `stage_id`. A stage's cost includes its children's, so each operator counts once per level.
+/// Sources and sinks get a root row at nesting 0 that sums every operator of the dataflow,
+/// including operators outside any stage. Tables get no root row, because their dataflow is
+/// shared with sibling exports. With `export_owner`, a source lists only the exports that role
+/// owns, while its root row still covers the whole dataflow.
+///
+/// The stage tree's shape, `stage_id`s, and stage names are defined by `mz_storage::logging`.
+fn explain_analyze_storage_computation_query(
+    kind: StorageExplainee,
+    global_ids: &[GlobalId],
+    export_owner: Option<RoleId>,
+    display_name: &str,
+    ExplainAnalyzeComputationProperties { properties, skew }: ExplainAnalyzeComputationProperties,
+) -> String {
+    let with_root = kind != StorageExplainee::Table;
+
+    let stage_filter = match (kind, export_owner) {
+        (StorageExplainee::Table, _) => "
+   WHERE ssm.global_id IN (SELECT global_id FROM explainee)
+      OR (ssm.parent_stage_id IS NULL AND ssm.stage <> 'Export')"
+            .to_string(),
+        (StorageExplainee::Source, Some(owner)) => format!(
+            "
+   WHERE ssm.global_id IN (SELECT global_id FROM explainee)
+      OR ssm.global_id IN (SELECT mogi.global_id
+                             FROM      mz_internal.mz_object_global_ids mogi
+                                  JOIN mz_catalog.mz_objects mo ON (mogi.id = mo.id)
+                            WHERE mo.owner_id = {})",
+            escaped_string_literal(&owner.to_string())
+        ),
+        (StorageExplainee::Source | StorageExplainee::Sink, _) => String::new(),
+    };
+
+    let mut root_stage = String::new();
+    let mut root_operators = String::new();
+    if with_root {
+        let label = match kind {
+            StorageExplainee::Sink => "Sink",
+            StorageExplainee::Source | StorageExplainee::Table => "Source",
+        };
+        // NOTE: The root row reuses `stage_id` 0, which is also the `Remap` stage's. Every join
+        // and the output order key on `(stage_id, nesting)`, and the root's nesting of 0 is
+        // unique.
+        root_stage = format!(
+            "
+  SELECT 0 :: uint8 AS stage_id,
+         0 :: uint2 AS nesting,
+         {} || ' (' || e.global_id || ')' AS operator
+    FROM explainee e
+UNION ALL",
+            escaped_string_literal(&format!("{label} {display_name}")),
+        );
+        root_operators = "
+         UNION ALL
+         SELECT 0 :: uint8, 0 :: uint2, lo.operator_id
+           FROM leaf_operators lo"
+            .to_string();
+    }
+    let shared_label = if kind == StorageExplainee::Table {
+        "
+              WHEN sr.parent_stage_id IS NULL THEN sr.stage || ' (shared)'"
+    } else {
+        ""
+    };
+
+    // Stages form a tree of depth two: top-level stages and the children of `Export` stages.
+    // `stage_operators` attributes each operator to its stage and to that stage's parent.
+    // Operators with children are excluded, because the scheduling time of a region includes
+    // the time of the operators inside it.
+    //
+    // `dataflow_objects` keeps only the newest dataflow that renders the explainee. A restarted
+    // ingestion is built while its predecessor may still be shutting down, and stage ids are
+    // positions in each dataflow's own export order, so the same id can name different exports
+    // in the two. Timely allocates dataflow ids in increasing order, so the maximum is the
+    // current incarnation.
+    let mut ctes: Vec<(&str, String)> = vec![
+        (
+            "explainee",
+            format!(
+                "
+  SELECT global_id
+    FROM (VALUES {}) AS e(global_id)",
+                separated(
+                    ", ",
+                    global_ids
+                        .iter()
+                        .map(|id| format!("({})", escaped_string_literal(&id.to_string())))
+                )
+            ),
+        ),
+        (
+            "dataflow_objects",
+            "
+  SELECT sdgi.id AS dataflow_id, sdgi.global_id AS global_id
+    FROM mz_introspection.mz_storage_dataflow_global_ids sdgi
+   WHERE sdgi.id = (SELECT MAX(e_sdgi.id)
+                      FROM      mz_introspection.mz_storage_dataflow_global_ids e_sdgi
+                           JOIN explainee e ON (e_sdgi.global_id = e.global_id))"
+                .to_string(),
+        ),
+        (
+            "leaf_operators",
+            "
+  SELECT mdod.id :: int8 AS operator_id
+    FROM mz_introspection.mz_dataflow_operator_dataflows mdod
+   WHERE mdod.dataflow_id IN (SELECT dataflow_id FROM dataflow_objects)
+     AND mdod.id NOT IN (SELECT parent_id FROM mz_introspection.mz_dataflow_operator_parents)"
+                .to_string(),
+        ),
+        (
+            "stage_ranges",
+            format!(
+                "
+  SELECT ssm.global_id AS global_id,
+         ssm.stage_id AS stage_id,
+         ssm.parent_stage_id AS parent_stage_id,
+         ssm.nesting AS nesting,
+         ssm.stage AS stage,
+         ssm.operator_id_start AS operator_id_start,
+         ssm.operator_id_end AS operator_id_end
+    FROM      mz_introspection.mz_storage_stage_mapping ssm
+         JOIN dataflow_objects dfo
+           ON (ssm.dataflow_id = dfo.dataflow_id AND ssm.global_id = dfo.global_id){stage_filter}"
+            ),
+        ),
+        (
+            "stages",
+            format!(
+                "{root_stage}
+  SELECT DISTINCT sr.stage_id AS stage_id,
+         sr.nesting AS nesting,
+         CASE WHEN sr.stage = 'Export'
+              THEN 'Export ' || COALESCE(ms.name || '.' || mo.name, sr.global_id) || ' (' || sr.global_id || ')'{shared_label}
+              ELSE sr.stage
+         END AS operator
+    FROM           stage_ranges sr
+         LEFT JOIN mz_internal.mz_object_global_ids mogi ON (sr.global_id = mogi.global_id)
+         LEFT JOIN mz_catalog.mz_objects mo ON (mogi.id = mo.id)
+         LEFT JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)"
+            ),
+        ),
+        (
+            "stage_operators",
+            format!(
+                "
+  SELECT so.stage_id AS stage_id, so.nesting AS nesting, so.operator_id AS operator_id
+    FROM (
+         SELECT sr.stage_id, sr.nesting, operator_id
+           FROM            stage_ranges sr
+                CROSS JOIN generate_series(sr.operator_id_start :: int8, sr.operator_id_end :: int8 - 1) AS operator_id
+         UNION ALL
+         SELECT parent.stage_id, parent.nesting, operator_id
+           FROM            stage_ranges sr
+                      JOIN (SELECT DISTINCT stage_id, nesting FROM stage_ranges) parent
+                        ON (sr.parent_stage_id = parent.stage_id)
+                CROSS JOIN generate_series(sr.operator_id_start :: int8, sr.operator_id_end :: int8 - 1) AS operator_id{root_operators}
+         ) so
+    JOIN leaf_operators lo ON (so.operator_id = lo.operator_id)"
+            ),
+        ),
+    ];
+
+    let indent = if with_root {
+        "nesting * 2"
+    } else {
+        "nesting * 2 - 2"
+    };
+    let operator_column = format!("REPEAT(' ', {indent}) || s.operator AS operator");
+    let mut columns = vec![operator_column.as_str()];
+    let mut from = vec!["stages s"];
+    let mut predicates = vec![];
+    let mut order_by = vec!["stage_id", "nesting"];
+
+    let properties: Vec<_> = properties.into_iter().unique().collect();
+
+    // With skew, rows are per worker. The first property's per-worker CTE supplies
+    // `worker_id`, and the other's per-worker rows are matched to it. Most stages have no
+    // arrangements, so when memory comes first the output falls back to the CPU row's worker.
+    let worker_id = match properties.first() {
+        Some(ExplainAnalyzeComputationProperty::Memory) if skew => Some("pwm.worker_id"),
+        Some(ExplainAnalyzeComputationProperty::Cpu) if skew => Some("pwc.worker_id"),
+        _ => None,
+    };
+    if let Some(worker_id) = worker_id {
+        let worker_id_column = if worker_id == "pwm.worker_id" && properties.len() > 1 {
+            "COALESCE(pwm.worker_id, pwc.worker_id) AS worker_id"
+        } else if worker_id == "pwm.worker_id" {
+            "pwm.worker_id AS worker_id"
+        } else {
+            "pwc.worker_id AS worker_id"
+        };
+        columns.extend([worker_id_column, "sw.active_workers AS active_workers"]);
+        order_by.push("worker_id");
+        ctes.push((
+            "stage_workers",
+            "
+  SELECT so.stage_id AS stage_id,
+         so.nesting AS nesting,
+         COUNT(DISTINCT mse.worker_id) AS active_workers
+    FROM      stage_operators so
+         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+           ON (mse.id = so.operator_id)
+   WHERE mse.elapsed_ns > 0
+GROUP BY so.stage_id, so.nesting"
+                .to_string(),
+        ));
+        from.push("LEFT JOIN stage_workers sw USING (stage_id, nesting)");
+    }
+    let mut match_worker_id = |candidate: &str| {
+        if let Some(worker_id) = worker_id {
+            if candidate != worker_id {
+                predicates.push(format!(
+                    "({candidate} = {worker_id} OR {candidate} IS NULL OR {worker_id} IS NULL)"
+                ));
+            }
+        }
+    };
+
+    for property in properties {
+        match property {
+            ExplainAnalyzeComputationProperty::Memory => {
+                ctes.push((
+                    "summary_memory",
+                    "
+  SELECT so.stage_id AS stage_id,
+         so.nesting AS nesting,
+         SUM(mas.size) AS total_memory,
+         SUM(mas.records) AS total_records,
+         CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.size) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_memory,
+         CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.records) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_records
+    FROM      stage_operators so
+         JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+           ON (mas.operator_id = so.operator_id)
+GROUP BY so.stage_id, so.nesting"
+                        .to_string(),
+                ));
+                from.push("LEFT JOIN summary_memory sm USING (stage_id, nesting)");
+
+                if skew {
+                    ctes.push((
+                        "per_worker_memory",
+                        "
+  SELECT so.stage_id AS stage_id,
+         so.nesting AS nesting,
+         mas.worker_id AS worker_id,
+         SUM(mas.size) AS worker_memory,
+         SUM(mas.records) AS worker_records
+    FROM      stage_operators so
+         JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+           ON (mas.operator_id = so.operator_id)
+GROUP BY so.stage_id, so.nesting, mas.worker_id"
+                            .to_string(),
+                    ));
+                    from.push("LEFT JOIN per_worker_memory pwm USING (stage_id, nesting)");
+                    match_worker_id("pwm.worker_id");
+                    columns.extend([
+                        "CASE WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0 THEN ROUND(pwm.worker_memory / sm.avg_memory, 2) ELSE NULL END AS memory_ratio",
+                        "pg_size_pretty(pwm.worker_memory) AS worker_memory",
+                        "pg_size_pretty(sm.avg_memory) AS avg_memory",
+                        "pg_size_pretty(sm.total_memory) AS total_memory",
+                        "CASE WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0 THEN ROUND(pwm.worker_records / sm.avg_records, 2) ELSE NULL END AS records_ratio",
+                        "pwm.worker_records AS worker_records",
+                        "sm.avg_records AS avg_records",
+                        "sm.total_records AS total_records",
+                    ]);
+                } else {
+                    columns.extend([
+                        "pg_size_pretty(sm.total_memory) AS total_memory",
+                        "sm.total_records AS total_records",
+                    ]);
+                }
+            }
+            ExplainAnalyzeComputationProperty::Cpu => {
+                ctes.push((
+                    "summary_cpu",
+                    "
+  SELECT so.stage_id AS stage_id,
+         so.nesting AS nesting,
+         SUM(mse.elapsed_ns) AS total_ns,
+         CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
+    FROM      stage_operators so
+         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+           ON (mse.id = so.operator_id)
+GROUP BY so.stage_id, so.nesting"
+                        .to_string(),
+                ));
+                from.push("LEFT JOIN summary_cpu sc USING (stage_id, nesting)");
+
+                if skew {
+                    ctes.push((
+                        "per_worker_cpu",
+                        "
+  SELECT so.stage_id AS stage_id,
+         so.nesting AS nesting,
+         mse.worker_id AS worker_id,
+         SUM(mse.elapsed_ns) AS worker_ns
+    FROM      stage_operators so
+         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+           ON (mse.id = so.operator_id)
+GROUP BY so.stage_id, so.nesting, mse.worker_id"
+                            .to_string(),
+                    ));
+                    from.push("LEFT JOIN per_worker_cpu pwc USING (stage_id, nesting)");
+                    match_worker_id("pwc.worker_id");
+                    columns.extend([
+                        "CASE WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0 THEN ROUND(pwc.worker_ns / sc.avg_ns, 2) ELSE NULL END AS cpu_ratio",
+                        "pwc.worker_ns / 1000 * '1 microsecond'::INTERVAL AS worker_elapsed",
+                        "sc.avg_ns / 1000 * '1 microsecond'::INTERVAL AS avg_elapsed",
+                    ]);
+                }
+                columns.push("sc.total_ns / 1000 * '1 microsecond'::INTERVAL AS total_elapsed");
+            }
+        }
+    }
+
+    let ctes = separated(
+        ",\n",
+        ctes.iter()
+            .map(|(name, defn)| format!("{name} AS ({defn})")),
+    );
+    let columns = separated(", ", columns);
+    let from = separated(" ", from);
+    let predicates = if predicates.is_empty() {
+        String::new()
+    } else {
+        format!("\nWHERE {}", separated(" AND ", predicates))
+    };
+    let order_by = separated(", ", order_by);
+    format!(
+        r#"WITH {ctes}
+SELECT {columns}
+FROM {from}{predicates}
+ORDER BY {order_by}"#
+    )
 }
 
 /// Generates the `INGESTION` query for a source or a table from a source.
@@ -1290,7 +1681,7 @@ UNION ALL
     FROM mz_catalog.mz_tables sub
    WHERE sub.source_id = {id}{owner_filter}"
         ),
-        StorageExplainee::Table => format!(
+        StorageExplainee::Table | StorageExplainee::Sink => format!(
             "
   SELECT {id} AS id, FALSE AS is_source"
         ),
@@ -1364,7 +1755,47 @@ pub fn plan_explain_analyze_cluster(
        WHERE {predicates}
        ORDER BY {order_by}, mo.name DESC
     */
-    let mut ctes = Vec::with_capacity(4); // max 2 per ExplainAnalyzeComputationProperty
+    // `operator_ranges` gives compute LIR nodes and storage stages the same shape. `node_id` is
+    // an LIR id or a storage `stage_id`, and stays unique per `global_id` because compute and
+    // storage objects have disjoint global ids.
+    //
+    // An object's storage cost is the sum over its stage ranges. Operators a storage dataflow
+    // renders outside any stage count toward no object, so a source's total here can be below
+    // the root row of `EXPLAIN ANALYZE ... FOR SOURCE`, which sums the whole dataflow.
+    //
+    // Storage stage ranges are disjoint, but a stage range can contain a region together with
+    // the operators inside it, and a region's scheduling time includes theirs. `cpu_operators`
+    // therefore skips region operators of storage ranges, matching the per-object storage form.
+    // Compute LIR ranges keep their regions.
+    let mut ctes = vec![(
+        "operator_ranges",
+        r#"
+SELECT global_id, lir_id AS node_id, operator_id_start, operator_id_end, FALSE AS is_storage
+  FROM mz_introspection.mz_lir_mapping
+UNION ALL
+SELECT global_id, stage_id AS node_id, operator_id_start, operator_id_end, TRUE AS is_storage
+  FROM mz_introspection.mz_storage_stage_mapping"#,
+    )];
+    if statement
+        .properties
+        .properties
+        .contains(&ExplainAnalyzeComputationProperty::Cpu)
+    {
+        ctes.push((
+            "cpu_operators",
+            r#"
+SELECT mlm.global_id AS global_id, mlm.node_id AS node_id, valid_id AS operator_id
+FROM       operator_ranges mlm
+CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+WHERE NOT mlm.is_storage
+UNION ALL
+SELECT mlm.global_id AS global_id, mlm.node_id AS node_id, valid_id AS operator_id
+FROM       operator_ranges mlm
+CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+WHERE mlm.is_storage
+  AND valid_id NOT IN (SELECT parent_id :: int8 FROM mz_introspection.mz_dataflow_operator_parents)"#,
+        ));
+    }
     let mut columns = vec!["mo.name AS object", "mo.global_id AS global_id"];
     let mut from = vec!["mz_introspection.mz_mappable_objects mo"];
     let mut predicates = vec![];
@@ -1399,16 +1830,16 @@ pub fn plan_explain_analyze_cluster(
                     "per_operator_memory_summary",
                     r#"
 SELECT mlm.global_id AS global_id,
-       mlm.lir_id AS lir_id,
+       mlm.node_id AS node_id,
        SUM(mas.size) AS total_memory,
        SUM(mas.records) AS total_records,
        CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.size) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_memory,
        CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.records) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_records
-FROM        mz_introspection.mz_lir_mapping mlm
+FROM        operator_ranges mlm
  CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
        JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
          ON (mas.operator_id = valid_id)
-GROUP BY mlm.global_id, mlm.lir_id"#,
+GROUP BY mlm.global_id, mlm.node_id"#,
                 ));
 
                     // computes the memory per worker in a per operator way
@@ -1416,15 +1847,15 @@ GROUP BY mlm.global_id, mlm.lir_id"#,
                     "per_operator_memory_per_worker",
                     r#"
 SELECT mlm.global_id AS global_id,
-       mlm.lir_id AS lir_id,
+       mlm.node_id AS node_id,
        mas.worker_id AS worker_id,
        SUM(mas.size) AS worker_memory,
        SUM(mas.records) AS worker_records
-FROM        mz_introspection.mz_lir_mapping mlm
+FROM        operator_ranges mlm
  CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
        JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
          ON (mas.operator_id = valid_id)
-GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
+GROUP BY mlm.global_id, mlm.node_id, mas.worker_id"#,
                     ));
 
                     // computes memory ratios per worker per operator
@@ -1432,13 +1863,13 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                     "per_operator_memory_ratios",
                     r#"
 SELECT pompw.global_id AS global_id,
-       pompw.lir_id AS lir_id,
+       pompw.node_id AS node_id,
        pompw.worker_id AS worker_id,
        CASE WHEN pompw.worker_id IS NOT NULL AND poms.avg_memory <> 0 THEN ROUND(pompw.worker_memory / poms.avg_memory, 2) ELSE NULL END AS memory_ratio,
        CASE WHEN pompw.worker_id IS NOT NULL AND poms.avg_records <> 0 THEN ROUND(pompw.worker_records / poms.avg_records, 2) ELSE NULL END AS records_ratio
   FROM      per_operator_memory_per_worker pompw
        JOIN per_operator_memory_summary poms
-         USING (global_id, lir_id)
+         USING (global_id, node_id)
 "#,
                     ));
 
@@ -1454,7 +1885,7 @@ SELECT pompw.global_id AS global_id,
        SUM(pompw.worker_records) AS worker_records
 FROM        per_operator_memory_per_worker pompw
      JOIN   per_operator_memory_ratios pomr
-     USING (global_id, worker_id, lir_id)
+     USING (global_id, worker_id, node_id)
 GROUP BY pompw.global_id, pompw.worker_id
 "#,
                     ));
@@ -1499,14 +1930,14 @@ GROUP BY om.global_id"#));
                         "per_operator_memory_totals",
                         r#"
     SELECT mlm.global_id AS global_id,
-           mlm.lir_id AS lir_id,
+           mlm.node_id AS node_id,
            SUM(mas.size) AS total_memory,
            SUM(mas.records) AS total_records
-    FROM        mz_introspection.mz_lir_mapping mlm
+    FROM        operator_ranges mlm
      CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
            JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
              ON (mas.operator_id = valid_id)
-    GROUP BY mlm.global_id, mlm.lir_id"#,
+    GROUP BY mlm.global_id, mlm.node_id"#,
                     ));
 
                     ctes.push((
@@ -1550,14 +1981,13 @@ GROUP BY pomt.global_id
     "per_operator_cpu_summary",
     r#"
 SELECT mlm.global_id AS global_id,
-       mlm.lir_id AS lir_id,
+       mlm.node_id AS node_id,
        SUM(mse.elapsed_ns) AS total_ns,
        CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
-FROM       mz_introspection.mz_lir_mapping mlm
-CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+FROM       cpu_operators mlm
       JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-        ON (mse.id = valid_id)
-GROUP BY mlm.global_id, mlm.lir_id"#,
+        ON (mse.id = mlm.operator_id)
+GROUP BY mlm.global_id, mlm.node_id"#,
 ));
 
                     // computes the CPU per worker in a per operator way
@@ -1565,14 +1995,13 @@ GROUP BY mlm.global_id, mlm.lir_id"#,
                         "per_operator_cpu_per_worker",
                         r#"
 SELECT mlm.global_id AS global_id,
-       mlm.lir_id AS lir_id,
+       mlm.node_id AS node_id,
        mse.worker_id AS worker_id,
        SUM(mse.elapsed_ns) AS worker_ns
-FROM       mz_introspection.mz_lir_mapping mlm
-CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+FROM       cpu_operators mlm
       JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-        ON (mse.id = valid_id)
-GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
+        ON (mse.id = mlm.operator_id)
+GROUP BY mlm.global_id, mlm.node_id, mse.worker_id"#,
                     ));
 
                     // computes CPU ratios per worker per operator
@@ -1580,12 +2009,12 @@ GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
                         "per_operator_cpu_ratios",
                         r#"
 SELECT pocpw.global_id AS global_id,
-       pocpw.lir_id AS lir_id,
+       pocpw.node_id AS node_id,
        pocpw.worker_id AS worker_id,
        CASE WHEN pocpw.worker_id IS NOT NULL AND pocs.avg_ns <> 0 THEN ROUND(pocpw.worker_ns / pocs.avg_ns, 2) ELSE NULL END AS cpu_ratio
 FROM      per_operator_cpu_per_worker pocpw
      JOIN per_operator_cpu_summary pocs
-     USING (global_id, lir_id)
+     USING (global_id, node_id)
 "#,
                     ));
 
@@ -1599,7 +2028,7 @@ SELECT pocpw.global_id AS global_id,
        SUM(pocpw.worker_ns) AS worker_ns
 FROM      per_operator_cpu_per_worker pocpw
      JOIN per_operator_cpu_ratios pomr
-     USING (global_id, worker_id, lir_id)
+     USING (global_id, worker_id, node_id)
 GROUP BY pocpw.global_id, pocpw.worker_id
 "#,
                     ));
@@ -1638,13 +2067,12 @@ GROUP BY oc.global_id"#,));
                         "per_operator_cpu_totals",
                         r#"
     SELECT mlm.global_id AS global_id,
-           mlm.lir_id AS lir_id,
+           mlm.node_id AS node_id,
            SUM(mse.elapsed_ns) AS total_ns
-    FROM        mz_introspection.mz_lir_mapping mlm
-     CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+    FROM        cpu_operators mlm
            JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-             ON (mse.id = valid_id)
-    GROUP BY mlm.global_id, mlm.lir_id"#,
+             ON (mse.id = mlm.operator_id)
+    GROUP BY mlm.global_id, mlm.node_id"#,
                     ));
 
                     ctes.push((

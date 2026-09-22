@@ -1208,20 +1208,38 @@ query T multiline
 EXPLAIN ANALYZE CLUSTER MEMORY AS SQL;
 ----
 WITH
+    operator_ranges AS
+    (
+        SELECT
+            global_id,
+            lir_id AS node_id,
+            operator_id_start,
+            operator_id_end,
+            false AS is_storage
+        FROM mz_introspection.mz_lir_mapping
+        UNION ALL
+            SELECT
+                global_id,
+                stage_id AS node_id,
+                operator_id_start,
+                operator_id_end,
+                true AS is_storage
+            FROM mz_introspection.mz_storage_stage_mapping
+    ),
     per_operator_memory_totals AS
     (
         SELECT
             mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            mlm.node_id AS node_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
+            operator_ranges AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON (mas.operator_id = valid_id)
-        GROUP BY mlm.global_id, mlm.lir_id
+        GROUP BY mlm.global_id, mlm.node_id
     ),
     object_memory_totals AS
     (
@@ -1250,20 +1268,65 @@ query T multiline
 EXPLAIN ANALYZE CLUSTER MEMORY, CPU AS SQL;
 ----
 WITH
+    operator_ranges AS
+    (
+        SELECT
+            global_id,
+            lir_id AS node_id,
+            operator_id_start,
+            operator_id_end,
+            false AS is_storage
+        FROM mz_introspection.mz_lir_mapping
+        UNION ALL
+            SELECT
+                global_id,
+                stage_id AS node_id,
+                operator_id_start,
+                operator_id_end,
+                true AS is_storage
+            FROM mz_introspection.mz_storage_stage_mapping
+    ),
+    cpu_operators AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.node_id AS node_id,
+            valid_id AS operator_id
+        FROM
+            operator_ranges AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+        WHERE NOT mlm.is_storage
+        UNION ALL
+            SELECT
+                mlm.global_id AS global_id,
+                mlm.node_id AS node_id,
+                valid_id AS operator_id
+            FROM
+                operator_ranges AS mlm
+                     CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            WHERE
+                mlm.is_storage
+                    AND
+                valid_id
+                NOT IN (
+                SELECT parent_id::int8
+                FROM mz_introspection.mz_dataflow_operator_parents
+                )
+    ),
     per_operator_memory_totals AS
     (
         SELECT
             mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            mlm.node_id AS node_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
+            operator_ranges AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON (mas.operator_id = valid_id)
-        GROUP BY mlm.global_id, mlm.lir_id
+        GROUP BY mlm.global_id, mlm.node_id
     ),
     object_memory_totals AS
     (
@@ -1278,15 +1341,14 @@ WITH
     (
         SELECT
             mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            mlm.node_id AS node_id,
             sum(mse.elapsed_ns) AS total_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
-                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            cpu_operators AS mlm
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-        GROUP BY mlm.global_id, mlm.lir_id
+                    ON (mse.id = mlm.operator_id)
+        GROUP BY mlm.global_id, mlm.node_id
     ),
     object_cpu_totals AS
     (
@@ -1315,11 +1377,56 @@ query T multiline
 EXPLAIN ANALYZE CLUSTER CPU, MEMORY WITH SKEW AS SQL;
 ----
 WITH
+    operator_ranges AS
+    (
+        SELECT
+            global_id,
+            lir_id AS node_id,
+            operator_id_start,
+            operator_id_end,
+            false AS is_storage
+        FROM mz_introspection.mz_lir_mapping
+        UNION ALL
+            SELECT
+                global_id,
+                stage_id AS node_id,
+                operator_id_start,
+                operator_id_end,
+                true AS is_storage
+            FROM mz_introspection.mz_storage_stage_mapping
+    ),
+    cpu_operators AS
+    (
+        SELECT
+            mlm.global_id AS global_id,
+            mlm.node_id AS node_id,
+            valid_id AS operator_id
+        FROM
+            operator_ranges AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+        WHERE NOT mlm.is_storage
+        UNION ALL
+            SELECT
+                mlm.global_id AS global_id,
+                mlm.node_id AS node_id,
+                valid_id AS operator_id
+            FROM
+                operator_ranges AS mlm
+                     CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            WHERE
+                mlm.is_storage
+                    AND
+                valid_id
+                NOT IN (
+                SELECT parent_id::int8
+                FROM mz_introspection.mz_dataflow_operator_parents
+                )
+    ),
     per_operator_cpu_summary AS
     (
         SELECT
             mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            mlm.node_id AS node_id,
             sum(mse.elapsed_ns) AS total_ns,
             CASE
                     WHEN count(DISTINCT mse.worker_id) <> 0
@@ -1330,33 +1437,31 @@ WITH
                 END
                 AS avg_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
-                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            cpu_operators AS mlm
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-        GROUP BY mlm.global_id, mlm.lir_id
+                    ON (mse.id = mlm.operator_id)
+        GROUP BY mlm.global_id, mlm.node_id
     ),
     per_operator_cpu_per_worker AS
     (
         SELECT
             mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            mlm.node_id AS node_id,
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
-                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+            cpu_operators AS mlm
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON (mse.id = valid_id)
-        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
+                    ON (mse.id = mlm.operator_id)
+        GROUP BY mlm.global_id, mlm.node_id, mse.worker_id
     ),
     per_operator_cpu_ratios AS
     (
         SELECT
             pocpw.global_id AS global_id,
-            pocpw.lir_id AS lir_id,
+            pocpw.node_id AS node_id,
             pocpw.worker_id AS worker_id,
             CASE
                     WHEN pocpw.worker_id IS NOT NULL AND pocs.avg_ns <> 0
@@ -1366,7 +1471,7 @@ WITH
                 AS cpu_ratio
         FROM
             per_operator_cpu_per_worker AS pocpw
-                JOIN per_operator_cpu_summary AS pocs USING(global_id, lir_id)
+                JOIN per_operator_cpu_summary AS pocs USING(global_id, node_id)
     ),
     object_cpu AS
     (
@@ -1379,7 +1484,7 @@ WITH
             per_operator_cpu_per_worker AS pocpw
                 JOIN
                     per_operator_cpu_ratios AS pomr
-                    USING(global_id, worker_id, lir_id)
+                    USING(global_id, worker_id, node_id)
         GROUP BY pocpw.global_id, pocpw.worker_id
     ),
     object_average_cpu AS
@@ -1401,7 +1506,7 @@ WITH
     (
         SELECT
             mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            mlm.node_id AS node_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
             CASE
@@ -1418,34 +1523,34 @@ WITH
                 END
                 AS avg_records
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
+            operator_ranges AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON (mas.operator_id = valid_id)
-        GROUP BY mlm.global_id, mlm.lir_id
+        GROUP BY mlm.global_id, mlm.node_id
     ),
     per_operator_memory_per_worker AS
     (
         SELECT
             mlm.global_id AS global_id,
-            mlm.lir_id AS lir_id,
+            mlm.node_id AS node_id,
             mas.worker_id AS worker_id,
             sum(mas.size) AS worker_memory,
             sum(mas.records) AS worker_records
         FROM
-            mz_introspection.mz_lir_mapping AS mlm
+            operator_ranges AS mlm
                  CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
                     ON (mas.operator_id = valid_id)
-        GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
+        GROUP BY mlm.global_id, mlm.node_id, mas.worker_id
     ),
     per_operator_memory_ratios AS
     (
         SELECT
             pompw.global_id AS global_id,
-            pompw.lir_id AS lir_id,
+            pompw.node_id AS node_id,
             pompw.worker_id AS worker_id,
             CASE
                     WHEN pompw.worker_id IS NOT NULL AND poms.avg_memory <> 0
@@ -1466,7 +1571,7 @@ WITH
             per_operator_memory_per_worker AS pompw
                 JOIN
                     per_operator_memory_summary AS poms
-                    USING(global_id, lir_id)
+                    USING(global_id, node_id)
     ),
     object_memory AS
     (
@@ -1481,7 +1586,7 @@ WITH
             per_operator_memory_per_worker AS pompw
                 JOIN
                     per_operator_memory_ratios AS pomr
-                    USING(global_id, worker_id, lir_id)
+                    USING(global_id, worker_id, node_id)
         GROUP BY pompw.global_id, pompw.worker_id
     ),
     object_average_memory AS

@@ -27,7 +27,7 @@ EXPLAIN ANALYZE
       CPU [, MEMORY] [WITH SKEW]
     | MEMORY [, CPU] [WITH SKEW]
     | HINTS
-FOR INDEX <name> | MATERIALIZED VIEW <name>
+FOR INDEX <name> | MATERIALIZED VIEW <name> | SOURCE <name> | TABLE <name> | SINK <name>
 [ AS SQL ]
 ;
 
@@ -48,7 +48,7 @@ however, each may appear only once.
 {{</ tip >}}
 
 {{< private-preview >}}
-`EXPLAIN ANALYZE INGESTION`
+`FOR SOURCE`, `FOR TABLE`, `FOR SINK`, and `EXPLAIN ANALYZE INGESTION`
 {{< /private-preview >}}
 
 Parameter    | Description
@@ -58,6 +58,7 @@ Parameter    | Description
 **WITH SKEW** | *Optional.* If specified, includes additional information about average and per-worker consumption and ratios (of `CPU` and/or `MEMORY`).
 **HINTS**    | Annotates the LIR plan with [TopK hints]. Only `FOR INDEX` and `FOR MATERIALIZED VIEW` support it.
 **INGESTION** | Reports ingestion progress for a source and each of its subsources and tables (`FOR SOURCE`), or for one table created from a source or one subsource (`FOR TABLE`): status, snapshot progress, upstream offset lag (source row only), received and committed counts, envelope state size, rehydration latency, and wallclock lag. Regular tables do not ingest, so `FOR TABLE` does not accept them.
+**SOURCE**, **TABLE**, **SINK** | Reports `CPU` and `MEMORY` per pipeline stage of the object's storage dataflow. A stage includes the cost of the stages nested under it. `FOR SOURCE` and `FOR SINK` start with a row for the whole dataflow. `FOR TABLE` accepts a table created from a source or a subsource, and labels stages shared with the source's other tables `(shared)`. Regular tables are not maintained by a dataflow, so `FOR TABLE` does not accept them. `WITH SKEW` also reports `active_workers`, the number of workers that scheduled the stage. These forms require the active cluster to be the object's cluster, and return no rows unless the cluster runs storage and compute dataflows on the same replicas.
 **AS SQL**   | *Optional.* If specified, returns the SQL associated with the specified `EXPLAIN ANALYZE` command without executing it. You can modify this SQL as a starting point to create customized queries.
 
 ## Privileges

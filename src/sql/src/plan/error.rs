@@ -28,7 +28,7 @@ use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{CatalogItemId, ColumnName, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
+use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
 use mz_sql_server_util::SqlServerError;
 use mz_storage_types::connections::InvalidAwsPrivatelinkServiceName;
@@ -327,6 +327,12 @@ pub enum PlanError {
         replacement_type: CatalogItemType,
         replacement_name: PartialItemName,
     },
+    /// `EXPLAIN ANALYZE` of a storage object whose cluster is not the active cluster.
+    ExplainAnalyzeWrongCluster {
+        item_name: String,
+        cluster_name: String,
+        active_cluster: String,
+    },
     /// `EXPLAIN ANALYZE ... FOR SOURCE` of a subsource.
     ExplainAnalyzeSubsource {
         item_name: String,
@@ -533,6 +539,9 @@ impl PlanError {
             }
             Self::ExplainAnalyzeSubsource { item_name } => {
                 Some(format!("Use EXPLAIN ANALYZE ... FOR TABLE {item_name} to explain it."))
+            }
+            Self::ExplainAnalyzeWrongCluster { cluster_name, .. } => {
+                Some(format!("Use SET cluster = {} to explain it.", Ident::new_unchecked(cluster_name.as_str()).to_ast_string_simple()))
             }
             _ => None,
         }
@@ -917,6 +926,14 @@ impl fmt::Display for PlanError {
             Self::ExplainAnalyzeIngestionUnsupported => f.write_str(
                 "EXPLAIN ANALYZE INGESTION is only supported for sources and tables created from sources",
             ),
+            Self::ExplainAnalyzeWrongCluster { item_name, cluster_name, active_cluster } => {
+                write!(
+                    f,
+                    "{item_name} runs on cluster {}, but the active cluster is {}",
+                    cluster_name.quoted(),
+                    active_cluster.quoted(),
+                )
+            }
         }
     }
 }

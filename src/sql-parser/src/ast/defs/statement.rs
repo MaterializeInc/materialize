@@ -4350,6 +4350,7 @@ pub enum ExplainAnalyzeExplainee<T: AstInfo> {
     Source(T::ItemName),
     /// A table created from a source, or a subsource.
     Table(T::ItemName),
+    Sink(T::ItemName),
 }
 
 impl<T: AstInfo> ExplainAnalyzeExplainee<T> {
@@ -4358,7 +4359,8 @@ impl<T: AstInfo> ExplainAnalyzeExplainee<T> {
             Self::Index(name)
             | Self::MaterializedView(name)
             | Self::Source(name)
-            | Self::Table(name) => name,
+            | Self::Table(name)
+            | Self::Sink(name) => name,
         }
     }
 }
@@ -4370,6 +4372,7 @@ impl<T: AstInfo> AstDisplay for ExplainAnalyzeExplainee<T> {
             Self::MaterializedView(name) => ("MATERIALIZED VIEW", name),
             Self::Source(name) => ("SOURCE", name),
             Self::Table(name) => ("TABLE", name),
+            Self::Sink(name) => ("SINK", name),
         };
         f.write_str(kind);
         f.write_str(" ");

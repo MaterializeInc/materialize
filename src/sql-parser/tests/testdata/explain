@@ -365,14 +365,14 @@ EXPLAIN ANALYZE MEMORY, CPU, CPU WITH SKEW FOR MATERIALIZED VIEW w
 parse-statement
 EXPLAIN ANALYZE HINTS FOR SELECT 1
 ----
-error: Expected one of INDEX or MATERIALIZED or SOURCE or TABLE, found SELECT
+error: Expected one of INDEX or MATERIALIZED or SOURCE or TABLE or SINK, found SELECT
 EXPLAIN ANALYZE HINTS FOR SELECT 1
                           ^
 
 parse-statement
 EXPLAIN ANALYZE HINTS FOR idx_top_buyers
 ----
-error: Expected one of INDEX or MATERIALIZED or SOURCE or TABLE, found identifier "idx_top_buyers"
+error: Expected one of INDEX or MATERIALIZED or SOURCE or TABLE or SINK, found identifier "idx_top_buyers"
 EXPLAIN ANALYZE HINTS FOR idx_top_buyers
                           ^
 
@@ -389,6 +389,13 @@ EXPLAIN ANALYZE MEMORY WITH SKEW FOR TABLE db.sch.t AS SQL
 EXPLAIN ANALYZE MEMORY WITH SKEW FOR TABLE db.sch.t AS SQL
 =>
 ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Computation(ExplainAnalyzeComputationProperties { properties: [Memory], skew: true }), explainee: Table(Name(UnresolvedItemName([Ident("db"), Ident("sch"), Ident("t")]))), as_sql: true })
+
+parse-statement
+EXPLAIN ANALYZE CPU FOR SINK k
+----
+EXPLAIN ANALYZE CPU FOR SINK k
+=>
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Computation(ExplainAnalyzeComputationProperties { properties: [Cpu], skew: false }), explainee: Sink(Name(UnresolvedItemName([Ident("k")]))), as_sql: false })
 
 parse-statement
 EXPLAIN ANALYZE INGESTION FOR SOURCE s
