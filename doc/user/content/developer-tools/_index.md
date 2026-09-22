@@ -19,7 +19,6 @@ Use these tools to develop with Materialize and manage your deployments:
 
 {{< linkbox title="Develop and connect" >}}
 - [Materialize Emulator](/developer-tools/install-materialize-emulator/)
-- [`mz` CLI](/developer-tools/cli/)
 - [Console](/developer-tools/console/)
 {{</ linkbox >}}
 

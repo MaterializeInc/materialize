@@ -57,5 +57,4 @@ See also the following integration guides for BI tools:
 
 ## Materialize Tools
 
-- [mz - Materialize CLI](/developer-tools/cli/)
 - [mz-debug (Debug tool)](/developer-tools/mz-debug/)
