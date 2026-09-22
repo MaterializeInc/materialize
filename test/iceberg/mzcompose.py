@@ -506,6 +506,22 @@ def workflow_commit_overlap_recovery(c: Composition) -> None:
                 f"{phase}: {e}\n{json.dumps(diagnostics, default=str, indent=2)}"
             ) from e
 
+    def native_executor_present() -> bool:
+        # This diagnostic is restricted to mz_system. Sink DDL and verification
+        # still use the ordinary Materialize role.
+        with c.sql_connection(port=6877, user="mz_system") as conn:
+            row = conn.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM mz_internal.mz_catalog_raw
+                    WHERE data->>'kind' = 'ClientIncarnation'
+                      AND data->'value'->>'replica_id' IS NOT NULL
+                )
+            """).fetchone()
+            assert row is not None
+            return row[0]
+
+    wait_for("native replica execution", native_executor_present)
+
     def initially_committed() -> bool:
         try:
             _, snap = snapshot()

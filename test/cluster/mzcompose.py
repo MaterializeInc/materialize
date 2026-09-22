@@ -8980,16 +8980,28 @@ def workflow_adapter_loss(c: Composition) -> None:
             "--replication-factor=1",
         )
         produce(0)
+        deadline = time.monotonic() + timeout
+        while True:
+            with c.sql_connection(
+                service=adapter.name, port=6877, user="mz_system"
+            ) as conn:
+                row = conn.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM mz_internal.mz_catalog_raw
+                        WHERE data->>'kind' = 'ClientIncarnation'
+                          AND data->'value'->>'replica_id' IS NOT NULL
+                    )
+                """).fetchone()
+                assert row is not None
+                if row[0]:
+                    break
+            if time.monotonic() >= deadline:
+                raise AssertionError("No native replica participant")
+            time.sleep(0.25)
         # Controls ingest the same Kafka records into a separate shard. Their
         # permitted stalls must not hold back the source-only compaction check.
         c.testdrive(
             dedent(f"""
-            > SELECT EXISTS (
-                SELECT 1 FROM mz_internal.mz_catalog_raw
-                WHERE data->>'kind' = 'ClientIncarnation'
-                  AND data->'value'->>'replica_id' IS NOT NULL
-              )
-            true
             > CREATE CONNECTION al_kafka TO KAFKA
               (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT)
             > CREATE SOURCE al_source IN CLUSTER cluster1

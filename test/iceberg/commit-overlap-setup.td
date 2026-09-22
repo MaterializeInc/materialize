@@ -28,12 +28,3 @@
     )
     MODE APPEND
     WITH (COMMIT INTERVAL '2s');
-
-# The reconstruction proof must run with replica-owned execution, not a
-# controller replaying the sink after observing its health status.
-> SELECT EXISTS (
-    SELECT 1 FROM mz_internal.mz_catalog_raw
-    WHERE data->>'kind' = 'ClientIncarnation'
-      AND data->'value'->>'replica_id' IS NOT NULL
-  );
-true
