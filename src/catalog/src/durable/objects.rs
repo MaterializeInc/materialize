@@ -2142,6 +2142,15 @@ pub struct WrittenPlan {
     pub id: GlobalId,
     pub build_version: String,
     pub revision: Uuid,
+    pub replica_owner: Option<ReplicaPlanOwner>,
+}
+
+/// Replica-local maintained work without a SQL catalog item. Presence of the
+/// selection records admission, independently of the writer's lifetime.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
+pub struct ReplicaPlanOwner {
+    pub replica_id: ReplicaId,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
@@ -2153,6 +2162,7 @@ pub struct WrittenPlanKey {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct WrittenPlanValue {
     pub revision: Uuid,
+    pub replica_owner: Option<ReplicaPlanOwner>,
 }
 
 impl DurableType for WrittenPlan {
@@ -2167,6 +2177,7 @@ impl DurableType for WrittenPlan {
             },
             WrittenPlanValue {
                 revision: self.revision,
+                replica_owner: self.replica_owner,
             },
         )
     }
@@ -2176,6 +2187,7 @@ impl DurableType for WrittenPlan {
             id: key.id,
             build_version: key.build_version,
             revision: value.revision,
+            replica_owner: value.replica_owner,
         }
     }
 

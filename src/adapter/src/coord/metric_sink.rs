@@ -7,20 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Coordinator-installed metric sinks, the curated counterpart to `CREATE METRIC SINK`.
+//! Curated metric sinks, the curated counterpart to `CREATE METRIC SINK`.
 //!
 //! A curated metric sink is a [`CURATED`] entry rendered on every replica, publishing its series
 //! into that replica's process-local Prometheus registry. Unlike a user's `CREATE METRIC SINK` it
 //! is not a catalog item: it gets a transient [`GlobalId`], targets one replica rather than a
-//! cluster, and is re-created from the static list on every boot. Modelling the curated set this
-//! way keeps it out of the catalog, so adding or removing a definition needs no builtin migration.
+//! cluster. In native protected mode the writer durably selects its plan and the replica executes
+//! it independently of adapter lifetime. Otherwise the coordinator installs it at boot.
+//! Keeping the curated set out of the SQL catalog means changing a definition needs no builtin
+//! migration.
 //!
 //! Every replica means every replica of every cluster, user clusters included. Each definition is
 //! therefore a dataflow, with its arrangements, on customer compute, charged to that customer's
 //! cluster, and the cost scales with `CURATED`. `coord::introspection` already accepts this for its
 //! subscribes.
 //!
-//! `install_metric_sinks` installs every definition on a newly created replica
+//! In controller-owned mode, `install_metric_sinks` installs every definition on a newly created replica
 //! (`bootstrap_metric_sinks` covers the replicas already present at startup), and
 //! `drop_metric_sinks` drops them before a replica is dropped. This mirrors
 //! [`crate::coord::introspection`], which installs introspection subscribes on the same triggers.
@@ -44,7 +46,7 @@ use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
 use mz_sql::session::vars::ENABLE_METRIC_SINK;
 use tracing::{Span, info};
 
-use crate::catalog::Catalog;
+use crate::catalog::CatalogState;
 use crate::coord::{
     Coordinator, Message, MetricSinkFinish, MetricSinkOptimize, MetricSinkStage, PlanValidity,
     StageResult, Staged,
@@ -52,6 +54,8 @@ use crate::coord::{
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::{AdapterError, ExecuteResponse, optimize};
+
+mod written;
 
 /// A curated metric sink: SQL producing the canonical metric-sink columns, plus the name it is
 /// known by in logs.
@@ -196,7 +200,9 @@ impl Coordinator {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
     ) {
-        if !ENABLE_METRIC_SINK.enabled(self.catalog().system_config()) {
+        if self.replica_owned_metric_sinks()
+            || !ENABLE_METRIC_SINK.enabled(self.catalog().system_config())
+        {
             return;
         }
 
@@ -301,7 +307,7 @@ impl Coordinator {
 
         // Enforce the introspection-only contract before any optimization work, against what the
         // definition reads rather than how the optimizer imports it.
-        if let Err(err) = ensure_reads_only_logs(&self.catalog, &dependencies) {
+        if let Err(err) = ensure_reads_only_logs(self.catalog().state(), &dependencies) {
             soft_panic_or_log!(
                 "invalid curated metric sink (name={}): {err}",
                 definition.name
@@ -487,6 +493,9 @@ impl Coordinator {
     /// dataflows down anyway, but the controller's collection state for them is instance-global,
     /// so it has to be released explicitly.
     pub(super) fn drop_metric_sinks(&mut self, replica_id: ReplicaId) {
+        if self.replica_owned_metric_sinks() {
+            return;
+        }
         for (name, cluster_id, sink_id) in metric_sinks_on_replica(&self.metric_sinks, replica_id) {
             info!(%sink_id, %replica_id, name, "dropping metric sink");
             self.metric_sinks.remove(&(replica_id, name));
@@ -522,7 +531,7 @@ fn metric_sinks_on_replica(
 /// import split (storage vs index) depends on which indexes the target cluster happens to have, so
 /// it gives the same definition different verdicts on different clusters.
 fn ensure_reads_only_logs(
-    catalog: &Catalog,
+    catalog: &CatalogState,
     dependencies: &BTreeSet<CatalogItemId>,
 ) -> Result<(), anyhow::Error> {
     let mut to_visit: Vec<_> = dependencies.iter().copied().collect();
@@ -753,7 +762,7 @@ mod tests {
                                 definition.name
                             )
                         });
-                ensure_reads_only_logs(&catalog, &dependencies).unwrap_or_else(|err| {
+                ensure_reads_only_logs(catalog.state(), &dependencies).unwrap_or_else(|err| {
                     panic!(
                         "curated metric sink {:?} reads a non-introspection relation: {err}",
                         definition.name
@@ -820,7 +829,7 @@ mod tests {
             }
             .plan_source(&session_catalog)
             .expect("plans against the system catalog");
-            assert!(ensure_reads_only_logs(&catalog, &dependencies).is_err());
+            assert!(ensure_reads_only_logs(catalog.state(), &dependencies).is_err());
         })
         .await
     }
@@ -837,14 +846,16 @@ mod tests {
                 .find(|e| matches!(e.item(), CatalogItem::Log(_)))
                 .expect("debug catalog has a builtin log")
                 .id();
-            assert!(ensure_reads_only_logs(&catalog, &BTreeSet::from([log_id])).is_ok());
+            assert!(ensure_reads_only_logs(catalog.state(), &BTreeSet::from([log_id])).is_ok());
 
             let storage_id = catalog
                 .entries()
                 .find(|e| matches!(e.item(), CatalogItem::Table(_) | CatalogItem::Source(_)))
                 .expect("debug catalog has a builtin table or source")
                 .id();
-            assert!(ensure_reads_only_logs(&catalog, &BTreeSet::from([storage_id])).is_err());
+            assert!(
+                ensure_reads_only_logs(catalog.state(), &BTreeSet::from([storage_id])).is_err()
+            );
         })
         .await
     }

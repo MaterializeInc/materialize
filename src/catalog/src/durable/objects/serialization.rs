@@ -1227,15 +1227,33 @@ impl RustType<proto::WrittenPlanKey> for super::WrittenPlanKey {
     }
 }
 
+impl RustType<proto::ReplicaPlanOwner> for super::ReplicaPlanOwner {
+    fn into_proto(&self) -> proto::ReplicaPlanOwner {
+        proto::ReplicaPlanOwner {
+            replica_id: self.replica_id.into_proto(),
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReplicaPlanOwner) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            replica_id: proto.replica_id.into_rust()?,
+            name: proto.name,
+        })
+    }
+}
+
 impl RustType<proto::WrittenPlanValue> for super::WrittenPlanValue {
     fn into_proto(&self) -> proto::WrittenPlanValue {
         proto::WrittenPlanValue {
             revision: self.revision,
+            replica_owner: self.replica_owner.into_proto(),
         }
     }
     fn from_proto(proto: proto::WrittenPlanValue) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             revision: proto.revision,
+            replica_owner: proto.replica_owner.into_rust()?,
         })
     }
 }

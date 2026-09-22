@@ -51,6 +51,8 @@ mod lag_tests;
 #[cfg(test)]
 mod liveness_tests;
 #[cfg(test)]
+mod metric_tests;
+#[cfg(test)]
 mod source_tests;
 #[cfg(test)]
 mod tests;
@@ -386,7 +388,8 @@ impl ReplicaEnactment {
             })
             .map(|(id, _, plan)| {
                 let mut plan = plan.physical_plan.clone();
-                if let CatalogItem::MaterializedView(mv) = catalog.get_entry_by_global_id(id).item()
+                if let Some(entry) = catalog.try_get_entry_by_global_id(id)
+                    && let CatalogItem::MaterializedView(mv) = entry.item()
                 {
                     mv.apply_execution_bounds(&mut plan);
                 }
@@ -572,7 +575,7 @@ impl ReplicaEnactment {
             .iter()
             .flat_map(|p| p.export_ids())
             .filter_map(|id| {
-                let entry = catalog.get_entry_by_global_id(&id);
+                let entry = catalog.try_get_entry_by_global_id(&id)?;
                 let CatalogItem::MaterializedView(mv) = entry.item() else {
                     return None;
                 };
@@ -852,6 +855,8 @@ impl ReplicaEnactment {
         metadata: &storage_metadata::Resolution,
         apply_permissions: bool,
     ) {
+        let build = mz_catalog::expr_cache::expression_build_version(catalog.config().build_info)
+            .to_string();
         let ready: BTreeSet<_> = self
             .installed
             .iter()
@@ -861,8 +866,12 @@ impl ReplicaEnactment {
             if collection.retired {
                 continue;
             }
-            let live =
-                catalog
+            let live = (id.is_transient()
+                && catalog
+                    .state()
+                    .written_plan_replica_owner(*id, &build)
+                    .is_some_and(|owner| owner.replica_id == self.replica))
+                || catalog
                     .try_get_entry_by_global_id(id)
                     .is_some_and(|entry| match entry.item() {
                         CatalogItem::MaterializedView(mv) => mv.global_id_writes() == *id,

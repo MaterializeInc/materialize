@@ -526,7 +526,7 @@ impl Coordinator {
             .written_plans()
             .iter()
             .filter(|((_, version), _)| version == &build)
-            .map(|((id, _), revision)| (*id, *revision))
+            .map(|((id, _), selection)| (*id, selection.revision))
             .collect();
         for op in ops.iter() {
             if let Op::SetWrittenPlan {
@@ -580,6 +580,7 @@ impl Coordinator {
                     expected_revision: Some(revisions[&id]),
                     revision: None,
                     imports: BTreeSet::new(),
+                    replica_owner: None,
                 });
                 continue;
             }
@@ -882,6 +883,8 @@ impl Coordinator {
         let (_written_plan_protection, rewritten_objects) =
             Box::pin(self.prepare_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
                 .await?;
+
+        Box::pin(self.prepare_replica_metric_sinks(conn_id, &mut ops, oracle_write_ts)).await?;
 
         let Coordinator {
             catalog,

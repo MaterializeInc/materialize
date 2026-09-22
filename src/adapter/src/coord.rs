@@ -2738,6 +2738,15 @@ impl Coordinator {
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
         let protected_plans = self.catalog().state().catalog_read_protection_enabled();
         let write_plans = protected_plans && !self.read_only_controllers;
+        let selections = Box::pin(self.bootstrap_replica_metric_sink_selections()).await?;
+        if !selections.is_empty() {
+            let write_ts = self.get_catalog_write_ts().await;
+            let result = self
+                .catalog_mut()
+                .transact(None, write_ts, None, selections)
+                .await?;
+            builtin_table_updates.extend(result.builtin_table_updates);
+        }
         let mut candidates = cached_global_exprs;
         let mut written_ids = BTreeSet::new();
         if protected_plans {
@@ -2751,7 +2760,7 @@ impl Coordinator {
                 .filter(|((id, version), _)| {
                     version == &build && self.catalog().try_get_entry_by_global_id(id).is_some()
                 })
-                .map(|((id, _), revision)| (*id, *revision))
+                .map(|((id, _), selection)| (*id, selection.revision))
                 .collect();
             let written = self.catalog().read_written_plans(revisions.clone()).await?;
             if written.len() != revisions.len() {

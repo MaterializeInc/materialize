@@ -86,7 +86,7 @@ async fn written_index_survives_writer_and_query_disconnect() {
         .unwrap()
         .created_client_incarnations[0];
 
-    let factory = start_runtime(config, clients).await;
+    let factory = start_runtime(config, clients, MetricsRegistry::new()).await;
 
     let replica = wait_window(&mut observer, reader, source, index, 20_000).await;
     publish(
@@ -467,6 +467,7 @@ impl Fixture {
                 expected_revision: None,
                 revision: Some(revision),
                 imports: BTreeSet::from([source]),
+                replica_owner: None,
             }],
         )
         .await;
@@ -489,8 +490,8 @@ impl Fixture {
 pub(super) async fn start_runtime(
     config: follower::Config,
     clients: Arc<PersistClientCache>,
+    registry: MetricsRegistry,
 ) -> impl Fn() -> Box<dyn ComputeClient> + use<> {
-    let registry = MetricsRegistry::new();
     let mut server = mz_compute::server::serve(
         TimelyConfig {
             workers: 2,

@@ -142,6 +142,7 @@ pub enum Op {
         expected_revision: Option<uuid::Uuid>,
         revision: Option<uuid::Uuid>,
         imports: BTreeSet<GlobalId>,
+        replica_owner: Option<crate::durable::objects::ReplicaPlanOwner>,
     },
     AlterRetainHistory {
         id: CatalogItemId,
@@ -1122,14 +1123,32 @@ impl Catalog {
         for ((id, build_version), (revision, imports)) in selected_plans {
             if let Some(revision) = revision
                 && preliminary_state.written_plan(id, &build_version) == Some(revision)
-                && (preliminary_state.try_get_entry_by_global_id(&id).is_none()
-                    || imports.iter().any(|input| {
-                        preliminary_state
-                            .try_get_entry_by_global_id(input)
-                            .is_none()
-                    }))
             {
-                return Err(CatalogError::DDLTransactionRace);
+                let valid = if let Some(owner) =
+                    preliminary_state.written_plan_replica_owner(id, &build_version)
+                {
+                    // Replica-local observers read only this cluster's logs. Their
+                    // selection, rather than a SQL item or connection, owns them.
+                    id.is_transient()
+                        && !owner.name.is_empty()
+                        && preliminary_state.try_get_entry_by_global_id(&id).is_none()
+                        && preliminary_state.clusters_by_id.values().any(|cluster| {
+                            cluster.replica(owner.replica_id).is_some()
+                                && imports
+                                    .iter()
+                                    .all(|input| cluster.log_indexes.values().any(|id| id == input))
+                        })
+                } else {
+                    preliminary_state.try_get_entry_by_global_id(&id).is_some()
+                        && imports.iter().all(|input| {
+                            preliminary_state
+                                .try_get_entry_by_global_id(input)
+                                .is_some()
+                        })
+                };
+                if !valid {
+                    return Err(CatalogError::DDLTransactionRace);
+                }
             }
         }
 
@@ -1304,11 +1323,12 @@ impl Catalog {
                 expected_revision,
                 revision,
                 imports: _,
+                replica_owner,
             } => {
                 if tx.get_written_plan(id, &build_version) != expected_revision {
                     return Err(CatalogError::DDLTransactionRace);
                 }
-                tx.set_written_plan(id, &build_version, revision)?;
+                tx.set_written_plan_with_owner(id, &build_version, revision, replica_owner)?;
             }
             Op::CreateClientIncarnation { replica_id } => {
                 if !state.catalog_read_protection_enabled() {
@@ -2510,7 +2530,25 @@ impl Catalog {
                 }
 
                 // Drop any replicas.
-                let replicas = delta.replicas.keys().copied().collect();
+                let replicas: BTreeSet<_> = delta.replicas.keys().copied().collect();
+                if !replicas.is_empty() {
+                    let build =
+                        Self::expression_build_version(state.config().build_info).to_string();
+                    let observer_plans: Vec<_> = tx
+                        .get_written_plans()
+                        .filter(|plan| {
+                            plan.build_version == build
+                                && plan
+                                    .replica_owner
+                                    .as_ref()
+                                    .is_some_and(|owner| replicas.contains(&owner.replica_id))
+                        })
+                        .map(|plan| plan.id)
+                        .collect();
+                    for id in observer_plans {
+                        tx.set_written_plan(id, &build, None)?;
+                    }
+                }
                 tx.remove_cluster_replicas(&replicas)?;
 
                 for (replica_id, (cluster_id, reason)) in delta.replicas {
@@ -4132,6 +4170,8 @@ impl ObjectsToDrop {
 #[cfg(test)]
 mod incarnation_tests;
 #[cfg(test)]
+mod replica_plan_tests;
+#[cfg(test)]
 mod temp_tests;
 
 #[cfg(test)]
@@ -4182,6 +4222,7 @@ mod tests {
                 expected_revision,
                 revision,
                 imports,
+                replica_owner: None,
             };
             let (selected, snapshot) = catalog
                 .transact_incremental_dry_run(

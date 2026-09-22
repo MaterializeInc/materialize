@@ -77,7 +77,12 @@ async fn lagging_index_admits_new_historical_reader() {
     // updates can change the shared dyncfg set. No data is added or PUT yet.
     disable_inline_parts(&clients);
     let mut next_batch = input.builder(Antichain::from_elem(Timestamp::new(50_000)));
-    let factory = start_runtime(config, Arc::clone(&clients)).await;
+    let factory = start_runtime(
+        config,
+        Arc::clone(&clients),
+        mz_ore::metrics::MetricsRegistry::new(),
+    )
+    .await;
 
     let replica = wait_window(&mut observer, source, index, 50_000).await;
     assert_only_replica_grants(&observer, replica, source, index);

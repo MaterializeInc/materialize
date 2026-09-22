@@ -66,12 +66,13 @@ impl ReplicaEffects {
             || effects.replicas.keys().any(|(id, _)| *id == cluster)
             || effects.clusters.contains_key(&cluster);
         self.pending.extend(effects.items.into_keys());
-        self.pending.extend(
-            effects
-                .written_plans
-                .into_iter()
-                .filter_map(|id| catalog.try_resolve_item_id(&id)),
-        );
+        self.pending
+            .extend(effects.written_plans.into_iter().filter_map(|id| {
+                catalog.try_resolve_item_id(&id).or(match id {
+                    GlobalId::Transient(id) => Some(CatalogItemId::Transient(id)),
+                    _ => None,
+                })
+            }));
         if effects.clusters.contains_key(&cluster) {
             if catalog.try_get_cluster(cluster).is_some() {
                 // Cluster bound_objects contains user objects only. Bootstrap
@@ -111,6 +112,19 @@ impl ReplicaEffects {
             // This cache describes the current selection, not installed work.
             // A replacement that is not available must not expose stale bytes.
             self.selected.remove(item_id);
+            if let CatalogItemId::Transient(value) = item_id {
+                let id = GlobalId::Transient(*value);
+                if let Some(owner) = catalog.state().written_plan_replica_owner(id, build) {
+                    if owner.replica_id != replica {
+                        return false;
+                    }
+                    if let Some(revision) = catalog.state().written_plan(id, build) {
+                        revisions.push((id, revision));
+                        candidates.insert(*item_id, (id, revision, RelationVersion::root()));
+                    }
+                    return true;
+                }
+            }
             let candidate = catalog.try_get_entry(item_id).and_then(|entry| {
                 let item = entry.item();
                 if item.cluster_id() != Some(cluster) {
@@ -149,6 +163,25 @@ impl ReplicaEffects {
                 && plan.item_version == version
                 && plan.physical_plan.export_ids().any(|export| export == id)
             {
+                if let Some(owner) = catalog.state().written_plan_replica_owner(id, build) {
+                    let matching_sink =
+                        plan.physical_plan
+                            .sink_exports
+                            .get(&id)
+                            .is_some_and(|sink| match &sink.connection {
+                                mz_compute_types::sinks::ComputeSinkConnection::MetricSink(
+                                    connection,
+                                ) => connection.label == owner.name,
+                                _ => false,
+                            });
+                    anyhow::ensure!(
+                        plan.physical_plan.source_imports.is_empty()
+                            && plan.physical_plan.index_exports.is_empty()
+                            && plan.physical_plan.sink_exports.len() == 1
+                            && matching_sink,
+                        "invalid replica-owned metric plan {id}"
+                    );
+                }
                 self.selected.insert(item, (id, revision, plan));
                 self.pending.remove(&item);
             }

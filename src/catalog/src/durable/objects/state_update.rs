@@ -962,6 +962,7 @@ mod tests {
             id: mz_repr::GlobalId::User(42),
             build_version: "26.43.0-dev (build hash)".into(),
             revision: uuid::Uuid::new_v4(),
+            replica_owner: None,
         };
         let (key, value) = plan.clone().into_key_value();
         let update = StateUpdateKind::WrittenPlan(key.into_proto(), value.into_proto());

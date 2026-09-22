@@ -366,12 +366,47 @@ impl<'a> Transaction<'a> {
         build_version: &str,
         revision: Option<Uuid>,
     ) -> Result<(), CatalogError> {
+        self.set_written_plan_with_owner(id, build_version, revision, None)
+    }
+
+    /// Selects replica-local work in the same expression shard and build namespace.
+    /// Ownership is immutable for a selected identity. A replica/name pair has at
+    /// most one selected export per build.
+    pub fn set_written_plan_with_owner(
+        &mut self,
+        id: GlobalId,
+        build_version: &str,
+        revision: Option<Uuid>,
+        replica_owner: Option<crate::durable::objects::ReplicaPlanOwner>,
+    ) -> Result<(), CatalogError> {
+        let key = WrittenPlanKey {
+            id,
+            build_version: build_version.to_owned(),
+        };
+        if revision.is_some() {
+            if self
+                .written_plans
+                .get(&key)
+                .is_some_and(|previous| previous.replica_owner != replica_owner)
+            {
+                return Err(DurableCatalogError::UniquenessViolation.into());
+            }
+            if replica_owner.is_some()
+                && self.get_written_plans().any(|selected| {
+                    selected.id != id
+                        && selected.build_version == build_version
+                        && selected.replica_owner == replica_owner
+                })
+            {
+                return Err(DurableCatalogError::UniquenessViolation.into());
+            }
+        }
         self.written_plans.set(
-            WrittenPlanKey {
-                id,
-                build_version: build_version.to_owned(),
-            },
-            revision.map(|revision| WrittenPlanValue { revision }),
+            key,
+            revision.map(|revision| WrittenPlanValue {
+                revision,
+                replica_owner,
+            }),
             self.op_id,
         )?;
         Ok(())

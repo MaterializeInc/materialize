@@ -160,7 +160,8 @@ pub struct CatalogState {
     #[serde(serialize_with = "serialize_maintained_read_requirements")]
     pub(super) maintained_read_requirements: imbl::OrdMap<GlobalId, MaintainedReadRequirement>,
     #[serde(serialize_with = "serialize_written_plans")]
-    pub(super) written_plans: imbl::OrdMap<(GlobalId, String), uuid::Uuid>,
+    pub(super) written_plans:
+        imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue>,
     pub(super) client_incarnations:
         imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue>,
     #[serde(serialize_with = "serialize_client_read_requirements")]
@@ -2891,11 +2892,25 @@ impl CatalogState {
     pub fn written_plan(&self, id: GlobalId, build_version: &str) -> Option<uuid::Uuid> {
         self.written_plans
             .get(&(id, build_version.to_owned()))
-            .copied()
+            .map(|selection| selection.revision)
+    }
+
+    /// Replica ownership is distinct from SQL catalog membership.
+    pub fn written_plan_replica_owner(
+        &self,
+        id: GlobalId,
+        build_version: &str,
+    ) -> Option<&crate::durable::objects::ReplicaPlanOwner> {
+        self.written_plans
+            .get(&(id, build_version.to_owned()))?
+            .replica_owner
+            .as_ref()
     }
 
     /// All durable plan selections, including other builds.
-    pub fn written_plans(&self) -> &imbl::OrdMap<(GlobalId, String), uuid::Uuid> {
+    pub fn written_plans(
+        &self,
+    ) -> &imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue> {
         &self.written_plans
     }
 
@@ -3129,13 +3144,13 @@ fn serialize_maintained_read_requirements<S: serde::Serializer>(
 }
 
 fn serialize_written_plans<S: serde::Serializer>(
-    plans: &imbl::OrdMap<(GlobalId, String), uuid::Uuid>,
+    plans: &imbl::OrdMap<(GlobalId, String), crate::durable::objects::WrittenPlanValue>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.collect_seq(
-        plans
-            .iter()
-            .map(|((id, build), revision)| (id, build, revision)),
+        plans.iter().map(|((id, build), selection)| {
+            (id, build, selection.revision, &selection.replica_owner)
+        }),
     )
 }
 
@@ -3220,6 +3235,7 @@ mod tests {
                         id,
                         build_version: "build-a".into(),
                         revision,
+                        replica_owner: None,
                     }),
                     ts: Timestamp::MIN,
                     diff,
@@ -3248,7 +3264,7 @@ mod tests {
         let dump = serde_json::to_value(&state).expect("serialize catalog with written selections");
         assert_eq!(
             dump["written_plans"],
-            serde_json::json!([[id, "build-a", replacement]])
+            serde_json::json!([[id, "build-a", replacement, null]])
         );
     }
 
