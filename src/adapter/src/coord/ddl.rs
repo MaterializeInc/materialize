@@ -514,11 +514,10 @@ impl Coordinator {
         use mz_repr::optimize::OverrideFrom;
 
         if !self.catalog().state().catalog_read_protection_enabled()
-            || !ops.iter().any(|op| {
-                matches!(
-                    op,
-                    Op::DropObjects(_) | Op::AlterMaterializedViewApplyReplacement { .. }
-                )
+            || !ops.iter().any(|op| match op {
+                Op::DropObjects(objects) => !objects.is_empty(),
+                Op::AlterMaterializedViewApplyReplacement { .. } => true,
+                _ => false,
             })
         {
             return Ok((Vec::new(), Vec::new()));
@@ -881,7 +880,7 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let oracle_write_ts = self
+        let mut oracle_write_ts = self
             .get_catalog_write_ts()
             .wall_time()
             .observe(phase_seconds.with_label_values(&["write_ts"]))
@@ -905,43 +904,98 @@ impl Coordinator {
 
         let (_written_plan_protection, rewritten_objects) =
             Box::pin(self.prepare_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
+                .wall_time()
+                .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
                 .await?;
 
-        Box::pin(self.prepare_replica_metric_sinks(conn_id, &mut ops, oracle_write_ts)).await?;
+        Box::pin(self.prepare_replica_metric_sinks(conn_id, &mut ops, oracle_write_ts))
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["replica_metric_preparation"]))
+            .await?;
+
+        // Metadata publication does not invalidate immutable plans or their
+        // held inputs. Retry commit validation against the refreshed prefix,
+        // not the expensive preparation that preceded it. Structural changes
+        // return to the outer loop's planning-conflict policy.
+        let prepared_revision = self.catalog().transient_revision();
+        let result = loop {
+            let result = {
+                let Coordinator {
+                    catalog,
+                    active_conns,
+                    controller,
+                    ..
+                } = self;
+                let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
+                // Time validation and durable work per attempt. Preparation and
+                // conflict refresh have separate phases, not hidden retry cost.
+                Arc::make_mut(catalog)
+                    .transact(
+                        Some(&mut controller.storage_collections),
+                        oracle_write_ts,
+                        conn,
+                        ops.clone(),
+                    )
+                    .wall_time()
+                    .observe(phase_seconds.with_label_values(&["transact"]))
+                    .await
+            };
+            match result {
+                Err(error)
+                    if matches!(&error,
+                    AdapterError::Catalog(error) if matches!(&error.kind,
+                        mz_catalog::memory::error::ErrorKind::Durable(
+                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                        ))) =>
+                {
+                    self.refresh_catalog_after_conflict()
+                        .wall_time()
+                        .observe(phase_seconds.with_label_values(&["conflict_refresh"]))
+                        .await?;
+                    if self.catalog().transient_revision() != prepared_revision {
+                        return Err(error);
+                    }
+                    if let Some(client) = &self.query_client
+                        && !self
+                            .catalog()
+                            .state()
+                            .client_incarnations()
+                            .contains_key(&client.protection.incarnation())
+                    {
+                        // Held tokens cannot outlive durable reclamation. A
+                        // further peer change is caught by transaction-open/CAS
+                        // validation before these prepared operations commit.
+                        client.protection.mark_closed();
+                        return Err(AdapterError::internal(
+                            "prepared catalog transaction",
+                            "client read protection incarnation is closed",
+                        ));
+                    }
+                    oracle_write_ts = self
+                        .get_catalog_write_ts()
+                        .wall_time()
+                        .observe(phase_seconds.with_label_values(&["write_ts"]))
+                        .await;
+                }
+                result => break result?,
+            }
+        };
 
         let Coordinator {
             catalog,
             active_conns,
-            controller,
             cluster_replica_statuses,
             ..
         } = self;
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
-        // NOTE: This phase contains every durable `sync` and `commit` a catalog
-        // transaction performs, which is what makes `transact` minus those two
-        // histograms an estimate of the in-memory work. Two caveats. More than
-        // one sync happens per transaction, so the subtraction is only valid on
-        // rates of `_sum`, never on per-observation means. And durable
-        // `allocate_id` (user ID pool refills, storage usage batch IDs) observes
-        // into the same histograms from outside any catalog transaction, so the
-        // estimate is biased low while allocation is active.
         let TransactionResult {
             builtin_table_updates,
             catalog_updates,
             audit_events,
             created_client_incarnations,
-        } = catalog
-            .transact(
-                Some(&mut controller.storage_collections),
-                oracle_write_ts,
-                conn,
-                ops,
-            )
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["transact"]))
-            .await?;
+        } = result;
 
         if let Some(conn) = conn
             && !rewritten_objects.is_empty()

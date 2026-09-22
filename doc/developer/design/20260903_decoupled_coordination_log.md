@@ -1196,3 +1196,18 @@ renewal and reclamation. An abandoned query incarnation can pin input compaction
 through the same five-minute grace as any other client. Read-only provisioning
 omits native follower arguments and retains legacy prewarming. The legacy sink-drop
 path's stale shard-mapping rows remain outside the native inventory cleanup change.
+
+### 2026-09-14: Planning and metadata-contention boundaries
+
+EXPLAIN's declared index candidates are separate from the observed collections
+used for timestamp and read protection. A broader proposal to keep transaction
+access paths pinned to held indexes would also change the documented error after
+CREATE INDEX during a transaction. That behavior change awaits Aljoscha's decision.
+
+Empty DropObjects operations need no plan repair. Prepared DDL can survive
+metadata-only contention without repeating plan loading, provided its planning
+revision and client incarnation remain valid and commit validation runs against
+the refreshed prefix. Structural changes retain the planning-conflict policy.
+Next: verify this boundary against the unchanged bounded workload and finish the
+native outage demonstration. Upstream integration ordering remains a separate
+question for Aljoscha.

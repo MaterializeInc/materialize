@@ -2477,6 +2477,12 @@ def workflow_catalog_publication_measurement(
             "end": end,
             "environmentd_end": environmentd_end,
             "followers": follower_samples,
+            "adapter_phases": {
+                labels: float(value)
+                for line in response.text.splitlines()
+                if line.startswith("mz_catalog_transact_phase_seconds")
+                for labels, value in [line.rsplit(" ", 1)]
+            },
             "catalog_committed_updates": _catalog_committed_update_metrics(
                 response.text
             ),
