@@ -195,6 +195,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
             &discard,
             StorageResponse::FrontierUpper(id, Antichain::new()),
         );
+        drive(&mut worker, |_| !progress.is_empty());
         let frontier = progress.try_recv().unwrap().1;
         assert_eq!(frontier.output_generation, Some(1));
         assert!(matches!(
@@ -203,7 +204,15 @@ fn native_observation_subscription_and_current_status_reconnect() {
                 StorageResponse::FrontierUpper(actual, _)
             ) if actual == id
         ));
-        worker.send_storage_response(&discard, StorageResponse::DroppedId(id));
+        worker
+            .storage_state
+            .executions
+            .as_mut()
+            .unwrap()
+            .dropped_outputs
+            .push((id, 1));
+        worker.report_dropped_ids(&discard);
+        drive(&mut worker, |_| !progress.is_empty());
         assert!(observer_rx.try_recv().is_err());
         assert!(matches!(
             progress.try_recv().unwrap().1.response,
@@ -268,6 +277,9 @@ fn native_observation_subscription_and_current_status_reconnect() {
             progress.try_recv().is_err(),
             "observations do not use lifecycle"
         );
+        for dataflow in worker.timely_worker.installed_dataflows() {
+            worker.timely_worker.drop_dataflow(dataflow);
+        }
     });
 }
 
@@ -342,6 +354,9 @@ fn native_observation_counters_survive_unsubscribed_ticks_and_fan_out_once() {
             panic!("expected statistics")
         };
         assert_eq!(sinks[0].messages_staged, 5u64.into());
+        for dataflow in worker.timely_worker.installed_dataflows() {
+            worker.timely_worker.drop_dataflow(dataflow);
+        }
     });
 }
 

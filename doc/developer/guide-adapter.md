@@ -329,6 +329,14 @@ can also block the loop that must process it.
 This applies to the sink's output-progress shard, not a source remap shard. Remap
 progress alone does not establish completion of source output.
 
+### Planning eligibility is not execution readability
+
+EXPLAIN may describe a catalog-declared index before any replica has installed it.
+Keep those planning candidates separate from the observed collections used for
+timestamp selection, transaction read holds, and actual statistics reads. A fresh
+index can legitimately have neither a reported read frontier nor a published bound.
+Do not invent a bound or weaken execution admission merely to describe its plan.
+
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found

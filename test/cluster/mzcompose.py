@@ -5863,6 +5863,50 @@ def workflow_test_github_8734(c: Composition) -> None:
     Regression test for database-issues#8734.
     """
 
+    def protection_evidence(label: str) -> None:
+        try:
+            response = requests.get(
+                f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
+                timeout=10,
+            )
+            response.raise_for_status()
+            snapshot = response.json()
+            objects = c.sql_query("""
+                SELECT o.name, o.id, g.global_id FROM mz_objects o
+                JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+                WHERE o.name IN ('t', 'mv') ORDER BY o.name
+            """)
+            physical = {}
+            with c.sql_connection(port=6877, user="mz_system") as conn:
+                for name, item_id, _ in objects:
+                    row = conn.execute(
+                        sql.SQL("INSPECT SHARD {}").format(sql.Literal(item_id))
+                    ).fetchone()
+                    assert row is not None
+                    physical[name] = {
+                        key: row[0][key] for key in ("shard_id", "since", "upper")
+                    }
+            print(
+                json.dumps(
+                    {
+                        "label": label,
+                        "objects": objects,
+                        "physical": physical,
+                        **{
+                            key: snapshot[key]
+                            for key in (
+                                "client_incarnations",
+                                "client_read_requirements",
+                                "maintained_read_requirements",
+                                "collection_compaction_bounds",
+                            )
+                        },
+                    }
+                )
+            )
+        except Exception as error:
+            print(f"Protection diagnostics failed ({label}): {error}")
+
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
@@ -5892,12 +5936,17 @@ def workflow_test_github_8734(c: Composition) -> None:
         check_read_frontiers_not_stuck(c, ["t"])
 
         # Restart envd, then verify that the table's frontier still advances.
+        protection_evidence("before-restart")
         c.kill("materialized")
         c.up("materialized")
 
         c.sql("SELECT * FROM mv")
 
-        check_read_frontiers_not_stuck(c, ["t"])
+        try:
+            check_read_frontiers_not_stuck(c, ["t"])
+        except Exception:
+            protection_evidence("frontier-stuck-after-restart")
+            raise
 
 
 def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -8767,9 +8816,14 @@ def workflow_adapter_loss(c: Composition) -> None:
         external_blob_store=True,
         use_default_volumes=False,
         support_external_clusterd=True,
+        # The workflow verifies restart with the native catalog context intact.
+        # A harness restart after the overrides unwind would use another blob
+        # store and omit the replicas' reconstruction configuration.
+        sanity_restart=False,
         additional_system_parameter_defaults={
             "enable_catalog_read_protection": "true",
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            "enable_index_options": "true",
             "persist_inline_writes_single_max_bytes": "0",
             "persist_compaction_heuristic_min_inputs": "2",
             "enable_metric_sink": "true",
@@ -8827,7 +8881,6 @@ def workflow_adapter_loss(c: Composition) -> None:
     def inspect(shard: str) -> dict:
         result = c.run(
             "persistcli",
-            "persistcli",
             "inspect",
             "state",
             "--shard-id",
@@ -8839,11 +8892,49 @@ def workflow_adapter_loss(c: Composition) -> None:
             capture=True,
             rm=True,
         )
-        return json.loads(result.stdout)
+
+        # CLI inspection serializes ProtoRollup, not SQL INSPECT SHARD's State.
+        # Timestamp codecs store u64 bits in signed protobuf int64 elements.
+        def frontier(proto: dict) -> list[int]:
+            elements = proto["elements"]
+            assert len(elements) <= 1, elements
+            return [element % (2**64) for element in elements]
+
+        trace = json.loads(result.stdout)["trace"]
+        physical = [
+            *trace["legacy_batches"],
+            *(entry["batch"] for entry in trace["hollow_batches"]),
+        ]
+        # Spine descriptions include empty intervals omitted from hollow batches.
+        # An empty upper means the shard is closed, not timestamp zero.
+        logical = (
+            [entry["batch"] for entry in trace["spine_batches"]]
+            if trace["spine_batches"]
+            else trace["legacy_batches"]
+        )
+        uppers = [frontier(batch["desc"]["upper"]) for batch in logical]
+        upper = (
+            []
+            if any(not upper for upper in uppers)
+            else [max((u[0] for u in uppers), default=0)]
+        )
+        return {
+            "since": frontier(trace["since"]),
+            "upper": upper,
+            "batches": [
+                {
+                    "len": batch["len"],
+                    **{
+                        name: frontier(batch["desc"][name])
+                        for name in ("lower", "upper", "since")
+                    },
+                }
+                for batch in physical
+            ],
+        }
 
     def compacted_past(state: dict, timestamp: int) -> bool:
         # Require persisted history compaction, not just new batches or permission.
-        batches = [*state["batches"], *state["hollow_batches"].values()]
         return (
             bool(state["since"])
             and state["since"][0] > timestamp
@@ -8852,7 +8943,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                 and batch["lower"][0] <= timestamp
                 and batch["since"]
                 and batch["since"][0] > timestamp
-                for batch in batches
+                for batch in state["batches"]
             )
         )
 
@@ -9013,16 +9104,28 @@ def workflow_adapter_loss(c: Composition) -> None:
             "--replication-factor=1",
         )
         produce(0)
+        deadline = time.monotonic() + timeout
+        while True:
+            with c.sql_connection(
+                service=adapter.name, port=6877, user="mz_system"
+            ) as conn:
+                row = conn.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM mz_internal.mz_catalog_raw
+                        WHERE data->>'kind' = 'ClientIncarnation'
+                          AND data->'value'->>'replica_id' IS NOT NULL
+                    )
+                """).fetchone()
+                assert row is not None
+                if row[0]:
+                    break
+            if time.monotonic() >= deadline:
+                raise AssertionError("No native replica participant")
+            time.sleep(0.25)
         # Controls ingest the same Kafka records into a separate shard. Their
         # permitted stalls must not hold back the source-only compaction check.
         c.testdrive(
             dedent(f"""
-            > SELECT EXISTS (
-                SELECT 1 FROM mz_internal.mz_catalog_raw
-                WHERE data->>'kind' = 'ClientIncarnation'
-                  AND data->'value'->>'replica_id' IS NOT NULL
-              )
-            true
             > CREATE CONNECTION al_kafka TO KAFKA
               (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT)
             > CREATE SOURCE al_source IN CLUSTER cluster1
@@ -9054,7 +9157,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             service=td.name,
         )
         webhook_url = (
-            f"http://localhost:{c.port(adapter.name, 6874)}"
+            f"http://localhost:{c.port(adapter.name, 6876)}"
             "/api/webhook/materialize/public/al_webhook"
         )
         requests.post(webhook_url, data="1", timeout=10).raise_for_status()
@@ -9221,14 +9324,17 @@ def workflow_adapter_loss(c: Composition) -> None:
             c.up(*replicas)
             c.up(adapter.name)
 
-        # No executor has ever existed for this index. Its object policy, rather
-        # than an installed arrangement or an old reader, must retain its inputs.
+        # No executor has ever existed for this index. Observe its retention
+        # window across advancing permissions, without an arrangement or reader
+        # protecting the historical points being tested.
+        # Post-restart SQL must not reuse sockets cached before the adapter died.
         assert (
             c.sql_query(
                 """SELECT count(*) FROM mz_cluster_replicas r
                JOIN mz_clusters c ON c.id = r.cluster_id
                WHERE c.name = 'al_history'""",
                 service=adapter.name,
+                reuse_connection=False,
             )
             == [(0,)]
         )
@@ -9238,6 +9344,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                    JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
                    WHERE o.name IN ('al_input', 'al_history_idx')""",
                 service=adapter.name,
+                reuse_connection=False,
             )
         )
         assert set(history_ids) == {"al_input", "al_history_idx"}, history_ids
@@ -9246,6 +9353,8 @@ def workflow_adapter_loss(c: Composition) -> None:
         assert input_id.startswith("u"), input_id
         input_json_id = {"User": int(input_id[1:])}
         deadline = time.monotonic() + timeout
+        previous_unmasked = None
+        unmasked_advances = 0
         while True:
             # Observe Persist first, so this timestamp is strictly historical at
             # the catalog snapshot. Leave room on both sides of the 30s window.
@@ -9289,18 +9398,36 @@ def workflow_adapter_loss(c: Composition) -> None:
                 and all(historical_ts < frontier for _, frontier in clients)
                 and all(historical_ts < frontier for frontier in maintained.values())
             ):
-                print(
-                    f"Zero-replica history: {historical_ts=}, upper={state['upper']}, "
-                    f"since={state['since']}, {input_since=}, {index_since=}, "
-                    f"{clients=}, {maintained=}"
-                )
-                break
+                current = (state["upper"][0], input_since[0], state["since"][0])
+                if previous_unmasked is None:
+                    previous_unmasked = current
+                elif all(
+                    new > old
+                    for new, old in zip(current, previous_unmasked, strict=True)
+                ):
+                    unmasked_advances += 1
+                    previous_unmasked = current
+                    print(
+                        f"Zero-replica history: {historical_ts=}, {unmasked_advances=}, "
+                        f"upper={state['upper']}, since={state['since']}, "
+                        f"{input_since=}, {index_since=}, {clients=}, {maintained=}"
+                    )
+                    if unmasked_advances == 2:
+                        break
+            else:
+                previous_unmasked = None
+                unmasked_advances = 0
             if time.monotonic() >= deadline:
                 raise AssertionError(
                     f"No unmasked index-policy history: {historical_ts=}, "
                     f"upper={state['upper']}, since={state['since']}, "
                     f"{input_since=}, {index_since=}, {clients=}, {maintained=}"
                 )
+            # Fresh records also let ordinary Persist listeners release prior
+            # batches. Permission alone is not evidence of physical compaction.
+            n += 1
+            produce(n)
+            expected.add(n * 10)
             time.sleep(0.25)
 
         # Only now introduce a reader. Keep its logical-input hold through
@@ -9329,6 +9456,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                 c.sql(
                     "CREATE CLUSTER REPLICA al_history.first SIZE 'scale=1,workers=1'",
                     service=adapter.name,
+                    reuse_connection=False,
                 )
                 with c.sql_connection(service=adapter.name) as index_conn:
                     with index_conn.cursor() as indexed:
@@ -9366,3 +9494,58 @@ def workflow_adapter_loss(c: Composition) -> None:
                 service=td.name,
             )
             assert consume(name, len(expected)) == expected, name
+
+
+def workflow_test_explain_pending_index(c: Composition) -> None:
+    """EXPLAIN plans a declared index without requiring an installed trace."""
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_catalog_read_protection": "true",
+                "enable_frontend_peek_sequencing": "true",
+            }
+        )
+    ):
+        c.up("materialized")
+        for statement in (
+            "CREATE TABLE explain_pending_t (a int)",
+            "INSERT INTO explain_pending_t VALUES (1), (2)",
+            "CREATE CLUSTER explain_pending REPLICAS ()",
+            "CREATE INDEX explain_pending_idx IN CLUSTER explain_pending ON explain_pending_t (a)",
+        ):
+            c.sql(statement)
+        with c.sql_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET cluster = explain_pending")
+                cursor.execute("SET statement_timeout = '120s'")
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT a FROM explain_pending_t"
+                )
+                plan = "\n".join(str(row[0]) for row in cursor.fetchall())
+                assert re.search(r"ReadIndex[^\n]*explain_pending_idx", plan), plan
+                cursor.execute("COMMIT")
+                c.sql("""
+                    CREATE CLUSTER REPLICA explain_pending.r SIZE 'scale=1,workers=1'
+                """)
+                deadline = time.monotonic() + 120
+                while c.sql_query("""
+                    SELECT bool_and(h.hydrated)
+                    FROM mz_internal.mz_compute_hydration_statuses h
+                    JOIN mz_indexes i ON i.id = h.object_id
+                    WHERE i.name = 'explain_pending_idx'
+                """) != [(True,)]:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("Pending index did not hydrate")
+                    time.sleep(0.25)
+                # An EXPLAIN against an available index must establish the same
+                # transaction read inputs as the following SELECT.
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT a FROM explain_pending_t"
+                )
+                plan = "\n".join(str(row[0]) for row in cursor.fetchall())
+                assert re.search(r"ReadIndex[^\n]*explain_pending_idx", plan), plan
+                cursor.execute("SELECT a FROM explain_pending_t ORDER BY a")
+                assert cursor.fetchall() == [(1,), (2,)]
+                cursor.execute("COMMIT")

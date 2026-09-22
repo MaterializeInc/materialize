@@ -903,12 +903,16 @@ impl Catalog {
                 .transaction_from_snapshot(snapshot)
                 .unwrap_or_terminate("starting catalog transaction from snapshot")
         } else {
-            // First statement: fresh transaction from durable storage, which
-            // is in sync with the real catalog state.
-            let tx = storage
-                .transaction()
-                .await
-                .unwrap_or_terminate("starting catalog transaction");
+            // A peer may publish between planning and this first dry run. The
+            // caller must refresh and revalidate, just as for a commit CAS loss.
+            let tx = match storage.transaction().await {
+                Err(
+                    error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. }),
+                ) => {
+                    return Err(error.into());
+                }
+                result => result.unwrap_or_terminate("starting catalog transaction"),
+            };
             DryRunTransaction::new(tx)
         };
 

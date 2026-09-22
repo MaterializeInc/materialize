@@ -2155,6 +2155,9 @@ pub struct Coordinator {
     /// it manually.
     advance_timelines_interval: Interval,
 
+    /// Last reported native index observations, never execution capabilities.
+    native_frontiers: introspection::frontiers::NativeFrontiers,
+
     /// Serialized DDL. DDL must be serialized because:
     /// - Many of them do off-thread work and need to verify the catalog is in a valid state, but
     ///   [`PlanValidity`] does not currently support tracking all changes. Doing that correctly
@@ -4390,6 +4393,10 @@ impl Coordinator {
                 crate::query_client::read_protection::CLIENT_PROTECTION_HEARTBEAT_INTERVAL;
             let client_heartbeat_timer = tokio::time::sleep(client_heartbeat_delay);
             tokio::pin!(client_heartbeat_timer);
+            // Match storage frontier introspection's maintenance cadence. This
+            // is independent of permission publication and installation waits.
+            let frontier_timer = tokio::time::sleep(Duration::from_secs(1));
+            tokio::pin!(frontier_timer);
 
             loop {
                 let delay = self
@@ -4451,6 +4458,12 @@ impl Coordinator {
                         }
                         publication_timer.set(tokio::time::sleep(publication_delay));
                     }
+                    // Polling the pinned Sleep is cancellation-safe. Snapshot
+                    // observations, not permissions or controller installation.
+                    _ = frontier_timer.as_mut(), if self.controller.replica_owned_compute() => {
+                        self.update_native_frontier_introspection();
+                        frontier_timer.set(tokio::time::sleep(Duration::from_secs(1)));
+                    },
                     // `recv_many()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
                     // Receive a batch of commands.
@@ -5873,6 +5886,7 @@ pub fn serve(
                     pending_writes: Vec::new(),
                     occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
                     advance_timelines_interval,
+                    native_frontiers: Default::default(),
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,

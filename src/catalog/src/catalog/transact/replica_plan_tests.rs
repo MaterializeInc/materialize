@@ -54,6 +54,130 @@ async fn protected_catalog() -> (Catalog, PersistClient, Uuid) {
     (catalog, persist, organization)
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn replica_plan_dry_run_returns_contention_for_refresh() {
+    const CHILD: &str = "MZ_CATALOG_DRY_RUN_CONTENTION_CHILD";
+    const DONE: &str = "dry-run contention refreshed successfully";
+    if std::env::var_os(CHILD).is_none() {
+        // A fatal catalog error can exit with status zero. Require completion
+        // evidence from the child, not just a successful process exit.
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            tokio::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "catalog::transact::replica_plan_tests::replica_plan_dry_run_returns_contention_for_refresh",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("bounded dry-run test")
+        .expect("run child");
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains(DONE),
+            "child did not complete: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    Box::pin(exercise_dry_run_contention()).await;
+    println!("{DONE}");
+}
+
+async fn exercise_dry_run_contention() {
+    let (mut catalog, persist, organization) = Box::pin(protected_catalog()).await;
+    let cluster = catalog.user_clusters().next().expect("bootstrap cluster");
+    let replica = cluster
+        .replicas()
+        .next()
+        .expect("bootstrap replica")
+        .replica_id;
+    let id = GlobalId::Transient(1_000_010);
+    let op = select(
+        id,
+        &Catalog::expression_build_version(catalog.config().build_info).to_string(),
+        None,
+        Uuid::new_v4(),
+        Some(ReplicaPlanOwner {
+            replica_id: replica,
+            name: "contention_metric".into(),
+        }),
+        cluster.log_indexes.values().copied().collect(),
+    );
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("join peer");
+    let state = catalog.replica_config().into_state(
+        catalog.config().build_info,
+        catalog.config().environment_id.clone(),
+        catalog.config().connection_context.clone(),
+        persist,
+    );
+    let mut peer = Box::pin(Catalog::open_committed(state, storage))
+        .await
+        .expect("open peer")
+        .catalog;
+    let revision = catalog.transient_revision();
+    peer.transact(
+        None,
+        peer.current_upper().await,
+        None,
+        vec![Op::CreateClientIncarnation {
+            replica_id: Some(replica),
+        }],
+    )
+    .await
+    .expect("peer metadata publication");
+    let error = catalog
+        .transact_incremental_dry_run(
+            catalog.state(),
+            vec![op.clone()],
+            None,
+            None,
+            catalog.current_upper().await,
+        )
+        .await
+        .expect_err("stale dry run must ask the caller to refresh");
+    assert!(matches!(error, CatalogError::Catalog(error) if matches!(
+        error.kind, ErrorKind::Durable(crate::durable::DurableCatalogError::CatalogOutOfSync { .. })
+    )));
+    catalog
+        .sync_to_current_updates()
+        .await
+        .expect("refresh peer metadata");
+    assert_eq!(
+        catalog.transient_revision(),
+        revision,
+        "metadata does not invalidate planning"
+    );
+    let (candidate, _) = catalog
+        .transact_incremental_dry_run(
+            catalog.state(),
+            vec![op],
+            None,
+            None,
+            catalog.current_upper().await,
+        )
+        .await
+        .expect("revalidated dry run");
+    assert!(
+        candidate
+            .written_plans()
+            .keys()
+            .any(|(selected, _)| *selected == id)
+    );
+}
+
 fn select(
     id: GlobalId,
     build: &str,

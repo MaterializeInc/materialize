@@ -317,12 +317,14 @@ impl Coordinator {
 
         // Clone what we need from the session before taking &mut below.
         let clone_start = Instant::now();
+        let txn_revision = *txn_revision;
         let txn_ops_clone = txn_ops.clone();
-        let txn_state_clone = txn_state.clone();
+        let mut txn_state_clone = txn_state.clone();
         // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
         // O(catalog size) in allocations, once per statement. `txn_state` next to
         // it is cheap, `CatalogState` holds its large collections in `imbl` maps.
-        let prev_snapshot = txn_snapshot.clone();
+        let mut prev_snapshot = txn_snapshot.clone();
+        let first_statement = prev_snapshot.is_none();
         phase_seconds
             .with_label_values(&["ddl_txn_snapshot_clone"])
             .observe(clone_start.elapsed().as_secs_f64());
@@ -361,26 +363,44 @@ impl Coordinator {
             .await
             .timestamp;
 
-        // Get ConnMeta for the session.
-        let conn = self.active_conns.get(ctx.session().conn_id());
-
         // Incremental dry run: process only NEW ops against accumulated state.
         // If we have a saved snapshot from a previous dry run, use it to
         // initialize the transaction so it starts in sync with the accumulated
-        // state. Otherwise (first statement), the fresh durable transaction is
-        // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
-            .catalog()
-            .transact_incremental_dry_run(
-                &txn_state_clone,
-                ops.clone(),
-                conn,
-                prev_snapshot,
-                oracle_write_ts,
-            )
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
-            .await?;
+        // state. A first statement may encounter peer metadata publication and
+        // must refresh before retrying, without merging a structural DDL race.
+        let (new_state, new_snapshot) = loop {
+            let conn = self.active_conns.get(ctx.session().conn_id());
+            let result = self
+                .catalog()
+                .transact_incremental_dry_run(
+                    &txn_state_clone,
+                    ops.clone(),
+                    conn,
+                    prev_snapshot.take(),
+                    oracle_write_ts,
+                )
+                .wall_time()
+                .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
+                .await;
+            match result {
+                Err(AdapterError::Catalog(error))
+                    if first_statement
+                        && matches!(
+                            &error.kind,
+                            mz_catalog::memory::error::ErrorKind::Durable(
+                                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                            )
+                        ) =>
+                {
+                    self.refresh_catalog_after_conflict().await?;
+                    if self.catalog().transient_revision() != txn_revision {
+                        return Err(AdapterError::DDLTransactionRace);
+                    }
+                    txn_state_clone = self.catalog().state().clone();
+                }
+                result => break result?,
+            }
+        };
 
         // Accumulate ops for eventual COMMIT.
         let result = ctx
@@ -400,6 +420,33 @@ impl Coordinator {
             .observe(start.elapsed().as_secs_f64());
 
         result
+    }
+
+    /// Apply the committed prefix exposed by a retryable catalog conflict.
+    /// Structural changes are checked by the caller against its planning revision.
+    pub(super) async fn refresh_catalog_after_conflict(&mut self) -> Result<(), AdapterError> {
+        let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
+        let builtin = self
+            .catalog()
+            .state()
+            .resolve_builtin_table_updates(builtin);
+        let notify = self.builtin_table_update().execute(builtin);
+        match mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(
+            Box::pin(self.apply_catalog_implications(None, updates)),
+        ))
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                mz_ore::halt!("cannot enact committed catalog changes, restart required: {error}")
+            }
+            Err(payload) => {
+                let cause = mz_ore::panic::downcast_panic_message(&*payload);
+                mz_ore::halt!("cannot enact committed catalog changes, restart required: {cause}")
+            }
+        }
+        notify.await;
+        Ok(())
     }
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
@@ -441,31 +488,7 @@ impl Coordinator {
                         )
                     ) =>
                 {
-                    let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
-                    let builtin = self
-                        .catalog()
-                        .state()
-                        .resolve_builtin_table_updates(builtin);
-                    let notify = self.builtin_table_update().execute(builtin);
-                    match mz_ore::future::OreFutureExt::ore_catch_unwind(
-                        std::panic::AssertUnwindSafe(Box::pin(
-                            self.apply_catalog_implications(None, updates),
-                        )),
-                    )
-                    .await
-                    {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => mz_ore::halt!(
-                            "cannot enact committed catalog changes, restart required: {error}"
-                        ),
-                        Err(payload) => {
-                            let cause = mz_ore::panic::downcast_panic_message(&*payload);
-                            mz_ore::halt!(
-                                "cannot enact committed catalog changes, restart required: {cause}"
-                            )
-                        }
-                    }
-                    notify.await;
+                    self.refresh_catalog_after_conflict().await?;
                     if !retry_after_planning_change
                         && self.catalog().transient_revision() != revision
                     {
@@ -491,11 +514,10 @@ impl Coordinator {
         use mz_repr::optimize::OverrideFrom;
 
         if !self.catalog().state().catalog_read_protection_enabled()
-            || !ops.iter().any(|op| {
-                matches!(
-                    op,
-                    Op::DropObjects(_) | Op::AlterMaterializedViewApplyReplacement { .. }
-                )
+            || !ops.iter().any(|op| match op {
+                Op::DropObjects(objects) => !objects.is_empty(),
+                Op::AlterMaterializedViewApplyReplacement { .. } => true,
+                _ => false,
             })
         {
             return Ok((Vec::new(), Vec::new()));
@@ -866,7 +888,7 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let oracle_write_ts = self
+        let mut oracle_write_ts = self
             .get_catalog_write_ts()
             .wall_time()
             .observe(phase_seconds.with_label_values(&["write_ts"]))
@@ -890,43 +912,98 @@ impl Coordinator {
 
         let (_written_plan_protection, rewritten_objects) =
             Box::pin(self.prepare_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
+                .wall_time()
+                .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
                 .await?;
 
-        Box::pin(self.prepare_replica_metric_sinks(conn_id, &mut ops, oracle_write_ts)).await?;
+        Box::pin(self.prepare_replica_metric_sinks(conn_id, &mut ops, oracle_write_ts))
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["replica_metric_preparation"]))
+            .await?;
+
+        // Metadata publication does not invalidate immutable plans or their
+        // held inputs. Retry commit validation against the refreshed prefix,
+        // not the expensive preparation that preceded it. Structural changes
+        // return to the outer loop's planning-conflict policy.
+        let prepared_revision = self.catalog().transient_revision();
+        let result = loop {
+            let result = {
+                let Coordinator {
+                    catalog,
+                    active_conns,
+                    controller,
+                    ..
+                } = self;
+                let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
+                // Time validation and durable work per attempt. Preparation and
+                // conflict refresh have separate phases, not hidden retry cost.
+                Arc::make_mut(catalog)
+                    .transact(
+                        Some(&mut controller.storage_collections),
+                        oracle_write_ts,
+                        conn,
+                        ops.clone(),
+                    )
+                    .wall_time()
+                    .observe(phase_seconds.with_label_values(&["transact"]))
+                    .await
+            };
+            match result {
+                Err(error)
+                    if matches!(&error,
+                    AdapterError::Catalog(error) if matches!(&error.kind,
+                        mz_catalog::memory::error::ErrorKind::Durable(
+                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                        ))) =>
+                {
+                    self.refresh_catalog_after_conflict()
+                        .wall_time()
+                        .observe(phase_seconds.with_label_values(&["conflict_refresh"]))
+                        .await?;
+                    if self.catalog().transient_revision() != prepared_revision {
+                        return Err(error);
+                    }
+                    if let Some(client) = &self.query_client
+                        && !self
+                            .catalog()
+                            .state()
+                            .client_incarnations()
+                            .contains_key(&client.protection.incarnation())
+                    {
+                        // Held tokens cannot outlive durable reclamation. A
+                        // further peer change is caught by transaction-open/CAS
+                        // validation before these prepared operations commit.
+                        client.protection.mark_closed();
+                        return Err(AdapterError::internal(
+                            "prepared catalog transaction",
+                            "client read protection incarnation is closed",
+                        ));
+                    }
+                    oracle_write_ts = self
+                        .get_catalog_write_ts()
+                        .wall_time()
+                        .observe(phase_seconds.with_label_values(&["write_ts"]))
+                        .await;
+                }
+                result => break result?,
+            }
+        };
 
         let Coordinator {
             catalog,
             active_conns,
-            controller,
             cluster_replica_statuses,
             ..
         } = self;
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
-        // NOTE: This phase contains every durable `sync` and `commit` a catalog
-        // transaction performs, which is what makes `transact` minus those two
-        // histograms an estimate of the in-memory work. Two caveats. More than
-        // one sync happens per transaction, so the subtraction is only valid on
-        // rates of `_sum`, never on per-observation means. And durable
-        // `allocate_id` (user ID pool refills, storage usage batch IDs) observes
-        // into the same histograms from outside any catalog transaction, so the
-        // estimate is biased low while allocation is active.
         let TransactionResult {
             builtin_table_updates,
             catalog_updates,
             audit_events,
             created_client_incarnations,
-        } = catalog
-            .transact(
-                Some(&mut controller.storage_collections),
-                oracle_write_ts,
-                conn,
-                ops,
-            )
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["transact"]))
-            .await?;
+        } = result;
 
         if let Some(conn) = conn
             && !rewritten_objects.is_empty()

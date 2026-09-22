@@ -281,6 +281,25 @@ impl QueryReplicaConnections {
         self.ready_snapshot(cluster, target).1
     }
 
+    /// Current connections with their catalog identity, for passive observations.
+    /// A retained connection can close after this snapshot, so consumers must
+    /// still handle a failed observation read.
+    pub(crate) fn ready_replicas(&self) -> Vec<(ReplicaKey, ReplicaQueryClient)> {
+        self.replicas
+            .lock()
+            .expect("query replicas mutex poisoned")
+            .iter()
+            .filter_map(|(key, replica)| {
+                let state = replica.state.lock().expect("query replica mutex poisoned");
+                state
+                    .client
+                    .as_ref()
+                    .filter(|client| client.is_connected())
+                    .map(|client| (*key, client.clone()))
+            })
+            .collect()
+    }
+
     /// Wait for at least one matching replica, not every replica in the cluster.
     /// Absence is an error, but a desired replica awaiting QueryReady is not.
     /// Dropping this future cancels the wait without affecting connections.
