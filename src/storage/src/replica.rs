@@ -3,11 +3,14 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-//! Passive, attempt-scoped observations for native maintained execution.
+//! Attempt-scoped observations and Kafka open admission for native execution.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{StorageCommand, StorageResponse};
@@ -21,6 +24,16 @@ use timely::progress::Antichain;
 /// acknowledgements do not imply that an execution has finished reading.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaStorageResponse {
+    /// Revalidate current definition, eligibility, and input protection before
+    /// this attempt opens a transactional Kafka producer.
+    KafkaPreOpen {
+        /// Unique, one-use request identity.
+        request: uuid::Uuid,
+        /// Run sequence that owns this request.
+        execution: u64,
+        /// Sink being opened.
+        id: GlobalId,
+    },
     /// The ordinary storage response, aggregated across global workers.
     Response(StorageResponse),
     /// Installation concluded on every worker, by rendering or fencing the
@@ -152,6 +165,104 @@ pub(crate) fn inputs(command: &StorageCommand) -> Option<(GlobalId, Vec<GlobalId
 
 type Observation = Box<dyn Fn() -> Antichain<Timestamp>>;
 
+/// Native endpoint ingress. This is not part of the controller wire protocol.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ReplicaCommand {
+    /// Maintained storage command and its native ingress sequence.
+    Storage(u64, StorageCommand),
+    /// One-use response to a pre-open callback on its originating worker.
+    KafkaPreOpenReply {
+        /// Unique callback identity.
+        request: uuid::Uuid,
+        /// Owning Run sequence.
+        execution: u64,
+        /// Sink being opened.
+        id: GlobalId,
+        /// Maximum age since request start, or denial.
+        max_age: Option<Duration>,
+    },
+}
+
+struct PendingPreOpen {
+    execution: u64,
+    id: GlobalId,
+    reply: tokio::sync::oneshot::Sender<Option<Duration>>,
+}
+
+struct PendingRequest(
+    Rc<RefCell<BTreeMap<uuid::Uuid, PendingPreOpen>>>,
+    uuid::Uuid,
+);
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        self.0.borrow_mut().remove(&self.1);
+    }
+}
+
+pub(crate) struct KafkaPreOpen {
+    execution: u64,
+    id: GlobalId,
+    current: Arc<AtomicBool>,
+    pending: Rc<RefCell<BTreeMap<uuid::Uuid, PendingPreOpen>>>,
+    commands: crate::internal_control::InternalCommandSender,
+}
+
+/// Consumed inside the blocking closure, immediately before the external call.
+/// The clock starts before requesting admission so queues never extend its age.
+/// This bounds the open decision, not the external call's duration. Kafka's
+/// transactional fencing still governs a call that is already in flight.
+pub(crate) struct KafkaOpenApproval {
+    started: Instant,
+    max_age: Duration,
+    current: Arc<AtomicBool>,
+}
+
+impl KafkaOpenApproval {
+    pub fn check(self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.current.load(Ordering::SeqCst), "Kafka attempt retired");
+        anyhow::ensure!(
+            self.started.elapsed() < self.max_age,
+            "Kafka admission expired"
+        );
+        Ok(())
+    }
+}
+
+impl KafkaPreOpen {
+    pub async fn request(self) -> anyhow::Result<KafkaOpenApproval> {
+        let started = Instant::now();
+        anyhow::ensure!(self.current.load(Ordering::SeqCst), "Kafka attempt retired");
+        let request = uuid::Uuid::new_v4();
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.pending.borrow_mut().insert(
+            request,
+            PendingPreOpen {
+                execution: self.execution,
+                id: self.id,
+                reply,
+            },
+        );
+        // Cancellation must remove the local callback even if no reply arrives.
+        let _cleanup = PendingRequest(Rc::clone(&self.pending), request);
+        self.commands.send(
+            crate::internal_control::InternalStorageCommand::KafkaPreOpen {
+                request,
+                execution: self.execution,
+                id: self.id,
+            },
+        );
+        let max_age = response
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Kafka admission denied"))?;
+        Ok(KafkaOpenApproval {
+            started,
+            max_age,
+            current: self.current,
+        })
+    }
+}
+
 struct Input {
     readers: Vec<Observation>,
     reported: Antichain<Timestamp>,
@@ -167,14 +278,70 @@ struct Attempt {
 
 #[derive(Default)]
 pub(crate) struct Executions {
+    // Mutate through start/retire so blocking Kafka opens are revoked too.
     pub current: BTreeMap<GlobalId, u64>,
     pub outputs: OutputGenerations,
     pub dropped_outputs: Vec<(GlobalId, u64)>,
     attempts: RefCell<BTreeMap<u64, Attempt>>,
+    gates: BTreeMap<GlobalId, Arc<AtomicBool>>,
+    preopens: Rc<RefCell<BTreeMap<uuid::Uuid, PendingPreOpen>>>,
+}
+
+impl Drop for Executions {
+    fn drop(&mut self) {
+        for gate in self.gates.values() {
+            gate.store(false, Ordering::SeqCst);
+        }
+        self.preopens.borrow_mut().clear();
+    }
 }
 
 impl Executions {
+    pub fn retire(&mut self, id: GlobalId) {
+        self.current.remove(&id);
+        if let Some(gate) = self.gates.remove(&id) {
+            gate.store(false, Ordering::SeqCst);
+        }
+        self.preopens
+            .borrow_mut()
+            .retain(|_, pending| pending.id != id);
+    }
+
+    pub fn kafka_pre_open(
+        &self,
+        id: GlobalId,
+        commands: crate::internal_control::InternalCommandSender,
+    ) -> KafkaPreOpen {
+        KafkaPreOpen {
+            execution: self.current[&id],
+            id,
+            current: Arc::clone(&self.gates[&id]),
+            pending: Rc::clone(&self.preopens),
+            commands,
+        }
+    }
+
+    pub fn kafka_pre_open_reply(
+        &self,
+        request: uuid::Uuid,
+        execution: u64,
+        id: GlobalId,
+        max_age: Option<Duration>,
+    ) {
+        let mut pending = self.preopens.borrow_mut();
+        if pending
+            .get(&request)
+            .is_some_and(|p| p.execution == execution && p.id == id)
+        {
+            let pending = pending.remove(&request).expect("checked request");
+            let max_age = max_age.filter(|_| self.current.get(&id) == Some(&execution));
+            let _ = pending.reply.send(max_age);
+        }
+    }
+
     pub fn start(&mut self, execution: u64, id: GlobalId, inputs: Vec<GlobalId>) {
+        self.retire(id);
+        self.gates.insert(id, Arc::new(AtomicBool::new(true)));
         self.current.insert(id, execution);
         assert!(
             self.attempts

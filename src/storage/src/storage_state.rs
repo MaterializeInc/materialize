@@ -142,6 +142,7 @@ struct Query {
     /// Terminal callbacks observed in the common order, one per worker.
     finished: BTreeMap<Uuid, usize>,
     responses: Vec<StorageResponse>,
+    observations: bool,
 }
 
 /// State maintained for each worker thread.
@@ -163,7 +164,7 @@ pub struct Worker<'w> {
     initialization: Option<Vec<StorageCommand>>,
     queries: BTreeMap<Uuid, Query>,
     query_ready: bool,
-    replica_commands: Option<mpsc::UnboundedReceiver<(u64, StorageCommand)>>,
+    replica_commands: Option<mpsc::UnboundedReceiver<crate::replica::ReplicaCommand>>,
     replica_progress: Option<mz_cluster::replica_progress::Sender<crate::replica::WorkerResponse>>,
 }
 
@@ -293,7 +294,7 @@ impl<'w> Worker<'w> {
     pub(crate) fn enable_replica(
         &mut self,
     ) -> (
-        mpsc::UnboundedSender<(u64, StorageCommand)>,
+        mpsc::UnboundedSender<crate::replica::ReplicaCommand>,
         mpsc::UnboundedReceiver<(usize, crate::replica::WorkerResponse)>,
     ) {
         assert!(self.replica_progress.is_none());
@@ -524,10 +525,10 @@ impl<'w> Worker<'w> {
             if let Some(commands) = &mut self.replica_commands {
                 for _ in 0..commands.len() + 1 {
                     match commands.try_recv() {
-                        Ok((sequence, command)) => self
+                        Ok(command) => self
                             .storage_state
                             .internal_cmd_tx
-                            .send(InternalStorageCommand::Replica(sequence, command)),
+                            .send(InternalStorageCommand::Replica(command)),
                         Err(TryRecvError::Empty) => break,
                         Err(TryRecvError::Disconnected) => panic!("replica storage ingress lost"),
                     }
@@ -741,6 +742,32 @@ impl<'w> Worker<'w> {
                     }
                 }
             }
+            Some(StorageCommand::SubscribeObservations) => {
+                if !self.query_ready {
+                    // A malformed query peer must not kill maintained work.
+                    self.handle_query(nonce, None);
+                    return;
+                }
+                let Some(query) = self.queries.get_mut(&nonce) else {
+                    return;
+                };
+                // The client waits for aggregate readiness before subscribing, so
+                // every process has its endpoint and current state available.
+                if !query.observations {
+                    query.observations = true;
+                    let now = mz_ore::now::to_datetime((self.storage_state.now)());
+                    query.responses.extend(
+                        self.storage_state
+                            .latest_status_updates
+                            .values()
+                            .cloned()
+                            .map(|mut update| {
+                                update.timestamp = now.clone();
+                                StorageResponse::StatusUpdate(update)
+                            }),
+                    );
+                }
+            }
             None => {
                 self.queries.remove(&nonce);
                 self.peers.remove(&nonce);
@@ -868,7 +895,44 @@ impl<'w> Worker<'w> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(&mut self, internal_cmd: InternalStorageCommand) {
         match internal_cmd {
-            InternalStorageCommand::Replica(sequence, command) => {
+            InternalStorageCommand::Replica(
+                crate::replica::ReplicaCommand::KafkaPreOpenReply {
+                    request,
+                    execution,
+                    id,
+                    max_age,
+                },
+            ) => {
+                self.storage_state
+                    .executions
+                    .as_mut()
+                    .expect("native runtime")
+                    .kafka_pre_open_reply(request, execution, id, max_age);
+            }
+            InternalStorageCommand::KafkaPreOpen {
+                request,
+                execution,
+                id,
+            } => {
+                // Exactly one response, regardless of which process runs the sink.
+                if self.timely_worker.index() == 0 {
+                    self.replica_progress
+                        .as_ref()
+                        .expect("native runtime")
+                        .send(
+                            crate::replica::ReplicaStorageResponse::KafkaPreOpen {
+                                request,
+                                execution,
+                                id,
+                            }
+                            .into(),
+                        );
+                }
+            }
+            InternalStorageCommand::Replica(crate::replica::ReplicaCommand::Storage(
+                sequence,
+                command,
+            )) => {
                 assert!(self.replica_progress.is_some());
                 let dropping = match &command {
                     StorageCommand::AllowCompaction(_, frontier) => frontier.is_empty(),
@@ -953,7 +1017,7 @@ impl<'w> Worker<'w> {
                     }
                     // Removing admission fences late startup and coalesces all
                     // workers' requests for this attempt. Only a new Run can restart.
-                    executions.current.remove(&id);
+                    executions.retire(id);
                     self.storage_state.source_tokens.remove(&id);
                     self.storage_state.sink_tokens.remove(&id);
                     self.replica_progress.as_ref().unwrap().send(
@@ -1357,7 +1421,8 @@ impl<'w> Worker<'w> {
                 .map(|mut update| {
                     update.timestamp = now_ts.clone();
                     update
-                });
+                })
+                .collect::<Vec<_>>();
             for update in status_updates {
                 self.send_storage_response(response_tx, StorageResponse::StatusUpdate(update));
             }
@@ -1386,6 +1451,11 @@ impl<'w> Worker<'w> {
                 .send(InternalStorageCommand::StatisticsUpdate { sources, sinks })
         }
 
+        // Snapshot resets global counters. Keep aggregating at constant memory
+        // through same-process observer outages, without consuming their deltas.
+        if self.replica_progress.is_some() && !self.queries.values().any(|q| q.observations) {
+            return;
+        }
         let (sources, sinks) = self.storage_state.aggregated_statistics.snapshot();
         if !sources.is_empty() || !sinks.is_empty() {
             self.send_storage_response(
@@ -1417,7 +1487,19 @@ impl<'w> Worker<'w> {
     }
 
     /// Send a response to the coordinator.
-    fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
+    fn send_storage_response(&mut self, response_tx: &ResponseSender, response: StorageResponse) {
+        if matches!(
+            response,
+            StorageResponse::StatusUpdate(_) | StorageResponse::StatisticsUpdates(..)
+        ) {
+            for query in self.queries.values_mut().filter(|q| q.observations) {
+                query.responses.push(response.clone());
+            }
+            self.flush_query_responses();
+            if self.replica_progress.is_some() {
+                return;
+            }
+        }
         if let Some(progress) = &self.replica_progress {
             let output_generation = if let StorageResponse::FrontierUpper(id, _) = &response {
                 Some(self.storage_state.executions.as_ref().unwrap().outputs.0[id])
@@ -1498,8 +1580,10 @@ impl<'w> Worker<'w> {
 
         for command in &mut commands {
             match command {
-                StorageCommand::Hello { .. } | StorageCommand::HelloQuery { .. } => {
-                    panic!("Hello must be captured before")
+                StorageCommand::Hello { .. }
+                | StorageCommand::HelloQuery { .. }
+                | StorageCommand::SubscribeObservations => {
+                    panic!("transport and query commands must be captured before")
                 }
                 StorageCommand::AllowCompaction(id, since) => {
                     info!(%worker_id, ?id, ?since, "reconcile: received AllowCompaction command");
@@ -1570,8 +1654,10 @@ impl<'w> Worker<'w> {
         for mut command in commands.into_iter().rev() {
             let mut should_keep = true;
             match &mut command {
-                StorageCommand::Hello { .. } | StorageCommand::HelloQuery { .. } => {
-                    panic!("Hello must be captured before")
+                StorageCommand::Hello { .. }
+                | StorageCommand::HelloQuery { .. }
+                | StorageCommand::SubscribeObservations => {
+                    panic!("transport and query commands must be captured before")
                 }
                 StorageCommand::RunIngestion(ingestion) => {
                     // Subsources can be dropped independently of their
@@ -1774,8 +1860,10 @@ impl StorageState {
     /// commands to the `internal_cmd_tx`.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::Hello { .. } | StorageCommand::HelloQuery { .. } => {
-                panic!("Hello must be captured before")
+            StorageCommand::Hello { .. }
+            | StorageCommand::HelloQuery { .. }
+            | StorageCommand::SubscribeObservations => {
+                panic!("transport and query commands must be captured before")
             }
             StorageCommand::InitializationComplete => (),
             StorageCommand::AllowWrites => {
@@ -1904,7 +1992,7 @@ impl StorageState {
         fail_point!("crash_on_drop");
 
         if let Some(executions) = &mut self.executions {
-            executions.current.remove(&id);
+            executions.retire(id);
             if let Some(generation) = executions.outputs.0.remove(&id) {
                 executions.dropped_outputs.push((id, generation));
             }
@@ -1962,351 +2050,5 @@ impl StorageState {
 mod native_runtime_tests;
 
 #[cfg(test)]
-mod query_tests {
-    use super::*;
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_storage_types::oneshot_sources::{
-        ContentFilter, ContentFormat, ContentShape, ContentSource, OneshotIngestionRequest,
-    };
-
-    pub(super) fn worker<'w>(
-        timely: &'w mut TimelyWorker,
-        clients: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
-    ) -> Worker<'w> {
-        Worker::new(
-            timely,
-            clients,
-            StorageMetrics::register_with(&MetricsRegistry::new()),
-            mz_ore::now::SYSTEM_TIME.clone(),
-            ConnectionContext::for_tests(Arc::new(mz_secrets::InMemorySecretsController::new())),
-            StorageInstanceContext::new(None, None),
-            Arc::new(PersistClientCache::new_no_metrics()),
-            TxnsContext::default(),
-            Arc::new(TracingHandle::disabled()),
-            Default::default(),
-        )
-    }
-
-    fn connect(
-        clients: &mpsc::UnboundedSender<(Uuid, CommandReceiver, ResponseSender)>,
-        nonce: Uuid,
-        query: bool,
-    ) -> (
-        mpsc::UnboundedSender<StorageCommand>,
-        mpsc::UnboundedReceiver<StorageResponse>,
-    ) {
-        let (tx, commands) = mpsc::unbounded_channel();
-        let (responses, rx) = mpsc::unbounded_channel();
-        clients.send((nonce, commands, responses)).unwrap();
-        tx.send(if query {
-            StorageCommand::HelloQuery { nonce }
-        } else {
-            // ClusterClient consumes lifecycle Hello before the worker boundary.
-            StorageCommand::UpdateConfiguration(Default::default())
-        })
-        .unwrap();
-        (tx, rx)
-    }
-
-    fn drive(worker: &mut Worker<'_>, done: impl Fn(&Worker<'_>) -> bool) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let (discard_responses, _) = mpsc::unbounded_channel();
-        loop {
-            worker.poll_clients();
-            worker.timely_worker.step();
-            worker.process_oneshot_ingestions(&discard_responses);
-            while let Some(command) = worker.storage_state.internal_cmd_rx.try_recv() {
-                worker.handle_internal_storage_command(command);
-            }
-            if done(worker) {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "worker boundary timed out"
-            );
-        }
-    }
-
-    fn request(id: Uuid) -> StorageCommand {
-        let desc = mz_repr::RelationDesc::empty();
-        StorageCommand::RunOneshotIngestion(Box::new(RunOneshotIngestion {
-            ingestion_id: id,
-            collection_id: GlobalId::User(1),
-            collection_meta: CollectionMetadata {
-                persist_location: mz_persist_types::PersistLocation {
-                    blob_uri: "mem://query-test".parse().unwrap(),
-                    consensus_uri: "mem://query-test".parse().unwrap(),
-                },
-                data_shard: mz_persist_client::ShardId::new(),
-                relation_desc: desc.clone(),
-                txns_shard: None,
-            },
-            request: OneshotIngestionRequest {
-                source: ContentSource::Http {
-                    // Port zero cannot host an HTTP service. The real renderer
-                    // reports a fetch error without an external dependency.
-                    url: "http://127.0.0.1:0/unused".parse().unwrap(),
-                },
-                format: ContentFormat::Parquet,
-                filter: ContentFilter::None,
-                shape: ContentShape {
-                    source_desc: desc,
-                    source_mfp: mz_expr::SafeMfpPlan::from_mfp(mz_expr::MapFilterProject::new(0)),
-                },
-            },
-        }))
-    }
-
-    #[mz_ore::test]
-    fn query_worker_pending_routing_and_retirement() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let handle = runtime.handle().clone();
-        let barrier = Arc::new(std::sync::Barrier::new(2));
-        let guards = timely::execute(timely::Config::process(2), move |timely| {
-            let _guard = handle.enter();
-            let (clients, rx) = mpsc::unbounded_channel();
-            let mut worker = worker(timely, rx);
-            let lifecycle = Uuid::from_u128(1);
-            let owner = Uuid::from_u128(2);
-            let sibling = Uuid::from_u128(3);
-            let id = Uuid::from_u128(4);
-            let (lifecycle_tx, mut lifecycle_rx) = connect(&clients, lifecycle, false);
-            let (owner_tx, mut owner_rx) = connect(&clients, owner, true);
-            let (sibling_tx, mut sibling_rx) = connect(&clients, sibling, true);
-            owner_tx.send(request(id)).unwrap();
-            drive(&mut worker, |w| {
-                w.storage_state.query_owners.contains_key(&id) && w.queries.contains_key(&sibling)
-            });
-            assert!(worker.initialization.is_some());
-            assert!(!worker.query_ready);
-            assert!(owner_rx.try_recv().is_err());
-            barrier.wait();
-            // A sibling cannot cancel another connection's pending run.
-            sibling_tx
-                .send(StorageCommand::CancelOneshotIngestion(id))
-                .unwrap();
-            drive(&mut worker, |w| w.queries[&sibling].seen.contains(&id));
-            assert!(worker.queries[&owner].pending.contains_key(&id));
-            barrier.wait();
-            owner_tx
-                .send(StorageCommand::CancelOneshotIngestion(id))
-                .unwrap();
-            drive(&mut worker, |w| {
-                !w.queries[&owner].pending.contains_key(&id)
-            });
-            assert!(!worker.storage_state.query_owners.contains_key(&id));
-            barrier.wait();
-            let pending = Uuid::from_u128(5);
-            // The sibling cancelled this ID before ever submitting a run.
-            sibling_tx.send(request(id)).unwrap();
-            owner_tx.send(request(pending)).unwrap();
-            drive(&mut worker, |w| {
-                w.storage_state.query_owners.contains_key(&pending)
-            });
-            assert!(!worker.queries[&sibling].pending.contains_key(&id));
-            barrier.wait();
-            drop(owner_tx);
-            drive(&mut worker, |w| !w.queries.contains_key(&owner));
-            assert!(worker.storage_state.query_owners.is_empty());
-            assert!(worker.queries.contains_key(&sibling));
-            assert!(worker.initialization.is_some());
-            barrier.wait();
-            lifecycle_tx
-                .send(StorageCommand::InitializationComplete)
-                .unwrap();
-            drive(&mut worker, |w| w.query_ready);
-            assert!(matches!(
-                sibling_rx.try_recv(),
-                Ok(StorageResponse::QueryReady)
-            ));
-            assert!(lifecycle_rx.try_recv().is_err());
-            barrier.wait();
-            drop(sibling_tx);
-            drive(&mut worker, |w| w.queries.is_empty());
-            barrier.wait();
-            drop(lifecycle_tx);
-            drop(clients);
-            worker.run();
-            // Timely's sequencer is intentionally live until the server returns.
-            worker.timely_worker.drop_dataflow(0);
-        })
-        .unwrap();
-        for result in guards.join() {
-            result.unwrap();
-        }
-    }
-
-    #[mz_ore::test]
-    fn query_worker_results_preserve_maintained_work() {
-        let results_barrier = Arc::new(tokio::sync::Barrier::new(2));
-        let saw_error = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let handle = runtime.handle().clone();
-        let barrier = Arc::new(std::sync::Barrier::new(2));
-        let guards = timely::execute(timely::Config::process(2), move |timely| {
-            let _guard = handle.enter();
-            let (clients, rx) = mpsc::unbounded_channel();
-            let mut worker = worker(timely, rx);
-            let (lifecycle_tx, mut lifecycle_rx) = connect(&clients, Uuid::from_u128(1), false);
-            lifecycle_tx
-                .send(StorageCommand::InitializationComplete)
-                .unwrap();
-            drive(&mut worker, |w| w.query_ready);
-            barrier.wait();
-
-            let maintained = GlobalId::User(9);
-            let token = worker.timely_worker.dataflow::<Timestamp, _, _>(|scope| {
-                mz_timely_util::builder_async::OperatorBuilder::new("maintained".into(), scope)
-                    .build(|_| std::future::pending::<()>())
-                    .press_on_drop()
-            });
-            worker
-                .storage_state
-                .source_tokens
-                .insert(maintained, vec![token]);
-            let upper = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::from(42))));
-            worker
-                .storage_state
-                .source_uppers
-                .insert(maintained, Rc::clone(&upper));
-            worker
-                .storage_state
-                .reported_frontiers
-                .insert(maintained, upper.borrow().clone());
-
-            let owner = Uuid::from_u128(2);
-            // Worker one's local endpoint arrives after the sequenced open and
-            // QueryReady. Responses must wait for that endpoint, not leak to lifecycle.
-            let mut owner_client =
-                (worker.timely_worker.index() == 0).then(|| connect(&clients, owner, true));
-            drive(&mut worker, |w| w.queries.contains_key(&owner));
-            barrier.wait();
-            let (owner_tx, mut owner_rx) = owner_client
-                .take()
-                .unwrap_or_else(|| connect(&clients, owner, true));
-            let (sibling_tx, mut sibling_rx) = connect(&clients, Uuid::from_u128(3), true);
-            let (replacement_tx, mut replacement_rx) = connect(&clients, Uuid::from_u128(4), false);
-
-            let results_barrier = Arc::clone(&results_barrier);
-            let saw_error = Arc::clone(&saw_error);
-            let worker_thread = thread::current();
-            let task = mz_ore::task::spawn(|| "storage query test client", async move {
-                // No new endpoints can arrive, but existing clients must still work.
-                drop(clients);
-                let result = tokio::time::timeout(Duration::from_secs(30), async {
-                    assert!(matches!(
-                        owner_rx.recv().await,
-                        Some(StorageResponse::QueryReady)
-                    ));
-                    assert!(matches!(
-                        sibling_rx.recv().await,
-                        Some(StorageResponse::QueryReady)
-                    ));
-                    let id = Uuid::from_u128(5);
-                    owner_tx.send(request(id)).unwrap();
-                    worker_thread.unpark();
-                    let Some(StorageResponse::StagedBatches(batches)) = owner_rx.recv().await
-                    else {
-                        panic!("expected owner result");
-                    };
-                    assert_eq!(batches.keys().copied().collect::<Vec<_>>(), vec![id]);
-                    if batches[&id].iter().any(Result::is_err) {
-                        saw_error.store(true, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    assert!(sibling_rx.try_recv().is_err());
-                    assert!(lifecycle_rx.try_recv().is_err());
-                    assert!(replacement_rx.try_recv().is_err());
-                    results_barrier.wait().await;
-                    assert!(saw_error.load(std::sync::atomic::Ordering::SeqCst));
-                    drop(owner_tx);
-                    let id = Uuid::from_u128(6);
-                    sibling_tx.send(request(id)).unwrap();
-                    worker_thread.unpark();
-                    let Some(StorageResponse::StagedBatches(batches)) = sibling_rx.recv().await
-                    else {
-                        panic!("expected healthy sibling result");
-                    };
-                    assert_eq!(batches.keys().copied().collect::<Vec<_>>(), vec![id]);
-                    results_barrier.wait().await;
-                })
-                .await;
-                // Closing the real channels must terminate Worker::run, including
-                // when the assertion/timeout path leaves initialization incomplete.
-                drop((lifecycle_tx, replacement_tx, sibling_tx));
-                worker_thread.unpark();
-                result.unwrap();
-            });
-            worker.run();
-            handle.block_on(task);
-            assert!(worker.storage_state.source_tokens.contains_key(&maintained));
-            assert!(Rc::ptr_eq(
-                &worker.storage_state.source_uppers[&maintained],
-                &upper
-            ));
-            assert_eq!(
-                worker.storage_state.reported_frontiers[&maintained],
-                *upper.borrow()
-            );
-            worker.timely_worker.drop_dataflow(0);
-        })
-        .unwrap();
-        for result in guards.join() {
-            result.unwrap();
-        }
-    }
-
-    #[mz_ore::test]
-    fn query_worker_completion_reclaims_work_before_disconnect() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let handle = runtime.handle().clone();
-        let barrier = Arc::new(std::sync::Barrier::new(2));
-        let guards = timely::execute(timely::Config::process(2), move |timely| {
-            let _guard = handle.enter();
-            let (clients, rx) = mpsc::unbounded_channel();
-            let mut worker = worker(timely, rx);
-            let (lifecycle_tx, _) = connect(&clients, Uuid::from_u128(1), false);
-            let owner = Uuid::from_u128(2);
-            let (owner_tx, mut owner_rx) = connect(&clients, owner, true);
-            lifecycle_tx.send(StorageCommand::InitializationComplete).unwrap();
-            drive(&mut worker, |w| w.query_ready && w.queries.contains_key(&owner));
-            assert!(matches!(owner_rx.try_recv(), Ok(StorageResponse::QueryReady)));
-            let id = Uuid::from_u128(3);
-            owner_tx.send(request(id)).unwrap();
-            drive(&mut worker, |w| {
-                w.queries[&owner].seen.contains(&id)
-                    && !w.storage_state.query_owners.contains_key(&id)
-            });
-            assert!(worker.storage_state.oneshot_ingestions.is_empty());
-            assert!(worker.queries[&owner].finished.is_empty());
-            assert!(matches!(owner_rx.try_recv(), Ok(StorageResponse::StagedBatches(b)) if b.contains_key(&id)));
-            barrier.wait();
-            drop((clients, owner_tx, lifecycle_tx));
-            worker.run();
-            worker.timely_worker.drop_dataflow(0);
-        }).unwrap();
-        for result in guards.join() {
-            result.unwrap();
-        }
-    }
-
-    #[mz_ore::test]
-    fn query_worker_container_shutdown() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let _guard = runtime.enter();
-        timely::execute_directly(|timely| {
-            let (clients, rx) = mpsc::unbounded_channel();
-            let mut worker = worker(timely, rx);
-            let (commands, responses) = mpsc::unbounded_channel();
-            let (response_tx, _response_rx) = mpsc::unbounded_channel();
-            clients
-                .send((Uuid::new_v4(), responses, response_tx))
-                .unwrap();
-            drop(commands);
-            drop(clients);
-            worker.run();
-            assert!(worker.peers.is_empty());
-            worker.timely_worker.drop_dataflow(0);
-        });
-    }
-}
+#[path = "storage_state/query_tests.rs"]
+mod query_tests;

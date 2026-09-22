@@ -31,6 +31,7 @@ pub(super) struct StorageIo {
     pub inputs: BTreeMap<(u64, GlobalId), Antichain<Timestamp>>,
     pub restarts: BTreeSet<(u64, GlobalId)>,
     pub started: BTreeSet<u64>,
+    preopens: Vec<(uuid::Uuid, u64, GlobalId)>,
     initialized: bool,
 }
 
@@ -41,6 +42,7 @@ impl StorageIo {
             inputs: BTreeMap::new(),
             restarts: BTreeSet::new(),
             started: BTreeSet::new(),
+            preopens: Vec::new(),
             initialized: false,
         }
     }
@@ -59,6 +61,13 @@ impl StorageIo {
 
     pub fn absorb(&mut self, response: ReplicaStorageResponse) {
         match response {
+            ReplicaStorageResponse::KafkaPreOpen {
+                request,
+                execution,
+                id,
+            } => {
+                self.preopens.push((request, execution, id));
+            }
             ReplicaStorageResponse::ExecutionStarted { execution } => {
                 self.started.insert(execution);
             }

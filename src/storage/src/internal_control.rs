@@ -67,7 +67,16 @@ impl DataflowParameters {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum InternalStorageCommand {
     /// Native maintained ingress, ordered before worker bookkeeping and async work.
-    Replica(u64, mz_storage_client::client::StorageCommand),
+    Replica(crate::replica::ReplicaCommand),
+    /// Ask the native owner to revalidate immediately before Kafka fencing.
+    KafkaPreOpen {
+        /// Unique callback identity, generated on the requesting worker.
+        request: uuid::Uuid,
+        /// Run sequence.
+        execution: u64,
+        /// Sink identity.
+        id: GlobalId,
+    },
     /// Worker zero sequences query opens, commands and retirement together, so a
     /// delayed process endpoint cannot resurrect retired work.
     Query {

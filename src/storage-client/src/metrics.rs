@@ -260,6 +260,8 @@ pub struct CommandMetrics<M> {
     pub hello: M,
     /// Metrics for `HelloQuery`.
     pub hello_query: M,
+    /// Metrics for `SubscribeObservations`.
+    pub subscribe_observations: M,
     /// Metrics for `InitializationComplete`.
     pub initialization_complete: M,
     /// Metrics for `AllowWrites`.
@@ -286,6 +288,7 @@ impl<M> CommandMetrics<M> {
         Self {
             hello: build_metric("hello"),
             hello_query: build_metric("hello_query"),
+            subscribe_observations: build_metric("subscribe_observations"),
             initialization_complete: build_metric("initialization_complete"),
             allow_writes: build_metric("allow_writes"),
             update_configuration: build_metric("update_configuration"),
@@ -303,6 +306,7 @@ impl<M> CommandMetrics<M> {
     {
         f(&self.hello);
         f(&self.hello_query);
+        f(&self.subscribe_observations);
         f(&self.initialization_complete);
         f(&self.allow_writes);
         f(&self.update_configuration);
@@ -319,6 +323,7 @@ impl<M> CommandMetrics<M> {
         match command {
             Hello { .. } => &self.hello,
             HelloQuery { .. } => &self.hello_query,
+            SubscribeObservations => &self.subscribe_observations,
             InitializationComplete => &self.initialization_complete,
             AllowWrites => &self.allow_writes,
             UpdateConfiguration(..) => &self.update_configuration,

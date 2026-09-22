@@ -90,8 +90,14 @@ impl<C: StorageClient> GenericClient<StorageCommand, StorageResponse> for RoleCl
             (Some(_), Hello { .. } | HelloQuery { .. }) => {
                 anyhow::bail!("duplicate storage handshake")
             }
-            (Some(true), RunOneshotIngestion(_) | CancelOneshotIngestion(_)) => (),
+            (
+                Some(true),
+                RunOneshotIngestion(_) | CancelOneshotIngestion(_) | SubscribeObservations,
+            ) => (),
             (Some(true), _) => anyhow::bail!("command is not allowed on this query connection"),
+            (Some(false), SubscribeObservations) => {
+                anyhow::bail!("observations require a query connection")
+            }
             (Some(false), _) => (),
         }
         self.inner.send(command).await
@@ -111,7 +117,8 @@ pub enum StorageCommand {
     },
     /// Opens an ephemeral query connection without replacing maintained lifecycle.
     /// Use a fresh nonce, common to all replica process connections. Only oneshot
-    /// run and cancel commands are permitted. Wait for QueryReady before work.
+    /// run, cancel, and observation subscription commands are permitted.
+    /// Wait for aggregate QueryReady before work or subscription.
     HelloQuery {
         nonce: Uuid,
     },
@@ -149,6 +156,13 @@ pub enum StorageCommand {
     /// [`CancelOneshotIngestion`]: crate::client::StorageCommand::CancelOneshotIngestion
     /// [`RunOneshotIngestion`]: crate::client::StorageCommand::RunOneshotIngestion
     CancelOneshotIngestion(Uuid),
+    /// Subscribes this query connection to current statuses and live status and
+    /// statistics updates. Send only after aggregate `QueryReady`. Repeating this
+    /// command is a no-op. Disconnect ends the subscription.
+    ///
+    /// Statuses are timestamped at subscription time, not replayed as history.
+    /// Statistics are subsequent deltas, without replay or durability guarantees.
+    SubscribeObservations,
 }
 
 impl StorageCommand {
@@ -158,6 +172,7 @@ impl StorageCommand {
         match self {
             Hello { .. }
             | HelloQuery { .. }
+            | SubscribeObservations
             | InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
@@ -454,6 +469,7 @@ impl PartitionedStorageState {
                 self.insert_new_uppers([export.id]);
             }
             StorageCommand::InitializationComplete
+            | StorageCommand::SubscribeObservations
             | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
             | StorageCommand::AllowCompaction(_, _)
@@ -723,6 +739,12 @@ mod query_wire_tests {
                 std::thread::current(),
             ));
             assert!(client.send(StorageCommand::AllowWrites).await.is_err());
+            assert!(
+                client
+                    .send(StorageCommand::SubscribeObservations)
+                    .await
+                    .is_err()
+            );
             assert!(received.try_recv().is_err());
             let nonce = Uuid::new_v4();
             let hello = if query {
@@ -760,6 +782,17 @@ mod query_wire_tests {
             let cancel = StorageCommand::CancelOneshotIngestion(Uuid::new_v4());
             client.send(cancel.clone()).await.unwrap();
             assert_eq!(received.recv().await, Some(cancel));
+            let subscribed = client.send(StorageCommand::SubscribeObservations).await;
+            if query {
+                subscribed.unwrap();
+                assert_eq!(
+                    received.recv().await,
+                    Some(StorageCommand::SubscribeObservations)
+                );
+            } else {
+                assert!(subscribed.is_err());
+                assert!(received.try_recv().is_err());
+            }
         }
     }
 
@@ -810,6 +843,16 @@ mod query_wire_tests {
                     }
                 }
             }
+        }
+        assert_eq!(
+            replica.split_command(StorageCommand::SubscribeObservations),
+            vec![Some(StorageCommand::SubscribeObservations); processes]
+        );
+        for local in &mut local {
+            assert_eq!(
+                local.split_command(StorageCommand::SubscribeObservations),
+                vec![Some(StorageCommand::SubscribeObservations); workers]
+            );
         }
     }
 }
