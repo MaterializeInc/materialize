@@ -1,69 +1,69 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
-  <title id="t">BYOC on GCP: what runs where</title>
-  <desc id="d">Your Materialize environment runs inside a dedicated GCP project. The Materialize control plane manages your environment using a service account you grant admin on that project, while redacted telemetry flows back to Materialize.</desc>
-
-  <rect x="0" y="0" width="900" height="520" fill="#FFFFFF"/>
-
-  <text x="28" y="36" font-size="19" font-weight="700" fill="#15202B">BYOC on GCP: what runs where</text>
-  <text x="28" y="58" font-size="12.5" fill="#5B6472">Materialize manages the deployment across the project boundary. Your data stays in your project.</text>
-
-  <!-- Your GCP project -->
-  <rect x="28" y="78" width="496" height="416" rx="12" fill="#F1F6FF" stroke="#2D6CDF" stroke-width="1.5"/>
-  <text x="48" y="106" font-size="15" font-weight="700" fill="#2D6CDF">Your GCP project (dedicated)</text>
-
-  <!-- VPC -->
-  <rect x="48" y="120" width="456" height="296" rx="10" fill="#FFFFFF" stroke="#9DB6E8" stroke-width="1.1" stroke-dasharray="5 3"/>
-  <text x="64" y="141" font-size="12" font-weight="600" fill="#3A4658">VPC network</text>
-
-  <!-- GKE -->
-  <rect x="66" y="152" width="420" height="74" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
-  <text x="82" y="178" font-size="13.5" font-weight="700" fill="#15202B">Google Kubernetes Engine</text>
-  <text x="82" y="200" font-size="11.5" fill="#4A5568">Runs your Materialize instance + console</text>
-
-  <!-- Cloud SQL -->
-  <rect x="66" y="238" width="200" height="62" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
-  <text x="82" y="264" font-size="13.5" font-weight="700" fill="#15202B">Cloud SQL</text>
-  <text x="82" y="284" font-size="11.5" fill="#4A5568">Metadata database</text>
-
-  <!-- Cloud Storage -->
-  <rect x="286" y="238" width="200" height="62" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
-  <text x="302" y="264" font-size="13.5" font-weight="700" fill="#15202B">Cloud Storage</text>
-  <text x="302" y="284" font-size="11.5" fill="#4A5568">Object storage</text>
-
-  <!-- Observability -->
-  <rect x="66" y="312" width="420" height="60" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
-  <text x="82" y="338" font-size="13.5" font-weight="700" fill="#15202B">Observability</text>
-  <text x="82" y="357" font-size="11.5" fill="#4A5568">In-project logs + metrics</text>
-
-  <!-- notes -->
-  <text x="48" y="444" font-size="11.5" font-style="italic" fill="#2D6CDF">Your data never leaves your project.</text>
-  <text x="48" y="464" font-size="11.5" fill="#5B6472">Apps connect over a private connection.</text>
-
-  <!-- Materialize control plane -->
-  <rect x="672" y="170" width="200" height="180" rx="12" fill="#F4EEFF" stroke="#7F4EFF" stroke-width="1.5"/>
-  <text x="692" y="200" font-size="15" font-weight="700" fill="#7F4EFF">Materialize</text>
-  <text x="692" y="222" font-size="12" font-weight="600" fill="#3A4658">Control plane</text>
-  <text x="692" y="250" font-size="11.5" fill="#4A5568">Provisioning</text>
-  <text x="692" y="270" font-size="11.5" fill="#4A5568">Upgrades</text>
-  <text x="692" y="290" font-size="11.5" fill="#4A5568">Monitoring</text>
-  <text x="692" y="310" font-size="11.5" fill="#4A5568">Billing</text>
-
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 600" width="1240" height="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="BYOC on GCP architecture: a dedicated customer GCP project containing the VPC network, GKE, Cloud SQL, Cloud Storage, observability and ingress, alongside the Materialize control plane.">
   <defs>
-    <marker id="ap" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L7,3 L0,6 Z" fill="#7F4EFF"/>
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7C3AED"/>
     </marker>
-    <marker id="ag" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L7,3 L0,6 Z" fill="#5B6472"/>
+    <marker id="arrowDark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#111827"/>
     </marker>
   </defs>
 
-  <!-- manage: control plane -> project -->
-  <line x1="672" y1="226" x2="528" y2="226" stroke="#7F4EFF" stroke-width="2" marker-end="url(#ap)"/>
-  <text x="600" y="216" font-size="10.5" fill="#7F4EFF" text-anchor="middle">manages your environment</text>
-  <text x="600" y="240" font-size="9.5" fill="#8A77C9" text-anchor="middle">admin via federation</text>
+  <rect width="1240" height="600" fill="#FFFFFF"/>
 
-  <!-- telemetry: project -> control plane -->
-  <line x1="528" y1="300" x2="670" y2="300" stroke="#5B6472" stroke-width="2" marker-end="url(#ag)"/>
-  <text x="600" y="292" font-size="10.5" fill="#5B6472" text-anchor="middle">redacted</text>
-  <text x="600" y="316" font-size="9.5" fill="#7A828F" text-anchor="middle">logs + metrics</text>
+  <!-- Customer project -->
+  <rect x="10" y="10" width="660" height="560" rx="14" fill="#EEF3FE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="34" y="54" font-size="25" font-weight="700" fill="#1D4ED8">Customer GCP project (dedicated)</text>
+
+  <rect x="34" y="72" width="612" height="400" rx="8" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="54" y="106" font-size="19" font-weight="700" fill="#111827">VPC network</text>
+  <text x="626" y="106" font-size="13" fill="#6B7280" text-anchor="end">subnets · /16 by default</text>
+
+  <rect x="54" y="122" width="572" height="88" rx="8" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+  <text x="72" y="152" font-size="19" font-weight="700" fill="#111827">Google Kubernetes Engine</text>
+  <text x="72" y="176" font-size="15" fill="#374151">Runs the Materialize instance + console</text>
+  <text x="72" y="197" font-size="13" fill="#6B7280">auto-scaling node pools · orchestratord + environmentd + clusterd + console</text>
+
+  <rect x="54" y="222" width="279" height="86" rx="8" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+  <text x="72" y="252" font-size="18" font-weight="700" fill="#111827">Cloud SQL</text>
+  <text x="72" y="275" font-size="15" fill="#374151">Metadata database</text>
+  <text x="72" y="295" font-size="13" fill="#6B7280">consensus, per environment</text>
+
+  <rect x="347" y="222" width="279" height="86" rx="8" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+  <text x="365" y="252" font-size="18" font-weight="700" fill="#111827">Cloud Storage</text>
+  <text x="365" y="275" font-size="15" fill="#374151">Object storage</text>
+  <text x="365" y="295" font-size="13" fill="#6B7280">CMEK via Cloud KMS, your key</text>
+
+  <rect x="54" y="320" width="572" height="86" rx="8" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+  <text x="72" y="350" font-size="18" font-weight="700" fill="#111827">Observability</text>
+  <text x="72" y="373" font-size="15" fill="#374151">In-project logs + metrics</text>
+  <text x="72" y="393" font-size="13" fill="#6B7280">Loki · Thanos · Grafana with TLS</text>
+
+  <rect x="54" y="418" width="572" height="40" rx="6" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+  <text x="72" y="444" font-size="15" font-weight="700" fill="#111827">Ingress</text>
+  <text x="140" y="444" font-size="15" fill="#374151">Private Service Connect, or public with IP allowlisting</text>
+
+  <text x="34" y="507" font-size="17" font-style="italic" fill="#2563EB">Customer data never leaves the account.</text>
+  <text x="34" y="533" font-size="15" fill="#374151">Customers are responsible for connecting their applications and</text>
+  <text x="34" y="554" font-size="15" fill="#374151">sources to the BYOC network.</text>
+
+  <!-- Materialize control plane -->
+  <rect x="900" y="95" width="320" height="330" rx="14" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2.5"/>
+  <text x="926" y="142" font-size="25" font-weight="700" fill="#7C3AED">Materialize</text>
+  <text x="926" y="180" font-size="19" font-weight="700" fill="#111827">Control plane</text>
+  <text x="926" y="216" font-size="17" fill="#374151">Provisioning</text>
+  <text x="926" y="248" font-size="17" fill="#374151">Upgrades, rolling, about weekly</text>
+  <text x="926" y="280" font-size="17" fill="#374151">Monitoring</text>
+  <text x="926" y="312" font-size="17" fill="#374151">Billing and Account Mgmt</text>
+
+  <!-- Management arrow, control plane to customer project -->
+  <line x1="898" y1="190" x2="678" y2="190" stroke="#7C3AED" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
+  <text x="788" y="174" font-size="14" fill="#7C3AED" text-anchor="middle">manages the environment</text>
+  <text x="788" y="212" font-size="14" fill="#7C3AED" text-anchor="middle">admin via federation</text>
+
+  <!-- Telemetry arrow, customer project to control plane -->
+  <line x1="678" y1="330" x2="898" y2="330" stroke="#111827" stroke-width="2.5" marker-end="url(#arrowDark)"/>
+  <text x="788" y="314" font-size="14" fill="#111827" text-anchor="middle">usage data</text>
+  <text x="788" y="354" font-size="15" fill="#111827" text-anchor="middle">logs + metrics</text>
+  <text x="788" y="376" font-size="12.5" fill="#6B7280" text-anchor="middle">mTLS, literals excluded</text>
+  <text x="788" y="394" font-size="12.5" fill="#6B7280" text-anchor="middle">at the application level</text>
 </svg>
