@@ -317,12 +317,14 @@ impl Coordinator {
 
         // Clone what we need from the session before taking &mut below.
         let clone_start = Instant::now();
+        let txn_revision = *txn_revision;
         let txn_ops_clone = txn_ops.clone();
-        let txn_state_clone = txn_state.clone();
+        let mut txn_state_clone = txn_state.clone();
         // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
         // O(catalog size) in allocations, once per statement. `txn_state` next to
         // it is cheap, `CatalogState` holds its large collections in `imbl` maps.
-        let prev_snapshot = txn_snapshot.clone();
+        let mut prev_snapshot = txn_snapshot.clone();
+        let first_statement = prev_snapshot.is_none();
         phase_seconds
             .with_label_values(&["ddl_txn_snapshot_clone"])
             .observe(clone_start.elapsed().as_secs_f64());
@@ -361,26 +363,44 @@ impl Coordinator {
             .await
             .timestamp;
 
-        // Get ConnMeta for the session.
-        let conn = self.active_conns.get(ctx.session().conn_id());
-
         // Incremental dry run: process only NEW ops against accumulated state.
         // If we have a saved snapshot from a previous dry run, use it to
         // initialize the transaction so it starts in sync with the accumulated
-        // state. Otherwise (first statement), the fresh durable transaction is
-        // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
-            .catalog()
-            .transact_incremental_dry_run(
-                &txn_state_clone,
-                ops.clone(),
-                conn,
-                prev_snapshot,
-                oracle_write_ts,
-            )
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
-            .await?;
+        // state. A first statement may encounter peer metadata publication and
+        // must refresh before retrying, without merging a structural DDL race.
+        let (new_state, new_snapshot) = loop {
+            let conn = self.active_conns.get(ctx.session().conn_id());
+            let result = self
+                .catalog()
+                .transact_incremental_dry_run(
+                    &txn_state_clone,
+                    ops.clone(),
+                    conn,
+                    prev_snapshot.take(),
+                    oracle_write_ts,
+                )
+                .wall_time()
+                .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
+                .await;
+            match result {
+                Err(AdapterError::Catalog(error))
+                    if first_statement
+                        && matches!(
+                            &error.kind,
+                            mz_catalog::memory::error::ErrorKind::Durable(
+                                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                            )
+                        ) =>
+                {
+                    self.refresh_catalog_after_conflict().await?;
+                    if self.catalog().transient_revision() != txn_revision {
+                        return Err(AdapterError::DDLTransactionRace);
+                    }
+                    txn_state_clone = self.catalog().state().clone();
+                }
+                result => break result?,
+            }
+        };
 
         // Accumulate ops for eventual COMMIT.
         let result = ctx
@@ -400,6 +420,33 @@ impl Coordinator {
             .observe(start.elapsed().as_secs_f64());
 
         result
+    }
+
+    /// Apply the committed prefix exposed by a retryable catalog conflict.
+    /// Structural changes are checked by the caller against its planning revision.
+    async fn refresh_catalog_after_conflict(&mut self) -> Result<(), AdapterError> {
+        let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
+        let builtin = self
+            .catalog()
+            .state()
+            .resolve_builtin_table_updates(builtin);
+        let notify = self.builtin_table_update().execute(builtin);
+        match mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(
+            Box::pin(self.apply_catalog_implications(None, updates)),
+        ))
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                mz_ore::halt!("cannot enact committed catalog changes, restart required: {error}")
+            }
+            Err(payload) => {
+                let cause = mz_ore::panic::downcast_panic_message(&*payload);
+                mz_ore::halt!("cannot enact committed catalog changes, restart required: {cause}")
+            }
+        }
+        notify.await;
+        Ok(())
     }
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
@@ -441,31 +488,7 @@ impl Coordinator {
                         )
                     ) =>
                 {
-                    let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
-                    let builtin = self
-                        .catalog()
-                        .state()
-                        .resolve_builtin_table_updates(builtin);
-                    let notify = self.builtin_table_update().execute(builtin);
-                    match mz_ore::future::OreFutureExt::ore_catch_unwind(
-                        std::panic::AssertUnwindSafe(Box::pin(
-                            self.apply_catalog_implications(None, updates),
-                        )),
-                    )
-                    .await
-                    {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => mz_ore::halt!(
-                            "cannot enact committed catalog changes, restart required: {error}"
-                        ),
-                        Err(payload) => {
-                            let cause = mz_ore::panic::downcast_panic_message(&*payload);
-                            mz_ore::halt!(
-                                "cannot enact committed catalog changes, restart required: {cause}"
-                            )
-                        }
-                    }
-                    notify.await;
+                    self.refresh_catalog_after_conflict().await?;
                     if !retry_after_planning_change
                         && self.catalog().transient_revision() != revision
                     {
