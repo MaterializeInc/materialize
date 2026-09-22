@@ -8772,7 +8772,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             "kafka-console-producer",
             "--bootstrap-server=kafka:9092",
             f"--topic={source_topic}",
-            "--producer-property=acks=all",
+            "--command-property=acks=all",
             stdin=f"{value}\n",
         )
 
@@ -8787,14 +8787,19 @@ def workflow_adapter_loss(c: Composition) -> None:
             "--from-beginning",
             f"--max-messages={count}",
             "--timeout-ms=10000",
-            "--consumer-property=isolation.level=read_committed",
+            "--command-property=isolation.level=read_committed",
             capture=True,
             capture_stderr=True,
             check=False,
         )
         if result.returncode and "TimeoutException" not in (result.stderr or ""):
             raise RuntimeError(f"Kafka verification failed: {result}")
-        return {json.loads(line)["v"] for line in result.stdout.splitlines()}
+        try:
+            return {json.loads(line)["v"] for line in result.stdout.splitlines()}
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"Kafka returned non-JSON records: stdout={result.stdout!r}, stderr={result.stderr!r}"
+            ) from error
 
     def inspect(shard: str) -> dict:
         result = c.run(
