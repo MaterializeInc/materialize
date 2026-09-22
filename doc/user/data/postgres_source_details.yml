@@ -201,11 +201,6 @@
 
 - name: postgres-considerations
   content: |
-    {{% include-from-yaml data="postgres_source_details"
-    name="postgres-considerations-body" %}}
-
-- name: postgres-considerations-body
-  content: |
     {{% include-headless "/headless/postgres-supported-data-types" %}}
 
     {{% include-headless "/headless/postgres-ingestion-mechanics" %}}

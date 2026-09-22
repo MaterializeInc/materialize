@@ -44,11 +44,10 @@ during planned maintenance.
 
 A smaller set of events breaks LSN continuity or destroys the replication slot.
 When this happens, Materialize cannot guarantee a correct, gap-free view of your
-data, so it puts the **entire source** into an error state that requires
-**re-creating** the source. Re-creating triggers a fresh
-[snapshot](/ingest-data/#snapshotting) and rehydration of dependent objects.
-Upstream changes to an individual table's schema are handled separately, and do
-not error the entire source.
+data, so it puts the **entire source** into an error or permanently stalled
+state that requires **re-creating** the source. Upstream changes to an
+individual table's schema are handled separately, and do not error the entire
+source.
 
 In each case below, the remediation is to drop and re-create the source:
 
@@ -62,9 +61,19 @@ CREATE SOURCE mz_source
 CREATE TABLE table_1 FROM SOURCE mz_source (REFERENCE public.table_1);
 ```
 
+If you are using the legacy `CREATE SOURCE ... FOR TABLES` syntax, re-create the
+source with `FOR TABLES` or `FOR ALL TABLES` instead of adding tables
+separately.
+
 Because a re-created source snapshots from the current state of the upstream
 database, any changes it missed while it was in an error state are reflected in
 the snapshot rather than replayed as individual updates.
+
+{{< warning >}}
+`CASCADE` drops every object that depends on the source, including its tables,
+views, materialized views, indexes, and sinks. Capture their definitions before
+you run it, and re-create them once the new source has finished snapshotting.
+{{< /warning >}}
 
 #### Point-in-time restore
 
@@ -77,9 +86,8 @@ unsupported action: database restored from point-in-time backup. Expected
 timeline ID 8 but got 9
 ```
 
-The same error covers any other event that increments the timeline, including a
-failover to a standby and a major version upgrade. To see the timeline a source
-is pinned to, query
+The same error covers other events that change the timeline, such as a managed
+failover between replicas. To see the timeline a source is pinned to, query
 [`mz_internal.mz_postgres_sources`](/sql/system-catalog/mz_internal/#mz_postgres_sources):
 
 ```mzsql
@@ -151,9 +159,8 @@ Re-create the publication upstream, then re-create the source.
 
 #### Major version upgrades
 
-A PostgreSQL major version upgrade rewrites the on-disk format, increments the
-timeline, and does not preserve the replication slot, so there is no in-place
-recovery. To upgrade without a gap in your downstream views, run a second source
+A PostgreSQL major version upgrade rewrites the on-disk format and does not
+preserve the replication slot, so there is no in-place recovery. To upgrade without a gap in your downstream views, run a second source
 against the upgraded instance in parallel and cut over once it has hydrated. See
 [Upgrade the major version of your PostgreSQL
 source](/ingest-data/postgres/major-version-upgrade/).

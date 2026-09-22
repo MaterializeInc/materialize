@@ -64,14 +64,15 @@ To help you get started, the following integration guides are available:
 ## Supported schema and table changes
 
 The following table summarizes how Materialize handles changes to an upstream
-table it is ingesting. See the details below the table for recovery commands.
+table it is ingesting. See the details below the table for the remediation for
+each syntax.
 
 | Change | Effect |
 | --- | --- |
 | Foreign key, `CHECK`, or `EXCLUSION` constraint changes | No impact: Materialize ignores these changes. |
 | Dropping a column that is not ingested | No impact. |
 | Adding a `NOT NULL`, `UNIQUE`, or `PRIMARY KEY` constraint | No impact. |
-| [Adding a column](#adding-a-column) | Handled automatically. Materialize keeps ingesting the existing columns; incorporate the new column with a new table (current syntax) or by re-adding the subsource (legacy syntax). |
+| [Adding a column](#adding-a-column) | Handled automatically. Materialize keeps ingesting the existing columns. To pick up the new column, create a new table (current syntax) or re-add the subsource (legacy syntax). |
 | [Dropping an ingested column](#dropping-a-column) | Table enters an error state. Re-create the table. |
 | [Renaming an ingested column](#renaming-a-column) | Table enters an error state. Re-create the table. |
 | [Changing an ingested column's data type](#changing-a-columns-data-type) | Table enters an error state, unless the column is ingested as `text` via `TEXT COLUMNS`. Re-create the table. |
