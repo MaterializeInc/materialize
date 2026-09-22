@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::pin::pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,15 +41,16 @@ use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{assert_contains, assert_err, assert_ok, task};
 use mz_pgwire_common::{
-    FrontendStartupMessage, MAX_FORWARDED_STARTUP_FRAME_SIZE, MAX_STARTUP_FRAME_SIZE,
-    REJECT_ENCRYPTION, VERSION_3,
+    ACCEPT_SSL_ENCRYPTION, FrontendStartupMessage, MAX_FORWARDED_STARTUP_FRAME_SIZE,
+    MAX_STARTUP_FRAME_SIZE, REJECT_ENCRYPTION, VERSION_3,
 };
 use mz_server_core::TlsCertConfig;
-use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
+use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
+use tokio_openssl::SslStream;
 use uuid::Uuid;
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -421,10 +422,24 @@ async fn test_balancer() {
 /// not. These tests never get far enough to be forwarded anywhere.
 async fn start_balancer() -> SocketAddr {
     // Unreachable upstream: these tests never get far enough to be forwarded.
-    start_balancer_to("127.0.0.1:1".to_string()).await
+    start_balancer_to("127.0.0.1:1".to_string(), vec![], None)
+        .await
+        .pgwire
 }
 
-async fn start_balancer_to(upstream: String) -> SocketAddr {
+/// Listen addresses of a started balancerd.
+struct Balancer {
+    pgwire: SocketAddr,
+    https: SocketAddr,
+    internal_http: SocketAddr,
+}
+
+/// Starts a balancerd proxying to `upstream`, with the given dyncfg defaults.
+async fn start_balancer_to(
+    upstream: String,
+    default_configs: Vec<(String, String)>,
+    tls: Option<TlsCertConfig>,
+) -> Balancer {
     let unreachable = upstream;
     let (_reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
     let balancer_cfg = BalancerConfig::new(
@@ -435,9 +450,7 @@ async fn start_balancer_to(upstream: String) -> SocketAddr {
         CancellationResolver::Static(unreachable.clone()),
         BalancerResolver::Static(unreachable.clone()),
         unreachable.clone(),
-        // No certificate. These connections are rejected or parked before TLS
-        // would have come into it.
-        None,
+        tls,
         false,
         MetricsRegistry::new(),
         Box::pin(reload_rx),
@@ -448,14 +461,54 @@ async fn start_balancer_to(upstream: String) -> SocketAddr {
         None,
         None,
         TracingHandle::disabled(),
-        vec![],
+        default_configs,
     );
     let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
-    let pgwire_addr = balancer_server.pgwire.0.local_addr();
+    let addrs = Balancer {
+        pgwire: balancer_server.pgwire.0.local_addr(),
+        https: balancer_server.https.0.local_addr(),
+        internal_http: balancer_server.internal_http.0.local_addr(),
+    };
     task::spawn(|| "balancer", async {
         balancer_server.serve().await.unwrap();
     });
-    pgwire_addr
+    addrs
+}
+
+/// Narrows a metric to one listener's series.
+const PGWIRE: Option<&str> = Some("source=\"pgwire\"");
+const HTTPS: Option<&str> = Some("source=\"https\"");
+const PRE_RESOLVED_ACTIVE: &str = "mz_balancer_pre_resolved_connection_active";
+const PRE_RESOLVED_TIMEOUTS: &str = "mz_balancer_pre_resolved_timeout_total";
+const CONNECTION_REJECTED: &str = "mz_balancer_connection_rejected_total";
+
+/// The current value of a metric, optionally narrowed to lines carrying `label`.
+async fn metric_value(internal_http: SocketAddr, name: &str, label: Option<&str>) -> Option<f64> {
+    let body = reqwest::get(format!("http://{internal_http}/metrics"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    body.lines()
+        .find(|line| line.starts_with(name) && label.is_none_or(|l| line.contains(l)))
+        .and_then(|line| line.rsplit(' ').next())
+        .map(|value| value.parse().unwrap())
+}
+
+/// Waits for `name` to read `expected`. The server-side guard is dropped shortly after the
+/// client observes the close, so the metric can lag the assertion by a moment.
+async fn assert_metric(internal_http: SocketAddr, name: &str, label: Option<&str>, expected: f64) {
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry_async(|_| async {
+            match metric_value(internal_http, name, label).await {
+                Some(value) if value == expected => Ok(()),
+                other => Err(format!("{name} is {other:?}, expected {expected}")),
+            }
+        })
+        .await
+        .unwrap();
 }
 
 /// Opens a pgwire connection, writes a startup frame-length header declaring
@@ -467,10 +520,11 @@ async fn startup_header_only(addr: SocketAddr, frame_len: u32) -> TcpStream {
     stream
 }
 
-/// Whether balancerd closed the connection rather than waiting for a body.
-async fn was_closed(stream: &mut TcpStream) -> bool {
+/// Whether balancerd closed the connection within `within`, rather than
+/// continuing to wait on us.
+async fn was_closed(stream: &mut TcpStream, within: Duration) -> bool {
     let mut byte = [0u8; 1];
-    match tokio::time::timeout(Duration::from_secs(10), stream.read(&mut byte)).await {
+    match tokio::time::timeout(within, stream.read(&mut byte)).await {
         // Still waiting on us, so the frame was accepted.
         Err(_elapsed) => false,
         Ok(Ok(0)) => true,
@@ -492,7 +546,7 @@ async fn test_pgwire_oversized_startup_frame_is_rejected() {
     for declared in [budget + 1, protocol_max] {
         let mut stream = startup_header_only(pgwire_addr, declared).await;
         assert!(
-            was_closed(&mut stream).await,
+            was_closed(&mut stream, Duration::from_secs(10)).await,
             "balancerd accepted a {declared} byte startup frame and waited for the body",
         );
     }
@@ -501,7 +555,7 @@ async fn test_pgwire_oversized_startup_frame_is_rejected() {
     // its job rather than balancerd refusing everything.
     let mut stream = startup_header_only(pgwire_addr, budget).await;
     assert!(
-        !was_closed(&mut stream).await,
+        !was_closed(&mut stream, Duration::from_secs(10)).await,
         "balancerd rejected a startup frame at the budget",
     );
 
@@ -530,7 +584,9 @@ async fn test_forwarded_startup_frame_fits_downstream_budget() {
     // Stands in for environmentd, only to capture the frame balancerd sends it.
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
-    let pgwire_addr = start_balancer_to(upstream_addr.to_string()).await;
+    let pgwire_addr = start_balancer_to(upstream_addr.to_string(), vec![], None)
+        .await
+        .pgwire;
 
     // The largest startup frame balancerd will accept from a client. `user` is required to get
     // past `run`, and `options` pads the rest out to exactly the budget.
@@ -571,5 +627,296 @@ async fn test_forwarded_startup_frame_fits_downstream_budget() {
         "balancerd forwarded a {forwarded_len} byte startup frame, over the \
          {MAX_FORWARDED_STARTUP_FRAME_SIZE} byte budget downstream allows. If a parameter was \
          added to the forwarded set, raise FORWARDED_STARTUP_PARAM_ALLOWANCE to match.",
+    );
+}
+
+/// The connection limit counts a connection from the moment it is accepted, and the pre-resolved
+/// deadline releases connections that never resolve, so the limit cannot be held shut by clients
+/// that connect and say nothing. The metrics tell the two phases apart.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_connection_limit_covers_unresolved_connections() {
+    let balancer = start_balancer_to(
+        "127.0.0.1:1".to_string(),
+        vec![
+            ("balancerd_max_connections".into(), "1".into()),
+            ("balancerd_pre_resolved_timeout".into(), "5s".into()),
+        ],
+        None,
+    )
+    .await;
+
+    // One connection parks before resolving and holds the only slot.
+    let mut held = startup_header_only(balancer.pgwire, 1 << 10).await;
+    assert!(
+        !was_closed(&mut held, Duration::from_millis(500)).await,
+        "the first connection should be admitted and waited on",
+    );
+    assert_metric(balancer.internal_http, PRE_RESOLVED_ACTIVE, PGWIRE, 1.0).await;
+
+    // The next is refused at accept while the limit is reached. The window is well inside the
+    // deadline on purpose: a wider one would also be satisfied by a connection that was wrongly
+    // admitted and then closed by its own deadline, so the test would pass with no limit at all.
+    let mut refused = startup_header_only(balancer.pgwire, 1 << 10).await;
+    assert!(
+        was_closed(&mut refused, Duration::from_secs(2)).await,
+        "a connection beyond the limit should be refused at accept, not left to the deadline",
+    );
+    assert_metric(balancer.internal_http, CONNECTION_REJECTED, None, 1.0).await;
+
+    // The deadline reclaims the slot, so the limit is not a one-way door.
+    assert!(
+        was_closed(&mut held, Duration::from_secs(20)).await,
+        "the held connection should be closed once the pre-resolved deadline passes",
+    );
+    assert_metric(balancer.internal_http, PRE_RESOLVED_ACTIVE, PGWIRE, 0.0).await;
+    assert_metric(balancer.internal_http, PRE_RESOLVED_TIMEOUTS, PGWIRE, 1.0).await;
+    let mut after = startup_header_only(balancer.pgwire, 1 << 10).await;
+    assert!(
+        !was_closed(&mut after, Duration::from_millis(500)).await,
+        "capacity should be available again once the deadline reclaimed the slot",
+    );
+}
+
+/// A client that asks for TLS and then never starts the handshake is closed by the pre-resolved
+/// deadline. The handshake is the one step of the phase that is neither a frame read nor part of
+/// resolution, so it has to be covered explicitly rather than by the reads around it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_stalled_tls_handshake_is_closed() {
+    let (_ca, tls) = make_balancer_tls();
+    let balancer = start_balancer_to(
+        "127.0.0.1:1".to_string(),
+        vec![("balancerd_pre_resolved_timeout".into(), "5s".into())],
+        Some(tls),
+    )
+    .await;
+
+    let mut stream = TcpStream::connect(balancer.pgwire).await.unwrap();
+    let mut ssl_request = BytesMut::new();
+    FrontendStartupMessage::SslRequest
+        .encode(&mut ssl_request)
+        .unwrap();
+    stream.write_all(&ssl_request).await.unwrap();
+
+    // balancerd agrees to TLS and waits for a ClientHello that never comes.
+    let mut reply = [0u8; 1];
+    stream.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply, [ACCEPT_SSL_ENCRYPTION]);
+
+    assert!(
+        was_closed(&mut stream, Duration::from_secs(20)).await,
+        "a connection stalled mid-handshake should be closed once the deadline passes",
+    );
+    assert_metric(balancer.internal_http, PRE_RESOLVED_TIMEOUTS, PGWIRE, 1.0).await;
+}
+
+fn make_balancer_tls() -> (Ca, TlsCertConfig) {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (cert, key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    (ca, TlsCertConfig { cert, key })
+}
+
+struct HttpsTest {
+    _ca: Ca,
+    balancer: Balancer,
+    upstream: TcpListener,
+    connector: SslConnector,
+}
+
+impl HttpsTest {
+    async fn start(pre_resolved_timeout: &str) -> Self {
+        let (ca, tls) = make_balancer_tls();
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let balancer = start_balancer_to(
+            upstream.local_addr().unwrap().to_string(),
+            vec![
+                ("balancerd_max_connections".into(), "1".into()),
+                (
+                    "balancerd_pre_resolved_timeout".into(),
+                    pre_resolved_timeout.into(),
+                ),
+            ],
+            Some(tls),
+        )
+        .await;
+        let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+        connector
+            .cert_store_mut()
+            .add_cert(ca.cert.clone())
+            .unwrap();
+        Self {
+            _ca: ca,
+            balancer,
+            upstream,
+            connector: connector.build(),
+        }
+    }
+
+    async fn connect(&self) -> (SslStream<TcpStream>, TcpStream) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let tcp = TcpStream::connect(self.balancer.https).await.unwrap();
+            let ssl = self
+                .connector
+                .configure()
+                .unwrap()
+                .into_ssl("127.0.0.1")
+                .unwrap();
+            let mut client = SslStream::new(ssl, tcp).unwrap();
+            Pin::new(&mut client).connect().await.unwrap();
+            let (upstream, _) = self.upstream.accept().await.unwrap();
+            (client, upstream)
+        })
+        .await
+        .expect("HTTPS handshake and upstream connection should complete")
+    }
+}
+
+async fn assert_https_exchange(client: &mut SslStream<TcpStream>, upstream: &mut TcpStream) {
+    const REQUEST: &[u8] = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let client_exchange = async {
+            client.write_all(REQUEST).await.unwrap();
+            client.flush().await.unwrap();
+            let mut response = vec![0; RESPONSE.len()];
+            client.read_exact(&mut response).await.unwrap();
+            assert_eq!(response, RESPONSE);
+        };
+        let upstream_exchange = async {
+            let mut request = vec![0; REQUEST.len()];
+            upstream.read_exact(&mut request).await.unwrap();
+            assert_eq!(request, REQUEST);
+            upstream.write_all(RESPONSE).await.unwrap();
+            upstream.flush().await.unwrap();
+        };
+        tokio::join!(client_exchange, upstream_exchange);
+    })
+    .await
+    .expect("HTTPS request and response should pass through balancerd");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_https_connection_limit_and_stalled_handshake_recovery() {
+    let fixture = HttpsTest::start("5s").await;
+    let balancer = &fixture.balancer;
+
+    // HTTPS starts TLS directly, so withholding ClientHello parks in the handshake.
+    let mut held = TcpStream::connect(balancer.https).await.unwrap();
+    assert_metric(balancer.internal_http, PRE_RESOLVED_ACTIVE, HTTPS, 1.0).await;
+    let mut refused = TcpStream::connect(balancer.https).await.unwrap();
+    assert!(
+        was_closed(&mut refused, Duration::from_secs(2)).await,
+        "HTTPS admission must refuse excess connections before their 5s deadline",
+    );
+    assert_metric(balancer.internal_http, CONNECTION_REJECTED, None, 1.0).await;
+    assert!(
+        was_closed(&mut held, Duration::from_secs(20)).await,
+        "the HTTPS handshake deadline should close a client withholding ClientHello",
+    );
+    assert_metric(balancer.internal_http, PRE_RESOLVED_ACTIVE, HTTPS, 0.0).await;
+    assert_metric(balancer.internal_http, PRE_RESOLVED_TIMEOUTS, HTTPS, 1.0).await;
+
+    let (mut client, mut upstream) = fixture.connect().await;
+    assert_https_exchange(&mut client, &mut upstream).await;
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_https_and_pgwire_share_connection_limit() {
+    // Releasing the client, rather than a deadline, must make the shared slot available.
+    let fixture = HttpsTest::start("0s").await;
+    let balancer = &fixture.balancer;
+    for (held_addr, held_label, refused_addr, rejections) in [
+        (balancer.pgwire, PGWIRE, balancer.https, 1.0),
+        (balancer.https, HTTPS, balancer.pgwire, 2.0),
+    ] {
+        let held = TcpStream::connect(held_addr).await.unwrap();
+        assert_metric(balancer.internal_http, PRE_RESOLVED_ACTIVE, held_label, 1.0).await;
+        let mut refused = TcpStream::connect(refused_addr).await.unwrap();
+        assert!(
+            was_closed(&mut refused, Duration::from_secs(2)).await,
+            "{refused_addr} should share the slot held by {held_addr}",
+        );
+        assert_metric(
+            balancer.internal_http,
+            CONNECTION_REJECTED,
+            None,
+            rejections,
+        )
+        .await;
+        drop(held);
+        assert_metric(balancer.internal_http, PRE_RESOLVED_ACTIVE, held_label, 0.0).await;
+    }
+    let (mut client, mut upstream) = fixture.connect().await;
+    assert_https_exchange(&mut client, &mut upstream).await;
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_https_resolved_connection_outlives_startup_deadline() {
+    let fixture = HttpsTest::start("5s").await;
+    let (mut client, mut upstream) = fixture.connect().await;
+    assert_https_exchange(&mut client, &mut upstream).await;
+    assert_metric(
+        fixture.balancer.internal_http,
+        PRE_RESOLVED_ACTIVE,
+        HTTPS,
+        0.0,
+    )
+    .await;
+
+    // Reuse these exact sockets after the deadline, so reconnecting cannot hide a close.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_https_exchange(&mut client, &mut upstream).await;
+    assert_metric(
+        fixture.balancer.internal_http,
+        "mz_balancer_connection_active",
+        HTTPS,
+        1.0,
+    )
+    .await;
+    assert_eq!(
+        metric_value(fixture.balancer.internal_http, PRE_RESOLVED_TIMEOUTS, HTTPS,)
+            .await
+            .unwrap_or(0.0),
+        0.0,
+    );
+}
+
+/// A client that is rejected during startup is told why, rather than having the connection
+/// closed under it. `FramedConn::send` only enqueues, so these paths are only correct if the
+/// rejection is flushed before the connection is dropped.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_startup_rejection_reaches_the_client() {
+    let pgwire_addr = start_balancer().await;
+
+    // An unsupported protocol version, which balancerd answers and then stops on.
+    let mut frame = BytesMut::new();
+    FrontendStartupMessage::Startup {
+        version: VERSION_3 + 1,
+        params: BTreeMap::from([("user".to_string(), "mz".to_string())]),
+    }
+    .encode(&mut frame)
+    .unwrap();
+
+    let mut stream = TcpStream::connect(pgwire_addr).await.unwrap();
+    stream.write_all(&frame).await.unwrap();
+    stream.flush().await.unwrap();
+
+    let mut tag = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut tag))
+        .await
+        .expect("balancerd should answer rather than leave the client waiting")
+        .unwrap();
+    assert_eq!(
+        (read, tag),
+        (1, [b'E']),
+        "expected an ErrorResponse, got {read} bytes; a rejection that is not flushed reaches \
+         the client as a bare close",
     );
 }
