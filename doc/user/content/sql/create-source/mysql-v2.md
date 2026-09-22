@@ -160,6 +160,10 @@ database. For more information, see [Troubleshooting](/ops/troubleshooting/).
 
 {{% upstream-schema-change-behavior connector="mysql" %}}
 
+## Source failure states and recovery
+
+{{% include-headless "/headless/mysql-failure-states" %}}
+
 ## Example
 
 {{< important >}}
