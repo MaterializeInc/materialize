@@ -89,4 +89,4 @@ values.
 
 {{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
 
-See also: [PostgreSQL considerations](/ingest-data/postgres/#considerations).
+See also: [Supported data types](/ingest-data/postgres/#supported-data-types).

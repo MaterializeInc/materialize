@@ -110,6 +110,10 @@ name="postgres-physical-standby" %}}
 
 {{% upstream-schema-change-behavior connector="postgres" %}}
 
+## Source failure states and recovery
+
+{{% include-headless "/headless/postgres-failure-states" %}}
+
 ## Examples
 
 ### Prerequisites
