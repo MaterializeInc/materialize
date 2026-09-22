@@ -432,6 +432,8 @@ mod tests {
     /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
     #[mz_ore::test]
     fn test_compute_response_size() {
-        assert_eq!(std::mem::size_of::<ComputeResponse>(), 144);
+        // Keep frontier observations inline rather than allocating for every
+        // progress report, while pinning their complete read/hydration payload.
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 152);
     }
 }
