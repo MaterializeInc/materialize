@@ -5896,6 +5896,50 @@ def workflow_test_github_8734(c: Composition) -> None:
     Regression test for database-issues#8734.
     """
 
+    def protection_evidence(label: str) -> None:
+        try:
+            response = requests.get(
+                f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
+                timeout=10,
+            )
+            response.raise_for_status()
+            snapshot = response.json()
+            objects = c.sql_query("""
+                SELECT o.name, o.id, g.global_id FROM mz_objects o
+                JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+                WHERE o.name IN ('t', 'mv') ORDER BY o.name
+            """)
+            physical = {}
+            with c.sql_connection(port=6877, user="mz_system") as conn:
+                for name, item_id, _ in objects:
+                    row = conn.execute(
+                        sql.SQL("INSPECT SHARD {}").format(sql.Literal(item_id))
+                    ).fetchone()
+                    assert row is not None
+                    physical[name] = {
+                        key: row[0][key] for key in ("shard_id", "since", "upper")
+                    }
+            print(
+                json.dumps(
+                    {
+                        "label": label,
+                        "objects": objects,
+                        "physical": physical,
+                        **{
+                            key: snapshot[key]
+                            for key in (
+                                "client_incarnations",
+                                "client_read_requirements",
+                                "maintained_read_requirements",
+                                "collection_compaction_bounds",
+                            )
+                        },
+                    }
+                )
+            )
+        except Exception as error:
+            print(f"Protection diagnostics failed ({label}): {error}")
+
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
@@ -5925,12 +5969,17 @@ def workflow_test_github_8734(c: Composition) -> None:
         check_read_frontiers_not_stuck(c, ["t"])
 
         # Restart envd, then verify that the table's frontier still advances.
+        protection_evidence("before-restart")
         c.kill("materialized")
         c.up("materialized")
 
         c.sql("SELECT * FROM mv")
 
-        check_read_frontiers_not_stuck(c, ["t"])
+        try:
+            check_read_frontiers_not_stuck(c, ["t"])
+        except Exception:
+            protection_evidence("frontier-stuck-after-restart")
+            raise
 
 
 def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) -> None:
