@@ -515,7 +515,20 @@ impl Coordinator {
 
         if !self.catalog().state().catalog_read_protection_enabled()
             || !ops.iter().any(|op| match op {
-                Op::DropObjects(objects) => !objects.is_empty(),
+                Op::DropObjects(objects) => objects.iter().any(|object| {
+                    // Written-plan and notice dependencies are indexes or items used by
+                    // a plan owner. An unused view cannot affect either, and
+                    // owns no selection itself. Keep all other drops conservative.
+                    match object {
+                        catalog::DropObjectInfo::Item(id) => {
+                            !self.catalog().try_get_entry(id).is_some_and(|entry| {
+                                matches!(entry.item(), CatalogItem::View(_))
+                                    && entry.used_by().is_empty()
+                            })
+                        }
+                        _ => true,
+                    }
+                }),
                 Op::AlterMaterializedViewApplyReplacement { .. } => true,
                 _ => false,
             })
@@ -910,6 +923,16 @@ impl Coordinator {
             }
         }
 
+        let prepared_observer =
+            crate::test_util::prepared_rewrite_observer(&self.catalog().config().environment_id)
+                .map(|observer| {
+                    let baseline = self
+                        .query_client
+                        .as_ref()
+                        .map(|client| client.protection.active_frontiers())
+                        .unwrap_or_default();
+                    (observer, baseline)
+                });
         let (_written_plan_protection, rewritten_objects) =
             Box::pin(self.prepare_written_plan_rewrites(conn_id, &mut ops, oracle_write_ts))
                 .wall_time()
@@ -927,6 +950,34 @@ impl Coordinator {
         // return to the outer loop's planning-conflict policy.
         let prepared_revision = self.catalog().transient_revision();
         let result = loop {
+            if !rewritten_objects.is_empty()
+                && let Some((observer, baseline)) = &prepared_observer
+            {
+                let selections = ops
+                    .iter()
+                    .filter_map(|op| match op {
+                        Op::SetWrittenPlan {
+                            id,
+                            revision: Some(revision),
+                            ..
+                        } => Some((*id, *revision)),
+                        _ => None,
+                    })
+                    .collect();
+                observer(&crate::test_util::PreparedRewriteObservation {
+                    selections,
+                    active_holds_before_preparation: baseline.clone(),
+                    incarnation: self
+                        .query_client
+                        .as_ref()
+                        .map(|client| client.protection.incarnation()),
+                    active_holds: self
+                        .query_client
+                        .as_ref()
+                        .map(|client| client.protection.active_frontiers())
+                        .unwrap_or_default(),
+                });
+            }
             let result = {
                 let Coordinator {
                     catalog,

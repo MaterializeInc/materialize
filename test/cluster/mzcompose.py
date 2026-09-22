@@ -107,10 +107,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
         # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
         # and slow-seqno-hold are slow, run in separate CI step
+        # adapter-loss has its own native acceptance job and reclamation budget.
         # concurrent-connections is too flaky
         # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
             "default",
+            "adapter-loss",
             "test-concurrent-connections",
             "test-memory-limiter",
         ):
@@ -8848,14 +8850,14 @@ def workflow_adapter_loss(c: Composition) -> None:
         materialize_params={"cluster": "compute_cluster"},
     )
 
-    def produce(value: int) -> None:
+    def produce(value: int, count: int = 1) -> None:
         c.exec(
             "kafka",
             "kafka-console-producer",
             "--bootstrap-server=kafka:9092",
             f"--topic={source_topic}",
-            "--producer-property=acks=all",
-            stdin=f"{value}\n",
+            "--command-property=acks=all",
+            stdin="".join(f"{item}\n" for item in range(value, value + count)),
         )
 
     def consume(name: str, count: int) -> set[int]:
@@ -8869,16 +8871,22 @@ def workflow_adapter_loss(c: Composition) -> None:
             "--from-beginning",
             f"--max-messages={count}",
             "--timeout-ms=10000",
-            "--consumer-property=isolation.level=read_committed",
+            "--command-property=isolation.level=read_committed",
             capture=True,
             capture_stderr=True,
             check=False,
         )
         if result.returncode and "TimeoutException" not in (result.stderr or ""):
             raise RuntimeError(f"Kafka verification failed: {result}")
-        return {json.loads(line)["v"] for line in result.stdout.splitlines()}
+        try:
+            return {json.loads(line)["v"] for line in result.stdout.splitlines()}
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"Kafka returned non-JSON records: stdout={result.stdout!r}, stderr={result.stderr!r}"
+            ) from error
 
     def inspect(shard: str) -> dict:
+        wall_start_ms = time.time_ns() // 1_000_000
         result = c.run(
             "persistcli",
             "inspect",
@@ -8900,7 +8908,8 @@ def workflow_adapter_loss(c: Composition) -> None:
             assert len(elements) <= 1, elements
             return [element % (2**64) for element in elements]
 
-        trace = json.loads(result.stdout)["trace"]
+        rollup = json.loads(result.stdout)
+        trace = rollup["trace"]
         physical = [
             *trace["legacy_batches"],
             *(entry["batch"] for entry in trace["hollow_batches"]),
@@ -8919,6 +8928,10 @@ def workflow_adapter_loss(c: Composition) -> None:
             else [max((u[0] for u in uppers), default=0)]
         )
         return {
+            "wall_start_ms": wall_start_ms,
+            "wall_end_ms": time.time_ns() // 1_000_000,
+            "leased_readers": rollup["leased_readers"],
+            "critical_readers": rollup["critical_readers"],
             "since": frontier(trace["since"]),
             "upper": upper,
             "batches": [
@@ -9124,6 +9137,8 @@ def workflow_adapter_loss(c: Composition) -> None:
             time.sleep(0.25)
         # Controls ingest the same Kafka records into a separate shard. Their
         # permitted stalls must not hold back the source-only compaction check.
+        # The zero-replica retention input has no compute readers. Readers on
+        # the shared recovery input can leave valid Persist leases after SIGKILL.
         c.testdrive(
             dedent(f"""
             > CREATE CONNECTION al_kafka TO KAFKA
@@ -9133,8 +9148,13 @@ def workflow_adapter_loss(c: Composition) -> None:
             > CREATE TABLE al_input FROM SOURCE al_source
               (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
               WITH (RETAIN HISTORY = FOR '1s')
+            > CREATE SOURCE al_history_source IN CLUSTER cluster1
+              FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
+            > CREATE TABLE al_history_input FROM SOURCE al_history_source
+              (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
+              WITH (RETAIN HISTORY = FOR '1s')
             > CREATE CLUSTER al_history REPLICAS ()
-            > CREATE INDEX al_history_idx IN CLUSTER al_history ON al_input (text)
+            > CREATE INDEX al_history_idx IN CLUSTER al_history ON al_history_input (text)
               WITH (RETAIN HISTORY = FOR '30s')
             > CREATE SOURCE al_control_source IN CLUSTER cluster1
               FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
@@ -9181,10 +9201,11 @@ def workflow_adapter_loss(c: Composition) -> None:
                 """SELECT r.name, s.shard_id FROM mz_internal.mz_storage_shards s
                    JOIN mz_internal.mz_object_global_ids g ON g.global_id = s.object_id
                    JOIN mz_catalog.mz_relations r ON r.id = g.id
-                   WHERE r.name IN ('al_input', 'al_source_mv')""",
+                   WHERE r.name IN ('al_input', 'al_source_mv', 'al_history_input')""",
                 service=adapter.name,
             )
         )
+        history_shard = shards.pop("al_history_input")
         assert set(shards) == {"al_input", "al_source_mv"}, shards
         metric_names = {"mz_metric_arrangement_sizes", "mz_metric_dataflow_errors"}
         deadline = time.monotonic() + timeout
@@ -9206,23 +9227,32 @@ def workflow_adapter_loss(c: Composition) -> None:
         c.kill(adapter.name)
         try:
             absent()
+            history_before = inspect(history_shard)
+            assert history_before["upper"], history_before
+            history_threshold = history_before["upper"][0] - 1
             before = {name: inspect(shard) for name, shard in shards.items()}
             assert all(state["upper"] for state in before.values()), before
             thresholds = {name: state["upper"][0] - 1 for name, state in before.items()}
             expected = {0}
             deadline = time.monotonic() + timeout
             n = 0
+            input_count = 1
+            compaction_wave_size = None
+            compaction_waves_remaining = 4
             while True:
                 absent()
-                n += 1
-                produce(n)
-                expected.add(n * 10)
+                first = n + 1
+                produce(first, input_count)
+                n += input_count
+                expected.update(value * 10 for value in range(first, n + 1))
                 actual = consume("source", len(expected))
                 after = {name: inspect(shard) for name, shard in shards.items()}
                 absent()
-                progressed = all(
-                    compacted_past(after[name], thresholds[name]) for name in shards
-                )
+                physical_progress = {
+                    name: compacted_past(after[name], thresholds[name])
+                    for name in shards
+                }
+                progressed = all(physical_progress.values())
                 if (
                     actual == expected
                     and progressed
@@ -9236,9 +9266,40 @@ def workflow_adapter_loss(c: Composition) -> None:
                     break
                 if time.monotonic() >= deadline:
                     raise AssertionError(
-                        f"No outage progress: expected={expected}, Kafka={actual}, "
+                        f"Outage acceptance incomplete: Kafka_complete={actual == expected}, "
+                        f"physical_progress={physical_progress}, "
+                        f"expected={expected}, Kafka={actual}, "
                         f"compactions before={before}, after={after}"
                     )
+                input_count = 1
+                if (
+                    not progressed
+                    and actual == expected
+                    and compaction_waves_remaining
+                    and all(
+                        state["since"] and state["since"][0] > thresholds[name]
+                        for name, state in after.items()
+                    )
+                ):
+                    # Advancing permission does not schedule a rewrite of old
+                    # batches. Supply bounded ordinary input after permission
+                    # advances, without tying every record to two CLI inspections.
+                    # Complete each wave through Kafka before starting the next.
+                    if compaction_wave_size is None:
+                        compaction_wave_size = max(
+                            1,
+                            max(
+                                sum(batch["len"] for batch in state["batches"])
+                                for state in after.values()
+                            ),
+                        )
+                        print(
+                            "Providing ordinary compaction work: "
+                            f"up to {compaction_waves_remaining} waves of "
+                            f"{compaction_wave_size} records"
+                        )
+                    input_count = compaction_wave_size
+                    compaction_waves_remaining -= 1
 
             successive_observer_progress(running_replicas)
             # Reconstruct after actual history compaction, with no SQL ingress.
@@ -9342,13 +9403,13 @@ def workflow_adapter_loss(c: Composition) -> None:
             c.sql_query(
                 """SELECT o.name, g.global_id FROM mz_objects o
                    JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
-                   WHERE o.name IN ('al_input', 'al_history_idx')""",
+                   WHERE o.name IN ('al_history_input', 'al_history_idx')""",
                 service=adapter.name,
                 reuse_connection=False,
             )
         )
-        assert set(history_ids) == {"al_input", "al_history_idx"}, history_ids
-        input_id = history_ids["al_input"]
+        assert set(history_ids) == {"al_history_input", "al_history_idx"}, history_ids
+        input_id = history_ids["al_history_input"]
         index_id = history_ids["al_history_idx"]
         assert input_id.startswith("u"), input_id
         input_json_id = {"User": int(input_id[1:])}
@@ -9358,7 +9419,7 @@ def workflow_adapter_loss(c: Composition) -> None:
         while True:
             # Observe Persist first, so this timestamp is strictly historical at
             # the catalog snapshot. Leave room on both sides of the 30s window.
-            state = inspect(shards["al_input"])
+            state = inspect(history_shard)
             response = requests.get(
                 f"http://localhost:{c.port(adapter.name, 6878)}/api/catalog/dump",
                 timeout=10,
@@ -9389,7 +9450,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             # pass. The input's own 1s policy cannot account for this history.
             if (
                 len(input_since) == 1
-                and thresholds["al_input"] < state["since"][0] <= historical_ts
+                and history_threshold < state["since"][0] <= historical_ts
                 and input_since[0] <= historical_ts
                 and (
                     index_since is None
@@ -9430,10 +9491,36 @@ def workflow_adapter_loss(c: Composition) -> None:
             expected.add(n * 10)
             time.sleep(0.25)
 
+        # The two unmasked advances prove the 30s policy without a reader or
+        # executor. Only now extend this index's window to cover the reference
+        # read, hydration, and indexed read, each with its existing 420s budget.
+        c.sql(
+            "ALTER INDEX al_history_idx SET (RETAIN HISTORY = FOR '30m')",
+            service=adapter.name,
+            reuse_connection=False,
+        )
+
+        def peek_strategy_counts() -> dict[str, float]:
+            response = requests.get(
+                f"http://localhost:{c.port(adapter.name, 6878)}/metrics", timeout=10
+            )
+            response.raise_for_status()
+            counts = {"fast-path": 0.0, "persist-fast-path": 0.0}
+            for line in response.text.splitlines():
+                if not line.startswith("mz_time_to_first_row_seconds_count{"):
+                    continue
+                if not re.search(r'(?:\{|,)application_name="psql"(?:,|\})', line):
+                    continue
+                strategy = re.search(r'(?:\{|,)strategy="([^"]+)"', line)
+                assert strategy is not None, line
+                if strategy[1] in counts:
+                    counts[strategy[1]] += float(line.rsplit(" ", 1)[1])
+            return counts
+
         # Only now introduce a reader. Keep its logical-input hold through
         # hydration, without a manual reclaim or an artificial grace period.
         historical_query = sql.SQL(
-            "SELECT text FROM al_input ORDER BY text AS OF {}"
+            "SELECT text FROM al_history_input ORDER BY text AS OF {}"
         ).format(sql.Literal(historical_ts))
         with c.sql_connection(service=adapter.name) as reference_conn:
             with reference_conn.cursor() as reference:
@@ -9474,15 +9561,41 @@ def workflow_adapter_loss(c: Composition) -> None:
                                 )
                             )
                             plan = "\n".join(str(row[0]) for row in indexed.fetchall())
-                            if re.search(r"ReadIndex[^\n]*al_history_idx", plan):
+                            hydrated = c.sql_query(
+                                """SELECT bool_and(h.hydrated)
+                                   FROM mz_internal.mz_compute_hydration_statuses h
+                                   JOIN mz_indexes i ON i.id = h.object_id
+                                   WHERE i.name = 'al_history_idx'""",
+                                service=adapter.name,
+                                reuse_connection=False,
+                            )
+                            if hydrated == [(True,)] and re.search(
+                                r"(?:ReadIndex|Indexed)[^\n]*al_history_idx", plan
+                            ):
                                 break
                             if time.monotonic() >= deadline:
                                 raise AssertionError(
-                                    f"Historical read must use the reconstructed index: {plan}"
+                                    f"Historical read must use the reconstructed index: {plan}, {hydrated=}"
                                 )
                             time.sleep(0.25)
+                        # Only this SELECT uses the psql metric label in this
+                        # fixture. The pgwire metric records the actual execution
+                        # strategy, so EXPLAIN alone or Persist fallback cannot pass.
+                        indexed.execute("SET application_name = 'psql'")
+                        before = peek_strategy_counts()
                         indexed.execute(historical_query)
                         assert indexed.fetchall() == historical_rows
+                        after = peek_strategy_counts()
+                        assert after["fast-path"] == before["fast-path"] + 1, (
+                            before,
+                            after,
+                        )
+                        assert (
+                            after["persist-fast-path"] == before["persist-fast-path"]
+                        ), (
+                            before,
+                            after,
+                        )
                 reference.execute("COMMIT")
 
         for name in outputs:

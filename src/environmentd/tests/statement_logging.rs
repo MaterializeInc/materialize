@@ -1039,12 +1039,12 @@ fn test_statement_logging_ws_subscribe_no_crash() {
 #[allow(clippy::disallowed_methods)]
 fn test_statement_logging_finished_at_excludes_coordinator_queue() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
+    let mut ddl = server.connect_internal(postgres::NoTls).unwrap();
 
     // Populate this session's catalog snapshot cache, so the measured statement
     // below needs nothing from the stalled coordinator.
     client.execute("SELECT 1", &[]).unwrap();
 
-    let mut ddl = server.connect_internal(postgres::NoTls).unwrap();
     fail::cfg("catalog_transact", "sleep(3000)").unwrap();
     let stall = thread::spawn(move || {
         let _ = ddl.batch_execute("CREATE TABLE stalls_the_coordinator (x int)");
@@ -1061,8 +1061,10 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
         .unwrap();
     let finished_bound = Utc::now().timestamp_millis() + 1;
 
-    stall.join().unwrap();
+    // Metadata conflicts can retry the DDL. Disable the repeating stall before
+    // waiting for completion so retries can catch up with peer publications.
     fail::remove("catalog_transact");
+    stall.join().unwrap();
 
     let mut internal = server.connect_internal(postgres::NoTls).unwrap();
     let query = "

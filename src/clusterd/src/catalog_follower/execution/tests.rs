@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use mz_catalog::catalog::{Catalog, CatalogError, Op, test_support};
 use mz_catalog::durable::{DurableCatalogError, TestCatalogStateBuilder};
-use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, expression_build_version};
+use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions};
 use mz_catalog::memory::error::ErrorKind;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
@@ -50,6 +50,66 @@ use uuid::Uuid;
 
 use crate::catalog_follower as follower;
 use follower::tests::{debug_catalog, name, transact};
+
+#[mz_ore::test(tokio::test)]
+async fn startup_rejects_mismatched_plan_versions() {
+    let fixture = Box::pin(Fixture::new((1, 15_000), 20_000, false)).await;
+    let config = &fixture.config;
+    let own = config.build_info.semver_version();
+    let mut other_version = own.clone();
+    other_version.patch += 1;
+    let mut other_prerelease = own.clone();
+    other_prerelease.pre = if own.pre.is_empty() {
+        "other".parse().unwrap()
+    } else {
+        format!("{}.other", own.pre).parse().unwrap()
+    };
+    for plan_build in [other_version.to_string(), other_prerelease.to_string()] {
+        let mut reconstruction = config.reconstruction.clone();
+        reconstruction.plan_build = plan_build;
+        let rejected = follower::Config {
+            reconstruction,
+            environment_id: config.environment_id.clone(),
+            connection_context: config.connection_context.clone(),
+            cluster_id: config.cluster_id,
+            replica_id: config.replica_id,
+            deploy_generation: config.deploy_generation,
+            persist_location: config.persist_location.clone(),
+            build_info: config.build_info,
+        };
+        let error = timeout(
+            Duration::from_secs(5),
+            follower::run(
+                rejected,
+                Arc::clone(&fixture.clients),
+                MetricsRegistry::new(),
+                None,
+                None,
+            ),
+        )
+        .await
+        .expect("incompatible startup must reject without awaiting plans")
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("does not match replica version"),
+            "{error:#}"
+        );
+    }
+
+    let mut reconstruction = config.reconstruction.clone();
+    let mut writer_build = own;
+    writer_build.build = "writer-namespace".parse().unwrap();
+    reconstruction.plan_build = writer_build.to_string();
+    let decoded: mz_catalog::config::ReplicaCatalogConfig =
+        serde_json::from_str(&serde_json::to_string(&reconstruction).unwrap()).unwrap();
+    assert_eq!(
+        decoded
+            .plan_build_version(config.build_info)
+            .unwrap()
+            .to_string(),
+        reconstruction.plan_build,
+    );
+}
 
 #[mz_ore::test(tokio::test)]
 async fn written_index_survives_writer_and_query_disconnect() {
@@ -421,7 +481,10 @@ impl Fixture {
         ))
         .await
         .unwrap();
-        let build = expression_build_version(config.build_info);
+        let build = config
+            .reconstruction
+            .plan_build_version(config.build_info)
+            .unwrap();
         let store = ExpressionCacheHandle::open_plan_store(
             build.clone(),
             &persist,

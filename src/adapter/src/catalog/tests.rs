@@ -30,6 +30,97 @@ use crate::catalog::Catalog;
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::session::Session;
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates() {
+    use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_client::PersistClient;
+
+    let persist = PersistClient::new_for_tests().await;
+    let organization = uuid::Uuid::new_v4();
+    let bootstrap = test_bootstrap_args();
+    let storage = TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("open fresh durable catalog");
+    let mut catalog = Catalog::open_debug_catalog_inner(
+        persist.clone(),
+        storage,
+        mz_ore::now::SYSTEM_TIME.clone(),
+        Some(
+            format!("local-az1-{organization}-0")
+                .parse()
+                .expect("valid environment ID"),
+        ),
+        &mz_build_info::DUMMY_BUILD_INFO,
+        [("enable_catalog_read_protection".into(), "true".into())].into(),
+        &bootstrap,
+        None,
+        None,
+    )
+    .await
+    .expect("open protected catalog");
+    let registry = MetricsRegistry::new();
+    let (writer, _) = catalog
+        .initialize_table_writer(persist.clone(), &registry, false)
+        .await
+        .expect("initialize the first table writer without restarting the catalog");
+    let shard = catalog.txn_wal_shard().await.expect("initialized WAL");
+    drop(writer);
+
+    let mut peer = TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("join metadata publisher");
+    peer.sync_to_current_updates()
+        .await
+        .expect("consume peer snapshot");
+    let incarnation = {
+        let mut tx = peer.transaction().await.expect("start peer publication");
+        let incarnation = tx.create_client_incarnation(None).expect("register peer");
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("publish peer metadata");
+        incarnation
+    };
+    let (writer, _) = catalog
+        .initialize_table_writer(persist, &MetricsRegistry::new(), true)
+        .await
+        .expect("open a WAL reader despite pending peer metadata");
+    assert_eq!(
+        catalog.txn_wal_shard().await.expect("same WAL identity"),
+        shard
+    );
+    assert!(
+        !catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+    );
+    catalog
+        .sync_to_current_updates()
+        .await
+        .expect("apply queued peer metadata");
+    assert!(
+        catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+    );
+    drop(writer);
+    catalog.expire().await;
+    peer.expire().await;
+}
+
 /// System sessions have an empty `search_path` so it's necessary to
 /// schema-qualify all referenced items.
 ///

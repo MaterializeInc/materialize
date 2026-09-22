@@ -66,7 +66,6 @@ pub mod replica_http_locator;
 // Export this on behalf of the storage controller to provide a unified
 // interface, allowing other crates to depend on this crate alone.
 pub use mz_storage_controller::adapter_storage::AdapterStorageWriter;
-pub use mz_storage_controller::prepare_initialization;
 pub use mz_storage_controller::rtr::real_time_recency_ts;
 pub use replica_http_locator::ReplicaHttpLocator;
 
@@ -679,11 +678,11 @@ impl Controller {
 impl Controller {
     /// Creates a new controller.
     ///
-    /// For correctness, this function expects to have access to the mutations
-    /// to the `storage_txn` that occurred in [`prepare_initialization`].
+    /// The transaction WAL identity in `storage_txn` must be durably initialized
+    /// by catalog bootstrap before construction opens Persist handles.
     ///
     /// # Panics
-    /// If this function is called before [`prepare_initialization`].
+    /// If `storage_txn` is missing the transaction WAL identity.
     #[instrument(name = "controller::new")]
     pub async fn new(
         config: ControllerConfig,

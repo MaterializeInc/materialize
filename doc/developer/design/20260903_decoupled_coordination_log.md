@@ -1217,3 +1217,111 @@ connections, independently of permission publication. Unknown observations are
 omitted, not reported as completed frontiers. Disconnect and DROP retract them.
 This reporting owns no installation or read capabilities. Persisted collections'
 global frontier reporting remains storage-owned.
+
+Unused unmaterialized views have no plan owners and cannot invalidate written
+imports or notices. Drops with dependents still take the full repair path. This
+eligibility distinction does not add a plan cache or broaden notice optimization.
+
+Runtime-immutable WAL identity is read from a fenced durable snapshot without
+requiring the SQL projection to consume unrelated replica updates. Those updates
+remain queued for normal application. Temporary comments follow their items'
+local SQL visibility, independently of durable membership and reclamation. The
+same-generation restart cleanup expectation remains a separate open question.
+
+### 2026-09-14: Bootstrap and acceptance boundaries
+
+Protected same-generation restart preserves potentially live foreign temporary
+owners. SQL namespace isolation is separate from durable inventory. Graceful close
+cleans up its owner, and promotion reclaims crashed-owner items, comments and
+storage mappings with finalization. Crashed-owner resources may remain until
+promotion. Unprotected cleanup is unchanged, without a session-liveness framework.
+
+Bootstrap must tolerate autonomous metadata publication throughout opening, not
+just at the final WAL lookup. Identity creation precedes runtime freezing. Pure
+catalog replay does not commit, while genuine initialization writes keep
+refresh, validation and fencing. Absorbed builtin rows belong in the initial reset
+vector until that reset completes, not in the live introspection writer.
+
+Retained catalog history needs attribution to actual Persist readers before cost
+acceptance. Keep reader maps from the existing boundary inspections. A controlled
+nonempty prepared-rewrite regression needs visibility into revision reuse and live
+holds. Approval for a small test observation hook is pending. Broader transaction
+access-path behavior remains deferred.
+
+### 2026-09-14: Scoped proof and existing retention costs
+
+The prepared-rewrite regression may use an environment-scoped Rust observation
+hook, inactive unless explicitly configured. It reports plain IDs, revisions and
+active hold minima without acquiring, cloning or extending protection or changing
+retry decisions. No SQL surface, durable state or general observer framework.
+
+The outage fixture may supply bounded ordinary input to give Persist compaction
+work independently of per-record inspection overhead. Keep the physical assertion,
+cutoff, grace, timeout and exact outputs. A universal scheduling theorem is not a
+landing requirement. Ordinary lease-refresh lag is an accepted existing M2 cost,
+not a new latency guarantee. Report observed retention costs and the unproven
+steady-state plateau without adding a longer campaign as an acceptance gate.
+
+### 2026-09-14: Sibling development binaries and historical-index verification
+
+Within the single-build scope, replica reconstruction configuration carries the
+writer's explicit written-plan namespace. The writer keeps its distinct
+development-build namespace and expression-cache isolation. Replica selections,
+plan bytes and ownership checks use that supplied namespace, with matching
+semantic versions, including prerelease, required before loading plans. The
+provisioner must pair compatible sibling binaries. Neither version equality nor
+successful decoding proves development-build compatibility. Reconstruction does
+not need an adapter connection, arbitrary selection fallback, cross-build repair
+or a new fingerprinting framework. Release-build behavior is unchanged.
+
+After two unmasked zero-replica history advances, the outage fixture may extend
+only the historical index's retention before starting its first replica. The
+original historical timestamp and reference read remain protected through
+hydration and comparison. This separates rolling retention from cold-start
+verification without changing physical cutoffs, grace, deadlines or exact
+outputs. The final historical query must execute through the reconstructed index,
+not merely explain a declared index candidate. Broader transaction behavior
+remains outside this change.
+
+### 2026-09-14: Isolated retention input and frozen M2 acceptance scope
+
+The zero-replica retention input and index are established before the adapter
+outage on a shard without readers from the compute replicas deliberately killed
+by the recovery checks. The shared-input outage and recovery checks remain intact.
+This isolates retention advancement from valid abandoned Persist reader leases,
+without changing production leases, reclamation, scheduling or proof deadlines.
+
+The CI135583 failure reproduced with its prebuilt images. At the failed deadline,
+a killed compute replica's input reader still had a valid 15-minute lease. The
+reader subsequently expired normally and Persist since advanced without
+intervention. This is fixture interference, not evidence of a production defect.
+
+M2 acceptance scope is frozen. The targeted DDL regressions and bounded throughput
+checks have sufficient passing evidence. Finish the agreed native outcomes, fix
+concrete CI regressions and continue the agreed upstream integration. Preserve
+behavioral contracts while simplifying incidental fixture arrangements. Do not
+add scenarios, stronger guarantees, observability or a lease-expiry campaign.
+Escalate correctness problems, user-visible changes or disproportionate cost.
+
+The complete native workflow passes locally with CI135583 binaries and this
+fixture correction. It proves physical compaction past cutoff `1790241677000`,
+adapter-absent compute recovery with fresh value 1220, source/sink recovery with
+1230, and two unmasked retention advances. Historical timestamp `1790242378001`
+is read through the reconstructed index with equal reference rows, one additional
+pgwire fast-path execution and no Persist-fast-path execution. All three resumed
+MV/sink outputs match exactly: 132 values from 0 through 1310 in steps of 10.
+The EXPLAIN matcher accepts both `ReadIndex` and fast-path `Indexed` rendering.
+Syntax, Black, Ruff and whitespace checks pass. Host memory pressure delayed
+startup, but the workflow's proof deadlines and assertions were unchanged.
+This closes the native runtime proof, not the remaining CI regressions.
+
+### 2026-09-14: Replacement tests follow asynchronous application semantics
+
+Replacement application is not linearizable at the dataflow level. Queries may
+return old data after ALTER returns, even under strict serializable isolation,
+as documented in `test/testdrive/replacement-materialized-views.td` and the test
+migration in a67e138b92 (#35091). The observed old value followed by convergence
+does not demonstrate a production correctness defect. The expression-cache tests
+use bounded eventual-output checks while retaining dependency-drop, cache-disabled
+application and restart coverage. No enacted-catalog observation or synchronous
+APPLY completion contract is added. Failure to converge or recover remains a bug.

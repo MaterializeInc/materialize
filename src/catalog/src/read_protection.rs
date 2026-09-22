@@ -97,6 +97,15 @@ impl ClientReadProtection {
         self.incarnation
     }
 
+    /// Copies local active-token minima for diagnostics without publishing,
+    /// acquiring or extending protection. These are not a liveness certificate.
+    pub fn active_frontiers(&self) -> BTreeMap<GlobalId, Timestamp> {
+        self.state
+            .lock()
+            .expect("read protection mutex poisoned")
+            .aggregate(BTreeMap::new())
+    }
+
     /// Whether the writer has a publication in flight. Committed-update
     /// callbacks must defer further publication until that attempt finishes.
     pub fn publication_pending(&self) -> bool {

@@ -38,6 +38,10 @@ impl ClientReadProtection {
         self.inner.incarnation()
     }
 
+    pub(crate) fn active_frontiers(&self) -> BTreeMap<GlobalId, Timestamp> {
+        self.inner.active_frontiers()
+    }
+
     pub(crate) fn publication_pending(&self) -> bool {
         self.inner.publication_pending()
     }
@@ -150,6 +154,24 @@ mod tests {
     fn publish(client: &ClientReadProtection, extra: BTreeMap<GlobalId, Timestamp>) {
         client.prepare_publication(extra);
         client.finish_publication(true);
+    }
+
+    #[mz_ore::test]
+    fn observing_active_minima_does_not_retain_or_publish_protection() {
+        let client = ClientReadProtection::new(1);
+        let granted = requirements(&[(1, 10), (2, 10)]);
+        publish(&client, granted.clone());
+        assert!(client.active_frontiers().is_empty());
+        let holds = acquire(&client, 10);
+        let observed = client.active_frontiers();
+        drop(holds);
+        assert!(client.active_frontiers().is_empty());
+        assert_eq!(observed, granted);
+        assert_eq!(
+            client.granted_frontier(GlobalId::User(1)),
+            Some(Timestamp::from(10))
+        );
+        assert!(!client.publication_pending());
     }
 
     #[mz_ore::test]

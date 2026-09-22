@@ -184,6 +184,7 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::ShardId;
     use mz_repr::RelationVersion;
+    use mz_sql::names::CommentObjectId;
     use mz_storage_client::controller::StorageTxn;
 
     async fn check(catalog: &Catalog) {
@@ -244,6 +245,11 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
     let local_item = CatalogItemId::User(100_000);
     let foreign_item = CatalogItemId::User(100_001);
     let alias_item = CatalogItemId::User(100_002);
+    let ordinary_comment = catalog
+        .entries()
+        .find(|entry| entry.conn_id().is_none())
+        .expect("bootstrap contains ordinary catalog items")
+        .comment_object_id();
     let ids = [local, foreign, version];
     let (updates, incarnation) = {
         let mut storage = catalog.storage().await;
@@ -280,7 +286,17 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
                 Some(owner),
             )
             .expect("can insert temporary catalog item");
+            for column in [None, Some(0)] {
+                tx.update_comment(
+                    CommentObjectId::Table(item),
+                    column,
+                    Some("temporary".into()),
+                )
+                .expect("can comment on temporary item");
+            }
         }
+        tx.update_comment(ordinary_comment, None, Some("ordinary".into()))
+            .expect("can comment on ordinary item");
         // The native catalog harness has no storage controller. Allocate the
         // metadata and initial permission together, as storage preparation does.
         let foreign_shard = ShardId::new();
@@ -316,6 +332,25 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
     assert!(catalog.state.try_get_entry(&local_item).is_some());
     assert!(catalog.state.try_get_entry(&foreign_item).is_none());
     assert!(catalog.state.try_get_entry(&alias_item).is_none());
+    catalog
+        .check_consistency()
+        .expect("comments follow local SQL visibility");
+    assert_eq!(
+        catalog
+            .state
+            .comments
+            .get_object_comments(CommentObjectId::Table(local_item))
+            .expect("local comments remain visible")
+            .len(),
+        2
+    );
+    assert!(
+        catalog
+            .state
+            .comments
+            .get_object_comments(CommentObjectId::Table(foreign_item))
+            .is_none()
+    );
     check(&catalog).await;
     assert!(
         catalog
@@ -324,6 +359,65 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
             .retained_collections
             .is_empty()
     );
+
+    // Comment-only transactions have no Item update to classify their targets.
+    let updates = {
+        let mut storage = catalog.storage().await;
+        let mut tx = storage
+            .transaction()
+            .await
+            .expect("can start comment transaction");
+        tx.update_comment(
+            CommentObjectId::Table(local_item),
+            Some(0),
+            Some("edited".into()),
+        )
+        .expect("can replace local column comment");
+        tx.update_comment(
+            CommentObjectId::Table(foreign_item),
+            None,
+            Some("edited foreign".into()),
+        )
+        .expect("can replace foreign table comment");
+        tx.update_comment(CommentObjectId::Table(foreign_item), Some(0), None)
+            .expect("can remove foreign column comment");
+        let updates = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("can commit comment changes");
+        updates
+    };
+    let _ = catalog
+        .state
+        .apply_updates(updates, &mut LocalExpressionCache::Closed)
+        .await;
+    assert_eq!(
+        catalog
+            .state
+            .comments
+            .get_object_comments(CommentObjectId::Table(local_item))
+            .expect("local comments remain visible after replacement")
+            .get(&Some(0))
+            .map(String::as_str),
+        Some("edited")
+    );
+    assert!(
+        catalog
+            .state
+            .comments
+            .get_object_comments(CommentObjectId::Table(foreign_item))
+            .is_none()
+    );
+    assert_eq!(
+        catalog
+            .state
+            .comments
+            .get_object_comments(ordinary_comment)
+            .expect("ordinary item comments remain visible")
+            .get(&None)
+            .map(String::as_str),
+        Some("ordinary")
+    );
+    check(&catalog).await;
 
     // Dry runs leave durable client protection in place for the drop checks.
     let release = Op::PublishClientReadRequirements {
@@ -357,6 +451,8 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
                 .expect("can start temporary item removal transaction");
             tx.remove_item(item)
                 .expect("can remove temporary catalog item");
+            tx.drop_comments(&BTreeSet::from([CommentObjectId::Table(item)]))
+                .expect("can remove temporary item comments");
             let updates = tx.get_and_commit_op_updates();
             let ts = tx.upper();
             tx.commit(ts)
@@ -412,6 +508,31 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
             );
         }
     }
+    // A dropped foreign item is no longer a valid reason to hide a comment.
+    // Apply a malformed update without persisting it and retain the diagnostic.
+    use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+    let orphan = StateUpdate {
+        kind: StateUpdateKind::Comment(crate::durable::objects::Comment {
+            object_id: CommentObjectId::Table(foreign_item),
+            sub_component: None,
+            comment: "orphan".into(),
+        }),
+        ts: catalog.current_upper().await,
+        diff: StateDiff::Addition,
+    };
+    let _ = catalog
+        .state
+        .apply_updates(vec![orphan], &mut LocalExpressionCache::Closed)
+        .await;
+    let errors = catalog
+        .check_consistency()
+        .expect_err("orphaned comments must remain errors");
+    assert_eq!(
+        errors["comments"],
+        serde_json::json!([
+            {"Dangling": {"Table": foreign_item}}
+        ])
+    );
     catalog.expire().await;
 }
 

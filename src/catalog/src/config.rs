@@ -155,10 +155,14 @@ pub struct StateConfig {
 
 /// Non-runtime configuration required to reconstruct the catalog in a replica.
 ///
-/// This is operator-provided configuration, not an end-user input. Runtime
+/// This is provisioner-supplied configuration, not an end-user input. Runtime
 /// handles and credentials are supplied locally and are never serialized here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplicaCatalogConfig {
+    /// Written-plan namespace supplied by the provisioning writer. In development,
+    /// the provisioner must pair compatible sibling binaries. Version equality
+    /// and successful plan decoding do not establish compatibility.
+    pub plan_build: String,
     pub unsafe_mode: bool,
     pub all_features: bool,
     #[serde(serialize_with = "serialize_replica_sizes")]
@@ -201,11 +205,25 @@ where
 }
 
 impl ReplicaCatalogConfig {
+    /// Returns the supplied writer namespace when the replica's semantic version,
+    /// including prerelease, matches. Build metadata identifies the namespace and
+    /// is not a compatibility check.
+    pub fn plan_build_version(&self, replica: &BuildInfo) -> anyhow::Result<semver::Version> {
+        let build: semver::Version = self.plan_build.parse()?;
+        let replica_version = replica.semver_version();
+        anyhow::ensure!(
+            build.cmp_precedence(&replica_version).is_eq(),
+            "written-plan version {build} does not match replica version {replica_version}"
+        );
+        Ok(build)
+    }
+
     /// Copies reconstruction inputs without runtime handles or credentials.
     ///
     /// The caller must supply effective system parameter defaults in `state`.
     pub fn from_state(state: &StateConfig) -> Self {
         Self {
+            plan_build: crate::expr_cache::expression_build_version(state.build_info).to_string(),
             unsafe_mode: state.unsafe_mode,
             all_features: state.all_features,
             cluster_replica_sizes: state.cluster_replica_sizes.clone(),

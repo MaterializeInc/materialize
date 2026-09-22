@@ -20,7 +20,7 @@ use anyhow::Context;
 use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::config::ReplicaCatalogConfig;
 use mz_catalog::durable::{Metrics, persist_backed_catalog_state};
-use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, expression_build_version};
+use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions};
 use mz_catalog::memory::implications::{CatalogImplications, ParsedStateUpdate};
 use mz_catalog::memory::objects::CatalogItem;
 use mz_compute::server::ReplicaCompute;
@@ -219,6 +219,9 @@ pub(crate) async fn run(
     endpoint: Option<ReplicaCompute>,
     storage_endpoint: Option<mz_storage::server::ReplicaStorage>,
 ) -> anyhow::Result<()> {
+    let build = config
+        .reconstruction
+        .plan_build_version(config.build_info)?;
     let failure_counts: mz_ore::metrics::IntCounterVec = registry.register(mz_ore::metric! {
         name: "mz_catalog_follower_failures_total",
         help: "Catalog follower attempts that require retry, by phase.",
@@ -260,7 +263,6 @@ pub(crate) async fn run(
     let mut catalog = opened.catalog;
     let initial = opened.initial_updates;
     let txns_shard = opened.txn_wal_shard;
-    let build = expression_build_version(config.build_info);
     let shard = opened
         .expression_cache_shard
         .context("catalog has no expression shard")?;
@@ -385,7 +387,12 @@ pub(crate) async fn run(
             // Advancing permission waits for current selections and import holds.
             // Retired definitions cannot be imported by current own-build selections:
             // their removing transaction also repairs those written plans.
-            execution.apply_catalog(&catalog, &storage_metadata::Resolution::default(), false);
+            execution.apply_catalog(
+                &catalog,
+                &build,
+                &storage_metadata::Resolution::default(),
+                false,
+            );
             if effects.configuration_changed {
                 anyhow::ensure!(
                     catalog
@@ -530,7 +537,12 @@ pub(crate) async fn run(
                     }
                     pending |= execution.pending_installations(&effects) > 0;
                     execution.apply_progress(&catalog);
-                    execution.apply_catalog(&catalog, &metadata, effects.pending.is_empty());
+                    execution.apply_catalog(
+                        &catalog,
+                        &build,
+                        &metadata,
+                        effects.pending.is_empty(),
+                    );
                     let interval = catalog
                         .system_config()
                         .catalog_read_protection_publish_interval();

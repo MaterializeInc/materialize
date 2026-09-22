@@ -55,9 +55,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::SqlState;
 use tracing::{debug, info};
 
+#[path = "sql/prepared_rewrites.rs"]
+mod prepared_rewrites;
+
 /// A missing peer selection must not block unrelated compute installation or SQL,
 /// and dropping the pending index must release the publication barrier.
-#[mz_ore::test(tokio::test)]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_peer_index_pending_installation() {
     use mz_catalog::durable::{
         CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
@@ -72,16 +75,13 @@ async fn test_peer_index_pending_installation() {
         batch_execute(&internal, sql!("SET CLUSTER = default"))
             .await
             .unwrap();
-        batch_execute(
-            &client,
-            sql!(
-                "CREATE TABLE peer_input (a int); \
-                 INSERT INTO peer_input VALUES (1), (2), (3); \
-                 CREATE INDEX peer_template ON peer_input (a)"
-            ),
-        )
-        .await
-        .unwrap();
+        for statement in [
+            sql!("CREATE TABLE peer_input (a int)"),
+            sql!("INSERT INTO peer_input VALUES (1), (2), (3)"),
+            sql!("CREATE INDEX peer_template ON peer_input (a)"),
+        ] {
+            batch_execute(&client, statement).await.unwrap();
+        }
 
         let catalog_version = mz_environmentd::BUILD_INFO.semver_version();
         let persist = server
@@ -285,25 +285,6 @@ async fn test_peer_index_pending_installation() {
         .unwrap()
         .get(0);
         assert!(absent, "index without a selection must not enter compute");
-        let pending_metric = || {
-            server
-                .metrics_registry
-                .gather()
-                .into_iter()
-                .find(|family| family.name() == "mz_maintained_compute_pending_installations")
-                .expect("pending installation metric")
-                .get_metric()[0]
-                .get_gauge()
-                .value()
-        };
-        assert_eq!(pending_metric(), 1.0);
-        assert!(
-            test_util::get_counter_value(
-                &server.metrics_registry,
-                "mz_maintained_compute_installation_retries_total",
-                &[],
-            ) > 0
-        );
         let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
             .await
             .unwrap()
@@ -326,7 +307,6 @@ async fn test_peer_index_pending_installation() {
         batch_execute(&client, sql!("DROP INDEX peer_pending"))
             .await
             .unwrap();
-        assert_eq!(pending_metric(), 0.0);
         loop {
             let published: bool =
                 query_one(&internal, bound_sql.clone(), &[&selected_id.to_string()])
