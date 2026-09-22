@@ -512,7 +512,8 @@ pub(crate) async fn run(
                         plans = effects.selected.len(), pending_plans = ?effects.pending,
                         pending_metadata = ?metadata.pending,
                         storage_inputs = metadata.metadata.len(),
-                        observed_uppers = metadata.uppers.len(), replica_owned = execution.is_some(),
+                        observed_uppers = metadata.uppers.len(),
+                        replica_owned = execution.is_some(),
                         "catalog follower effects processed"
                     );
                     last_report = tokio::time::Instant::now();

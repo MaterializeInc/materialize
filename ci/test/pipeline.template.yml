@@ -316,6 +316,19 @@ steps:
     agents:
       queue: hetzner-aarch64-16cpu-32gb
 
+  - id: iceberg-overlap-recovery
+    topics: [iceberg, postgres]
+    label: Iceberg overlap recovery
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/iceberg, src/storage/src/sink/iceberg.rs]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: iceberg
+          run: commit-overlap-recovery
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
   - id: sqllogictest-fast
     label: SLT
     depends_on: build-aarch64

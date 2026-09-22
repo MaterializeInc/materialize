@@ -170,7 +170,7 @@ async fn shared_opaque_contention_and_stale_permission() {
     assert!(observer(&persist, shard).await.since().is_empty());
 }
 
-#[test]
+#[mz_ore::test]
 fn missing_permission_is_not_empty_permission() {
     let local = GlobalId::User(1);
     let alias = GlobalId::User(2);
