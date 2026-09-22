@@ -81,6 +81,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::{Stage, StageLogger};
 use crate::metrics::sink::kafka::KafkaSinkMetrics;
 use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
@@ -168,11 +169,13 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+        stages: &StageLogger,
     ) -> (
         StreamVec<'scope, Timestamp, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
         let scope = batches.scope();
+        let worker = scope.worker();
 
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
@@ -196,16 +199,19 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             .sink_write_frontiers
             .insert(sink_id, Rc::clone(&write_frontier));
 
-        let (encoded, encode_status, encode_token) = encode_collection(
-            format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
-            batches,
-            sink.envelope,
-            self.clone(),
-            storage_state.storage_configuration.clone(),
-            sink_id,
-            sink.from,
-            key_is_synthetic,
-        );
+        let (encoded, encode_status, encode_token) =
+            stages.export(worker, sink_id, Stage::Encode, || {
+                encode_collection(
+                    format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
+                    batches,
+                    sink.envelope,
+                    self.clone(),
+                    storage_state.storage_configuration.clone(),
+                    sink_id,
+                    sink.from,
+                    key_is_synthetic,
+                )
+            });
 
         let metrics = storage_state.metrics.get_kafka_sink_metrics(sink_id);
         let statistics = storage_state
@@ -214,18 +220,20 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
             .expect("statistics initialized")
             .clone();
 
-        let (sink_status, sink_token) = sink_collection(
-            format!("kafka-{sink_id}-sink"),
-            encoded,
-            sink_id,
-            self.clone(),
-            storage_state.storage_configuration.clone(),
-            sink,
-            metrics,
-            statistics,
-            write_handle,
-            write_frontier,
-        );
+        let (sink_status, sink_token) = stages.export(worker, sink_id, Stage::Sink, || {
+            sink_collection(
+                format!("kafka-{sink_id}-sink"),
+                encoded,
+                sink_id,
+                self.clone(),
+                storage_state.storage_configuration.clone(),
+                sink,
+                metrics,
+                statistics,
+                write_handle,
+                write_frontier,
+            )
+        });
 
         let running_status = Some(HealthStatusMessage {
             id: None,

@@ -32,6 +32,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::Stage;
 use crate::source::types::{FuelSize, SignaledFuture, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
@@ -51,9 +52,14 @@ pub fn render<'scope>(
 ) {
     // known and comitted offsets are recorded in the stats operator
     // It's easier to have this operator record the metrics rather than trying to special case it below.
-    let stats_button = render_statistics_operator(scope, &config, committed_uppers);
+    let stages = &config.stage_logger;
+    let worker = scope.worker();
 
-    let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
+    let (stats_button, mut builder) = stages.shared(worker, Stage::Reader, || {
+        let stats_button = render_statistics_operator(scope, &config, committed_uppers);
+        let builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
+        (stats_button, builder)
+    });
 
     let (data_output, stream) = builder.new_output::<FueledBuilder<
         CapacityContainerBuilder<
@@ -65,22 +71,25 @@ pub fn render<'scope>(
         >,
     >>();
     let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
-    let partition_count = u64::cast_from(export_ids.len());
-    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
-        partition_count,
-        |((output, data), time, diff): (
-            (usize, Result<SourceMessage, DataflowError>),
-            MzOffset,
-            Diff,
-        )| {
-            let output = u64::cast_from(output);
-            (output, (data, time, diff))
-        },
-    );
-    let mut data_collections = BTreeMap::new();
-    for (id, data_stream) in export_ids.iter().zip_eq(data_streams) {
-        data_collections.insert(*id, data_stream.as_collection());
-    }
+    let data_collections = stages.shared(worker, Stage::Partition, || {
+        let partition_count = u64::cast_from(export_ids.len());
+        let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
+            partition_count,
+            |((output, data), time, diff): (
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            )| {
+                let output = u64::cast_from(output);
+                (output, (data, time, diff))
+            },
+        );
+        let mut data_collections = BTreeMap::new();
+        for (id, data_stream) in export_ids.iter().zip_eq(data_streams) {
+            data_collections.insert(*id, data_stream.as_collection());
+        }
+        data_collections
+    });
 
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
