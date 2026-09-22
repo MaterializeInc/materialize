@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/sql_server.rs
-revision: 946b68f676
+revision: 4c45b862e2
 ---
 
 # mz-storage::source::sql_server

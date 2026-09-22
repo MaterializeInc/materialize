@@ -1,4 +1,5 @@
 ---
+draft: true
 title: mz sql
 description: The `mz sql` command executes SQL statements in a region.
 menu:

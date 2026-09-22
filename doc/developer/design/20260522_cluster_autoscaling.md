@@ -283,3 +283,17 @@ The following behaviors fall out of the design rather than being its headline ou
 8. **Transient replicas and HA placement.** A burst (or reconfiguration-overlap) replica currently counts toward a cluster's topology spread / min-domains, so it can skew where a subsequently-added steady replica lands. Low-likelihood; excluding transient replicas from spread accounting is follow-up work.
 
 9. **Config-shape `ALTER` on a scheduled cluster.** A non-MANUAL (scheduled) cluster holds `replication_factor = 0` and lets the `ON REFRESH` strategy own the replica set, which does not compose cleanly with the rule that every config-shape change writes a `reconfiguration` record (see [Durable state model](#durable-state-model)): graceful reconfiguration would desire `0` target replicas, so the cut-over degenerates to a vacuous one (advance `cluster.size` and mark the record `Finalized`) and any replica running inside a refresh window is then swapped for one at the new size. That is a disruptive mid-window resize. The likely intent is that a size change writes `cluster.size` directly and the next refresh window brings a replica up at the new size. v1 does exactly that: a config-shape `ALTER` on a scheduled cluster takes the direct (non-record) path, and the sequencer refuses a `SCHEDULE` change while a `reconfiguration` record is in flight, so the record and schedule ownership regimes never overlap. A `WITH (WAIT ...)` option on such an `ALTER` is rejected rather than ignored: the direct path has no hydrate-overlap to wait on, and an instant success would have waited for nothing.
+
+## Addendum: readiness for graceful reconfiguration
+
+Graceful reconfiguration now requires hydration and per-collection compute
+progress within `cluster_reconfiguration_allowed_lag` of the outgoing replicas,
+using replica output frontiers. The default allowance is 60 seconds. Surviving
+replicas, including hydration-burst replicas, do not raise the reference frontier.
+Storage readiness remains hydration-only.
+
+`enable_cluster_reconfiguration_lag_gate` defaults to `true` and can be disabled
+to restore hydration-only cutover. Timeout behavior is unchanged: `ROLLBACK`
+preserves the current configuration, while `COMMIT` forces cutover once the
+target set exists. A downsize that cannot meet the lag allowance waits until
+the deadline and follows that timeout policy.

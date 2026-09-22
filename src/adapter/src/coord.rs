@@ -2644,10 +2644,6 @@ impl Coordinator {
 
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
-        let enable_storage_introspection_logs = self
-            .catalog()
-            .system_config()
-            .enable_storage_introspection_logs();
         for instance in self.catalog.clusters() {
             self.controller.create_cluster(
                 instance.id,
@@ -2666,7 +2662,6 @@ impl Coordinator {
                     role,
                     replica.config.clone(),
                     enable_worker_core_affinity,
-                    enable_storage_introspection_logs,
                 )?;
             }
         }

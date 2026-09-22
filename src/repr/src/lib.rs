@@ -80,7 +80,7 @@ pub use crate::scalar::{
     PropArray, PropDatum, PropDict, PropList, arb_datum, arb_datum_for_column,
     arb_datum_for_scalar, arb_range_type,
 };
-pub use crate::timestamp::{Timestamp, TimestampManipulation};
+pub use crate::timestamp::{Timestamp, TimestampManipulation, frontier_within_lag};
 pub use crate::update::{
     Rows, RowsBuilder, SharedSlice, UpdateCollection, UpdateCollectionBuilder,
 };

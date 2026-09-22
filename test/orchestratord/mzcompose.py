@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import subprocess
@@ -770,6 +771,18 @@ class BalancerdNodeSelector(Modification):
         retry(check, 240)
 
 
+def _minio_image() -> str:
+    """The MinIO image the current tree's manifest uses, read from the file so the
+    two cannot drift."""
+    manifest = MZ_ROOT / "misc" / "helm-charts" / "testing" / "minio.yaml"
+    for line in manifest.read_text().splitlines():
+        if line.strip().startswith("image:"):
+            return line.split("image:", 1)[1].strip()
+    raise ValueError(f"no image line in {manifest}")
+
+
+MINIO_IMAGE = _minio_image()
+
 # Must match test/orchestratord/priorityclass.yaml.
 PRIORITY_CLASS_NAME = "mz-test-priority"
 PRIORITY_CLASS_VALUE = 1000000000
@@ -1213,6 +1226,62 @@ class ConsoleReplicas(Modification):
 
         # console doesn't get launched until last
         retry(check_replicas, 120)
+
+
+def balancerd_configmap() -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": "balancerd-settings",
+            "namespace": "materialize-environment",
+        },
+        "data": {"config.json": json.dumps({"balancerd_max_connections": 123})},
+    }
+
+
+class BalancerdConfigMap(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.44.0-dev.0"):
+            return [None, "balancerd-settings"]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["balancerdConfigmapName"] = self.value
+        if self.value is not None:
+            definition["balancerd_configmap"] = balancerd_configmap()
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if not mods[BalancerdEnabled] or MzVersion.parse_mz(
+            mods[EnvironmentdImageRef]
+        ) < MzVersion.parse_mz("v26.44.0-dev.0"):
+            return
+
+        def check() -> None:
+            pods = get_balancerd_data()["items"]
+            assert pods
+            for pod in pods:
+                volumes = [
+                    v for v in pod["spec"]["volumes"] if v["name"] == "dynamic-config"
+                ]
+                args = pod["spec"]["containers"][0]["args"]
+                if self.value is None:
+                    assert not volumes
+                    assert not any(
+                        arg.startswith("--config-sync-file-path=") for arg in args
+                    )
+                else:
+                    assert len(volumes) == 1
+                    assert volumes[0]["configMap"]["name"] == self.value
+                    assert "--config-sync-file-path=/etc/balancerd/config.json" in args
+                    assert "--config-sync-loop-interval=1s" in args
+
+        retry(check, 240)
 
 
 class SystemParamConfigMap(Modification):
@@ -2358,9 +2427,15 @@ def workflow_documentation_defaults(
             "misc/helm-charts/operator/values.yaml",
             os.path.join(dir, "sample-values.yaml"),
         )
+        # MinIO is test scaffolding rather than part of the release, so always
+        # use the local manifest. Copies at older release tags reference the
+        # `minio/minio` Docker Hub image, which MinIO has deleted.
+        shutil.copyfile(
+            "misc/helm-charts/testing/minio.yaml",
+            os.path.join(dir, "sample-minio.yaml"),
+        )
         files = {
             "sample-postgres.yaml": "misc/helm-charts/testing/postgres.yaml",
-            "sample-minio.yaml": "misc/helm-charts/testing/minio.yaml",
             "sample-materialize.yaml": "misc/helm-charts/testing/materialize.yaml",
         }
 
@@ -2369,6 +2444,20 @@ def workflow_documentation_defaults(
                 shutil.copyfile(path, os.path.join(dir, file))
             else:
                 content = download_repo_file_at_tag(path, str(version))
+                if file == "sample-minio.yaml":
+                    # Every released tag's manifest still says `image:
+                    # minio/minio`, which resolves to docker.io, where MinIO
+                    # deleted the repository (#38802, #38824). The published
+                    # files cannot be changed, so point the downloaded copy at
+                    # the image the current tree uses. Everything else in the
+                    # manifest is exercised as published.
+                    content = re.sub(
+                        rb"^(\s*image:\s*)minio/minio\s*$",
+                        rb"\g<1>" + MINIO_IMAGE.encode(),
+                        content,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
                 with open(os.path.join(dir, file), "wb") as f:
                     f.write(content)
 
@@ -2763,8 +2852,146 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
     definition = setup(c, args)
+    if args.tag is None:
+        definition["balancerd_configmap"] = balancerd_configmap()
+        definition["balancer"]["spec"]["configmapName"] = "balancerd-settings"
     init(definition)
     run_balancer(definition, False)
+    if args.tag is None:
+        check_balancer_config_sync(definition)
+
+
+def check_balancer_config_sync(definition: dict[str, Any]) -> None:
+    namespace = definition["balancer"]["metadata"]["namespace"]
+    pods = get_balancerd_data()["items"]
+    assert pods, "Expected balancerd pods"
+
+    def pod_state() -> dict[str, tuple[str, list[int]]]:
+        return {
+            pod["metadata"]["name"]: (
+                pod["metadata"]["uid"],
+                [s["restartCount"] for s in pod["status"].get("containerStatuses", [])],
+            )
+            for pod in get_balancerd_data()["items"]
+        }
+
+    initial_pod_state = pod_state()
+    volume = next(
+        v for v in pods[0]["spec"]["volumes"] if v["name"] == "dynamic-config"
+    )
+    config_map_name = volume["configMap"]["name"]
+    assert config_map_name == "balancerd-settings"
+
+    def read_config() -> dict[str, Any]:
+        cm = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "configmap",
+                    config_map_name,
+                    "-n",
+                    namespace,
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        assert not cm["metadata"].get(
+            "ownerReferences"
+        ), "Operator adopted an external ConfigMap"
+        return json.loads(cm["data"]["config.json"])
+
+    def check_limit(expected: int) -> None:
+        for pod in pods:
+            container = pod["spec"]["containers"][0]
+            port = next(
+                p["containerPort"]
+                for p in container["ports"]
+                if p["name"] == "internal-http"
+            )
+            name = pod["metadata"]["name"]
+            metrics = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "--raw",
+                    f"/api/v1/namespaces/{namespace}/pods/{name}:{port}/proxy/metrics",
+                ]
+            )
+            assert (
+                f"mz_balancer_connection_limit {expected}" in metrics.splitlines()
+            ), metrics
+
+    assert read_config() == {"balancerd_max_connections": 123}
+    retry(lambda: check_limit(123), 60)
+    for index, limit in enumerate((456, 0)):
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "configmap",
+                config_map_name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps(
+                    {
+                        "data": {
+                            "config.json": json.dumps(
+                                {"balancerd_max_connections": limit}
+                            )
+                        }
+                    }
+                ),
+            ]
+        )
+        # A spec change forces reconciliation, which must leave the external
+        # ConfigMap unchanged.
+        replicas = len(pods) + index + 1
+        name = definition["balancer"]["metadata"]["name"]
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "balancer",
+                name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps({"spec": {"replicas": replicas}}),
+            ]
+        )
+        deployment = pods[0]["metadata"]["labels"]["materialize.cloud/name"]
+
+        def check_reconciled() -> None:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "deployment",
+                        deployment,
+                        "-n",
+                        namespace,
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            assert data["spec"]["replicas"] == replicas
+
+        retry(check_reconciled, 60)
+        assert read_config() == {"balancerd_max_connections": limit}
+        # Kubelet projection can take two minutes before the one-second sync.
+        retry(lambda: check_limit(limit), 180)
+        current_pod_state = pod_state()
+        for name, state in initial_pod_state.items():
+            assert (
+                current_pod_state.get(name) == state
+            ), "balancerd restarted during config sync"
 
 
 def get_materialize_v1alpha1() -> dict[str, Any]:
@@ -3537,6 +3764,8 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         defs.append(definition["materialize2"])
     if "system_params_configmap" in definition:
         defs.append(definition["system_params_configmap"])
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
     yaml_str = yaml.dump_all(defs)
     print(f"Attempting to apply:\n{yaml_str}")
     kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], yaml_str)
@@ -5154,8 +5383,10 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
 def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
     defs = [
         definition["namespace"],
-        definition["balancer"],
     ]
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
+    defs.append(definition["balancer"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],

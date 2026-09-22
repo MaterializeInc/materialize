@@ -1,4 +1,5 @@
 ---
+draft: true
 title: "Materialize CLI Installation"
 description: "The Materialize CLI can be installed through several different methods."
 menu:
