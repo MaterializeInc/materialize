@@ -39,21 +39,28 @@ point](#binlog-files-removed-before-the-resume-point).
 A smaller set of events breaks GTID continuity or makes the binlog stream
 unreadable. Materialize cannot then guarantee a correct, gap-free view of your
 data, so it puts the **entire source** into an error state that requires
-**re-creating** the source. Re-creating triggers a fresh
-[snapshot](/ingest-data/#snapshotting) and rehydration of dependent objects.
-Upstream changes to an individual table's schema are handled separately, and do
-not error the entire source.
+**re-creating** the source. Upstream changes to an individual table's schema
+are handled separately, and do not error the entire source.
 
-In each case, the remediation is to drop and re-create the source:
+In each case, the remediation is to drop the source and create it again with
+the statements you originally used, which triggers a fresh
+[snapshot](/ingest-data/#snapshotting):
 
 ```mzsql
 DROP SOURCE mz_source CASCADE;
+```
 
-CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_connection;
+{{< warning >}}
+`CASCADE` drops **every object that depends on the source**, including views,
+materialized views, indexes, and sinks. Take stock of them before you drop the
+source, because you have to re-create them yourself.
+{{< /warning >}}
 
--- Re-create the tables you were ingesting.
-CREATE TABLE table_1 FROM SOURCE mz_source (REFERENCE mydb.table_1);
+Once the source is back, it is healthy when `status` is `running` and `error`
+is `NULL`:
+
+```mzsql
+SELECT status, error FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 ```
 
 #### Binlog files removed before the resume point
@@ -80,9 +87,14 @@ retention](/sql/create-source/mysql-v2/#binlog-retention).
 
 `RESET BINARY LOGS AND GTIDS` (`RESET MASTER` before MySQL 8.4) discards the
 binlog files and the server's GTID history, so the source's resume point no
-longer exists. The source fails with one of the errors above, or, if the server
-then reissues the same GTIDs, with an [out-of-order GTID
-error](#out-of-order-gtids).
+longer exists. The source fails with:
+
+```nofmt
+mysql server does not have the binlog available at the requested gtid set
+```
+
+or, if the server then reissues GTIDs the source has already seen, with an
+[out-of-order GTID error](#out-of-order-gtids).
 
 #### Changing a required replication setting
 
@@ -95,9 +107,10 @@ mysql server configuration: invalid mysql system setting '<setting>'. Expected '
 ```
 
 The validated settings are `log_bin`, `binlog_format`, `binlog_row_image`,
-`gtid_mode`, `enforce_gtid_consistency`, and, when the upstream server applies
-replication with more than one thread, `replica_preserve_commit_order`. For the
-required values, see [Change data
+`gtid_mode`, `enforce_gtid_consistency`, `gtid_next`, and, when
+`replica_parallel_workers` is greater than `1`,
+`replica_preserve_commit_order` (`slave_preserve_commit_order` on servers
+older than MySQL 8.0). For the required values, see [Change data
 capture](/sql/create-source/mysql-v2/#change-data-capture). Restore the setting
 upstream, then re-create the source.
 
@@ -111,11 +124,11 @@ the errors above or with:
 received a gtid set from the server that violates our requirements: <detail>
 ```
 
-or it keeps replicating against a history that no longer matches what it has
-ingested, serving incorrect results without reporting an error.
-
-Re-create the source after any restore of the upstream database, including a
-disaster-recovery restore onto a new server.
+or, if the restore reuses GTIDs the source has already ingested, it keeps
+replicating against a history that no longer matches its state. Materialize
+cannot detect that case, so re-create the source after any restore of the
+upstream database, including a disaster-recovery restore onto a new server,
+rather than relying on an error.
 
 #### Out-of-order GTIDs
 
@@ -129,7 +142,7 @@ received out of order gtids for source <source_id> at transaction-id <transactio
 This is most common when Materialize replicates from a MySQL replica that
 applies transactions with multiple threads. See [Troubleshooting: Received out
 of order GTIDs](/ingest-data/mysql/received-out-of-order-gtids/) for the
-diagnosis steps and the upstream settings that prevent it.
+diagnosis steps and the upstream settings that make it less likely.
 
 ### Operations that require re-creating only the affected tables
 
@@ -172,5 +185,7 @@ On the new primary, confirm that:
   point](#binlog-files-removed-before-the-resume-point).
 - The [required replication settings](#changing-a-required-replication-setting)
   hold, including `replica_preserve_commit_order` while the server is still
-  applying replication from another server. Multi-threaded apply without
-  preserved commit order produces [out-of-order GTIDs](#out-of-order-gtids).
+  applying replication from another server. Multi-threaded apply is the main
+  source of [out-of-order GTIDs](#out-of-order-gtids); preserving commit order
+  reduces but does not eliminate the risk, so keep
+  `replica_parallel_workers` at `0` or `1` where you can.
