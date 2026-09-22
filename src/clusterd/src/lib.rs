@@ -502,8 +502,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     // Start storage server.
-    let storage_client_builder = mz_storage::serve(
+    let replica_owned =
+        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some();
+    let mut storage_server = mz_storage::server::serve_with_replica(
         storage_timely_config,
+        replica_owned,
         &metrics_registry,
         Arc::clone(&persist_clients),
         txns_ctx.clone(),
@@ -514,6 +517,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         storage_log_writers,
     )
     .await?;
+    let storage_client_builder = storage_server.client_builder();
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
@@ -535,7 +539,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_server = mz_compute::server::serve(
         compute_timely_config,
         ComputeRuntimeRole::Solo,
-        mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some(),
+        replica_owned,
         &metrics_registry,
         Arc::clone(&persist_clients),
         txns_ctx,
@@ -550,11 +554,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     .await?;
     if let Some(config) = follower_config {
         let endpoint = compute_server.take_replica();
+        let storage_endpoint = storage_server.take_replica();
         let replica_owned = endpoint.is_some();
         let registry = metrics_registry.clone();
         mz_ore::task::spawn(|| "catalog_follower", async move {
-            if let Err(error) =
-                catalog_follower::run(config, persist_clients, registry, endpoint).await
+            if let Err(error) = catalog_follower::run(
+                config,
+                persist_clients,
+                registry,
+                endpoint,
+                storage_endpoint,
+            )
+            .await
             {
                 if replica_owned {
                     mz_ore::halt!("execution-critical catalog follower stopped: {error:#}");

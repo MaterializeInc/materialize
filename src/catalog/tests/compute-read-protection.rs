@@ -139,8 +139,8 @@ async fn client_publication_reopen_and_reclamation() {
         .unwrap();
     txn.set_collection_compaction_bound(id, Some(10.into()))
         .unwrap();
-    let a = txn.create_client_incarnation().unwrap();
-    let b = txn.create_client_incarnation().unwrap();
+    let a = txn.create_client_incarnation(None).unwrap();
+    let b = txn.create_client_incarnation(None).unwrap();
     assert_ne!(a, b);
     assert_eq!(
         txn.publish_client_read_requirements(a, BTreeMap::from([(id, 20.into())]))
@@ -232,7 +232,7 @@ async fn client_publication_reopen_and_reclamation() {
         txn.publish_client_read_requirements(a, BTreeMap::from([(id, 30.into())]))
             .is_err()
     );
-    let c = txn.create_client_incarnation().unwrap();
+    let c = txn.create_client_incarnation(None).unwrap();
     assert!(c > a && c > b);
     commit(txn).await;
     Box::new(state).expire().await;
@@ -262,7 +262,7 @@ async fn client_admission_and_protected_metadata_retirement() {
         .unwrap();
     txn.set_maintained_read_requirement(id, BTreeSet::from([input]), Some(10.into()))
         .unwrap();
-    let client = txn.create_client_incarnation().unwrap();
+    let client = txn.create_client_incarnation(None).unwrap();
     commit(txn).await;
 
     for target in [id, GlobalId::User(9999)] {
@@ -282,7 +282,7 @@ async fn client_admission_and_protected_metadata_retirement() {
     let mut txn = state.transaction().await.unwrap();
     txn.publish_client_read_requirements(client, BTreeMap::from([(id, 10.into())]))
         .unwrap();
-    let other = txn.create_client_incarnation().unwrap();
+    let other = txn.create_client_incarnation(None).unwrap();
     txn.publish_client_read_requirements(other, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     commit(txn).await;
@@ -334,7 +334,7 @@ async fn client_index_permission_and_retirement() {
         .unwrap();
     Owner::Ordinary.insert(&mut txn, 1000);
     let id = Owner::Ordinary.id(1000);
-    let client = txn.create_client_incarnation().unwrap();
+    let client = txn.create_client_incarnation(None).unwrap();
     txn.publish_client_read_requirements(client, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     commit(txn).await;
@@ -359,7 +359,7 @@ async fn client_index_permission_and_retirement() {
         .unwrap();
     commit(txn).await;
     let mut txn = state.transaction().await.unwrap();
-    let other = txn.create_client_incarnation().unwrap();
+    let other = txn.create_client_incarnation(None).unwrap();
     txn.publish_client_read_requirements(other, BTreeMap::from([(id, 21.into())]))
         .unwrap();
     reject(txn, "no live storage or index identity").await;

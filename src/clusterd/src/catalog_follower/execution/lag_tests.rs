@@ -43,7 +43,7 @@ use super::tests::{Fixture, assert_rows, disable_inline_parts, in_child, publish
 async fn lagging_index_admits_new_historical_reader() {
     const CHILD: &str = "MZ_CLUSTERD_LAGGING_INDEX_TEST_CHILD";
     const TEST: &str =
-        "catalog_follower::compute::lag_tests::lagging_index_admits_new_historical_reader";
+        "catalog_follower::execution::lag_tests::lagging_index_admits_new_historical_reader";
     if !in_child(CHILD, TEST, Duration::from_secs(180)).await {
         return;
     }
@@ -346,7 +346,12 @@ async fn create_reader(catalog: &mut Catalog) -> u64 {
             catalog.sync_to_current_updates().await.unwrap();
             let ts = catalog.current_upper().await;
             match catalog
-                .transact(None, ts, None, vec![Op::CreateClientIncarnation])
+                .transact(
+                    None,
+                    ts,
+                    None,
+                    vec![Op::CreateClientIncarnation { replica_id: None }],
+                )
                 .await
             {
                 Err(CatalogError::Catalog(error))

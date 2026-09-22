@@ -55,7 +55,7 @@ use follower::tests::{debug_catalog, name, transact};
 async fn written_index_survives_writer_and_query_disconnect() {
     const CHILD: &str = "MZ_CLUSTERD_NATIVE_INDEX_TEST_CHILD";
     const TEST: &str =
-        "catalog_follower::compute::tests::written_index_survives_writer_and_query_disconnect";
+        "catalog_follower::execution::tests::written_index_survives_writer_and_query_disconnect";
 
     if !in_child(CHILD, TEST, Duration::from_secs(120)).await {
         return;
@@ -76,7 +76,12 @@ async fn written_index_survives_writer_and_query_disconnect() {
     } = Fixture::new((1, 15_000), 20_000, false).await;
     let ts = writer.current_upper().await;
     let reader = writer
-        .transact(None, ts, None, vec![Op::CreateClientIncarnation])
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation { replica_id: None }],
+        )
         .await
         .unwrap()
         .created_client_incarnations[0];
@@ -512,7 +517,7 @@ pub(super) async fn start_runtime(
     drop(server);
     // A returned follower, including an error, is always a failure in this test.
     mz_ore::task::spawn(|| "native follower test", async move {
-        let result = follower::run(config, clients, registry, Some(endpoint)).await;
+        let result = follower::run(config, clients, registry, Some(endpoint), None).await;
         panic!("native follower stopped: {result:?}");
     });
 

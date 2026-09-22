@@ -64,6 +64,71 @@ async fn register(persist: &PersistClient, shard: ShardId, desc: &RelationDesc) 
 }
 
 #[mz_ore::test(tokio::test)]
+async fn cold_source_metadata_does_not_require_adapter_registration() {
+    let persist = PersistClient::new_for_tests().await;
+    let store = store(&persist).await;
+    let mut writer = debug_catalog(&persist, Some(ShardId::new())).await;
+    let (item_id, global_id) = writer
+        .allocate_user_id_for_test()
+        .await
+        .expect("source IDs");
+    let mut state = writer.state().clone();
+    let cluster = writer
+        .user_clusters()
+        .next()
+        .expect("bootstrap cluster")
+        .name
+        .clone();
+    let item = mz_catalog::catalog::test_support::parse_item(
+        &mut state,
+        global_id,
+        &format!("CREATE SOURCE materialize.public.cold_source IN CLUSTER {cluster} FROM LOAD GENERATOR COUNTER"),
+        &BTreeMap::new(),
+    ).expect("source definition");
+    let CatalogItem::Source(source) = &item else {
+        panic!("source plan");
+    };
+    let expected_desc = source.desc.clone();
+    let source_name = name(&writer, "cold_source");
+    transact(
+        &mut writer,
+        vec![Op::CreateItem {
+            id: item_id,
+            name: source_name,
+            item,
+            owner_id: RoleId::System(1),
+        }],
+    )
+    .await;
+    let (catalog, _) = committed(&writer, &persist).await;
+    drop(writer);
+    let result = resolve(
+        &catalog,
+        &BTreeSet::from([global_id]),
+        &store,
+        BUILD,
+        &persist,
+        &PersistLocation::new_in_mem(),
+    )
+    .await
+    .expect("cold source metadata");
+    assert!(result.pending.is_empty(), "{:?}", result.pending);
+    let metadata = &result.metadata[&global_id];
+    assert_eq!(metadata.relation_desc, expected_desc);
+    assert_eq!(metadata.txns_shard, None);
+    assert!(
+        persist
+            .latest_schema::<SourceData, (), Timestamp, StorageDiff>(
+                metadata.data_shard,
+                diagnostics(global_id)
+            )
+            .await
+            .expect("schema observation")
+            .is_none()
+    );
+}
+
+#[mz_ore::test(tokio::test)]
 async fn table_aliases_use_exact_schema_versions_and_wal_upper() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;

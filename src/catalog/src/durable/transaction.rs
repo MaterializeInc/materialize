@@ -2857,7 +2857,22 @@ impl<'a> Transaction<'a> {
 
     /// Allocates a fresh client identity. Durably committed identities are never
     /// reused, including after reclamation. The identity is usable only after durable commit.
-    pub fn create_client_incarnation(&mut self) -> Result<u64, CatalogError> {
+    pub fn create_client_incarnation(
+        &mut self,
+        replica_id: Option<ReplicaId>,
+    ) -> Result<u64, CatalogError> {
+        if let Some(id) = replica_id {
+            if self
+                .cluster_replicas
+                .get(&ClusterReplicaKey { id })
+                .is_none()
+            {
+                return Err(DurableCatalogError::InvalidReadProtection(format!(
+                    "replica {id} does not exist"
+                ))
+                .into());
+            }
+        }
         let name = "client_incarnation".to_string();
         if self
             .id_allocator
@@ -2869,7 +2884,10 @@ impl<'a> Transaction<'a> {
         let id = self.get_and_increment_id(name)?;
         self.client_incarnations.insert(
             ClientIncarnationKey { id },
-            ClientIncarnationValue { heartbeat: 0 },
+            ClientIncarnationValue {
+                heartbeat: 0,
+                replica_id,
+            },
             self.op_id,
         )?;
         Ok(id)
@@ -2886,7 +2904,7 @@ impl<'a> Transaction<'a> {
         requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
     ) -> Result<u64, CatalogError> {
         let key = ClientIncarnationKey { id: incarnation };
-        let heartbeat = self
+        let previous = self
             .client_incarnations
             .get(&key)
             .ok_or_else(|| {
@@ -2894,13 +2912,12 @@ impl<'a> Transaction<'a> {
                     "client incarnation {incarnation} is closed or missing"
                 ))
             })?
-            .heartbeat
-            .checked_add(1)
-            .ok_or_else(|| {
-                DurableCatalogError::InvalidReadProtection(format!(
-                    "client incarnation {incarnation} heartbeat exhausted"
-                ))
-            })?;
+            .clone();
+        let heartbeat = previous.heartbeat.checked_add(1).ok_or_else(|| {
+            DurableCatalogError::InvalidReadProtection(format!(
+                "client incarnation {incarnation} heartbeat exhausted"
+            ))
+        })?;
         let mut updates: BTreeMap<_, _> = self
             .client_requirement_keys(incarnation)
             .into_iter()
@@ -2917,7 +2934,10 @@ impl<'a> Transaction<'a> {
             .set_many(updates, self.op_id)?;
         self.client_incarnations.set(
             key,
-            Some(ClientIncarnationValue { heartbeat }),
+            Some(ClientIncarnationValue {
+                heartbeat,
+                ..previous
+            }),
             self.op_id,
         )?;
         Ok(heartbeat)

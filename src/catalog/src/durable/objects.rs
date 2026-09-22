@@ -1377,6 +1377,8 @@ impl DurableType for MaintainedReadRequirement {
 pub struct ClientIncarnation {
     pub id: u64,
     pub heartbeat: u64,
+    /// Immutable participant identity, not write ownership or fencing authority.
+    pub replica_id: Option<ReplicaId>,
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
@@ -1384,9 +1386,10 @@ pub struct ClientIncarnationKey {
     pub(crate) id: u64,
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
 pub struct ClientIncarnationValue {
-    pub(crate) heartbeat: u64,
+    pub heartbeat: u64,
+    pub replica_id: Option<ReplicaId>,
 }
 
 impl DurableType for ClientIncarnation {
@@ -1397,6 +1400,7 @@ impl DurableType for ClientIncarnation {
             ClientIncarnationKey { id: self.id },
             ClientIncarnationValue {
                 heartbeat: self.heartbeat,
+                replica_id: self.replica_id,
             },
         )
     }
@@ -1404,6 +1408,7 @@ impl DurableType for ClientIncarnation {
         Self {
             id: key.id,
             heartbeat: value.heartbeat,
+            replica_id: value.replica_id,
         }
     }
     fn key(&self) -> Self::Key {

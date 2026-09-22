@@ -1177,7 +1177,7 @@ mod tests {
                     .expect("can enable joined protection writers");
             }
             let incarnation = tx
-                .create_client_incarnation()
+                .create_client_incarnation(None)
                 .expect("can create client incarnation");
             let _ = tx.get_and_commit_op_updates();
             let ts = tx.upper();
@@ -1381,7 +1381,7 @@ mod tests {
             drop(holds);
 
             let ts = catalog.current_upper().await;
-            let expected_heartbeat = catalog.state().client_incarnations()[&incarnation];
+            let expected_heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
             catalog
                 .transact(
                     None,
@@ -1618,7 +1618,7 @@ mod tests {
                 .prepare_publication_if_needed(elapsed)
                 .expect("advancement or renewal is due");
             assert_eq!(requirements, BTreeMap::from([(id, Timestamp::from(120))]));
-            let heartbeat = catalog.state().client_incarnations()[&incarnation];
+            let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
             let ts = catalog.current_upper().await;
             catalog
                 .transact(
@@ -1635,7 +1635,7 @@ mod tests {
             client.protection.finish_publication(true);
             client.published();
             assert_eq!(
-                catalog.state().client_incarnations()[&incarnation],
+                catalog.state().client_incarnations()[&incarnation].heartbeat,
                 heartbeat + 1
             );
             assert_eq!(

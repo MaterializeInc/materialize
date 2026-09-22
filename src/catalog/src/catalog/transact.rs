@@ -324,7 +324,9 @@ pub enum Op {
         bounds: Vec<CollectionCompactionBound>,
     },
     /// Allocates a fresh query-client incarnation. Returned only after commit.
-    CreateClientIncarnation,
+    CreateClientIncarnation {
+        replica_id: Option<ReplicaId>,
+    },
     /// Replaces a client's aggregate requirements and renews its heartbeat atomically.
     PublishClientReadRequirements {
         incarnation: u64,
@@ -1308,14 +1310,14 @@ impl Catalog {
                 }
                 tx.set_written_plan(id, &build_version, revision)?;
             }
-            Op::CreateClientIncarnation => {
+            Op::CreateClientIncarnation { replica_id } => {
                 if !state.catalog_read_protection_enabled() {
                     return Err(CatalogError::internal(
                         "create query client",
                         "catalog read protection is not enabled",
                     ));
                 }
-                created_client_incarnations.push(tx.create_client_incarnation()?);
+                created_client_incarnations.push(tx.create_client_incarnation(replica_id)?);
             }
             Op::PublishClientReadRequirements {
                 incarnation,
@@ -4128,6 +4130,8 @@ impl ObjectsToDrop {
 }
 
 #[cfg(test)]
+mod incarnation_tests;
+#[cfg(test)]
 mod temp_tests;
 
 #[cfg(test)]
@@ -4410,7 +4414,12 @@ mod tests {
 
         let ts = catalog.current_upper().await;
         let incarnation = catalog
-            .transact(None, ts, None, vec![Op::CreateClientIncarnation])
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::CreateClientIncarnation { replica_id: None }],
+            )
             .await
             .expect("client incarnation")
             .created_client_incarnations[0];

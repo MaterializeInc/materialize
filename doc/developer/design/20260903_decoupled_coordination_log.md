@@ -1119,3 +1119,39 @@ acknowledgement. Staleness pauses new installation without killing pinned existi
 execution or preventing renewal. Observed reclamation still terminates the follower.
 Current own-build DROP transactions repair pending consumers' selections, so late
 old plan bytes are not authority to install against a dropped index.
+
+### 2026-09-14: Cutover decisions approved by Aljoscha
+
+Fresh-environment M2 accepts roughly five-minute abandoned-incarnation Kafka
+takeover, including same-generation replica restarts. This is provisional, not a
+production failover target. Read-protection grace stays unchanged, without another
+sink lease or handoff protocol. Replica incarnations carry an immutable catalog
+replica ID, ordinary query incarnations remain untagged, and membership is derived
+from the catalog. The tag alone grants neither ownership nor fencing.
+
+Curated metric sinks must keep emitting during adapter loss. Planning can remain
+writer-owned, execution is replica-owned, and existing definitions and written
+plans should be reused. Bring disproportionate cost rather than adding a parallel
+protocol or weakening autonomous observability.
+
+Iceberg must check version and progress preconditions at every actual commit and
+internal rebase against atomically protected metadata, with explicit initial-
+snapshot semantics. Overlap stops prepared-file publication and reconstructs from
+committed progress through sink recovery. Uncertain commits require a progress
+reload before republishing and must not trigger deletion of possibly committed
+files. Completion without duplicates, not just overlap rejection, is the outcome.
+Next: integrate these decisions and complete the adapter-loss/reconstruction proof.
+
+Storage output uppers and bookkeeping DROP acknowledgements do not complete
+execution reads. Native attempts retain protection across async startup and actual
+reader teardown, including remap reads and upsert rehydration. Source enactment
+shares the compute follower's incarnation and publisher. Desired installation waits
+for all-worker acknowledgement, not first input data. Canceled attempts keep their
+read protection through teardown.
+
+Two proposals remain with Aljoscha: a Kafka pre-open admission roundtrip over the
+native endpoint after potentially long initialization I/O, and failing closed when
+all Materialize progress snapshots have expired behind an Iceberg compaction
+snapshot. No additional lease is proposed. Curated metrics still need replica-owned
+written selections. Their transient execution scopes are isolated from queries,
+but compute logging must also distinguish exports with colliding scoped IDs.

@@ -53,7 +53,9 @@ enum Schema {
     // Table ALTER maps RelationVersion 1:1 to SchemaId. A missing version must
     // not fall back to the latest schema, which can contain different columns.
     Table(SchemaId),
-    Registered,
+    // Source and sink schemas are reconstructible before any runtime has opened
+    // their shards. Prefer the registered schema when present.
+    Registered(RelationDesc),
     Builtin(RelationDesc),
     // MV replacement versions identify writers, not Persist schemas. Retired
     // aliases read their own mapped shard using the latest writer's value_desc.
@@ -144,7 +146,7 @@ pub(super) async fn resolve(
                     };
                     Some(connection.value_desc.clone())
                 }
-                Schema::Table(_) | Schema::Registered => None,
+                Schema::Table(_) | Schema::Registered(_) => None,
             };
             Ok((data_shard, txns_shard, desc))
         })();
@@ -158,7 +160,7 @@ pub(super) async fn resolve(
         let definition = definitions[id].as_ref().expect("resolved above");
         let schema_id = match definition.schema {
             Schema::Table(schema_id) => Some(Some(schema_id)),
-            Schema::Registered => Some(None),
+            Schema::Registered(_) => Some(None),
             _ => None,
         };
         if let Some(schema_id) = schema_id {
@@ -177,7 +179,11 @@ pub(super) async fn resolve(
                         diagnostics(*id),
                     )
                     .await?
-                    .map(|(_, desc, _)| desc),
+                    .map(|(_, desc, _)| desc)
+                    .or_else(|| match &definition.schema {
+                        Schema::Registered(desc) => Some(desc.clone()),
+                        _ => None,
+                    }),
             };
             let Some(schema) = schema else {
                 result.pending.insert(*id, Pending::Schema(schema_id));
@@ -267,9 +273,19 @@ fn definitions(
                             .ok_or(Pending::Definition)?;
                         Schema::Table(version.into())
                     }
-                    CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::Sink(_) => {
-                        Schema::Registered
+                    CatalogItem::Table(_) | CatalogItem::Source(_) => {
+                        let item = session
+                            .try_get_item_by_global_id(id)
+                            .ok_or(Pending::Definition)?;
+                        Schema::Registered(
+                            item.relation_desc()
+                                .ok_or(Pending::UnsupportedDefinition)?
+                                .into_owned(),
+                        )
                     }
+                    CatalogItem::Sink(_) => Schema::Registered(
+                        mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC.clone(),
+                    ),
                     _ => return Err(Pending::UnsupportedDefinition),
                 };
                 Ok(Definition {

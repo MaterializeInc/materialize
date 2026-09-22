@@ -619,6 +619,7 @@ mod tests {
                 proto::ClientIncarnationKey { id: 1 },
                 proto::ClientIncarnationValue {
                     heartbeat: u64::MAX,
+                    replica_id: None,
                 },
             ),
             Timestamp::new(699_999),

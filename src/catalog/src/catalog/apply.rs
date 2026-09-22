@@ -498,7 +498,10 @@ impl CatalogState {
                 apply_inverted_lookup(
                     &mut self.client_incarnations,
                     &incarnation.id,
-                    incarnation.heartbeat,
+                    crate::durable::objects::ClientIncarnationValue {
+                        heartbeat: incarnation.heartbeat,
+                        replica_id: incarnation.replica_id,
+                    },
                     diff,
                 );
             }

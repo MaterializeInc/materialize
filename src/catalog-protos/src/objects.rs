@@ -2343,6 +2343,8 @@ pub struct ClientIncarnationKey {
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClientIncarnationValue {
     pub heartbeat: u64,
+    #[serde(default)]
+    pub replica_id: Option<ReplicaId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

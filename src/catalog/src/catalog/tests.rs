@@ -295,7 +295,7 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
                 .expect("can set initial collection compaction bound");
         }
         let incarnation = tx
-            .create_client_incarnation()
+            .create_client_incarnation(None)
             .expect("can create client incarnation");
         tx.publish_client_read_requirements(
             incarnation,
@@ -1578,7 +1578,12 @@ async fn test_multi_subscriber_catalog() {
     let before_metadata = read_only_catalog.clone();
     let commit_ts = writer_catalog.current_upper().await;
     writer_catalog
-        .transact(None, commit_ts, None, vec![Op::CreateClientIncarnation])
+        .transact(
+            None,
+            commit_ts,
+            None,
+            vec![Op::CreateClientIncarnation { replica_id: None }],
+        )
         .await
         .expect("publish peer client metadata");
     read_only_catalog
