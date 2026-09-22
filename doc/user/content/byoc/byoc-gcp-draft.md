@@ -39,6 +39,7 @@ Your environment runs entirely in a dedicated GCP project that you create for Ma
 - Permission to configure Workload Identity Federation and grant IAM roles on that project.
 - Quota in that project and region for the machine types, local SSDs, and IP addresses your environment needs. Your Materialize contact will size this with you.
 - No inherited organization or folder policy that blocks the permissions Materialize needs. Materialize cannot detect these in advance, so this is worth checking before you start.
+- Your IdP details for SSO: metadata for Okta, Entra or another OIDC or SAML provider, and the group-to-role mapping you want.
 
 ## Step 1: Share setup details
 
@@ -73,6 +74,12 @@ Draft: the access model is chosen when your environment is provisioned and is no
 - **Single-tenant isolation.** Dedicated GKE, VPC, Cloud SQL, and Cloud Storage in your project. Data at rest is encrypted with your own Cloud KMS keys.
 - **You hold the kill switch.** Remove the Workload Identity Federation trust or the granted IAM role, or delete the project, at any time to cut access. While access is revoked, your environment keeps serving queries but cannot be upgraded, scaled, or repaired until access is restored.
 - **Audited support access.** Materialize support uses scoped, time-bound, audited access. Every action the federated identity takes is recorded in your project's Cloud Audit Logs.
+
+## Authentication
+
+Your people sign in through your own IdP. An Ory deployment runs next to Materialize in your GKE cluster: Kratos federates to Okta, Entra or any OIDC provider, Hydra is the OIDC issuer Materialize validates against, and Polis is added if your IdP speaks SAML. Sign-in never leaves your project and Materialize never holds your identity data.
+
+Groups arrive in the `groups` claim and map to Materialize roles, the same mapping self-managed Enterprise SSO uses. A sealed local admin credential stays available as break-glass.
 
 ## Observability
 
@@ -115,7 +122,9 @@ Access is session bound, time boxed, fully recorded, and used for support reason
 
 ### How do people authenticate?
 
-Ory runs inside your own cluster and federates to your IdP, so your identity data never reaches Materialize and your groups map to Materialize roles. A sealed local admin credential stays available as break-glass. Machine and service account auth for tools like dbt, sinks and CI is still being designed, so this answer covers people only.
+Through your own IdP, federated into an Ory stack running in your own cluster, with your groups mapped to Materialize roles. See [Authentication](#authentication).
+
+Two pieces are still being designed: SCIM provisioning is not committed for the first release, and machine and service account auth for tools like dbt, sinks and CI is still open, so this answer covers people only. Tell your Materialize contact if either is a hard requirement.
 
 ### How do my applications and my sources connect?
 
