@@ -1134,6 +1134,8 @@ Arrange Differential(BatcherSize)
 Arrange Differential(Sharing)
 Arrange PrometheusMetrics
 Arrange ResourceUsage
+Arrange Storage(DataflowGlobal)
+Arrange Storage(StageMapping)
 Arrange Timely(Addresses)
 Arrange Timely(BatchesReceived)
 Arrange Timely(BatchesSent)

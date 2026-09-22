@@ -393,6 +393,22 @@ static RELATIONS: &[Relation] = &[
         category: RelationCategory::Introspection,
     },
     Relation {
+        name: "mz_storage_dataflow_global_ids_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_storage_dataflow_global_ids",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_storage_stage_mapping_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_storage_stage_mapping",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
         name: "mz_compute_error_counts",
         category: RelationCategory::Introspection,
     },

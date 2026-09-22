@@ -386,6 +386,8 @@ mz_source_statistics_ind                                    mz_source_statistics
 mz_source_status_history_ind                                mz_source_status_history                     mz_catalog_server    {source_id}                                 ""
 mz_source_statuses_ind                                      mz_source_statuses                           mz_catalog_server    {id}                                        ""
 mz_sources_ind                                              mz_sources                                   mz_catalog_server    {id}                                        ""
+mz_storage_dataflow_global_ids_per_worker_s2_primary_idx    mz_storage_dataflow_global_ids_per_worker    mz_catalog_server    {id,worker_id,global_id}                    ""
+mz_storage_stage_mapping_per_worker_s2_primary_idx          mz_storage_stage_mapping_per_worker          mz_catalog_server    {dataflow_id,global_id,stage_id,worker_id,stage,parent_stage_id,nesting,operator_id_start,operator_id_end} ""
 mz_tables_ind                                               mz_tables                                    mz_catalog_server    {schema_id}                                 ""
 mz_types_ind                                                mz_types                                     mz_catalog_server    {schema_id}                                 ""
 mz_recent_sql_text_ind                                      mz_recent_sql_text                           mz_catalog_server    {sql_hash}                                  ""

@@ -1256,3 +1256,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17124  mz_replica_hydration_history
 17125  parse_catalog_item_references
 17126  mz_object_dependencies_raw
+17127  mz_storage_dataflow_global_ids_per_worker
+17128  mz_storage_stage_mapping_per_worker
+17129  mz_storage_dataflow_global_ids
+17130  mz_storage_stage_mapping

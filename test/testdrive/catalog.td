@@ -778,6 +778,8 @@ mz_message_batch_counts_sent_raw             log   <null>    ""
 mz_peek_durations_histogram_raw              log   <null>    ""
 mz_scheduling_elapsed_raw                    log   <null>    ""
 mz_scheduling_parks_histogram_raw            log   <null>    ""
+mz_storage_dataflow_global_ids_per_worker    log   <null>    ""
+mz_storage_stage_mapping_per_worker          log   <null>    ""
 
 > SHOW TABLES FROM mz_introspection
 
@@ -824,6 +826,8 @@ mz_scheduling_elapsed ""
 mz_scheduling_elapsed_per_worker ""
 mz_scheduling_parks_histogram ""
 mz_scheduling_parks_histogram_per_worker ""
+mz_storage_dataflow_global_ids ""
+mz_storage_stage_mapping ""
 
 > SET database = materialize
 
@@ -842,7 +846,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-280
+292
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
