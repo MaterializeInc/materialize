@@ -9188,8 +9188,9 @@ def workflow_adapter_loss(c: Composition) -> None:
             c.up(*replicas)
             c.up(adapter.name)
 
-        # No executor has ever existed for this index. Its object policy, rather
-        # than an installed arrangement or an old reader, must retain its inputs.
+        # No executor has ever existed for this index. Observe its retention
+        # window across advancing permissions, without an arrangement or reader
+        # protecting the historical points being tested.
         assert (
             c.sql_query(
                 """SELECT count(*) FROM mz_cluster_replicas r
@@ -9213,6 +9214,8 @@ def workflow_adapter_loss(c: Composition) -> None:
         assert input_id.startswith("u"), input_id
         input_json_id = {"User": int(input_id[1:])}
         deadline = time.monotonic() + timeout
+        previous_unmasked = None
+        unmasked_advances = 0
         while True:
             # Observe Persist first, so this timestamp is strictly historical at
             # the catalog snapshot. Leave room on both sides of the 30s window.
@@ -9256,18 +9259,36 @@ def workflow_adapter_loss(c: Composition) -> None:
                 and all(historical_ts < frontier for _, frontier in clients)
                 and all(historical_ts < frontier for frontier in maintained.values())
             ):
-                print(
-                    f"Zero-replica history: {historical_ts=}, upper={state['upper']}, "
-                    f"since={state['since']}, {input_since=}, {index_since=}, "
-                    f"{clients=}, {maintained=}"
-                )
-                break
+                current = (state["upper"][0], input_since[0], state["since"][0])
+                if previous_unmasked is None:
+                    previous_unmasked = current
+                elif all(
+                    new > old
+                    for new, old in zip(current, previous_unmasked, strict=True)
+                ):
+                    unmasked_advances += 1
+                    previous_unmasked = current
+                    print(
+                        f"Zero-replica history: {historical_ts=}, {unmasked_advances=}, "
+                        f"upper={state['upper']}, since={state['since']}, "
+                        f"{input_since=}, {index_since=}, {clients=}, {maintained=}"
+                    )
+                    if unmasked_advances == 2:
+                        break
+            else:
+                previous_unmasked = None
+                unmasked_advances = 0
             if time.monotonic() >= deadline:
                 raise AssertionError(
                     f"No unmasked index-policy history: {historical_ts=}, "
                     f"upper={state['upper']}, since={state['since']}, "
                     f"{input_since=}, {index_since=}, {clients=}, {maintained=}"
                 )
+            # Fresh records also let ordinary Persist listeners release prior
+            # batches. Permission alone is not evidence of physical compaction.
+            n += 1
+            produce(n)
+            expected.add(n * 10)
             time.sleep(0.25)
 
         # Only now introduce a reader. Keep its logical-input hold through
