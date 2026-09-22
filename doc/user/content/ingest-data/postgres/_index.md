@@ -97,7 +97,7 @@ text and any required configuration.
 | Transient network interruptions between Materialize and PostgreSQL | Supported automatically. |
 | Resizing the source cluster or changing its replication factor | Supported automatically. |
 | The upstream database running out of disk space | Supported automatically, once space is freed. |
-| [High-availability failover](#high-availability-failovers) | Requires re-creating the source, or a configuration change. |
+| [High-availability failover](#high-availability-failovers) | Requires re-creating the source. On self-managed Materialize, a configuration change can avoid this. |
 | [Point-in-time restore](#point-in-time-restore) | Requires re-creating the source. |
 | [Promoting a physical replica](#promotion-of-a-physical-replica) | Requires re-creating the source. |
 | [Replication slot invalidated](#replication-slot-invalidated) by WAL retention | Requires re-creating the source. |

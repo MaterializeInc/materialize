@@ -173,13 +173,18 @@ automatic failover between replicas. Materialize cannot distinguish these from a
 genuine restore, so by default they fail the source with the [`Expected timeline
 ID`](#point-in-time-restore) error.
 
-Where the service guarantees that a failover is a contiguous fork of the WAL
-with no data loss, you can disable timeline validation with the
+On self-managed Materialize, where the upstream service guarantees that a
+failover is a contiguous fork of the WAL with no data loss, you can disable
+timeline validation with the
 [`pg_source_validate_timeline`](/sql/alter-system-set/) system parameter:
 
 ```mzsql
 ALTER SYSTEM SET pg_source_validate_timeline = false;
 ```
+
+This parameter is not available on Materialize Cloud. There, a
+high-availability failover that changes the timeline requires re-creating the
+source.
 
 {{< warning >}}
 Disabling this check is a trade-off. With it off, Materialize also does **not**
