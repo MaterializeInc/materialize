@@ -8737,6 +8737,7 @@ def workflow_adapter_loss(c: Composition) -> None:
         additional_system_parameter_defaults={
             "enable_catalog_read_protection": "true",
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            "enable_index_options": "true",
             "persist_inline_writes_single_max_bytes": "0",
             "persist_compaction_heuristic_min_inputs": "2",
             "enable_metric_sink": "true",
