@@ -429,6 +429,7 @@ async fn start_balancer() -> SocketAddr {
 /// Listen addresses of a started balancerd.
 struct Balancer {
     pgwire: SocketAddr,
+    https: SocketAddr,
     internal_http: SocketAddr,
 }
 
@@ -464,6 +465,7 @@ async fn start_balancer_to(
     let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
     let addrs = Balancer {
         pgwire: balancer_server.pgwire.0.local_addr(),
+        https: balancer_server.https.0.local_addr(),
         internal_http: balancer_server.internal_http.0.local_addr(),
     };
     task::spawn(|| "balancer", async {
@@ -513,12 +515,10 @@ async fn startup_header_only(addr: SocketAddr, frame_len: u32) -> TcpStream {
     stream
 }
 
-/// Whether balancerd closed the connection within `within`, rather than
-/// continuing to wait on us.
+/// Whether balancerd closes the connection within the specified duration.
 async fn was_closed(stream: &mut TcpStream, within: Duration) -> bool {
     let mut byte = [0u8; 1];
     match tokio::time::timeout(within, stream.read(&mut byte)).await {
-        // Still waiting on us, so the frame was accepted.
         Err(_elapsed) => false,
         Ok(Ok(0)) => true,
         Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionReset => true,
@@ -674,9 +674,6 @@ async fn test_connection_limit_covers_unresolved_connections() {
     );
 }
 
-/// A client that asks for TLS and then never starts the handshake is closed by the pre-resolved
-/// deadline. The handshake is the one step of the phase that is neither a frame read nor part of
-/// resolution, so it has to be covered explicitly rather than by the reads around it.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_stalled_tls_handshake_is_closed() {
@@ -693,6 +690,7 @@ async fn test_stalled_tls_handshake_is_closed() {
     .await;
 
     let mut stream = TcpStream::connect(balancer.pgwire).await.unwrap();
+    let mut https_stream = TcpStream::connect(balancer.https).await.unwrap();
     let mut ssl_request = BytesMut::new();
     FrontendStartupMessage::SslRequest
         .encode(&mut ssl_request)
@@ -709,6 +707,17 @@ async fn test_stalled_tls_handshake_is_closed() {
         "a connection stalled mid-handshake should be closed once the deadline passes",
     );
     assert_metric(balancer.internal_http, TIMEOUTS, PGWIRE, 1.0).await;
+    assert!(
+        was_closed(&mut https_stream, Duration::from_secs(20)).await,
+        "an HTTPS connection stalled mid-handshake should be closed once the deadline passes",
+    );
+    assert_metric(
+        balancer.internal_http,
+        TIMEOUTS,
+        Some("source=\"https\""),
+        1.0,
+    )
+    .await;
 }
 
 /// A client that is rejected during startup is told why, rather than having the connection

@@ -57,17 +57,8 @@ pub const MAX_CONNECTIONS: Config<u32> = Config::new(
 
 /// How long a client has to reach a resolved backend before the connection is closed.
 ///
-/// Everything before resolution is paced by the client: the TLS handshake, the startup
-/// sequence, and any credential exchange. The connection limit counts a connection from the
-/// moment it is accepted, so without a deadline a client that connects and then says nothing
-/// holds a slot indefinitely. One absolute deadline covers the whole phase, so a client cannot
-/// extend its stay by completing one step at a time. Zero disables it.
-///
-/// The default has to clear the authenticator's own budget, because the deadline covers that call
-/// too. `mz_frontegg_auth::Client` retries transient failures for a total of 30s on top of a 5s
-/// per-request timeout, so one `authenticate` can legitimately run for ~35s if a final attempt
-/// starts just under the budget. A shorter deadline would cut exactly the connections those
-/// retries exist to save, and cut them with a bare socket close.
+/// Zero disables the deadline. The default allows for authentication's roughly 35-second
+/// retry budget, plus TLS negotiation and client startup.
 pub const PRE_RESOLVED_TIMEOUT: Config<Duration> = Config::new(
     "balancerd_pre_resolved_timeout",
     Duration::from_secs(60),
