@@ -7,16 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use dec::{OrderedDecimal, Rounding};
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
-use crate::scalar::func::EagerUnaryFunc;
 
 #[sqlfunc(
     sqlname = "-",
@@ -321,27 +318,17 @@ fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
 )]
 pub struct AdjustNumericScale(pub NumericMaxScale);
 
-impl EagerUnaryFunc for AdjustNumericScale {
-    type Input<'a> = Numeric;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, mut d: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        if numeric::rescale(&mut d, self.0.into_u8()).is_err() {
-            return Err(EvalError::NumericFieldOverflow);
-        };
-        Ok(d)
+#[sqlfunc(
+    AdjustNumericScale,
+    sqlname = "adjust_numeric_scale",
+    output_type_expr = SqlScalarType::Numeric {
+        max_scale: Some(self.0),
     }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric {
-            max_scale: Some(self.0),
-        }
-        .nullable(input.nullable)
-    }
-}
-
-impl fmt::Display for AdjustNumericScale {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("adjust_numeric_scale")
-    }
+    .nullable(input_type.nullable)
+)]
+fn adjust_numeric_scale(&self, mut d: Numeric) -> Result<Numeric, EvalError> {
+    if numeric::rescale(&mut d, self.0.into_u8()).is_err() {
+        return Err(EvalError::NumericFieldOverflow);
+    };
+    Ok(d)
 }

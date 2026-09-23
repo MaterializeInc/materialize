@@ -225,7 +225,7 @@
     "acl_item_privileges": {"display":"aclitem_privileges","sqlfunc_decl":"#[sqlfunc(sqlname = \"aclitem_privileges\")] fn acl_item_privileges(acl_item: AclItem) -> String","body_fingerprint":"3a895a5bdbaaa219"},
     "acos": {"display":"acos","sqlfunc_decl":"#[sqlfunc] fn acos(a: f64) -> Result<f64, EvalError>","body_fingerprint":"cee3661a7159fefd"},
     "acosh": {"display":"acosh","sqlfunc_decl":"#[sqlfunc] fn acosh(a: f64) -> Result<f64, EvalError>","body_fingerprint":"0a41640feefdc407"},
-    "adjust_numeric_scale": {"display":"adjust_numeric_scale","sqlfunc_decl":null,"body_fingerprint":null},
+    "adjust_numeric_scale": {"display":"adjust_numeric_scale","sqlfunc_decl":"#[sqlfunc(AdjustNumericScale, sqlname = \"adjust_numeric_scale\", output_type_expr = SqlScalarType::Numeric {max_scale: Some(self.0),}.nullable(input_type.nullable))] fn adjust_numeric_scale(&self, mut d: Numeric) -> Result<Numeric, EvalError>","body_fingerprint":"65a670a7bce8123b"},
     "adjust_timestamp_precision": {"display":"adjust_timestamp_precision","sqlfunc_decl":null,"body_fingerprint":null},
     "adjust_timestamp_precision[widening]": {"display":"adjust_timestamp_precision","sqlfunc_decl":null,"body_fingerprint":null},
     "adjust_timestamp_tz_precision": {"display":"adjust_timestamp_with_time_zone_precision","sqlfunc_decl":null,"body_fingerprint":null},
