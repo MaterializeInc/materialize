@@ -41,6 +41,7 @@ use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::response::{PeekError, PeekResponse};
 use mz_controller::clusters::{ClusterRole, ReplicaConfig};
+use mz_controller_types::dyncfgs::ENABLE_COMPUTE_INTERACTIVE_RUNTIME;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -1723,6 +1724,11 @@ impl Coordinator {
         // configuration replays with them. Render-frozen flags make a later push
         // too late, which is why the push precedes `create_replica`.
 
+        let interactive_runtime = self
+            .catalog()
+            .state()
+            .replica_scoped(replica_id, &ENABLE_COMPUTE_INTERACTIVE_RUNTIME);
+
         self.controller
             .create_replica(
                 cluster_id,
@@ -1732,6 +1738,7 @@ impl Coordinator {
                 role,
                 replica_config,
                 enable_worker_core_affinity,
+                interactive_runtime,
             )
             .expect("creating replicas must not fail");
 
