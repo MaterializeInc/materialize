@@ -85,22 +85,9 @@ Rows currently have a populated `finished_at` and the status `hydrated`.
 Resource columns are nullable because the available kernel and filesystem
 observations depend on the replica platform.
 
-## Retention and schema evolution
+## Addendum: separate replica retention
 
-`replica_hydration_history_retention_period` defaults to 120 days (four months),
-independently of the object table's 30-day `hydration_history_retention_period`.
-Replica history grows with replicas and episodes, rather than objects times
-replicas times episodes. Its smaller size makes longer retention practical
-for capacity planning and hydration and resource-usage trends across releases.
-
-Each table's collection and retention steps use its own cutoff. Replica history
-ages out by `finished_at`, in bounded batches through the shared retention path.
-A zero period expires all completed episodes and prevents their recollection.
-Disabling collection suspends retention for both tables.
-
-The replica table commits to additive-only schema evolution that preserves
-existing rows. It is exempt from bootstrap reset and forced re-sharding, and
-capacity-planning history must not be discarded for routine schema
-changes. An exceptional shard replacement remains a deliberate escape hatch:
-remove the existing replacement assert and exemption together, and explicitly
-call out the loss of replica history in the release notes.
+[SQL-714](https://linear.app/materializeinc/issue/SQL-714) introduced
+`replica_hydration_history_retention_period` after this design, with a default of
+120 days (four months). Object history retains its separate 30-day
+`hydration_history_retention_period`.
