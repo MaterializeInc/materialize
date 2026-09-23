@@ -21,8 +21,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.43.0
-*Released to Materialize Cloud: 2026-09-24* <br>
-*Released to Materialize Self-Managed: 2026-09-25* <br>
+*Released to Materialize Cloud: 2026-09-23* <br>
+*Released to Materialize Self-Managed: 2026-09-24* <br>
 
 ### Improvements {#v26.43-improvements}
 - **Graceful cluster resizes wait for replacements to catch up**: A graceful resize now retires the outgoing replicas only once the new replicas have both hydrated and caught up to within a configured lag allowance of the replicas they replace, rather than on hydration alone, so a cut-over no longer stalls query progress while the replacement works through its backlog; a resize that cannot meet the allowance waits until its reconfiguration timeout and then follows its `ON TIMEOUT` policy, which defaults to `ROLLBACK`.
