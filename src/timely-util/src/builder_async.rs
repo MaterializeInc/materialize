@@ -356,20 +356,14 @@ impl<T: Timestamp, CB: ContainerBuilder> Clone for AsyncOutputHandle<T, CB> {
     }
 }
 
-/// A message with an empty stamp makes no progress claims, so there is no capability to hand an
-/// operator body for it. An operator that must tolerate such a message takes a stamp connection,
-/// whose capability set is simply empty.
-const EMPTY_STAMP: &str = "message stamped with no capabilities";
-
 /// A trait describing the connection behavior between an input of an operator and zero or more of
 /// its outputs.
 ///
-/// The single-capability connections ([`ConnectedToOne`], [`ConnectedToMany`]) hand the operator
-/// body one capability per message, which exists only for a totally ordered timestamp, where a
-/// message's stamp is an antichain of at most one element. The stamp connections
-/// ([`ConnectedToOneStamp`], [`ConnectedToManyStamp`]) hand over the whole stamp, and work in any
-/// scope; an operator that wants a single point from one calls `CapabilitySet::delayed`.
-/// [`Disconnected`] holds no capability at all and so reports the message's stamp as plain times.
+/// The connected inputs ([`ConnectedToOne`], [`ConnectedToMany`]) hand the operator body the
+/// message's capabilities as a [`CapabilitySet`] per output, which works in any scope. An operator
+/// that wants a single point calls `CapabilitySet::delayed`, or [`sole_capability`] in a totally
+/// ordered scope. [`Disconnected`] holds no capability at all and so reports the message's stamp as
+/// plain times.
 pub trait InputConnection<T: Timestamp> {
     /// The capability type associated with this connection behavior.
     type Capability;
@@ -399,44 +393,7 @@ impl<T: Timestamp> InputConnection<T> for Disconnected {
 /// A marker type representing an input connected to exactly one output.
 pub struct ConnectedToOne(usize);
 
-impl<T: Timestamp + TotalOrder> InputConnection<T> for ConnectedToOne {
-    type Capability = Capability<T>;
-
-    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
-        let mut summary = vec![Antichain::new(); outputs];
-        summary[self.0] = Antichain::from_elem(T::Summary::default());
-        summary
-    }
-
-    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        input_cap.retain_least(self.0).expect(EMPTY_STAMP)
-    }
-}
-
-/// A marker type representing an input connected to many outputs.
-pub struct ConnectedToMany<const N: usize>([usize; N]);
-
-impl<const N: usize, T: Timestamp + TotalOrder> InputConnection<T> for ConnectedToMany<N> {
-    type Capability = [Capability<T>; N];
-
-    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
-        let mut summary = vec![Antichain::new(); outputs];
-        for output in self.0 {
-            summary[output] = Antichain::from_elem(T::Summary::default());
-        }
-        summary
-    }
-
-    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        self.0
-            .map(|output| input_cap.retain_least(output).expect(EMPTY_STAMP))
-    }
-}
-
-/// A marker type representing an input connected to exactly one output, carrying the whole stamp.
-pub struct ConnectedToOneStamp(usize);
-
-impl<T: Timestamp> InputConnection<T> for ConnectedToOneStamp {
+impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
     type Capability = CapabilitySet<T>;
 
     fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
@@ -450,10 +407,10 @@ impl<T: Timestamp> InputConnection<T> for ConnectedToOneStamp {
     }
 }
 
-/// A marker type representing an input connected to many outputs, carrying the whole stamp.
-pub struct ConnectedToManyStamp<const N: usize>([usize; N]);
+/// A marker type representing an input connected to many outputs.
+pub struct ConnectedToMany<const N: usize>([usize; N]);
 
-impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToManyStamp<N> {
+impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
     type Capability = [CapabilitySet<T>; N];
 
     fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
@@ -466,6 +423,21 @@ impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToManyStamp<N
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
         self.0.map(|output| input_cap.retain_stamp(output))
+    }
+}
+
+/// The one capability of a message in a totally ordered scope.
+///
+/// A capability set over a totally ordered timestamp holds at most one capability. It holds none
+/// for a message sent under no capabilities, which makes no progress claims, and this function
+/// panics on such a set.
+pub fn sole_capability<T: Timestamp + TotalOrder>(
+    capabilities: &CapabilitySet<T>,
+) -> &Capability<T> {
+    match &capabilities[..] {
+        [capability] => capability,
+        [] => panic!("message stamped with no capabilities"),
+        _ => unreachable!("a capability set over a total order holds at most one capability"),
     }
 }
 
@@ -530,43 +502,6 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         }
     }
 
-    /// Adds a new input connected to the specified output, whose handle carries the whole stamp
-    /// of each message.
-    ///
-    /// Use this where the scope's timestamp is partially ordered, so a message's stamp is an
-    /// antichain that may hold several incomparable capabilities.
-    pub fn new_input_for_stamp<D, P>(
-        &mut self,
-        stream: TimelyStream<'scope, T, D>,
-        pact: P,
-        output: &dyn OutputIndex,
-    ) -> AsyncInputHandle<T, D, ConnectedToOneStamp>
-    where
-        D: Container + Clone + 'static,
-        P: ParallelizationContract<T, D>,
-    {
-        let index = output.index();
-        self.new_input_connection(stream, pact, ConnectedToOneStamp(index))
-    }
-
-    /// Adds a new input connected to the specified outputs, whose handle carries the whole stamp
-    /// of each message.
-    ///
-    /// See [`Self::new_input_for_stamp`].
-    pub fn new_input_for_many_stamp<const N: usize, D, P>(
-        &mut self,
-        stream: TimelyStream<'scope, T, D>,
-        pact: P,
-        outputs: [&dyn OutputIndex; N],
-    ) -> AsyncInputHandle<T, D, ConnectedToManyStamp<N>>
-    where
-        D: Container + Clone + 'static,
-        P: ParallelizationContract<T, D>,
-    {
-        let indices = outputs.map(|output| output.index());
-        self.new_input_connection(stream, pact, ConnectedToManyStamp(indices))
-    }
-
     /// Adds a new input that is connected to the specified output, returning the async input handle to use.
     pub fn new_input_for<D, P>(
         &mut self,
@@ -575,7 +510,6 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         output: &dyn OutputIndex,
     ) -> AsyncInputHandle<T, D, ConnectedToOne>
     where
-        T: TotalOrder,
         D: Container + Clone + 'static,
         P: ParallelizationContract<T, D>,
     {
@@ -592,7 +526,6 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         outputs: [&dyn OutputIndex; N],
     ) -> AsyncInputHandle<T, D, ConnectedToMany<N>>
     where
-        T: TotalOrder,
         D: Container + Clone + 'static,
         P: ParallelizationContract<T, D>,
     {

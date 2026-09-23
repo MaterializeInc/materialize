@@ -9,6 +9,19 @@
 
 //! A source that reads from a persist shard.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::collections::VecDeque;
+use std::collections::hash_map::DefaultHasher;
+use std::convert::Infallible;
+use std::fmt::{Debug, Formatter};
+use std::future::Future;
+use std::hash::{Hash, Hasher};
+use std::pin::pin;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Instant;
+
 use anyhow::anyhow;
 use arrow::array::ArrayRef;
 use differential_dataflow::Hashable;
@@ -23,18 +36,6 @@ use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::collections::VecDeque;
-use std::collections::hash_map::DefaultHasher;
-use std::convert::Infallible;
-use std::fmt::{Debug, Formatter};
-use std::future::Future;
-use std::hash::{Hash, Hasher};
-use std::pin::pin;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::Instant;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -657,7 +658,7 @@ where
     let (fetched_output, fetched_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (completed_fetches_output, completed_fetches_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
-    let mut descs_input = builder.new_input_for_many_stamp(
+    let mut descs_input = builder.new_input_for_many(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
         [&fetched_output, &completed_fetches_output],

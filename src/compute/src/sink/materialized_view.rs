@@ -138,7 +138,7 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::PressOnDropButton;
-use mz_timely_util::builder_async::{Event, OperatorBuilder};
+use mz_timely_util::builder_async::{Event, OperatorBuilder, sole_capability};
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
@@ -912,7 +912,7 @@ mod write {
                         match event {
                             Event::Data(cap, data) => {
                                 for desc in data {
-                                    state.absorb_batch_description(desc, cap.clone());
+                                    state.absorb_batch_description(desc, sole_capability(&cap).clone());
                                 }
                                 state.maybe_write_batch().await
                             }

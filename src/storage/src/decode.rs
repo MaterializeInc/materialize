@@ -515,7 +515,7 @@ pub fn render_decode_delimited<'scope, T: Timestamp, FromTime: Timestamp>(
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
     let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut input = builder.new_input_for_stamp(input.inner, Exchange::new(dist), &output_handle);
+    let mut input = builder.new_input_for(input.inner, Exchange::new(dist), &output_handle);
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {

@@ -34,7 +34,7 @@ use mz_storage_types::sources::kafka::{KafkaTimestamp, RangeBound};
 use mz_storage_types::sources::mysql::GtidPartition;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    PressOnDropButton, sole_capability,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1286,6 +1286,7 @@ where
             for (i, event) in events {
                 match event {
                     AsyncEvent::Data(cap, mut data) => {
+                        let cap = sole_capability(&cap).clone();
                         tracing::trace!(
                             time=?cap.time(),
                             updates=%data.len(),

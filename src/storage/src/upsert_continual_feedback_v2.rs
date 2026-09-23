@@ -111,7 +111,7 @@ use mz_storage_types::dyncfgs::ENABLE_UPSERT_CHUNKED_STASH;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    PressOnDropButton, sole_capability,
 };
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -633,6 +633,7 @@ where
             while let Some(event) = input.next_sync() {
                 match event {
                     AsyncEvent::Data(cap, data) => {
+                        let cap = sole_capability(&cap).clone();
                         let mut pushed_any = false;
                         for ((key, value, from_time), ts, diff) in data {
                             assert!(diff.is_positive(), "invalid upsert input");

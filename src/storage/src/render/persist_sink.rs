@@ -114,7 +114,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::{StorageDiff, dyncfgs};
 use mz_timely_util::builder_async::{
-    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton, sole_capability,
 };
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
@@ -642,11 +642,9 @@ fn write_batches<'scope>(
                             }
                             match in_flight_batches.entry(description) {
                                 std::collections::hash_map::Entry::Vacant(v) => {
-                                    // This _should_ be `.retain`, but rust
-                                    // currently thinks we can't use `cap`
-                                    // as an owned value when using the
-                                    // match guard `Some(event)`
-                                    v.insert(cap.delayed(cap.time()));
+                                    // `cap` is borrowed once per description, so each
+                                    // in-flight batch holds its own copy.
+                                    v.insert(sole_capability(&cap).clone());
                                 }
                                 std::collections::hash_map::Entry::Occupied(o) => {
                                     let (description, _) = o.remove_entry();
