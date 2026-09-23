@@ -64,20 +64,18 @@ class Minio(Service):
 
 
 class Mc(Service):
-    # `mc` comes from quay.io because MinIO deleted `minio/mc` and
-    # `minio/minio` from Docker Hub, where both repositories 404. An
-    # unqualified image name resolves to Docker Hub and fails with "pull access
-    # denied", which reads like a credentials problem rather than a missing
-    # repository. The upstream source repository is archived and its final tag
-    # is the one pinned here, so there is no newer release to move to.
+    # `mc` is built from source in test/mc, like the MinIO server in
+    # test/minio, because MinIO deleted `minio/mc` from Docker Hub and archived
+    # the source repository. Pulling it from any registry leaves CI depending
+    # on a third party continuing to serve a dead project's images, which is
+    # what broke once already.
     def __init__(
         self,
         name: str = "mc",
-        image: str = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z",
     ) -> None:
         super().__init__(
             name=name,
             config={
-                "image": image,
+                "mzbuild": "mc",
             },
         )
