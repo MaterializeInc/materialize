@@ -1,0 +1,101 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# Pins the arithmetic of ram_percent / swap_of_ram_percent / heap_limit_percent
+# in the mz_console_cluster_utilization_overview* views. Those views read
+# mz_cluster_replica_metrics_history, which cannot be populated deterministically,
+# so the expressions are exercised here over tables of the same shape. Keep in
+# sync with CONSOLE_MEMORY_SHARES_SQL in src/catalog/src/builtin/mz_internal.rs.
+
+statement ok
+CREATE TABLE replica_sizes (size text, memory_bytes uint8)
+
+statement ok
+CREATE TABLE replica_metrics (
+    replica_id text,
+    size text,
+    process_id uint8,
+    memory_bytes uint8,
+    swap_bytes uint8,
+    heap_limit uint8
+)
+
+statement ok
+INSERT INTO replica_sizes VALUES ('normal', 100), ('zero-mem', 0)
+
+# r1 single process. r2 skewed, RAM and swap peaking on the same process.
+# r3 skewed in opposite directions, so the independent maxima describe different
+# processes. r4 has no swap reported, r5 no heap limit. r6 sits on a size whose
+# memory_bytes is 0, exercising the NULLIF guard.
+statement ok
+INSERT INTO replica_metrics VALUES
+    ('r1', 'normal',   0, 40, 0,  125),
+    ('r2', 'normal',   0, 90, 20, 125),
+    ('r2', 'normal',   1, 30, 5,  125),
+    ('r3', 'normal',   0, 90, 2,  125),
+    ('r3', 'normal',   1, 30, 60, 125),
+    ('r4', 'normal',   0, 50, NULL, 125),
+    ('r5', 'normal',   0, 50, 10, NULL),
+    ('r6', 'zero-mem', 0, 50, 10, 125)
+
+# MAX across processes, each divided by a *single* process's RAM allocation.
+# A SUM would report r2 at 1.2 rather than 0.9; multiplying the denominator by
+# the process count would report 0.45.
+query TRRR
+SELECT
+    m.replica_id,
+    MAX(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) AS ram_percent,
+    MAX(m.swap_bytes::float8) / NULLIF(s.memory_bytes, 0) AS swap_of_ram_percent,
+    MAX(m.heap_limit::float8) / NULLIF(s.memory_bytes, 0) AS heap_limit_percent
+FROM replica_metrics AS m
+JOIN replica_sizes AS s ON s.size = m.size
+GROUP BY m.replica_id, s.memory_bytes
+ORDER BY m.replica_id
+----
+r1  0.4  0  1.25
+r2  0.9  0.2  1.25
+r3  0.9  0.6  1.25
+r4  0.5  NULL  1.25
+r5  0.5  0.1  NULL
+r6  NULL  NULL  NULL
+
+# r3's stack exceeds its heap ceiling because peak RAM and peak swap come from
+# different processes. Documented upper-bound behaviour, not a bug.
+query TB
+SELECT
+    m.replica_id,
+    (MAX(m.memory_bytes::float8) + MAX(m.swap_bytes::float8)) / NULLIF(s.memory_bytes, 0)
+        > MAX(m.heap_limit::float8) / NULLIF(s.memory_bytes, 0) AS stack_exceeds_ceiling
+FROM replica_metrics AS m
+JOIN replica_sizes AS s ON s.size = m.size
+WHERE m.replica_id IN ('r2', 'r3')
+GROUP BY m.replica_id, s.memory_bytes
+ORDER BY m.replica_id
+----
+r2  false
+r3  true
+
+# A size that cannot swap reports null, never 0: "cannot swap" must not read as
+# "swapped nothing". Same for an unreported heap limit.
+query TBB
+SELECT
+    m.replica_id,
+    MAX(m.swap_bytes::float8) IS NULL AS swap_is_null,
+    MAX(m.heap_limit::float8) IS NULL AS heap_limit_is_null
+FROM replica_metrics AS m
+WHERE m.replica_id IN ('r4', 'r5')
+GROUP BY m.replica_id
+ORDER BY m.replica_id
+----
+r4  true  false
+r5  false  true
