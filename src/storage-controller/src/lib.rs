@@ -2711,21 +2711,6 @@ impl StorageController for Controller {
     }
 }
 
-/// Seed [`StorageTxn`] with any state required to instantiate a
-/// [`StorageController`].
-///
-/// This cannot be a member of [`StorageController`] because it cannot take a
-/// `self` parameter.
-///
-pub fn prepare_initialization(txn: &mut dyn StorageTxn) -> Result<(), StorageError> {
-    if txn.get_txn_wal_shard().is_none() {
-        let txns_id = ShardId::new();
-        txn.write_txn_wal_shard(txns_id)?;
-    }
-
-    Ok(())
-}
-
 impl Controller
 where
     Self: StorageController,
@@ -2740,7 +2725,7 @@ where
     /// Read-only prewarming uses legacy execution.
     ///
     /// # Panics
-    /// If this function is called before [`prepare_initialization`].
+    /// If `txn` is missing the durably initialized transaction WAL identity.
     pub async fn new(
         build_info: &'static BuildInfo,
         persist_location: PersistLocation,
@@ -2776,7 +2761,7 @@ where
         // state.
         let txns_id = txn
             .get_txn_wal_shard()
-            .expect("must call prepare initialization before creating storage controller");
+            .expect("catalog bootstrap must initialize the transaction WAL identity");
 
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 

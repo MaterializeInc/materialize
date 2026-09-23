@@ -221,24 +221,103 @@ impl Catalog {
         storage: &'a mut Box<dyn crate::durable::DurableCatalogState>,
     ) -> Result<InitializeStateResult, CatalogError> {
         let deploy_generation = storage.get_deployment_generation().await?;
-        let updates = storage.sync_to_current_updates().await?;
-        let mut txn = storage.transaction().await?;
+        let writable = !storage.is_read_only() && !storage.is_savepoint();
         let boot_ts = config.boot_ts;
-        let (result, cleanup) =
-            Self::initialize_state_from_updates(config, updates, &mut txn, Some(deploy_generation))
-                .await?;
-        txn.commit(boot_ts).await?;
-        cleanup.await;
-        Ok(result)
+        let mut updates = Vec::new();
+        let mut reconciled = None;
+        loop {
+            updates.extend(storage.sync_to_current_updates().await?);
+            fail::fail_point!(&format!(
+                "catalog_initialize_before_transaction_{}",
+                config.environment_id.organization_id()
+            ));
+            let mut txn = match storage.transaction().await {
+                Ok(txn) => txn,
+                Err(
+                    error @ crate::durable::CatalogError::Durable(
+                        crate::durable::DurableCatalogError::CatalogOutOfSync { .. },
+                    ),
+                ) => {
+                    info!(%error, "retrying bootstrap catalog admission");
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let separate_replay = writable
+                && txn.get_config("catalog_read_protection_enabled".into()) == Some(1)
+                && get_migration_version(&txn) == Some(config.build_info.semver_version())
+                && config
+                    .builtin_item_migration_config
+                    .force_migration
+                    .is_none();
+            if separate_replay && reconciled.is_none() {
+                // Keep durable reconciliation's CAS window independent of SQL
+                // parsing and optimization while replicas publish metadata.
+                let collections = reconcile_bootstrap_state(&config, &mut txn)?;
+                // Retired-index bounds can add retractions to the replay input.
+                txn.finalize_index_compaction_bounds();
+                let own_updates = txn.get_and_commit_op_updates();
+                fail::fail_point!(&format!(
+                    "catalog_initialize_before_commit_{}",
+                    config.environment_id.organization_id()
+                ));
+                match txn.commit(boot_ts).await {
+                    Ok(()) => {
+                        updates.extend(own_updates);
+                        reconciled = Some(collections);
+                        continue;
+                    }
+                    Err(
+                        error @ crate::durable::CatalogError::Durable(
+                            crate::durable::DurableCatalogError::CatalogOutOfSync { .. },
+                        ),
+                    ) => {
+                        info!(%error, "retrying bootstrap catalog reconciliation");
+                        continue;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+
+            let reconciled = match reconciled {
+                Some(collections) => collections,
+                None => reconcile_bootstrap_state(&config, &mut txn)?,
+            };
+            // Reconciliation owns bootstrap audit writes. Replay's durable
+            // changes are therefore represented by snapshot equality.
+            let before = separate_replay.then(|| txn.current_snapshot());
+            fail::fail_point!(&format!(
+                "catalog_initialize_before_replay_{}",
+                config.environment_id.organization_id()
+            ));
+            let (result, cleanup) = Self::initialize_state_from_updates(
+                config,
+                updates,
+                &mut txn,
+                Some((deploy_generation, reconciled)),
+            )
+            .await?;
+            if before
+                .as_ref()
+                .is_none_or(|before| txn.current_snapshot() != *before)
+            {
+                // Birth, upgrade and state-changing migrations retain their
+                // atomic write. Same-version replay leaves peer updates queued.
+                txn.commit(boot_ts).await?;
+            }
+            cleanup.await;
+            return Ok(result);
+        }
     }
 
     /// Reconstructs the full catalog using owned input and a caller-owned transaction.
-    /// A missing deployment generation replays committed live state without restart migrations.
+    /// `bootstrap` supplies the admitted generation and reconciled builtin IDs.
+    /// Without it, this replays committed live state without restart migrations.
     async fn initialize_state_from_updates(
         config: StateConfig,
         mut updates: Vec<StateUpdate>,
         txn: &mut Transaction<'_>,
-        deploy_generation: Option<u64>,
+        bootstrap: Option<(u64, Vec<GlobalId>)>,
     ) -> Result<(InitializeStateResult, BoxFuture<'static, ()>), CatalogError> {
         for builtin_role in BUILTIN_ROLES {
             assert!(
@@ -254,6 +333,9 @@ impl Catalog {
                 BUILTIN_PREFIXES.join(", ")
             );
         }
+
+        let deploy_generation = bootstrap.as_ref().map(|(generation, _)| *generation);
+        let reconciled_collections = bootstrap.map(|(_, collections)| collections);
 
         let mut system_configuration = SystemVars::new().set_unsafe(config.unsafe_mode);
         if config.all_features {
@@ -323,45 +405,8 @@ impl Catalog {
 
         // Committed replay must preserve pending replicas and builtin desired state,
         // which restart reconciliation is allowed to change.
-        let new_builtin_collections = if deploy_generation.is_some() {
-            migrate::durable_migrate(
-                txn,
-                state.config.environment_id.organization_id(),
-                config.boot_ts,
-            )?;
-            // Overwrite and persist selected parameter values in `remote_system_parameters` that
-            // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
-            if let Some(remote_system_parameters) = config.remote_system_parameters {
-                for (name, value) in remote_system_parameters {
-                    txn.upsert_system_config(&name, value)?;
-                }
-                txn.set_system_config_synced_once()?;
-            }
-            // Add any new builtin objects and remove old ones.
-            let new_builtin_collections = add_new_remove_old_builtin_items_migration(txn)?;
-            let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
-                system_cluster: config.builtin_system_cluster_config,
-                catalog_server_cluster: config.builtin_catalog_server_cluster_config,
-                probe_cluster: config.builtin_probe_cluster_config,
-                support_cluster: config.builtin_support_cluster_config,
-                analytics_cluster: config.builtin_analytics_cluster_config,
-            };
-            add_new_remove_old_builtin_clusters_migration(
-                txn,
-                &builtin_bootstrap_cluster_config_map,
-                config.boot_ts,
-            )?;
-            add_new_remove_old_builtin_introspection_source_migration(txn)?;
-            reconcile_builtin_cluster_replicas(
-                txn,
-                &builtin_bootstrap_cluster_config_map,
-                config.boot_ts,
-            )?;
-            add_new_remove_old_builtin_roles_migration(txn)?;
-            remove_invalid_config_param_role_defaults_migration(txn)?;
-            remove_pending_cluster_replicas_migration(txn, config.boot_ts)?;
-
-            new_builtin_collections
+        let new_builtin_collections = if let Some(collections) = reconciled_collections {
+            collections
         } else {
             let mut mappings: BTreeMap<_, _> = txn
                 .get_system_object_mappings()
@@ -956,6 +1001,49 @@ impl CatalogState {
     ) -> Result<(), Error> {
         Ok(Arc::make_mut(&mut self.system_configuration).set_default(name, value)?)
     }
+}
+
+/// Prepares bootstrap's durable identity and builtin reconciliation without
+/// parsing stored SQL or opening expression caches.
+fn reconcile_bootstrap_state(
+    config: &StateConfig,
+    txn: &mut Transaction<'_>,
+) -> Result<Vec<GlobalId>, CatalogError> {
+    // Establish the catalog's immutable identity before runtime freezes it.
+    if txn.get_txn_wal_shard().is_none() {
+        txn.write_txn_wal_shard(mz_persist_client::ShardId::new())
+            .map_err(crate::durable::DurableCatalogError::from)?;
+    }
+    migrate::durable_migrate(txn, config.environment_id.organization_id(), config.boot_ts)?;
+    // Overwrite and persist selected parameter values in `remote_system_parameters` that
+    // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
+    if let Some(remote_system_parameters) = &config.remote_system_parameters {
+        for (name, value) in remote_system_parameters {
+            txn.upsert_system_config(name, value.clone())?;
+        }
+        txn.set_system_config_synced_once()?;
+    }
+    // Add any new builtin objects and remove old ones.
+    let new_builtin_collections = add_new_remove_old_builtin_items_migration(txn)?;
+    let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
+        system_cluster: config.builtin_system_cluster_config.clone(),
+        catalog_server_cluster: config.builtin_catalog_server_cluster_config.clone(),
+        probe_cluster: config.builtin_probe_cluster_config.clone(),
+        support_cluster: config.builtin_support_cluster_config.clone(),
+        analytics_cluster: config.builtin_analytics_cluster_config.clone(),
+    };
+    add_new_remove_old_builtin_clusters_migration(
+        txn,
+        &builtin_bootstrap_cluster_config_map,
+        config.boot_ts,
+    )?;
+    add_new_remove_old_builtin_introspection_source_migration(txn)?;
+    reconcile_builtin_cluster_replicas(txn, &builtin_bootstrap_cluster_config_map, config.boot_ts)?;
+    add_new_remove_old_builtin_roles_migration(txn)?;
+    remove_invalid_config_param_role_defaults_migration(txn)?;
+    remove_pending_cluster_replicas_migration(txn, config.boot_ts)?;
+
+    Ok(new_builtin_collections)
 }
 
 /// Updates the catalog with new and removed builtin items.

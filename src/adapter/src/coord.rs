@@ -2566,6 +2566,49 @@ impl Coordinator {
             .cluster_scoped_optimizer_overrides(cluster_id)
     }
 
+    /// Commits prepared bootstrap selections, retaining refreshed rows for the
+    /// initial system-table reset instead of sending them to the live writer.
+    async fn bootstrap_catalog_transact(
+        &mut self,
+        ops: Vec<crate::catalog::Op>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+    ) -> Result<(), AdapterError> {
+        let revision = self.catalog().transient_revision();
+        loop {
+            let write_ts = self.get_catalog_write_ts().await;
+            match self
+                .catalog_mut()
+                .transact(None, write_ts, None, ops.clone())
+                .await
+            {
+                Ok(result) => {
+                    builtin_table_updates.extend(result.builtin_table_updates);
+                    return Ok(());
+                }
+                Err(error)
+                    if matches!(&error,
+                    AdapterError::Catalog(error) if matches!(&error.kind,
+                        mz_catalog::memory::error::ErrorKind::Durable(
+                            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                        ))) =>
+                {
+                    info!(%error, "refreshing bootstrap selections after catalog contention");
+                    let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
+                    builtin_table_updates.extend(
+                        self.catalog()
+                            .state()
+                            .resolve_builtin_table_updates(builtin),
+                    );
+                    if self.catalog().transient_revision() != revision {
+                        return Err(error);
+                    }
+                    Box::pin(self.apply_catalog_implications(None, updates)).await?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -2743,12 +2786,8 @@ impl Coordinator {
         let write_plans = protected_plans && !self.read_only_controllers;
         let selections = Box::pin(self.bootstrap_replica_metric_sink_selections()).await?;
         if !selections.is_empty() {
-            let write_ts = self.get_catalog_write_ts().await;
-            let result = self
-                .catalog_mut()
-                .transact(None, write_ts, None, selections)
+            self.bootstrap_catalog_transact(selections, &mut builtin_table_updates)
                 .await?;
-            builtin_table_updates.extend(result.builtin_table_updates);
         }
         let mut candidates = cached_global_exprs;
         let mut written_ids = BTreeSet::new();
@@ -2798,12 +2837,8 @@ impl Coordinator {
             });
             if !prepared.is_empty() {
                 let selections = self.catalog().write_plans(prepared).await?;
-                let write_ts = self.get_catalog_write_ts().await;
-                let result = self
-                    .catalog_mut()
-                    .transact(None, write_ts, None, selections)
+                self.bootstrap_catalog_transact(selections, &mut builtin_table_updates)
                     .await?;
-                builtin_table_updates.extend(result.builtin_table_updates);
             }
         }
         info!(
@@ -5703,7 +5738,7 @@ pub fn serve(
             last_seen_version,
             migrated_storage_collections_0dt,
             new_builtin_collections,
-            builtin_table_updates,
+            mut builtin_table_updates,
             cached_global_exprs,
             uncached_local_exprs,
         } = Catalog::open(mz_catalog::config::Config {
@@ -5933,7 +5968,7 @@ pub fn serve(
                         read_only_controllers,
                     ),
                 ).unwrap_or_terminate("failed to initialize adapter table writer");
-                let controller = handle
+                let (controller, storage_builtin_updates) = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
@@ -5943,6 +5978,7 @@ pub fn serve(
                         )
                     })
                     .unwrap_or_terminate("failed to initialize storage_controller");
+                builtin_table_updates.extend(storage_builtin_updates);
                 // Initializing the controller uses one or more timestamps, so push the boot timestamp up to the
                 // current catalog upper.
                 let catalog_upper = handle.block_on(catalog.current_upper());

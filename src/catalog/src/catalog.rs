@@ -809,7 +809,7 @@ impl Catalog {
             .map_err(|error| CatalogError::Unstructured(error.into()))
     }
 
-    /// Returns the catalog-owned transaction WAL identity after storage initialization.
+    /// Returns the catalog-owned transaction WAL identity established at bootstrap.
     pub async fn txn_wal_shard(&self) -> Result<mz_persist_client::ShardId, CatalogError> {
         // This identity is immutable during runtime. Reading it requires a
         // fenced durable snapshot, not an up-to-date SQL working copy. Snapshot

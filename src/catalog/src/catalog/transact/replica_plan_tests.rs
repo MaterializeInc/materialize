@@ -23,38 +23,14 @@ use crate::durable::objects::ReplicaPlanOwner;
 use crate::memory::error::{Error, ErrorKind};
 
 async fn protected_catalog() -> (Catalog, PersistClient, Uuid) {
-    use mz_storage_client::controller::StorageTxn;
-
     let persist = PersistClient::new_for_tests().await;
     let organization = Uuid::new_v4();
+    let catalog = open_protected_catalog(persist.clone(), organization).await;
+    (catalog, persist, organization)
+}
+
+async fn open_protected_catalog(persist: PersistClient, organization: Uuid) -> Catalog {
     let bootstrap = crate::catalog::test_bootstrap_args();
-    let mut storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
-        .with_organization_id(organization)
-        .with_default_deploy_generation()
-        .unwrap_build()
-        .await
-        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
-        .await
-        .expect("open durable catalog");
-    // Runtime identity is frozen when the SQL catalog finishes opening.
-    // Establish the WAL before that boundary, as storage initialization does.
-    storage
-        .sync_to_current_updates()
-        .await
-        .expect("consume bootstrap snapshot");
-    {
-        let mut tx = storage
-            .transaction()
-            .await
-            .expect("start WAL initialization");
-        tx.set_config("catalog_read_protection_enabled".into(), Some(1))
-            .expect("latch protected mode at catalog birth");
-        tx.write_txn_wal_shard(mz_persist_client::ShardId::new())
-            .expect("initialize WAL identity");
-        let ts = tx.upper();
-        tx.commit(ts).await.expect("commit WAL identity");
-    }
-    storage.expire().await;
     let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
         .with_organization_id(organization)
         .with_default_deploy_generation()
@@ -62,8 +38,8 @@ async fn protected_catalog() -> (Catalog, PersistClient, Uuid) {
         .await
         .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
         .await
-        .expect("open initialized catalog snapshot");
-    let catalog = Catalog::open_debug_catalog_inner(
+        .expect("open durable catalog");
+    Catalog::open_debug_catalog_inner(
         persist.clone(),
         storage,
         mz_ore::now::SYSTEM_TIME.clone(),
@@ -79,8 +55,141 @@ async fn protected_catalog() -> (Catalog, PersistClient, Uuid) {
         None,
     )
     .await
-    .expect("open protected catalog");
-    (catalog, persist, organization)
+    .expect("open protected catalog")
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)]
+async fn protected_bootstrap_absorbs_publication_without_replay_cas() {
+    use std::sync::{Arc, Mutex};
+
+    for phase in ["before_transaction", "before_commit", "before_replay"] {
+        let (catalog, persist, organization) = protected_catalog().await;
+        catalog.expire().await;
+        let mut peer = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .join()
+            .await
+            .expect("join bootstrap peer");
+        peer.sync_to_current_updates()
+            .await
+            .expect("consume peer snapshot");
+        let retired_index = if phase == "before_commit" {
+            use crate::durable::objects::{
+                SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
+            };
+            let mut tx = peer.transaction().await.expect("prepare retired builtin");
+            let (catalog_id, global_id) = tx
+                .allocate_system_item_ids(1)
+                .expect("allocate builtin identity")[0];
+            tx.set_system_object_mappings(vec![SystemObjectMapping {
+                description: SystemObjectDescription {
+                    schema_name: "mz_internal".into(),
+                    object_type: mz_sql::catalog::CatalogItemType::Index,
+                    object_name: "mz_bootstrap_retired_test_index".into(),
+                },
+                unique_identifier: SystemObjectUniqueIdentifier {
+                    catalog_id,
+                    global_id,
+                    fingerprint: "retired test index".into(),
+                },
+            }])
+            .expect("persist retired builtin mapping");
+            tx.set_collection_compaction_bound(global_id, Some(mz_repr::Timestamp::MIN))
+                .expect("publish builtin bound");
+            let _ = tx.get_and_commit_op_updates();
+            let ts = tx.upper();
+            tx.commit(ts).await.expect("commit retired builtin fixture");
+            Some(global_id)
+        } else {
+            None
+        };
+        let peer = Arc::new(tokio::sync::Mutex::new(peer));
+        let publication = Arc::new(Mutex::new(None));
+        let point = format!("catalog_initialize_{phase}_{organization}");
+        let handle = tokio::runtime::Handle::current();
+        fail::cfg_callback(&point, {
+            let peer = Arc::clone(&peer);
+            let publication = Arc::clone(&publication);
+            move || {
+                let mut publication = publication.lock().expect("publication mutex");
+                if publication.is_some() {
+                    return;
+                }
+                *publication = Some(tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        let mut peer = peer.lock().await;
+                        peer.sync_to_current_updates().await.expect("refresh peer");
+                        let mut tx = peer.transaction().await.expect("start peer publication");
+                        let incarnation =
+                            tx.create_client_incarnation(None).expect("register peer");
+                        let _ = tx.get_and_commit_op_updates();
+                        let ts = tx.upper();
+                        tx.commit(ts).await.expect("publish during bootstrap");
+                        (incarnation, peer.current_upper().await)
+                    })
+                }));
+            }
+        })
+        .expect("install bootstrap rendezvous");
+        let mut catalog = open_protected_catalog(persist, organization).await;
+        fail::remove(&point);
+        let (incarnation, upper) = publication
+            .lock()
+            .expect("publication mutex")
+            .expect("bootstrap crossed rendezvous");
+        if phase == "before_replay" {
+            assert_eq!(
+                catalog.current_upper().await,
+                upper,
+                "heavy read-only reconstruction must not commit after publication"
+            );
+            assert!(
+                !catalog
+                    .state()
+                    .client_incarnations()
+                    .contains_key(&incarnation)
+            );
+        } else {
+            assert!(
+                catalog
+                    .state()
+                    .client_incarnations()
+                    .contains_key(&incarnation)
+            );
+        }
+        catalog
+            .sync_to_current_updates()
+            .await
+            .expect("apply queued publication");
+        assert!(
+            catalog
+                .state()
+                .client_incarnations()
+                .contains_key(&incarnation)
+        );
+        catalog
+            .check_consistency()
+            .expect("consistent reconstructed catalog");
+        if let Some(id) = retired_index {
+            assert!(
+                !catalog
+                    .state()
+                    .collection_compaction_bounds()
+                    .contains_key(&id),
+                "retired builtin bound must be removed with its identity"
+            );
+        }
+        catalog.expire().await;
+        Arc::try_unwrap(peer)
+            .expect("rendezvous released peer")
+            .into_inner()
+            .expire()
+            .await;
+    }
 }
 
 #[mz_ore::test(tokio::test)]

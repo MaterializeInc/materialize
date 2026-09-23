@@ -29,7 +29,6 @@ use mz_sql::catalog::{CatalogDatabase, EnvironmentId};
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{SUPPORT_USER, SYSTEM_USER};
-use mz_storage_client::controller::StorageTxn;
 use mz_storage_client::storage_collections::StorageCollections;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
@@ -380,23 +379,9 @@ impl Catalog {
             Arc<dyn crate::table_writer::TableWriteHandle>,
             Arc<mz_txn_wal::metrics::Metrics>,
         ),
-        mz_catalog::durable::CatalogError,
+        mz_catalog::catalog::CatalogError,
     > {
-        let shard = {
-            let mut storage = self.storage().await;
-            let mut tx = storage.transaction().await?;
-            mz_controller::prepare_initialization(&mut tx)
-                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
-            let updates = tx.get_and_commit_op_updates();
-            assert!(
-                updates.is_empty(),
-                "WAL initialization should not produce catalog projection updates: {updates:?}"
-            );
-            let shard = tx.get_txn_wal_shard().expect("WAL identity is initialized");
-            let commit_ts = tx.upper();
-            tx.commit(commit_ts).await?;
-            shard
-        };
+        let shard = self.txn_wal_shard().await?;
         let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(metrics_registry));
         let writer =
             crate::table_writer::open(persist, shard, Arc::clone(&metrics), read_only).await;
@@ -408,19 +393,25 @@ impl Catalog {
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
         txns_metrics: Arc<mz_txn_wal::metrics::Metrics>,
-    ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
+    ) -> Result<
+        (mz_controller::Controller, Vec<BuiltinTableUpdate>),
+        mz_catalog::durable::CatalogError,
+    > {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
         let mut controller = {
             let mut storage = self.storage().await;
-            let read_only_tx = storage.transaction().await?;
+            // Construction reads one fenced prefix without consuming updates
+            // owed to the SQL projection or acquiring commit authority.
+            let snapshot = storage.snapshot().await?;
+            let mut read_only_tx = storage.transaction_from_snapshot(snapshot)?;
             mz_controller::Controller::new(
                 config,
                 envd_epoch,
                 read_only,
                 self.state().catalog_read_protection_enabled(),
-                &read_only_tx,
+                read_only_tx.transaction_mut(),
                 txns_metrics,
             )
             .await
@@ -430,15 +421,38 @@ impl Catalog {
             serde_json::to_string(&self.replica_config())
                 .expect("catalog reconstruction configuration is serializable"),
         );
-        self.initialize_storage_state(&controller.storage_collections)
-            .await?;
+        let mut builtin_updates = Vec::new();
+        let revision = self.transient_revision();
+        loop {
+            match self
+                .initialize_storage_state(&controller.storage_collections)
+                .await
+            {
+                Ok(()) => break,
+                Err(
+                    error @ mz_catalog::durable::CatalogError::Durable(
+                        mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. },
+                    ),
+                ) => {
+                    info!(%error, "refreshing storage initialization after catalog contention");
+                    let (updates, _) = self.sync_to_current_updates().await?;
+                    builtin_updates.extend(self.state().resolve_builtin_table_updates(updates));
+                    if self.transient_revision() != revision {
+                        return Err(error);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
 
         info!(
             "startup: controller init: complete in {:?}",
             controller_start.elapsed()
         );
 
-        Ok(controller)
+        // Nothing is registered yet. Bootstrap derives controller inventory from
+        // the refreshed state and includes these rows in the system-table reset.
+        Ok((controller, builtin_updates))
     }
 }
 impl OptimizerCatalog for CatalogState {
