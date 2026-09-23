@@ -63,6 +63,14 @@ class TypedVersionBase(Version):
         if drop_dev_suffix:
             version, _, _ = version.partition("-dev")
 
+        # Docker tags cannot contain `+`, so CI publishes images under tags that
+        # spell SemVer build metadata with `--` instead, e.g.
+        # `v26.42.0--pr.gabc123`. Swap the delimiter back so the suffix parses
+        # as build metadata, which ordering ignores, rather than as a
+        # prerelease, which sorts below every real prerelease and the release.
+        # This mirrors `parse_image_ref` in src/cloud-resources/src/crd/materialize.rs,
+        # so version gates in tests agree with the gates the operator applies.
+        version = version.replace("--", "+")
         result = super().parse(version)
         assert isinstance(result, cls)
         return result
@@ -82,7 +90,9 @@ class TypedVersionBase(Version):
         return cls.try_parse(version) is not None
 
     def str_without_prefix(self) -> str:
-        return super().__str__()
+        # Undo the `--` to `+` swap in `parse` so a parsed Docker tag prints
+        # back as a valid Docker tag.
+        return super().__str__().replace("+", "--")
 
     def __str__(self) -> str:
         return f"{self.get_prefix()}{self.str_without_prefix()}"
