@@ -16,11 +16,10 @@ use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::adt::timestamp::TimeLike;
-use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::strconv;
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
-use crate::scalar::func::EagerUnaryFunc;
 
 #[sqlfunc(
     sqlname = "time_to_text",
@@ -99,17 +98,9 @@ where
 )]
 pub struct ExtractTime(pub DateTimeUnits);
 
-impl EagerUnaryFunc for ExtractTime {
-    type Input<'a> = NaiveTime;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_part_time_inner(self.0, a)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
-    }
+#[sqlfunc(ExtractTime, skip_display = true)]
+fn extract_time(&self, a: NaiveTime) -> Result<Numeric, EvalError> {
+    date_part_time_inner(self.0, a)
 }
 
 impl fmt::Display for ExtractTime {
@@ -131,17 +122,9 @@ impl fmt::Display for ExtractTime {
 )]
 pub struct DatePartTime(pub DateTimeUnits);
 
-impl EagerUnaryFunc for DatePartTime {
-    type Input<'a> = NaiveTime;
-    type Output<'a> = Result<f64, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        date_part_time_inner(self.0, a)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Float64.nullable(input.nullable)
-    }
+#[sqlfunc(DatePartTime, skip_display = true)]
+fn date_part_time(&self, a: NaiveTime) -> Result<f64, EvalError> {
+    date_part_time_inner(self.0, a)
 }
 
 impl fmt::Display for DatePartTime {
@@ -176,17 +159,10 @@ pub struct TimezoneTime {
     pub wall_time: NaiveDateTime,
 }
 
-impl EagerUnaryFunc for TimezoneTime {
-    type Input<'a> = NaiveTime;
-    type Output<'a> = NaiveTime;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        timezone_time(self.tz, a, &self.wall_time)
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Time.nullable(input.nullable)
-    }
+#[sqlfunc(TimezoneTime, skip_display = true)]
+fn timezone_time(&self, a: NaiveTime) -> NaiveTime {
+    // NOTE: `self::` reaches the free function of the same name, not this method.
+    self::timezone_time(self.tz, a, &self.wall_time)
 }
 
 impl fmt::Display for TimezoneTime {
