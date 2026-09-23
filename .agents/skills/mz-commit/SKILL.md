@@ -31,8 +31,11 @@ and what it means. Both key off `LIR_VERSION` in
 
 `lir_schema` traces the serde schema of everything reachable from
 `LirRelationExpr` into `tests/snapshots/lir_v{LIR_VERSION}.json`. Run it
-whenever the diff touches `src/compute-types/src/plan/`, or adds, removes, or
-reshapes the payload of a `*Func` variant:
+whenever the diff changes the serde-visible shape of a type the trace
+reaches: anything in `src/compute-types/src/plan.rs` or
+`src/compute-types/src/plan/`, a `*Func` payload, or a plan-reachable type
+in `mz-expr` or `mz-repr` such as `AggregateFunc`, `TableFunc`,
+`SqlScalarType` or `DateTimeUnits`:
 
 ```
 cargo test -p mz-compute-types --test lir_schema
