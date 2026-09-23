@@ -11,7 +11,9 @@ use std::fmt;
 
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::array::{Array, ArrayDimension};
-use mz_repr::{Datum, DatumList, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
+use mz_repr::{
+    Datum, DatumList, ExcludeNull, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
@@ -51,57 +53,13 @@ pub struct CastArrayToString {
     pub ty: SqlScalarType,
 }
 
-impl LazyUnaryFunc for CastArrayToString {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a impl Eval,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut buf = String::new();
-        stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
-    }
-
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? If we moved typeconv into `expr` we could determine the right
-        // inverse of this.
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastArrayToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("arraytostr")
-    }
+// TODO? If we moved typeconv into `expr` we could determine the right inverse of
+// this cast.
+#[sqlfunc(CastArrayToString, sqlname = "arraytostr", preserves_uniqueness = true)]
+fn cast_array_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
+    let mut buf = String::new();
+    stringify_datum(&mut buf, *a, &self.ty)?;
+    Ok(buf)
 }
 
 #[derive(
