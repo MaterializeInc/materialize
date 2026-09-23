@@ -336,7 +336,7 @@ through a hierarchical scheme for either aggregation or Top K computations.
 
 ## `mz_mappable_objects`
 
-The `mz_mappable_objects` identifies indexes (and their underlying views) and materialized views which can be debugged using the [`mz_lir_mapping`](#mz_lir_mapping) view.
+The `mz_mappable_objects` identifies indexes (and their underlying views) and materialized views which can be debugged using the [`mz_lir_mapping`](#mz_lir_mapping) view, and sources, tables from sources, and sinks which can be debugged using the [`mz_storage_stage_mapping`](#mz_storage_stage_mapping) view.
 
 <!-- RELATION_SPEC mz_introspection.mz_mappable_objects -->
 | Field        | Type      | Meaning
@@ -465,6 +465,41 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_scheduling_parks_histogram_raw -->
+
+## `mz_storage_dataflow_global_ids`
+
+The `mz_storage_dataflow_global_ids` view associates storage [dataflow] ids with the global ids of the sources, tables, subsources, and sinks they render.
+It is populated only on replicas that run storage dataflows alongside compute dataflows.
+
+<!-- RELATION_SPEC mz_introspection.mz_storage_dataflow_global_ids -->
+| Field        | Type      | Meaning                                                                                 |
+|------------- | -------   | --------                                                                                |
+| `id`         | [`uint8`] | The ID of the storage dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).       |
+| `global_id`  | [`text`]  | The global ID of a source, table, subsource, or sink rendered by that dataflow.         |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_storage_dataflow_global_ids_per_worker -->
+
+## `mz_storage_stage_mapping`
+
+The `mz_storage_stage_mapping` view maps the rendering stages of storage dataflows to the dataflow operators that implement them.
+Stages form a tree: stages shared by all exports of a source belong to the source's global id, and each export's stages belong to the export's global id.
+A stage is implemented by one or more ranges of dataflow operators with sequential ids, and the view has one row per range.
+A stage whose `operator_id_start` equals its `operator_id_end` has no operators of its own.
+Note that stages are not a stable interface and may change at any time.
+
+<!-- RELATION_SPEC mz_introspection.mz_storage_stage_mapping -->
+| Field               | Type      | Meaning
+| ---------           | --------  | -----------
+| `dataflow_id`       | [`uint8`] | The ID of the storage dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+| `global_id`         | [`text`]  | The global ID of the object the stage belongs to. Stages shared by all exports of a source belong to the source.
+| `stage_id`          | [`uint8`] | The ID of the stage, unique within its dataflow. Ordering by it lists every stage after its parent.
+| `parent_stage_id`   | [`uint8`] | The ID of the enclosing stage. `NULL` for a top-level stage.
+| `nesting`           | [`uint2`] | The nesting level of the stage.
+| `stage`             | [`text`]  | The name of the stage.
+| `operator_id_start` | [`uint8`] | The first dataflow operator ID of this range of the stage (inclusive).
+| `operator_id_end`   | [`uint8`] | The first dataflow operator ID _after_ this range of the stage (exclusive).
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_storage_stage_mapping_per_worker -->
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list

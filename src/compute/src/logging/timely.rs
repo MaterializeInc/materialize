@@ -19,6 +19,7 @@ use columnation::{Columnation, CopyRegion};
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
+use mz_storage::logging::{DataflowShutdown as StorageDataflowShutdown, StorageEvent};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
@@ -624,6 +625,11 @@ impl DemuxHandler<'_, '_, '_> {
         self.shared_state.compute_logger.as_ref().map(|logger| {
             logger.log(&(ComputeEvent::DataflowShutdown(DataflowShutdown { dataflow_index })))
         });
+        if let Some(logger) = &self.shared_state.storage_logger {
+            logger.log(&StorageEvent::DataflowShutdown(StorageDataflowShutdown {
+                dataflow_index,
+            }));
+        }
 
         // When a dataflow shuts down, we need to retract all its channels.
         let Some(channels) = self.state.dataflow_channels.remove(&dataflow_index) else {

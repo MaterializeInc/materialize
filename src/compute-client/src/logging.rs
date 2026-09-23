@@ -54,6 +54,8 @@ pub enum LogVariant {
     Differential(DifferentialLog),
     /// TODO(database-issues#7533): Add documentation.
     Compute(ComputeLog),
+    /// Logs of storage dataflows hosted on the replica's Timely workers.
+    Storage(StorageLog),
 }
 
 impl From<TimelyLog> for LogVariant {
@@ -71,6 +73,12 @@ impl From<DifferentialLog> for LogVariant {
 impl From<ComputeLog> for LogVariant {
     fn from(value: ComputeLog) -> Self {
         Self::Compute(value)
+    }
+}
+
+impl From<StorageLog> for LogVariant {
+    fn from(value: StorageLog) -> Self {
+        Self::Storage(value)
     }
 }
 
@@ -186,6 +194,29 @@ pub enum ComputeLog {
     PrometheusMetrics,
     /// Resource usage observations of each replica process.
     ResourceUsage,
+}
+
+/// Variants of storage introspection sources.
+///
+/// These logs are populated only on replicas that run storage dataflows on the compute Timely
+/// workers. On other replicas they are empty.
+#[derive(
+    Hash,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
+pub enum StorageLog {
+    /// Mappings from storage dataflows to `GlobalId`s.
+    DataflowGlobal,
+    /// Mappings from storage rendering stages to dataflow operator id ranges.
+    StageMapping,
 }
 
 impl LogVariant {
@@ -422,6 +453,28 @@ impl LogVariant {
                 .with_column("metric", SqlScalarType::String.nullable(false))
                 .with_column("value", SqlScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1, 2])
+                .finish(),
+
+            LogVariant::Storage(StorageLog::DataflowGlobal) => RelationDesc::builder()
+                .with_column("id", SqlScalarType::UInt64.nullable(false))
+                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("global_id", SqlScalarType::String.nullable(false))
+                .with_key(vec![0, 1, 2])
+                .finish(),
+
+            // No key: a stage has one row per operator id range, and a stage that only
+            // aggregates its children logs empty ranges. Stage ids are unique only within a
+            // dataflow, so consumers must scope them by `dataflow_id`.
+            LogVariant::Storage(StorageLog::StageMapping) => RelationDesc::builder()
+                .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("global_id", SqlScalarType::String.nullable(false))
+                .with_column("stage_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("stage", SqlScalarType::String.nullable(false))
+                .with_column("parent_stage_id", SqlScalarType::UInt64.nullable(true))
+                .with_column("nesting", SqlScalarType::UInt16.nullable(false))
+                .with_column("operator_id_start", SqlScalarType::UInt64.nullable(false))
+                .with_column("operator_id_end", SqlScalarType::UInt64.nullable(false))
                 .finish(),
         }
     }
