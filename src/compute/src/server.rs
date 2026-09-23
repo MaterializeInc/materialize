@@ -458,6 +458,82 @@ struct StorageGuest {
     last_maintenance: Instant,
     /// The last time storage statistics were reported.
     last_stats_time: Instant,
+    /// Storage-internal commands held back until compute logging is initialized.
+    deferred_commands: DeferredStorageCommands,
+}
+
+/// Holds back ingestion and sink dataflow commands until compute logging is initialized.
+///
+/// Storage dataflows capture the worker's Timely loggers at construction, and compute registers
+/// those loggers while handling the process's first `CreateInstance`. A storage dataflow built
+/// before then stays invisible to introspection for its lifetime. The worker therefore defers
+/// every command that builds, restarts, or drops an ingestion or sink dataflow until that point,
+/// and dispatches the deferred commands, in lane order, immediately after handling the first
+/// `CreateInstance`. All other storage-internal commands dispatch immediately, see
+/// [`DeferredStorageCommands::defers`].
+///
+/// Every worker observes the same lane order and handles the first `CreateInstance` at the same
+/// point in it, so all workers defer the same commands and release them at the same point, which
+/// keeps dataflow construction order identical across workers. During the first compute
+/// reconciliation that point is the lane position of `InitializationComplete`, where `reconcile`
+/// applies the buffered `CreateInstance`, not the position at which `CreateInstance` arrived.
+/// Compute logging is initialized once per process and survives compute reconnects, so only
+/// commands from process start are ever deferred.
+#[derive(Debug)]
+struct DeferredStorageCommands {
+    /// The deferred commands, in lane order. `None` once compute logging is initialized.
+    pending: Option<Vec<InternalStorageCommand>>,
+}
+
+impl DeferredStorageCommands {
+    fn new() -> Self {
+        Self {
+            pending: Some(Vec::new()),
+        }
+    }
+
+    /// Whether `cmd` is held back while compute logging is uninitialized.
+    ///
+    /// Oneshot ingestions are not mapped in introspection and dispatch immediately. Their
+    /// cancellation is an external command that only drops an already-rendered ingestion, so
+    /// deferring the render would let a cancelled `COPY FROM` render anyway on release, and a
+    /// storage reconnect would re-issue it and render it twice. Configuration updates dispatch
+    /// immediately so that an undeferred oneshot ingestion renders with them. A deferred dataflow
+    /// renders at release with the configuration current then, as if its command had arrived at
+    /// that lane position.
+    ///
+    /// NOTE: The `as_of` and resume uppers of a deferred `CreateIngestionDataflow` are those the
+    /// async storage worker computed when it produced the command. Its remap read handle holds
+    /// the remap since there for a bounded time only. If the deferral outlasts that hold and
+    /// another replica advances the since, the remap operator rejects the stale `as_of` and the
+    /// ingestion recovers through `SuspendAndRestart`, which recomputes the frontiers.
+    fn defers(cmd: &InternalStorageCommand) -> bool {
+        match cmd {
+            InternalStorageCommand::CreateIngestionDataflow { .. }
+            | InternalStorageCommand::RunSinkDataflow(..)
+            | InternalStorageCommand::SuspendAndRestart { .. }
+            | InternalStorageCommand::DropDataflow(_) => true,
+            InternalStorageCommand::RunOneshotIngestion { .. }
+            | InternalStorageCommand::UpdateConfiguration { .. }
+            | InternalStorageCommand::StatisticsUpdate { .. } => false,
+        }
+    }
+
+    /// Returns `cmd` if it may be dispatched now, or holds it back.
+    fn admit(&mut self, cmd: InternalStorageCommand) -> Option<InternalStorageCommand> {
+        match &mut self.pending {
+            Some(pending) if Self::defers(&cmd) => {
+                pending.push(cmd);
+                None
+            }
+            _ => Some(cmd),
+        }
+    }
+
+    /// Stops deferring and returns the held-back commands in lane order.
+    fn release(&mut self) -> Vec<InternalStorageCommand> {
+        self.pending.take().unwrap_or_default()
+    }
 }
 
 impl StorageGuest {
@@ -582,6 +658,7 @@ impl ClusterSpec for Config {
                 storage_state,
                 last_maintenance: Instant::now(),
                 last_stats_time: Instant::now(),
+                deferred_commands: DeferredStorageCommands::new(),
             }
         });
 
@@ -743,10 +820,32 @@ impl<'w> Worker<'w> {
         while let Some(cmd) = self.command_rx.try_recv()? {
             match cmd {
                 WorkerCommand::Compute(cmd) => self.handle_command(cmd),
-                WorkerCommand::Storage(cmd) => self.handle_storage_internal_command(cmd),
+                WorkerCommand::Storage(cmd) => self.dispatch_storage_internal_command(cmd),
             }
         }
         Ok(())
+    }
+
+    /// Dispatch a storage-internal command received from the command channel, or defer it per
+    /// [`DeferredStorageCommands`].
+    fn dispatch_storage_internal_command(&mut self, cmd: InternalStorageCommand) {
+        let guest = self
+            .storage
+            .as_mut()
+            .expect("the command channel carries storage commands only when a guest is hosted");
+        if let Some(cmd) = guest.deferred_commands.admit(cmd) {
+            self.handle_storage_internal_command(cmd);
+        }
+    }
+
+    /// Dispatch the storage-internal commands deferred per [`DeferredStorageCommands`].
+    fn release_deferred_storage_commands(&mut self) {
+        let Some(guest) = self.storage.as_mut() else {
+            return;
+        };
+        for cmd in guest.deferred_commands.release() {
+            self.handle_storage_internal_command(cmd);
+        }
     }
 
     /// Whether the storage guest has pending work that forbids parking.
@@ -768,6 +867,15 @@ impl<'w> Worker<'w> {
     /// Dispatch a storage-internal command from the command channel to
     /// the storage guest. This is where all storage dataflow rendering happens.
     fn handle_storage_internal_command(&mut self, cmd: InternalStorageCommand) {
+        let logging_initialized = self
+            .compute_state
+            .as_ref()
+            .is_some_and(|state| state.compute_logger.is_some());
+        mz_ore::soft_assert_or_log!(
+            logging_initialized || !DeferredStorageCommands::defers(&cmd),
+            "storage dataflow command dispatched before compute logging is initialized: {cmd:?}",
+        );
+
         let mut guest = self
             .storage
             .take()
@@ -902,7 +1010,8 @@ impl<'w> Worker<'w> {
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
-        if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
+        let create_instance = matches!(&cmd, ComputeCommand::CreateInstance(_));
+        if create_instance {
             self.compute_state = Some(ComputeState::new(
                 Arc::clone(&self.persist_clients),
                 self.txns_ctx.clone(),
@@ -915,6 +1024,9 @@ impl<'w> Worker<'w> {
             ));
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);
+        if create_instance {
+            self.release_deferred_storage_commands();
+        }
     }
 
     fn activate_compute(&mut self) -> Option<ActiveComputeState<'_>> {
@@ -938,11 +1050,12 @@ impl<'w> Worker<'w> {
             if let Some(cmd) = self.command_rx.try_recv()? {
                 match cmd {
                     WorkerCommand::Compute(cmd) => return Ok(cmd),
-                    // Storage-internal commands are dispatched even while
-                    // waiting for compute commands (e.g. during compute reconciliation), so
-                    // storage dataflow construction keeps its lane position on all workers.
+                    // Storage-internal commands are consumed even while waiting for compute
+                    // commands, so every worker dispatches or defers them at the same lane
+                    // position. Before the first `CreateInstance` is handled, dataflow commands
+                    // are deferred per `DeferredStorageCommands` rather than dispatched here.
                     WorkerCommand::Storage(cmd) => {
-                        self.handle_storage_internal_command(cmd);
+                        self.dispatch_storage_internal_command(cmd);
                         continue;
                     }
                 }
@@ -1345,4 +1458,54 @@ fn spawn_channel_adapter(
             }
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::GlobalId;
+
+    use super::*;
+
+    fn drop_dataflow(id: u64) -> InternalStorageCommand {
+        InternalStorageCommand::DropDataflow(vec![GlobalId::User(id)])
+    }
+
+    #[mz_ore::test]
+    fn deferred_storage_commands_release_in_lane_order() {
+        let mut deferred = DeferredStorageCommands::new();
+
+        assert_eq!(deferred.admit(drop_dataflow(1)), None);
+        assert_eq!(deferred.admit(drop_dataflow(2)), None);
+        assert_eq!(deferred.admit(drop_dataflow(3)), None);
+
+        assert_eq!(
+            deferred.release(),
+            vec![drop_dataflow(1), drop_dataflow(2), drop_dataflow(3)],
+            "released commands keep lane order",
+        );
+
+        assert_eq!(
+            deferred.admit(drop_dataflow(4)),
+            Some(drop_dataflow(4)),
+            "commands after release dispatch immediately",
+        );
+        assert_eq!(deferred.release(), vec![], "release happens once");
+    }
+
+    #[mz_ore::test]
+    fn deferred_storage_commands_pass_through_non_dataflow_commands() {
+        let mut deferred = DeferredStorageCommands::new();
+        let stats = || InternalStorageCommand::StatisticsUpdate {
+            sources: Vec::new(),
+            sinks: Vec::new(),
+        };
+
+        assert_eq!(deferred.admit(drop_dataflow(1)), None);
+        assert_eq!(
+            deferred.admit(stats()),
+            Some(stats()),
+            "non-dataflow commands dispatch while deferring",
+        );
+        assert_eq!(deferred.release(), vec![drop_dataflow(1)]);
+    }
 }
