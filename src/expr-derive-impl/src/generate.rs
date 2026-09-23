@@ -16,23 +16,26 @@ use crate::shape::{Modifier, Shape};
 use crate::signature;
 use crate::source::sqlfunc_source;
 
-/// One `fn name(&self) -> Ret { expr }` per modifier present in `mods`, except
-/// `introduces_nulls`.
+/// One `fn name(&self) -> Ret { expr }` per modifier present in `mods`, in the arity
+/// table's order rather than the attribute's order, so the generated code is stable
+/// against how a call site happens to spell its modifiers.
 ///
-/// Generates in the arity table's order rather than the attribute's order, so the
-/// generated code is stable against how a call site happens to spell its
-/// modifiers.
-///
-/// `introduces_nulls` is skipped because [`generate`] synthesizes that method from
-/// the output type when the modifier is absent, then places it with
-/// [`insert_introduces_nulls`].
-fn override_methods(shape: Shape, mods: &Modifiers) -> Vec<TokenStream> {
+/// `introduces_nulls_fn` takes the table's `introduces_nulls` slot. [`generate`]
+/// synthesizes that method from the output type and has already taken the modifier out
+/// of `mods`, so the walk never finds one to build.
+fn override_methods(
+    shape: Shape,
+    mods: &Modifiers,
+    mut introduces_nulls_fn: Option<TokenStream>,
+) -> Vec<TokenStream> {
     let present: Vec<_> = mods.iter().collect();
     shape
         .modifiers()
         .iter()
-        .filter(|(modifier, _)| *modifier != Modifier::IntroducesNulls)
         .filter_map(|(modifier, ret)| {
+            if *modifier == Modifier::IntroducesNulls {
+                return introduces_nulls_fn.take();
+            }
             let expr = present
                 .iter()
                 .find(|(candidate, _)| candidate == modifier)
@@ -48,26 +51,6 @@ fn override_methods(shape: Shape, mods: &Modifiers) -> Vec<TokenStream> {
         .collect()
 }
 
-/// Places a hand-built `introduces_nulls` method in the slot `shape`'s table assigns
-/// it, among the methods `override_methods` generated.
-///
-/// Only the modifiers ahead of `IntroducesNulls` in the table decide the insertion
-/// point, so whether `mods` itself carries `introduces_nulls` is immaterial.
-fn insert_introduces_nulls(
-    methods: &mut Vec<TokenStream>,
-    shape: Shape,
-    mods: &Modifiers,
-    introduces_nulls_fn: TokenStream,
-) {
-    let index = shape
-        .modifiers()
-        .iter()
-        .take_while(|(modifier, _)| *modifier != Modifier::IntroducesNulls)
-        .filter(|(modifier, _)| mods.iter().any(|(present, _)| present == *modifier))
-        .count();
-    methods.insert(index, introduces_nulls_fn);
-}
-
 /// What the shared expansion needs that is not arity specific.
 struct Expansion {
     struct_name: Ident,
@@ -75,7 +58,6 @@ struct Expansion {
     /// inherent method instead of defining a unit struct.
     has_self: bool,
     sqlname: TokenStream,
-    fn_name: Ident,
     /// The registry's record of this function's source, generated as members of the
     /// `FuncName` impl.
     source: TokenStream,
@@ -85,11 +67,11 @@ struct Expansion {
 /// definition (unless `has_self`), the `Display` impl, the `FuncName` impl, and the
 /// annotated function itself.
 fn expand(e: &Expansion, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStream {
+    let func_name = &func.sig.ident;
     let Expansion {
         struct_name,
         has_self,
         sqlname,
-        fn_name,
         source,
     } = e;
 
@@ -103,7 +85,7 @@ fn expand(e: &Expansion, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenSt
 
     let funcname_impl = quote! {
         impl crate::func::FuncName for #struct_name {
-            const NAME: &'static str = stringify!(#fn_name);
+            const NAME: &'static str = stringify!(#func_name);
             #source
         }
     };
@@ -299,10 +281,7 @@ pub(crate) fn generate(
         });
     }
 
-    let mut methods = override_methods(shape, &mods);
-    if let Some(introduces_nulls_fn) = introduces_nulls_fn {
-        insert_introduces_nulls(&mut methods, shape, &mods, introduces_nulls_fn);
-    }
+    let methods = override_methods(shape, &mods, introduces_nulls_fn);
 
     let arena_param = if shape.takes_arena() {
         quote! { , temp_storage: &'a mz_repr::RowArena }
@@ -360,7 +339,6 @@ pub(crate) fn generate(
         struct_name,
         has_self,
         sqlname,
-        fn_name: fn_name.clone(),
         source: sqlfunc_source(attr, func, &param_types_raw, output_ty_raw, &param_types),
     };
     Ok(expand(&expansion, func, trait_impl))
@@ -379,7 +357,7 @@ mod tests {
             could_error = false,
         })
         .expect("parses");
-        let methods = super::override_methods(Shape::Binary, &mods);
+        let methods = super::override_methods(Shape::Binary, &mods, None);
         let rendered = methods
             .iter()
             .map(|m| m.to_string())
@@ -399,7 +377,7 @@ mod tests {
     fn unary_is_monotone_generates_a_bool_return() {
         let mods = crate::modifiers::Modifiers::from_tokens(quote! { is_monotone = true })
             .expect("parses");
-        let methods = super::override_methods(Shape::Unary, &mods);
+        let methods = super::override_methods(Shape::Unary, &mods, None);
         let rendered = methods[0].to_string();
         assert!(
             rendered.contains("fn is_monotone (& self) -> bool"),
@@ -415,7 +393,7 @@ mod tests {
         })
         .expect("parses");
         for shape in [Shape::Unary, Shape::Binary, Shape::Variadic] {
-            let rendered = super::override_methods(shape, &mods)
+            let rendered = super::override_methods(shape, &mods, None)
                 .iter()
                 .map(|m| m.to_string())
                 .collect::<Vec<_>>()
@@ -432,62 +410,30 @@ mod tests {
     #[mz_ore::test]
     fn absent_modifiers_generate_nothing() {
         let mods = crate::modifiers::Modifiers::from_tokens(quote! {}).expect("parses");
-        assert!(super::override_methods(Shape::Unary, &mods).is_empty());
+        assert!(super::override_methods(Shape::Unary, &mods, None).is_empty());
     }
 
     #[mz_ore::test]
-    fn insert_introduces_nulls_lands_after_could_error() {
-        // `introduces_nulls` is present here to pin `insert_introduces_nulls`'s claim
-        // that carrying it does not shift the insertion point.
+    fn synthesized_introduces_nulls_takes_its_table_slot() {
         let mods = crate::modifiers::Modifiers::from_tokens(quote! {
             could_error = true,
-            introduces_nulls = true,
             is_monotone = true,
         })
         .expect("parses");
-        let mut methods = super::override_methods(Shape::Unary, &mods);
-        assert_eq!(methods.len(), 2, "could_error and is_monotone");
-        super::insert_introduces_nulls(
-            &mut methods,
-            Shape::Unary,
-            &mods,
-            quote! {
-                fn introduces_nulls(&self) -> bool {
-                    true
-                }
-            },
-        );
+        let synthesized = quote! {
+            fn introduces_nulls(&self) -> bool {
+                true
+            }
+        };
+        let methods = super::override_methods(Shape::Unary, &mods, Some(synthesized));
         let rendered: Vec<String> = methods.iter().map(|m| m.to_string()).collect();
+        assert_eq!(rendered.len(), 3, "got:\n{rendered:?}");
         assert!(rendered[0].contains("could_error"), "got:\n{rendered:?}");
         assert!(
             rendered[1].contains("introduces_nulls"),
             "got:\n{rendered:?}"
         );
         assert!(rendered[2].contains("is_monotone"), "got:\n{rendered:?}");
-    }
-
-    #[mz_ore::test]
-    fn insert_introduces_nulls_leads_when_could_error_absent() {
-        let mods = crate::modifiers::Modifiers::from_tokens(quote! { is_monotone = true })
-            .expect("parses");
-        let mut methods = super::override_methods(Shape::Unary, &mods);
-        assert_eq!(methods.len(), 1, "is_monotone only");
-        super::insert_introduces_nulls(
-            &mut methods,
-            Shape::Unary,
-            &mods,
-            quote! {
-                fn introduces_nulls(&self) -> bool {
-                    true
-                }
-            },
-        );
-        let rendered: Vec<String> = methods.iter().map(|m| m.to_string()).collect();
-        assert!(
-            rendered[0].contains("introduces_nulls"),
-            "got:\n{rendered:?}"
-        );
-        assert!(rendered[1].contains("is_monotone"), "got:\n{rendered:?}");
     }
 
     #[mz_ore::test]
@@ -499,7 +445,6 @@ mod tests {
             struct_name: syn::parse_quote!(SomeFn),
             has_self: false,
             sqlname: quote! { "some_fn" },
-            fn_name: syn::parse_quote!(some_fn),
             source: quote! {},
         };
         let out = super::expand(&e, &func, quote! { impl Marker for SomeFn {} }).to_string();
@@ -524,7 +469,6 @@ mod tests {
             struct_name: syn::parse_quote!(SomeFn),
             has_self: true,
             sqlname: quote! { "some_fn" },
-            fn_name: syn::parse_quote!(some_fn),
             source: quote! {},
         };
         let out = super::expand(&e, &func, quote! { impl Marker for SomeFn {} }).to_string();
