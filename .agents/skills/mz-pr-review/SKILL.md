@@ -36,8 +36,10 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 - For more testing guidelines, read `doc/developer/guide-testing.md`
 
 ### LIR schema registry
-Applies when the diff touches `src/compute-types/src/plan/**` or the shape of
-a `*Func` variant's payload.
+Applies when the diff changes the serde-visible shape of a type the LIR
+schema reaches: `src/compute-types/src/plan.rs`,
+`src/compute-types/src/plan/**`, a `*Func` payload, or a plan-reachable type
+in `mz-expr` or `mz-repr`.
 - `src/compute-types/tests/snapshots/lir_v{N}.json` is regenerated in the
   same PR, and the diff matches the intended format change. Red flag: a
   serde-visible change to a plan type with no snapshot diff.
