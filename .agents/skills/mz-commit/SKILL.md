@@ -87,7 +87,8 @@ cargo test -p mz-compute-types --test func_registry
   same `LIR_VERSION`:
 
   ```
-  git show $(git tag --list 'v*' --sort=-v:refname | head -1):src/compute-types/src/plan.rs | grep 'pub const LIR_VERSION'
+  git fetch --tags
+  git show $(git tag --list 'v*' --sort=-v:refname | grep -v -- '-rc' | head -1):src/compute-types/src/plan.rs | grep 'pub const LIR_VERSION'
   ```
 
   A bump is a judgment call, so confirm it with the user before making it.
