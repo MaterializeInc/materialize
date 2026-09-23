@@ -832,6 +832,7 @@ impl Listeners {
 
         let secrets_controller = Arc::clone(&orchestrator);
         let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        connection_context.environment_id = config.environment_id.to_string();
         if !config.aws_connection_context {
             connection_context.aws_external_id_prefix = None;
             connection_context.aws_connection_role_arn = None;

@@ -3477,10 +3477,16 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
 
     wait_for(temp_item_counts, [(2, 2)], "both sessions' temporary items to appear")
 
-    sessions = query(f"""SELECT connection_id, id::text FROM mz_internal.mz_sessions
-            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""")
+    sessions = query(
+        f"""SELECT connection_id::text, id::text FROM mz_internal.mz_sessions
+            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})"""
+    )
     assert len(sessions) == 2, f"both sessions should be in mz_sessions, saw {sessions}"
-    session_ids = dict(sessions)
+    by_connection = dict(sessions)
+    session_ids = {
+        label: by_connection[str(connection_id)]
+        for label, connection_id in conn_ids.items()
+    }
 
     # --- Graceful close: only the closing session's items go ------------------
 
@@ -3493,7 +3499,7 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
     )
     wait_for(
         f"""SELECT count(*) FROM mz_internal.mz_sessions
-            WHERE id = '{session_ids[conn_ids["a"]]}'::uuid""",
+            WHERE id = '{session_ids["a"]}'::uuid""",
         [(0,)],
         "session a's mz_sessions row to be retracted",
     )
@@ -3558,8 +3564,8 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
     # disappear across close and restart.
     wait_for(
         f"""SELECT count(*) FROM mz_internal.mz_sessions
-            WHERE id IN ('{session_ids[conn_ids["a"]]}'::uuid,
-                         '{session_ids[conn_ids["b"]]}'::uuid)""",
+            WHERE id IN ('{session_ids["a"]}'::uuid,
+                         '{session_ids["b"]}'::uuid)""",
         [(0,)],
         "stale mz_sessions rows to be retracted at boot",
     )
