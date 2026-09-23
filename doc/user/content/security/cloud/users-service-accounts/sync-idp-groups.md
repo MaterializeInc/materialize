@@ -7,10 +7,6 @@ menu:
     weight: 20
 ---
 
-{{< private-preview >}}
-Group-to-role mapping
-{{< /private-preview >}}
-
 As an **administrator** of a Materialize organization, you can provision groups
 from your identity provider (IdP) with [SCIM](https://scim.cloud/), assign those
 groups custom organization roles, and map the roles to database roles.
@@ -65,8 +61,7 @@ for a role created in the Console.
 * You must have an identity provider that supports SCIM 2.0 provisioning
   (e.g., Okta or Microsoft Entra ID).
 * Your organization must have role mapping and custom organization role
-  management enabled. During private preview, contact Materialize support to
-  enable them.
+  management enabled. Contact Materialize support to enable them.
 * Only users assigned the **Organization Admin** role can manage provisioning,
   groups, and custom organization roles.
 * Group-to-role sync applies on **connection**, never mid-session. Materialize
