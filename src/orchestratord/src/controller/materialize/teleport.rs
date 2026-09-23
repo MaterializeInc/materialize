@@ -148,7 +148,7 @@ mod tests {
     // Matches `environment_id_base32_from_env` in the `cloud` repo
     // (`src/environment/src/util.rs`), which the same organization UUID and
     // region produce today for the un-prefixed name.
-    #[test]
+    #[mz_ore::test]
     fn app_name_matches_the_base32_convention() {
         assert_eq!(
             teleport_app_name(
