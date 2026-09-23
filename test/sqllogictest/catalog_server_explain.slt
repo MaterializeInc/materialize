@@ -4986,7 +4986,7 @@ mz_catalog.mz_indexes:
           Filter: ("2" = (#1 ->> "object_type")) AND ("mz_introspection" = (#1 ->> "schema_name")) AND ((#1 ->> "object_name")) IS NOT NULL AND ("GidMapping" = #2)
             →Read mz_internal.mz_catalog_raw
       →Arrange (#0{log_name})
-        →Constant (33 rows)
+        →Constant (35 rows)
 
 Source mz_internal.mz_catalog_raw
   project=(#0..=#2)
@@ -5392,7 +5392,7 @@ mz_catalog.mz_sources:
             Project: #4, #0, #5, #1, #2, #6..=#12, #3, #13, #14
             Map: null, null, null, null, null, null, "s1", null, null
         →Arrange (#1{schema_name}, #2{name})
-          →Constant (57 rows)
+          →Constant (59 rows)
         →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
           →Fused with Child Map/Filter/Project
             Project: #4, #3, #5
@@ -5527,7 +5527,7 @@ mz_catalog.mz_views:
           Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
           Map: "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (194 rows)
+        →Constant (196 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5889,7 +5889,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1024 rows)
+            →Constant (1031 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -8346,7 +8346,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_sources";
 ----
 Explained Query (fast path):
-  →Constant (57 rows)
+  →Constant (59 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8366,7 +8366,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (194 rows)
+  →Constant (196 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10284,7 +10284,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1024 rows)
+            →Constant (1031 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -10450,7 +10450,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_ontology_entity_types";
 ----
 Explained Query (fast path):
-  →Constant (138 rows)
+  →Constant (142 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10460,7 +10460,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_ontology_link_types";
 ----
 Explained Query (fast path):
-  →Constant (182 rows)
+  →Constant (186 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10474,7 +10474,7 @@ Explained Query:
     cte l0 =
       →Differential Join %1:mz_schemas[#0{id}] » %2:mz_objects[#2{schema_id}] » %0[#0{schema_name}, #1{table_name}] » %3:mz_columns[#0{id}]
         →Arrange (#0{schema_name}, #1{table_name})
-          →Constant (138 rows)
+          →Constant (142 rows)
         →Arrange (#0{id})
           →Fused with Child Map/Filter/Project
             Project: #1, #3
@@ -10527,7 +10527,7 @@ Explained Query:
       →Differential Join %0:l4[#0{entity_name}, #1{name}] » %1[#0{entity_name}, #1{column_name}]
         →Arranged l4
         →Arrange (#0{entity_name}, #1{column_name})
-          →Constant (284 rows)
+          →Constant (288 rows)
   →Return
     →Union
       →Map/Filter/Project
@@ -15052,19 +15052,29 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM "mz_introspection"."mz_dataflow_global_ids";
 ----
-Explained Query (fast path):
-  →Map/Filter/Project
-    Project: #0, #2
-    Filter: (#1{worker_id} = 0)
-      →Indexed mz_introspection.mz_compute_dataflow_global_ids_per_worker (using mz_introspection.mz_compute_dataflow_global_ids_per_worker_s2_primary_idx)
+Explained Query:
+  →Union
+    →Fused with Child Map/Filter/Project
+      Project: #0, #2
+      Filter: (#1{worker_id} = 0)
+        →Arranged mz_introspection.mz_compute_dataflow_global_ids_per_worker
+          Key: (#0..=#2)
+    →Fused with Child Map/Filter/Project
+      Project: #0, #2
+      Filter: (#1{worker_id} = 0)
+        →Arranged mz_introspection.mz_storage_dataflow_global_ids_per_worker
+          Key: (#0..=#2)
 
 Used Indexes:
   - mz_introspection.mz_compute_dataflow_global_ids_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_storage_dataflow_global_ids_per_worker_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 Notices:
   - Notice: Index mz_introspection.mz_compute_dataflow_global_ids_per_worker_s2_primary_idx on mz_compute_dataflow_global_ids_per_worker(id, worker_id, global_id) is too wide to use for literal equalities `worker_id = 0`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
+  - Notice: Index mz_introspection.mz_storage_dataflow_global_ids_per_worker_s2_primary_idx on mz_storage_dataflow_global_ids_per_worker(id, worker_id, global_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
 
 EOF
@@ -15718,57 +15728,109 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_mappable_objects";
 Explained Query:
   →With
     cte l0 =
-      →One-Shot Delta Join [%0:mz_objects » %1:mz_compute_exports_per_worker[#0{export_id}] » %2:mz_schemas[#0{id}] » %3:mz_compute_dataflow_global_ids_per_worker[#0{id}]]
-        →Unarranged Raw Stream
-          →Fused with Child Map/Filter/Project
-            Project: #1, #0, #3
-              →Arranged mz_catalog.mz_objects
-                Key: (#2{schema_id})
+      →Arrange (#0{id}) (#1{schema_id})
+        →Fused with Child Map/Filter/Project
+          Project: #1, #0, #3
+            →Arranged mz_catalog.mz_objects
+              Key: (#2{schema_id})
+    cte l1 =
+      →Arrange (#0{id})
+        →Fused with Child Map/Filter/Project
+          Project: #1, #0, #3
+            →Arranged mz_catalog.mz_schemas
+              Key: (#2{database_id})
+    cte l2 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{worker_id} = 0)
+          →Arranged mz_introspection.mz_storage_dataflow_global_ids_per_worker
+            Key: (#0..=#2)
+    cte l3 =
+      →One-Shot Delta Join [%0:l0[#0{id}] » %1:mz_compute_exports_per_worker[#0{export_id}] » %2:l1[#0{id}] » %3[#0{id}]]
+        →Arranged l0
         →Arrange (#0{export_id}) (#1{dataflow_id})
           →Fused with Child Map/Filter/Project
             Project: #0, #2
             Filter: (#1{worker_id} = 0)
               →Arranged mz_introspection.mz_compute_exports_per_worker
                 Key: (#0, #1)
+        →Arranged l1
         →Arrange (#0{id})
-          →Fused with Child Map/Filter/Project
-            Project: #1, #0, #3
-              →Arranged mz_catalog.mz_schemas
-                Key: (#2{database_id})
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Filter: (#1{worker_id} = 0)
+                →Arranged mz_introspection.mz_compute_dataflow_global_ids_per_worker
+                  Key: (#0..=#2)
+            →Stream l2
+    cte l4 =
+      →One-Shot Delta Join [%0:l0[#0{id}] » %2:l1[#0{id}] » %1:mz_object_global_ids[#0{id}]]
+        →Arranged l0
         →Arrange (#0{id})
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: (#1{worker_id} = 0)
-              →Arranged mz_introspection.mz_compute_dataflow_global_ids_per_worker
-                Key: (#0..=#2)
-    cte l1 =
-      →Differential Join %1:mz_databases[#0] » %0:l0[#1{database_id}]
+          →Stream mz_internal.mz_object_global_ids
+        →Arranged l1
+    cte l5 =
+      →Arrange (#0)
+        →Fused with Child Map/Filter/Project
+          Project: #1, #0
+            →Arranged mz_catalog.mz_databases
+              Key: (#2{name})
+    cte l6 =
+      →Differential Join %1:l5[#0] » %0:l3[#1{database_id}]
         →Arrange (#1{database_id})
           →Fused with Child Map/Filter/Project
             Filter: (#1{database_id}) IS NOT NULL
-              →Read l0
-        →Arrange (#0)
+              →Read l3
+        →Arranged l5
+    cte l7 =
+      →Differential Join %1:l5[#0] » %0:l4[#2{database_id}]
+        →Arrange (#2{database_id})
           →Fused with Child Map/Filter/Project
-            Project: #1, #0
-              →Arranged mz_catalog.mz_databases
-                Key: (#2{name})
+            Filter: (#2{database_id}) IS NOT NULL
+              →Read l4
+        →Arranged l5
   →Return
-    →Map/Filter/Project
-      Project: #4, #2
-      Map: (((coalesce((#3{name} || "."), "") || #1{name}) || ".") || #0{name})
-        →Union
-          →Map/Filter/Project
-            Project: #0..=#3
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
+    →Union
+      →Map/Filter/Project
+        Project: #4, #2
+        Map: (((coalesce((#3{name} || "."), "") || #1{name}) || ".") || #0{name})
+          →Union
+            →Map/Filter/Project
+              Project: #0..=#3
+              Map: null
+                →Consolidating Union
+                  →Negate Diffs
+                    →Fused with Child Map/Filter/Project
+                      Project: #0..=#2
+                        →Read l6
                   →Fused with Child Map/Filter/Project
-                    Project: #0..=#2
-                      →Read l1
-                →Fused with Child Map/Filter/Project
-                  Project: #0, #2, #3
-                    →Read l0
-          →Stream l1
+                    Project: #0, #2, #3
+                      →Read l3
+            →Stream l6
+      →Differential Join %1[#0] » %0[#1]
+        after %0:
+          Project: #4, #0
+          Map: (((coalesce((#3{name} || "."), "") || #2{name}) || ".") || #1{name})
+        →Arrange (#1)
+          →Union
+            →Map/Filter/Project
+              Project: #0..=#3
+              Map: null
+                →Consolidating Union
+                  →Negate Diffs
+                    →Fused with Child Map/Filter/Project
+                      Project: #0..=#2
+                        →Read l7
+                  →Fused with Child Map/Filter/Project
+                    Project: #0, #1, #3
+                      →Read l4
+            →Stream l7
+        →Distinct GroupAggregate
+          →Fused with Child Map/Filter/Project
+            Project: #1
+              →Read l2
+
+Source mz_internal.mz_object_global_ids
 
 Used Indexes:
   - mz_catalog.mz_databases_ind (*** full scan ***)
@@ -15776,6 +15838,7 @@ Used Indexes:
   - mz_catalog.mz_objects_ind (*** full scan ***)
   - mz_introspection.mz_compute_exports_per_worker_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_compute_dataflow_global_ids_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_storage_dataflow_global_ids_per_worker_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -15783,6 +15846,8 @@ Notices:
   - Notice: Index mz_introspection.mz_compute_exports_per_worker_s2_primary_idx on mz_compute_exports_per_worker(export_id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
   - Notice: Index mz_introspection.mz_compute_dataflow_global_ids_per_worker_s2_primary_idx on mz_compute_dataflow_global_ids_per_worker(id, worker_id, global_id) is too wide to use for literal equalities `worker_id = 0`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
+  - Notice: Index mz_introspection.mz_storage_dataflow_global_ids_per_worker_s2_primary_idx on mz_storage_dataflow_global_ids_per_worker(id, worker_id, global_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
 
 EOF
@@ -17227,6 +17292,46 @@ Used Indexes:
   - mz_introspection.mz_scheduling_parks_histogram_raw_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_introspection"."mz_storage_dataflow_global_ids";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #0, #2
+    Filter: (#1{worker_id} = 0)
+      →Indexed mz_introspection.mz_storage_dataflow_global_ids_per_worker (using mz_introspection.mz_storage_dataflow_global_ids_per_worker_s2_primary_idx)
+
+Used Indexes:
+  - mz_introspection.mz_storage_dataflow_global_ids_per_worker_s2_primary_idx (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+Notices:
+  - Notice: Index mz_introspection.mz_storage_dataflow_global_ids_per_worker_s2_primary_idx on mz_storage_dataflow_global_ids_per_worker(id, worker_id, global_id) is too wide to use for literal equalities `worker_id = 0`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_introspection"."mz_storage_stage_mapping";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #0..=#2, #5, #6, #4, #7, #8
+    Filter: (#3{worker_id} = 0)
+      →Indexed mz_introspection.mz_storage_stage_mapping_per_worker (using mz_introspection.mz_storage_stage_mapping_per_worker_s2_primary_idx)
+
+Used Indexes:
+  - mz_introspection.mz_storage_stage_mapping_per_worker_s2_primary_idx (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+Notices:
+  - Notice: Index mz_introspection.mz_storage_stage_mapping_per_worker_s2_primary_idx on mz_storage_stage_mapping_per_worker(dataflow_id, global_id, stage_id, worker_id, stage, parent_stage_id, nesting, operator_id_start, operator_id_end) is too wide to use for literal equalities `worker_id = 0`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
 
 EOF
 
