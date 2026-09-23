@@ -51,10 +51,10 @@ Applies when the diff touches `UnaryFunc`, `BinaryFunc`, or `VariadicFunc`
 (`src/expr/src/scalar/func.rs`, `src/expr/src/scalar/func/**`, `#[sqlfunc]`
 bodies).
 - The registry snapshots under `src/compute-types/tests/snapshots/` are
-  regenerated in the same PR (`func_registry.json`,
-  `func_registry_source.json`, `func_registry_digests.json`). Red flag: a
-  function change with no snapshot diff, or a snapshot diff that was clearly
-  hand-edited.
+  regenerated in the same PR. A property change moves `func_registry.json`
+  and the current version's entry in `func_registry_digests.json`, a
+  `#[sqlfunc]` declaration or body change moves `func_registry_source.json`
+  alone, and a change to a hand-written variant's body moves neither.
 - Every new variant with a payload has a `Sample` in
   `src/expr/src/scalar/func/registry.rs`, with a labeled second sample when a
   property depends on the payload.
