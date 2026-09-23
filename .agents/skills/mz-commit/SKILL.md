@@ -74,7 +74,8 @@ cargo test -p mz-compute-types --test func_registry
   REWRITE=1 cargo test -p mz-compute-types --test func_registry
   ```
 
-  Never hand-edit `func_registry*.json`. A digest check rejects it.
+  Never hand-edit `func_registry*.json`. The test rebuilds the registry and
+  compares it against all three files, so an edit fails it.
 * **New function with a payload** (any variant that carries data, e.g. a
   target type, a regex, a scale): the registry build panics naming the
   variant. Add a representative `Sample` to `unary_samples()`,
