@@ -80,6 +80,13 @@ def workflow_low_watermark(c: Composition) -> None:
         raise RuntimeError(f"Topic never became empty (low={low}, high={high})")
     print(f"Topic empty: low=high={low}")
 
+    # lwm_explicit and its table are expected to end up stalled: a start offset
+    # below the low watermark is unrecoverable, so they do not retry after a
+    # restart.
+    c.sources_and_sinks_ignored_from_validation.update(
+        {"lwm_explicit", "lwm_explicit_tbl"}
+    )
+
     for start_offset_clause in ["", ", START OFFSET (0)"]:
         suffix = "explicit" if start_offset_clause else "default"
         select_cmd = "!" if start_offset_clause else ">"
