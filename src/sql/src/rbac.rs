@@ -838,6 +838,7 @@ fn generate_rbac_requirements(
             referenced_ids,
             drop_ids: _,
             object_type,
+            cascade: _,
         }) => {
             let privileges = if object_type == &ObjectType::Role {
                 vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)]
@@ -885,6 +886,7 @@ fn generate_rbac_requirements(
             drop_ids: _,
             privilege_revokes: _,
             default_privilege_revokes: _,
+            cascade: _,
         }) => RbacRequirements {
             role_membership: role_ids.into_iter().cloned().collect(),
             ..Default::default()

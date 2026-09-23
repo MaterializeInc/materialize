@@ -691,6 +691,8 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    # Off by default so tests exercise the CASCADE requirement for in-use indexes.
+    "enable_unsafe_drop_index",
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",

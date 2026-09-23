@@ -1744,6 +1744,12 @@ class CreateIndexAction(Action):
 
 
 class DropIndexAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # A concurrently created materialized view or index may read from it.
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.indexes:

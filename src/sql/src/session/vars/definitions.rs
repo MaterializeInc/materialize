@@ -2061,6 +2061,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_unsafe_drop_index,
+        desc: "dropping an index without CASCADE while other dataflows read from it, leaving them running on an orphaned arrangement",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_managed_cluster_availability_zones,
         desc: "MANAGED, AVAILABILITY ZONES syntax",
         default: false,

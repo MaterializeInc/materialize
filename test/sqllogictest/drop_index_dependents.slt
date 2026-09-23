@@ -1,0 +1,177 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Dropping an index that other dataflows read from requires CASCADE. The
+# optimizer plans a materialized view or index over an indexed relation to read
+# from the index, which makes the new object a compute-level dependent of the
+# index even though the index does not appear in its definition.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int, b int);
+
+statement ok
+INSERT INTO t VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
+
+query II rowsort
+SELECT * FROM mv
+----
+1  10
+2  20
+
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by materialized view "mv"
+DROP INDEX t_idx;
+
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by materialized view "mv"
+DROP INDEX t_idx RESTRICT;
+
+# The error is a RESTRICT failure like any other.
+simple
+DROP INDEX t_idx;
+----
+db error: ERROR: cannot drop index "t_idx": still depended upon by materialized view "mv"
+DETAIL: The dependent objects are live dataflows that read from index "t_idx", so the index cannot be dropped while they exist.
+HINT: Add CASCADE to the statement to drop the index together with its dependent objects, or drop the dependent objects yourself and recreate them once the index is gone.
+
+# Nothing was dropped.
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t', 't_idx', 'mv')
+----
+mv
+t
+t_idx
+
+# Recreating the dependent while no index exists frees the index.
+statement ok
+DROP MATERIALIZED VIEW mv;
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
+
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by materialized view "mv"
+DROP INDEX t_idx;
+
+# CASCADE drops the index, the view that reads from it, and the view's own
+# catalog dependents.
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS SELECT a FROM mv;
+
+statement ok
+CREATE INDEX mv2_idx ON mv2 (a);
+
+statement ok
+DROP INDEX t_idx CASCADE;
+
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t', 't_idx', 'mv', 'mv2', 'mv2_idx')
+----
+t
+
+# An index whose dataflow reads from another index is a dependent too.
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE VIEW v AS SELECT a, b FROM t WHERE b > 0;
+
+statement ok
+CREATE INDEX v_idx ON v (b);
+
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by index "v_idx"
+DROP INDEX t_idx;
+
+statement ok
+DROP INDEX t_idx CASCADE;
+
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t_idx', 'v', 'v_idx')
+----
+v
+
+# A dependent that is dropped by the same statement does not block it.
+statement ok
+CREATE SCHEMA s;
+
+statement ok
+CREATE TABLE s.t (a int);
+
+statement ok
+CREATE INDEX t_idx ON s.t (a);
+
+statement ok
+CREATE MATERIALIZED VIEW s.mv AS SELECT a FROM s.t WHERE a > 0;
+
+statement ok
+DROP SCHEMA s CASCADE;
+
+# enable_unsafe_drop_index restores the plain drop, leaving the dependent
+# running on the orphaned index.
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+----
+COMPLETE 0
+
+statement ok
+DROP INDEX t_idx;
+
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t_idx', 'mv')
+----
+mv
+
+query II rowsort
+SELECT * FROM mv
+----
+1  10
+2  20
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
+----
+COMPLETE 0
+
+# CASCADE keeps its meaning under the flag: recreate the pair and cascade.
+statement ok
+DROP MATERIALIZED VIEW mv;
+
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+----
+COMPLETE 0
+
+statement ok
+DROP INDEX t_idx CASCADE;
+
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t_idx', 'mv')
+----
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
+----
+COMPLETE 0

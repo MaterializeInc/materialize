@@ -24,22 +24,28 @@ class DropIndex(Check):
                 > CREATE MATERIALIZED VIEW drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
                 """))
 
+    # The materialized view's plan may read from whichever index existed when it
+    # was (re)planned, and dropping such an index requires CASCADE. Each drop
+    # cascades and then recreates the view if it went with the index.
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
                 """
                 > INSERT INTO drop_index_table VALUES (4,4,4);
-                > DROP INDEX drop_index_index1;
+                > DROP INDEX drop_index_index1 CASCADE;
+                > CREATE MATERIALIZED VIEW IF NOT EXISTS drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
                 > INSERT INTO drop_index_table VALUES (5,5,5);
                 > CREATE INDEX drop_index_index2 ON drop_index_table (f1, f2);
                 > INSERT INTO drop_index_table VALUES (6,6,6);
                 """,
                 """
                 > INSERT INTO drop_index_table VALUES (7,7,7);
-                > DROP INDEX drop_index_table_primary_idx;
+                > DROP INDEX drop_index_table_primary_idx CASCADE;
+                > CREATE MATERIALIZED VIEW IF NOT EXISTS drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
                 > INSERT INTO drop_index_table VALUES (8,8,8);
-                > DROP INDEX drop_index_index2;
+                > DROP INDEX drop_index_index2 CASCADE;
+                > CREATE MATERIALIZED VIEW IF NOT EXISTS drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
                 > INSERT INTO drop_index_table VALUES (9,9,9);
                 """,
             ]

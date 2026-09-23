@@ -160,7 +160,7 @@
     {% elif relation.type == 'source' %}
       drop source if exists {{ relation }} cascade
     {% elif relation.type == 'index' %}
-      drop index if exists {{ relation }}
+      drop index if exists {{ relation }} cascade
     -- Tables are not supported as a materialization type in dbt-materialize,
     -- but seeds and source tables are materialized as tables.
     {% elif relation.type == 'table' %}

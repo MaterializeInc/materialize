@@ -368,9 +368,9 @@ true
   WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count'
 0
 
-> DROP INDEX arr_idx
-
 > DROP MATERIALIZED VIEW arr_mv
+
+> DROP INDEX arr_idx
 
 > DROP TABLE arr_t
 

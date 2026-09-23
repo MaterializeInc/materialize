@@ -4337,3 +4337,124 @@ fn test_grant_all_on_view_suppresses_non_applicable_notice() {
         );
     }
 }
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_drop_in_use_index_requires_cascade() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("CREATE INDEX t_idx ON t (a)").unwrap();
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a FROM t WHERE a > 0")
+        .unwrap();
+
+    let err = client.batch_execute("DROP INDEX t_idx").unwrap_err();
+    let err = err.as_db_error().unwrap();
+    assert_eq!(err.code(), &SqlState::DEPENDENT_OBJECTS_STILL_EXIST);
+    assert_eq!(
+        err.message(),
+        "cannot drop index \"t_idx\": still depended upon by materialized view \"mv\""
+    );
+    assert_contains!(err.hint().unwrap(), "Add CASCADE");
+
+    client.batch_execute("DROP INDEX t_idx CASCADE").unwrap();
+    let remaining: Vec<String> = client
+        .query(
+            "SELECT name FROM mz_objects WHERE name IN ('t_idx', 'mv')",
+            &[],
+        )
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(remaining.is_empty(), "cascade left {remaining:?}");
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_drop_in_use_index_unsafe_flag_warns() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_unsafe_drop_index".into(), "true".into())
+        .start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("CREATE INDEX t_idx ON t (a)").unwrap();
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a FROM t WHERE a > 0")
+        .unwrap();
+    while rx.try_recv().is_ok() {}
+
+    client.batch_execute("DROP INDEX t_idx").unwrap();
+
+    let notice = rx
+        .try_recv()
+        .expect("expected a warning about the orphaned index");
+    assert_eq!(notice.severity(), "WARNING");
+    assert_contains!(
+        notice.message(),
+        "index \"materialize.public.t_idx\" was dropped while the following objects read from it: materialize.public.mv"
+    );
+    assert_contains!(notice.message(), "enable_unsafe_drop_index");
+
+    // The view survives on the orphaned index.
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM mz_objects WHERE name = 'mv'", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1);
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_drop_index_read_by_in_flight_subscribe_notice() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+    let mut subscribe_client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    client.batch_execute("CREATE INDEX t_idx ON t (a)").unwrap();
+
+    // The subscribe's dataflow reads from the index. Fetching a row proves the
+    // dataflow has been created before the index is dropped.
+    subscribe_client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT a FROM t WHERE a > 0)")
+        .unwrap();
+    let rows = subscribe_client.query("FETCH 1 c", &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+
+    while rx.try_recv().is_ok() {}
+    client.batch_execute("DROP INDEX t_idx").unwrap();
+
+    let notice = rx
+        .try_recv()
+        .expect("expected a notice about the in-flight subscribe");
+    assert_eq!(notice.severity(), "NOTICE");
+    assert_eq!(
+        notice.message(),
+        "index \"materialize.public.t_idx\" is still read by transient dataflows for 1 in-progress \
+         SUBSCRIBE statement. Those dataflows end when their statements finish, and the index is \
+         maintained until then."
+    );
+
+    subscribe_client.batch_execute("COMMIT").unwrap();
+}

@@ -66,6 +66,19 @@ logic to them. Extend the implications framework instead.
   Representing a new kind may require extending `ParsedStateUpdate` /
   `ParsedStateUpdateKind` first.
 
+### Index imports are not catalog dependencies
+
+Which indexes a dataflow reads from is an optimizer decision recorded in the
+physical plan and in the compute controller (`compute_dependencies`), not in the
+catalog. A materialized view's `uses()` comes from its HIR and names relations
+only, so an index's `used_by` is always empty and the planner's `CASCADE`
+expansion and `RESTRICT` check never see index readers. The sequencer asks
+`ComputeController::collection_reverse_dependencies` instead
+(`Coordinator::resolve_index_dependents`), which is why that check lives in the
+sequencer rather than in `plan_drop_objects`. Anything else that needs "who
+reads this index" has to go through the compute controller too. See
+`doc/developer/design/20260923_drop_index_cascade.md`.
+
 ### Background reconcilers own convergence resource failures
 
 When a catalog mutation writes desired state that a background reconciler

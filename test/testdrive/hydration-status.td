@@ -87,8 +87,10 @@ true true
 # Test adding new compute dataflows.
 
 > CREATE TABLE t (a int)
-> CREATE INDEX idx ON t (a)
+# mv is created before idx so its plan does not read from idx, which is dropped
+# below while mv stays around.
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> CREATE INDEX idx ON t (a)
 > CREATE MATERIALIZED VIEW mv_const AS SELECT 1
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL

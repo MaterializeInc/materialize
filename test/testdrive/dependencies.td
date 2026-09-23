@@ -482,6 +482,28 @@ contains:cannot drop type "int4_list": still depended upon by type "int4_list_li
 
 > DROP TYPE int4_list_list
 
+# A reader of an index is a dependent of that index, so DROP INDEX ... CASCADE
+# drops the reader and its sinks, as DROP MATERIALIZED VIEW ... CASCADE would.
+> CREATE TABLE idx_sink_t (a int)
+> CREATE INDEX idx_sink_t_idx ON idx_sink_t (a)
+> CREATE MATERIALIZED VIEW idx_sink_mv AS SELECT a FROM idx_sink_t WHERE a > 0
+> CREATE SINK idx_sink_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM idx_sink_mv
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-idx-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+! DROP INDEX idx_sink_t_idx
+contains:cannot drop index "idx_sink_t_idx": still depended upon by materialized view "idx_sink_mv"
+
+> DROP INDEX idx_sink_t_idx CASCADE
+
+> SELECT name FROM mz_objects WHERE name LIKE 'idx_sink_%'
+idx_sink_t
+
+> DROP TABLE idx_sink_t
+
 #cleanup
 > DROP SINK IF EXISTS s1;
 
