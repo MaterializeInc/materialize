@@ -7967,8 +7967,12 @@ JOIN root_times r USING (id)",
 /// NOTE: peak RAM and peak swap are independent maxima, so under multi-process
 /// skew they can describe different processes and the stack is an upper bound.
 ///
-/// NOTE: null, not zero, where a size cannot swap or `heap_limit` goes
-/// unreported. Coalescing would report "swapped nothing" for "cannot swap".
+/// NOTE: a size that cannot swap reads 0 here, not null. clusterd reports
+/// `VmSwap` whenever it can read `/proc/self/status`, and that is 0 for a
+/// process with no swap. Null means no sample at all: the process orchestrator,
+/// a failed usage fetch, or history predating the column. `heap_limit_percent`
+/// is what separates "cannot swap" from "did not swap", reading 1.0 exactly
+/// when the cgroup grants no swap beyond RAM.
 ///
 /// NOTE: these recombine to `heap_percent` where the maxima agree, so prefer
 /// that column over a fourth spelling of the same quantity.
