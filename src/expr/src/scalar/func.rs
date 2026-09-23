@@ -138,7 +138,6 @@ func_name! {
     CaseLiteral => "case_literal",
     <E> CastArrayToArray<E> => "cast_array_to_array",
     <E> CastArrayToJsonb<E> => "cast_array_to_jsonb",
-    CastArrayToString => "cast_array_to_string",
     <E> CastList1ToList2<E> => "cast_list1_to_list2",
     <E> CastListToJsonb<E> => "cast_list_to_jsonb",
     CastListToString => "cast_list_to_string",
