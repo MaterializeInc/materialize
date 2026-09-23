@@ -190,6 +190,7 @@ mod threshold;
 mod top_k;
 
 pub use context::CollectionBundle;
+pub use join::LinearJoinSpec;
 
 /// Guard that presses a differential [`ShutdownButton`] when dropped.
 ///

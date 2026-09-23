@@ -53,7 +53,7 @@ use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, M
 use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
-use crate::render::{MaybeBucketByTime, RenderTimestamp};
+use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
@@ -89,6 +89,7 @@ pub struct Context<'scope, T: RenderTimestamp> {
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
+    pub(super) linear_join_spec: LinearJoinSpec,
     /// The expiration time for dataflows in this context. The output's frontier should never advance
     /// past this frontier, except the empty frontier.
     pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
@@ -132,6 +133,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             until,
             bindings: BTreeMap::new(),
             compute_logger,
+            linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
             config_set: Rc::clone(&compute_state.worker_config),
         }
@@ -205,6 +207,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             as_of_frontier: self.as_of_frontier.clone(),
             until: self.until.clone(),
             compute_logger: self.compute_logger.clone(),
+            linear_join_spec: self.linear_join_spec.clone(),
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
             config_set: Rc::clone(&self.config_set),

@@ -76,7 +76,7 @@ use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
-use crate::render::StartSignal;
+use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod error_scan;
@@ -221,6 +221,7 @@ pub struct ComputeState {
     /// Max size in bytes of any result.
     max_result_size: u64,
     /// Specification for rendering linear joins.
+    pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this worker.
     pub metrics: WorkerMetrics,
     /// A process-global handle to tracing configuration.
@@ -332,6 +333,7 @@ impl ComputeState {
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
+            linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
             context,
@@ -382,6 +384,8 @@ impl ComputeState {
         use mz_compute_types::dyncfgs::*;
 
         let config = &self.worker_config;
+
+        self.linear_join_spec = LinearJoinSpec::from_config(config);
 
         if ENABLE_LGALLOC.get(config) {
             if let Some(path) = &self.context.scratch_directory {

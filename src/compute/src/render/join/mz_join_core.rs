@@ -37,15 +37,17 @@ use differential_dataflow::Data;
 use differential_dataflow::consolidation::{consolidate_from, consolidate_updates};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
-use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal, CursorList};
-use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::cursor::{
+    BatchCursor, BatchKey, BatchVal, CursorList, cursor_list,
+};
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_ore::future::yield_now;
 use mz_repr::Diff;
 use timely::container::PushInto;
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputBuilderSession;
-use timely::dataflow::operators::{Capability, Operator};
+use timely::dataflow::operators::{CapabilitySet, Operator};
 use timely::{ContainerBuilder, PartialOrder};
 use tracing::trace;
 
@@ -92,7 +94,7 @@ where
             // initial work for the two traces, and before the operator is constructed.
 
             // Acknowledged frontier for each input.
-            // These two are used exclusively to track batch boundaries on which we may want/need to call `cursor_through`.
+            // These two are used exclusively to track batch boundaries on which we may want/need to call `batches_through`.
             // They will drive our physical compaction of each trace, and we want to maintain at all times that each is beyond
             // the physical compaction frontier of their corresponding trace.
             // Should we ever *drop* a trace, these are 1. much harder to maintain correctly, but 2. no longer used.
@@ -112,13 +114,13 @@ where
                 Work::<CursorList<BatchCursor<Tr1>>, BatchCursor<Tr2>, _, _>::new(result_fn);
 
             // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
-            trace1.map_batches(|batch1| {
+            trace1.map_spans(|batch1| {
                 trace!(
                     operator_id,
                     input = 1,
                     lower = ?batch1.lower().elements(),
                     upper = ?batch1.upper().elements(),
-                    size = batch1.len(),
+                    has_updates = batch1.has_updates(),
                     "pre-loading batch",
                 );
 
@@ -145,21 +147,24 @@ where
                 "pre-loading finished",
             );
 
-            // We capture batch2 cursors first and establish work second to avoid taking a `RefCell` lock
-            // on both traces at the same time, as they could be the same trace and this would panic.
-            let mut batch2_cursors = Vec::new();
-            trace2.map_batches(|batch2| {
+            // We capture batch2's updates first and establish work second to avoid taking a `RefCell`
+            // lock on both traces at the same time, as they could be the same trace and this would panic.
+            let mut batch2_updates = Vec::new();
+            trace2.map_spans(|batch2| {
                 trace!(
                     operator_id,
                     input = 2,
                     lower = ?batch2.lower().elements(),
                     upper = ?batch2.upper().elements(),
-                    size = batch2.len(),
+                    has_updates = batch2.has_updates(),
                     "pre-loading batch",
                 );
 
                 acknowledged2.clone_from(batch2.upper());
-                batch2_cursors.push((batch2.cursor(), batch2.clone()));
+                // Empty batches carry no updates, and have nothing to join.
+                if let Some(updates2) = &batch2.inner {
+                    batch2_updates.push(updates2.clone());
+                }
             });
             // At this point, `ack2` should exactly equal `trace2.read_upper()`, as they are both determined by
             // iterating through batches and capturing the upper bound. This is a great moment to assert that
@@ -183,8 +188,8 @@ where
             let preload_upper1 = acknowledged1.clone();
             let preload_upper2 = acknowledged2.clone();
 
-            // Load up deferred work using trace2 cursors and batches captured just above.
-            for (batch2_cursor, batch2) in batch2_cursors.into_iter() {
+            // Load up deferred work using the trace2 updates captured just above.
+            for updates2 in batch2_updates.into_iter() {
                 trace!(
                     operator_id,
                     input = 2,
@@ -194,7 +199,7 @@ where
 
                 // It is safe to ask for `ack1` because we have confirmed it to be in advance of `distinguish_since`.
                 let (trace1_cursor, trace1_storage) =
-                    trace1.cursor_through(acknowledged1.borrow()).unwrap();
+                    cursor_list(trace1.batches_through(acknowledged1.borrow()).unwrap());
                 // We could downgrade the capability here, but doing so is a bit complicated mathematically.
                 // TODO: downgrade the capability by searching out the one time in `batch2.lower()` and not
                 // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
@@ -202,9 +207,10 @@ where
                 todo2.push(
                     trace1_cursor,
                     trace1_storage,
-                    batch2_cursor,
-                    batch2.clone(),
-                    capability.clone(),
+                    updates2.cursor(),
+                    updates2,
+                    CapabilitySet::from_elem(capability.clone()),
+                    capability.time().clone(),
                 );
             }
 
@@ -238,7 +244,15 @@ where
                     let trace2 = trace2_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
-                    let capability = capability.retain(0);
+                    // A message in a partially ordered scope can carry several capabilities.
+                    // Their meet lower bounds every time in the message's batches, so it is a
+                    // valid time to advance the opposing trace's updates to.
+                    let capability = capability.retain_stamp(0);
+                    let meet = capability
+                        .iter()
+                        .map(|c| c.time().clone())
+                        .reduce(|a, b| a.meet(&b))
+                        .expect("non-empty stamp");
                     for batch1 in data.drain(..) {
                         // Ignore any pre-loaded data, which was joined at start-up. This tests the
                         // fixed preload boundary, not `acknowledged1`, which `advance_upper` can
@@ -250,11 +264,11 @@ where
                                 input = 1,
                                 lower = ?batch1.lower().elements(),
                                 upper = ?batch1.upper().elements(),
-                                size = batch1.len(),
+                                has_updates = batch1.has_updates(),
                                 "loading batch",
                             );
 
-                            if !batch1.is_empty() {
+                            if let Some(updates1) = &batch1.inner {
                                 trace!(
                                     operator_id,
                                     input = 1,
@@ -264,15 +278,16 @@ where
 
                                 // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let (trace2_cursor, trace2_storage) =
-                                    trace2.cursor_through(acknowledged2.borrow()).unwrap();
-                                let batch1_cursor = batch1.cursor();
+                                let (trace2_cursor, trace2_storage) = cursor_list(
+                                    trace2.batches_through(acknowledged2.borrow()).unwrap(),
+                                );
                                 todo1.push(
-                                    batch1_cursor,
-                                    batch1.clone(),
+                                    updates1.cursor(),
+                                    updates1.clone(),
                                     trace2_cursor,
                                     trace2_storage,
                                     capability.clone(),
+                                    meet.clone(),
                                 );
                             }
 
@@ -305,7 +320,15 @@ where
                     let trace1 = trace1_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
-                    let capability = capability.retain(0);
+                    // A message in a partially ordered scope can carry several capabilities.
+                    // Their meet lower bounds every time in the message's batches, so it is a
+                    // valid time to advance the opposing trace's updates to.
+                    let capability = capability.retain_stamp(0);
+                    let meet = capability
+                        .iter()
+                        .map(|c| c.time().clone())
+                        .reduce(|a, b| a.meet(&b))
+                        .expect("non-empty stamp");
                     for batch2 in data.drain(..) {
                         // Ignore any pre-loaded data, which was joined at start-up. This tests the
                         // fixed preload boundary, not `acknowledged2`, which `advance_upper` can
@@ -317,11 +340,11 @@ where
                                 input = 2,
                                 lower = ?batch2.lower().elements(),
                                 upper = ?batch2.upper().elements(),
-                                size = batch2.len(),
+                                has_updates = batch2.has_updates(),
                                 "loading batch",
                             );
 
-                            if !batch2.is_empty() {
+                            if let Some(updates2) = &batch2.inner {
                                 trace!(
                                     operator_id,
                                     input = 2,
@@ -331,15 +354,16 @@ where
 
                                 // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                 // at start-up, and have held back physical compaction ever since.
-                                let (trace1_cursor, trace1_storage) =
-                                    trace1.cursor_through(acknowledged1.borrow()).unwrap();
-                                let batch2_cursor = batch2.cursor();
+                                let (trace1_cursor, trace1_storage) = cursor_list(
+                                    trace1.batches_through(acknowledged1.borrow()).unwrap(),
+                                );
                                 todo2.push(
                                     trace1_cursor,
                                     trace1_storage,
-                                    batch2_cursor,
-                                    batch2.clone(),
+                                    updates2.cursor(),
+                                    updates2.clone(),
                                     capability.clone(),
+                                    meet.clone(),
                                 );
                             }
 
@@ -508,7 +532,7 @@ where
     C2: Cursor,
 {
     /// Pending work.
-    todo: VecDeque<(Pin<Box<dyn Future<Output = ()>>>, Capability<C1::Time>)>,
+    todo: VecDeque<(Pin<Box<dyn Future<Output = ()>>>, CapabilitySet<C1::Time>)>,
     /// A function that transforms raw join matches into join results.
     result_fn: Rc<RefCell<L>>,
     /// A buffer holding the join results.
@@ -552,21 +576,19 @@ where
     }
 
     /// Append some pending work.
+    ///
+    /// Every time in the freshly arrived batch must be greater or equal to some element of
+    /// `capability`, and to `meet`. The join results are advanced by `meet`.
     fn push(
         &mut self,
         cursor1: C1,
         storage1: C1::Storage,
         cursor2: C2,
         storage2: C2::Storage,
-        capability: Capability<C1::Time>,
+        capability: CapabilitySet<C1::Time>,
+        meet: C1::Time,
     ) {
-        let fut = self.start_work(
-            cursor1,
-            storage1,
-            cursor2,
-            storage2,
-            capability.time().clone(),
-        );
+        let fut = self.start_work(cursor1, storage1, cursor2, storage2, meet);
 
         self.todo.push_back((Box::pin(fut), capability));
     }
