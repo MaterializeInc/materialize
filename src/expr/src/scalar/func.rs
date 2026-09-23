@@ -141,7 +141,6 @@ func_name! {
     CastArrayToString => "cast_array_to_string",
     CastDateToTimestamp => "cast_date_to_timestamp",
     CastDateToTimestampTz => "cast_date_to_timestamp_tz",
-    CastJsonbToNumeric => "cast_jsonb_to_numeric",
     <E> CastList1ToList2<E> => "cast_list1_to_list2",
     <E> CastListToJsonb<E> => "cast_list_to_jsonb",
     CastListToString => "cast_list_to_string",
