@@ -561,15 +561,13 @@ snk           hydrated_test_4 true
 # Retention runs in the same sweep on the catalog server. It retracts aged-out rows
 # through the same OCC path, in bounded batches. Object retention must not expire
 # replica history.
-> CREATE TABLE retained_replica_history (
-      replica_id text, started_at timestamptz, process_id uint8
-  );
+$ set-from-sql var=retained-replica-history
+SELECT jsonb_agg(jsonb_build_object(
+    'replica_id', replica_id, 'started_at', started_at, 'process_id', process_id
+))::text
+FROM mz_internal.mz_replica_hydration_history
 
-> INSERT INTO retained_replica_history
-  SELECT replica_id, started_at, process_id
-  FROM mz_internal.mz_replica_hydration_history;
-
-> SELECT count(*) > 0 FROM retained_replica_history;
+> SELECT jsonb_array_length('${retained-replica-history}'::jsonb) > 0;
 true
 
 $ postgres-execute connection=mz_system
@@ -578,13 +576,11 @@ ALTER SYSTEM SET hydration_history_retention_period = '0s';
 > SELECT count(*) FROM mz_internal.mz_object_hydration_history;
 0
 
-> SELECT count(*) FROM (
-      SELECT * FROM retained_replica_history
-      EXCEPT
-      SELECT replica_id, started_at, process_id
-      FROM mz_internal.mz_replica_hydration_history
-  );
-0
+> SELECT jsonb_agg(jsonb_build_object(
+      'replica_id', replica_id, 'started_at', started_at, 'process_id', process_id
+  )) @> '${retained-replica-history}'::jsonb
+  FROM mz_internal.mz_replica_hydration_history;
+true
 
 # Conversely, replica retention must not expire object history.
 $ postgres-execute connection=mz_system
@@ -611,7 +607,6 @@ true
 true
 
 > DROP MATERIALIZED VIEW retention_probe;
-> DROP TABLE retained_replica_history;
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
