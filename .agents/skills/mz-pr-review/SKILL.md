@@ -44,7 +44,8 @@ a `*Func` variant's payload.
 - If `LIR_VERSION` in `src/compute-types/src/plan.rs` had shipped, it is
   bumped and the old `lir_v{N}.json` is left untouched rather than rewritten.
 - `Row` and `EvalError` never appear directly in plan types, only as
-  `StableRow` / `StableEvalError`.
+  `StableRow` / `StableEvalError`, enforced by
+  `lir_schema_contains_only_stable_types`.
 
 ### Scalar function registry
 Applies when the diff touches `UnaryFunc`, `BinaryFunc`, or `VariadicFunc`
