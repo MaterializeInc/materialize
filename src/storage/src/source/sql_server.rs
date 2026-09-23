@@ -35,6 +35,7 @@ use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::Stage;
 use crate::source::RawSourceCreationConfig;
 use crate::source::types::{Probe, SourceMessage, SourceRender, StackedCollection};
 
@@ -175,38 +176,57 @@ impl SourceRender for SqlServerSourceConnection {
             .metrics
             .get_sql_server_source_metrics(config.id, config.worker_id);
 
-        let (repl_updates, repl_errs, repl_token) = replication::render(
-            scope.clone(),
-            config.clone(),
-            source_outputs.clone(),
-            self.clone(),
-            metrics,
-        );
+        let stages = &config.stage_logger;
+        let worker = scope.worker();
 
-        let (progress_errs, progress_probes, progress_token) = progress::render(
-            scope.clone(),
-            config.clone(),
-            self.connection.clone(),
-            source_outputs.clone(),
-            resume_uppers,
-            self.extras.clone(),
-        );
+        // The replication operator also reads the snapshot, so the connector has a single
+        // reader stage.
+        let (repl_updates, repl_errs, repl_token, progress_errs, progress_probes, progress_token) =
+            stages.shared(worker, Stage::Reader, || {
+                let (repl_updates, repl_errs, repl_token) = replication::render(
+                    scope.clone(),
+                    config.clone(),
+                    source_outputs.clone(),
+                    self.clone(),
+                    metrics,
+                );
 
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = repl_updates
-            .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
-                partition_count,
-                move |((partition_idx, data), time, diff): (
-                    (u64, Result<SourceMessage, DataflowError>),
-                    Lsn,
-                    Diff,
-                )| { (partition_idx, (data, time, diff)) },
-            );
-        let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
-        }
+                let (progress_errs, progress_probes, progress_token) = progress::render(
+                    scope.clone(),
+                    config.clone(),
+                    self.connection.clone(),
+                    source_outputs.clone(),
+                    resume_uppers,
+                    self.extras.clone(),
+                );
+                (
+                    repl_updates,
+                    repl_errs,
+                    repl_token,
+                    progress_errs,
+                    progress_probes,
+                    progress_token,
+                )
+            });
+
+        let data_collections = stages.shared(worker, Stage::Partition, || {
+            let partition_count = u64::cast_from(config.source_exports.len());
+            let data_streams: Vec<_> = repl_updates
+                .inner
+                .partition::<CapacityContainerBuilder<_>, _, _>(
+                    partition_count,
+                    move |((partition_idx, data), time, diff): (
+                        (u64, Result<SourceMessage, DataflowError>),
+                        Lsn,
+                        Diff,
+                    )| { (partition_idx, (data, time, diff)) },
+                );
+            let mut data_collections = BTreeMap::new();
+            for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+                data_collections.insert(*id, data_stream.as_collection());
+            }
+            data_collections
+        });
 
         let export_ids = config.source_exports.keys().copied();
         let health_init = export_ids

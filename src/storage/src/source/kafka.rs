@@ -65,6 +65,7 @@ use tokio::sync::{Notify, mpsc};
 use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::logging::Stage;
 use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
@@ -191,29 +192,39 @@ impl SourceRender for KafkaSourceConnection {
         StreamVec<'scope, KafkaTimestamp, Probe<KafkaTimestamp>>,
         Vec<PressOnDropButton>,
     ) {
-        let (metadata, probes, metadata_token) =
-            render_metadata_fetcher(scope, self.clone(), config.clone());
-        let (data, health, reader_token) = render_reader(
-            scope,
-            self,
-            config.clone(),
-            resume_uppers,
-            metadata,
-            start_signal,
-        );
+        let stages = &config.stage_logger;
+        let worker = scope.worker();
 
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = data.inner.partition::<CapacityContainerBuilder<_>, _, _>(
-            partition_count,
-            |((output, data), time, diff)| {
-                let output = u64::cast_from(output);
-                (output, (data, time, diff))
-            },
-        );
-        let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
-        }
+        let (probes, metadata_token, data, health, reader_token) =
+            stages.shared(worker, Stage::Reader, || {
+                let (metadata, probes, metadata_token) =
+                    render_metadata_fetcher(scope, self.clone(), config.clone());
+                let (data, health, reader_token) = render_reader(
+                    scope,
+                    self,
+                    config.clone(),
+                    resume_uppers,
+                    metadata,
+                    start_signal,
+                );
+                (probes, metadata_token, data, health, reader_token)
+            });
+
+        let data_collections = stages.shared(worker, Stage::Partition, || {
+            let partition_count = u64::cast_from(config.source_exports.len());
+            let data_streams: Vec<_> = data.inner.partition::<CapacityContainerBuilder<_>, _, _>(
+                partition_count,
+                |((output, data), time, diff)| {
+                    let output = u64::cast_from(output);
+                    (output, (data, time, diff))
+                },
+            );
+            let mut data_collections = BTreeMap::new();
+            for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+                data_collections.insert(*id, data_stream.as_collection());
+            }
+            data_collections
+        });
 
         (
             data_collections,
