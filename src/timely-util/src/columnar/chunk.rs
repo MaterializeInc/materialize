@@ -175,7 +175,7 @@ fn codec_for_depth(depth: u8) -> (&'static dyn ExtentCodec, bool) {
 }
 
 /// The pool committed chunks spill to, if any.
-fn spill_pool() -> Option<Pool> {
+pub(crate) fn spill_pool() -> Option<Pool> {
     if let Some(pool) = SPILL_OVERRIDE.with(|cell| cell.borrow().clone()) {
         return Some(pool);
     }
@@ -346,7 +346,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
 
     /// Append byte-bounded pieces, preserving order and generational depth.
     /// A single update may exceed the bound because it cannot be split.
-    fn push_bounded(column: Column<(D, T, R)>, depth: u8, out: &mut VecDeque<Self>) {
+    pub(crate) fn push_bounded(column: Column<(D, T, R)>, depth: u8, out: &mut VecDeque<Self>) {
         let len = column.borrow().len();
         if len <= 1 || column.length_in_bytes() <= COMMIT_BYTES {
             if len > 0 {

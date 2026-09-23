@@ -40,7 +40,9 @@ itertools.workspace = true
 lz4_flex.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing", "pager", "pool"] }
 num-traits.workspace = true
+rand.workspace = true
 serde.workspace = true
+sha2.workspace = true
 smallvec.workspace = true
 timely.workspace = true
 tokio.workspace = true
