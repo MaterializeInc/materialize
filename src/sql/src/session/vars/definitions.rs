@@ -1898,6 +1898,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_explain_analyze_storage_objects,
+        desc: "EXPLAIN ANALYZE for sources, tables from sources, and sinks",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_index_options,
         desc: "INDEX OPTIONS",
         default: false,

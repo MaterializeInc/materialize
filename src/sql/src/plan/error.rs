@@ -327,6 +327,12 @@ pub enum PlanError {
         replacement_type: CatalogItemType,
         replacement_name: PartialItemName,
     },
+    /// `EXPLAIN ANALYZE ... FOR SOURCE` of a subsource.
+    ExplainAnalyzeSubsource {
+        item_name: String,
+    },
+    /// `EXPLAIN ANALYZE INGESTION` of an object that does not ingest.
+    ExplainAnalyzeIngestionUnsupported,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -524,6 +530,9 @@ impl PlanError {
             }
             Self::InvalidSchemaName => {
                 Some("Use SET schema = name to select a schema.  Use SHOW SCHEMAS to list available schemas.  Use SHOW search_path to show the schema names that we looked for, but none of them existed.".into())
+            }
+            Self::ExplainAnalyzeSubsource { item_name } => {
+                Some(format!("Use EXPLAIN ANALYZE ... FOR TABLE {item_name} to explain it."))
             }
             _ => None,
         }
@@ -902,6 +911,12 @@ impl fmt::Display for PlanError {
                      with {replacement_type} {replacement_name}",
                 )
             }
+            Self::ExplainAnalyzeSubsource { item_name } => {
+                write!(f, "{item_name} is a subsource")
+            }
+            Self::ExplainAnalyzeIngestionUnsupported => f.write_str(
+                "EXPLAIN ANALYZE INGESTION is only supported for sources and tables created from sources",
+            ),
         }
     }
 }
