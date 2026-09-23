@@ -8768,14 +8768,14 @@ def workflow_adapter_loss(c: Composition) -> None:
         materialize_params={"cluster": "compute_cluster"},
     )
 
-    def produce(value: int) -> None:
+    def produce(value: int, count: int = 1) -> None:
         c.exec(
             "kafka",
             "kafka-console-producer",
             "--bootstrap-server=kafka:9092",
             f"--topic={source_topic}",
             "--command-property=acks=all",
-            stdin=f"{value}\n",
+            stdin="".join(f"{item}\n" for item in range(value, value + count)),
         )
 
     def consume(name: str, count: int) -> set[int]:
@@ -8804,6 +8804,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             ) from error
 
     def inspect(shard: str) -> dict:
+        wall_start_ms = time.time_ns() // 1_000_000
         result = c.run(
             "persistcli",
             "inspect",
@@ -8825,7 +8826,8 @@ def workflow_adapter_loss(c: Composition) -> None:
             assert len(elements) <= 1, elements
             return [element % (2**64) for element in elements]
 
-        trace = json.loads(result.stdout)["trace"]
+        rollup = json.loads(result.stdout)
+        trace = rollup["trace"]
         physical = [
             *trace["legacy_batches"],
             *(entry["batch"] for entry in trace["hollow_batches"]),
@@ -8844,6 +8846,10 @@ def workflow_adapter_loss(c: Composition) -> None:
             else [max((u[0] for u in uppers), default=0)]
         )
         return {
+            "wall_start_ms": wall_start_ms,
+            "wall_end_ms": time.time_ns() // 1_000_000,
+            "leased_readers": rollup["leased_readers"],
+            "critical_readers": rollup["critical_readers"],
             "since": frontier(trace["since"]),
             "upper": upper,
             "batches": [
@@ -9137,17 +9143,23 @@ def workflow_adapter_loss(c: Composition) -> None:
             expected = {0}
             deadline = time.monotonic() + timeout
             n = 0
+            input_count = 1
+            compaction_wave_size = None
+            compaction_waves_remaining = 4
             while True:
                 absent()
-                n += 1
-                produce(n)
-                expected.add(n * 10)
+                first = n + 1
+                produce(first, input_count)
+                n += input_count
+                expected.update(value * 10 for value in range(first, n + 1))
                 actual = consume("source", len(expected))
                 after = {name: inspect(shard) for name, shard in shards.items()}
                 absent()
-                progressed = all(
-                    compacted_past(after[name], thresholds[name]) for name in shards
-                )
+                physical_progress = {
+                    name: compacted_past(after[name], thresholds[name])
+                    for name in shards
+                }
+                progressed = all(physical_progress.values())
                 if (
                     actual == expected
                     and progressed
@@ -9161,9 +9173,40 @@ def workflow_adapter_loss(c: Composition) -> None:
                     break
                 if time.monotonic() >= deadline:
                     raise AssertionError(
-                        f"No outage progress: expected={expected}, Kafka={actual}, "
+                        f"Outage acceptance incomplete: Kafka_complete={actual == expected}, "
+                        f"physical_progress={physical_progress}, "
+                        f"expected={expected}, Kafka={actual}, "
                         f"compactions before={before}, after={after}"
                     )
+                input_count = 1
+                if (
+                    not progressed
+                    and actual == expected
+                    and compaction_waves_remaining
+                    and all(
+                        state["since"] and state["since"][0] > thresholds[name]
+                        for name, state in after.items()
+                    )
+                ):
+                    # Advancing permission does not schedule a rewrite of old
+                    # batches. Supply bounded ordinary input after permission
+                    # advances, without tying every record to two CLI inspections.
+                    # Complete each wave through Kafka before starting the next.
+                    if compaction_wave_size is None:
+                        compaction_wave_size = max(
+                            1,
+                            max(
+                                sum(batch["len"] for batch in state["batches"])
+                                for state in after.values()
+                            ),
+                        )
+                        print(
+                            "Providing ordinary compaction work: "
+                            f"up to {compaction_waves_remaining} waves of "
+                            f"{compaction_wave_size} records"
+                        )
+                    input_count = compaction_wave_size
+                    compaction_waves_remaining -= 1
 
             successive_observer_progress(running_replicas)
             # Reconstruct after actual history compaction, with no SQL ingress.
