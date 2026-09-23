@@ -13,6 +13,8 @@
 
 #![allow(clippy::op_ref)]
 
+use std::collections::BTreeSet;
+
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::BatchCursor;
@@ -26,7 +28,6 @@ use mz_expr::Eval;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
-use std::collections::BTreeSet;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::OkErr;
@@ -435,7 +436,7 @@ where
     build_halfjoin_op(updates, trace, strict, closure, datums, errs)
 }
 
-/// `half_join2` implementation (less-quadratic, new default).
+/// Renders the half join of `updates` against `trace`, splitting errors from the closure off.
 fn build_halfjoin_op<'scope, T, Tr>(
     updates: VecCollection<'scope, T, (Row, Row, T), Diff>,
     trace: Arranged<'scope, Tr>,

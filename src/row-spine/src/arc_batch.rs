@@ -24,10 +24,11 @@
 //! here as a newtype lets cross-thread arrangement sharing build against a released
 //! differential-dataflow, with no differential-side `Arc` batch impls required.
 
+use std::sync::Arc;
+
 use differential_dataflow::trace::implementations::merge_batcher::Sealer;
 use differential_dataflow::trace::implementations::spine_fueled::{Merger, SpineBatch};
 use differential_dataflow::trace::{Builder, Cursor, Navigable};
-use std::sync::Arc;
 use timely::progress::frontier::AntichainRef;
 
 /// An `Arc`-backed batch, shareable across threads when `B`'s contents are `Send + Sync`.
@@ -180,7 +181,7 @@ impl<B: Default> Default for ArcBuilder<B> {
     }
 }
 
-impl<B: Builder + Default> Builder for ArcBuilder<B> {
+impl<B: Builder> Builder for ArcBuilder<B> {
     type Input = B::Input;
     type Time = B::Time;
     type Output = ArcBatch<B::Output>;

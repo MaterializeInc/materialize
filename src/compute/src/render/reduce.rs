@@ -11,6 +11,8 @@
 //!
 //! Consult [ReducePlan] documentation for details.
 
+use std::collections::BTreeMap;
+
 use columnar::Columnar;
 use columnation::{Columnation, CopyRegion};
 use differential_dataflow::Diff as _;
@@ -48,7 +50,6 @@ use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use tracing::warn;

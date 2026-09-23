@@ -912,7 +912,8 @@ mod write {
                         match event {
                             Event::Data(cap, data) => {
                                 for desc in data {
-                                    state.absorb_batch_description(desc, sole_capability(&cap).clone());
+                                    let cap = sole_capability(&cap).clone();
+                                    state.absorb_batch_description(desc, cap);
                                 }
                                 state.maybe_write_batch().await
                             }

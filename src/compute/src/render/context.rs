@@ -10,6 +10,9 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
+use std::collections::BTreeMap;
+use std::rc::Rc;
+
 use columnar::{Columnar, Index};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
@@ -27,17 +30,13 @@ use mz_expr::{Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
-use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, UnchunkBuilder};
+use mz_timely_util::columnar::chunk::AccountedChunkBatcher;
+use mz_timely_util::columnar::columnar_exchange;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
-use std::collections::BTreeMap;
-use std::rc::Rc;
 use timely::ContainerBuilder;
 use timely::container::NoopBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -55,7 +54,8 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowChunkedBatcher,
+    RowRowColumnarBatcher, RowRowColumnationBatcher, RowRowEnter, RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -1243,34 +1243,24 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let exchange =
             ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
         let oks = match batcher {
-            ArrangementBatcher::Chunked => ok_stream.mz_arrange_core::<_, AccountedChunkBatcher<
-                (Row, Row),
-                T,
-                Diff,
-                UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
-            >, RowRowSpine<_, _>>(
-                exchange, name, AccountedChunkBatcher::new
-            ),
-            ArrangementBatcher::Columnar => {
-                ok_stream.mz_arrange_core::<_, Col2ValColBatcher<
-                    _,
-                    _,
-                    _,
-                    _,
-                    batcher::ColumnChunker<_>,
-                    RowRowColPagedBuilder<_, _>,
-                >, RowRowSpine<_, _>>(exchange, name, MergeBatcher::new)
-            }
-            ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<_, Col2ValBatcher<
-                _,
-                _,
-                _,
-                _,
-                batcher::Chunker<_>,
-                RowRowBuilder<_, _>,
-            >, RowRowSpine<_, _>>(
-                exchange, name, MergeBatcher::new
-            ),
+            ArrangementBatcher::Chunked => ok_stream
+                .mz_arrange_core::<_, RowRowChunkedBatcher<T>, RowRowSpine<_, _>>(
+                    exchange,
+                    name,
+                    AccountedChunkBatcher::new,
+                ),
+            ArrangementBatcher::Columnar => ok_stream
+                .mz_arrange_core::<_, RowRowColumnarBatcher<T>, RowRowSpine<_, _>>(
+                    exchange,
+                    name,
+                    MergeBatcher::new,
+                ),
+            ArrangementBatcher::Columnation => ok_stream
+                .mz_arrange_core::<_, RowRowColumnationBatcher<_, T>, RowRowSpine<_, _>>(
+                    exchange,
+                    name,
+                    MergeBatcher::new,
+                ),
         };
         (oks, err_stream.as_collection(), passthrough)
     }
@@ -1301,9 +1291,9 @@ struct PendingWork<C>
 where
     C: Cursor,
 {
-    /// Capabilities for the `ok` output (output port 0), one per element of the batch's stamp.
+    /// Capabilities for the `ok` output (output port 0), covering the batch's stamp.
     ok_capability: CapabilitySet<C::Time>,
-    /// Capabilities for the `err` output (output port 1), one per element of the batch's stamp.
+    /// Capabilities for the `err` output (output port 1), covering the batch's stamp.
     err_capability: CapabilitySet<C::Time>,
     cursor: C,
     batch: C::Storage,

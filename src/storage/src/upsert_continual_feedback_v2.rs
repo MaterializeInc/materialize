@@ -42,7 +42,7 @@
 //!    to learn which times have been committed. When the persist frontier
 //!    reaches the resume upper, rehydration is complete.
 //!
-//! 3. **Seal & drain.** Call `batcher.seal(input_upper)` to extract all
+//! 3. **Extract & drain.** Call `batcher.extract(input_upper)` to extract all
 //!    source-finalized entries as sorted, consolidated chunks. Each entry is
 //!    classified:
 //!    - **Eligible** (at the persist frontier): the persist trace has the
@@ -88,22 +88,21 @@
 //! with `p < ts` is ineligible (persist hasn't caught up), and one with
 //! `ts < p` is already persisted and dropped.
 
+use std::fmt::Debug;
+
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::{Arranged, arrange_core};
-use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkSpine};
+use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkMerger, ChunkSpine};
+use differential_dataflow::trace::cursor::cursor_list;
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Batcher, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_dyncfg::ConfigSet;
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use std::fmt::Debug;
-
 // Only the fuzzing-gated `datum_seq_to_upsert_value` takes a `DatumSeq`.
-use differential_dataflow::trace::chunk::ChunkMerger;
-use differential_dataflow::trace::cursor::cursor_list;
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 #[cfg(feature = "fuzzing")]
 use mz_row_spine::DatumSeq;
 use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
@@ -615,7 +614,7 @@ where
         // Main operator loop. Each iteration performs four steps:
         //   Step 1: Ingest source data into the batcher.
         //   Step 2: Read the persist frontier and update rehydration state.
-        //   Step 3: Seal the batcher, drain eligible entries, push back the rest.
+        //   Step 3: Extract from the batcher, drain eligible entries, push back the rest.
         //   Step 4: Manage the output capability.
         loop {
             // Block until woken by source input or a persist frontier advance.
@@ -709,9 +708,9 @@ where
                 prev_persist_upper = persist_upper.clone();
             }
 
-            // Step 3: Seal & drain.
-            // Seal the batcher at input_upper to extract all source-finalized
-            // entries as sorted, consolidated chunks. The seal merges all
+            // Step 3: Extract & drain.
+            // Extract from the batcher at input_upper all source-finalized
+            // entries as sorted, consolidated chunks. The extract merges all
             // internal chains (O(N) linear merge of sorted data) and splits
             // by time: entries at ts < input_upper are extracted, the rest
             // stay in the batcher.
@@ -722,8 +721,8 @@ where
             //   - Ineligible (persist_upper < ts < input_upper): persist
             //     hasn't caught up yet, so pushed back into the batcher.
             //
-            // We skip the seal entirely unless an eligible entry is at all
-            // possible. `seal` performs an O(N) merge of all chains
+            // We skip the extract entirely unless an eligible entry is at all
+            // possible. `extract` performs an O(N) merge of all chains
             // regardless of how much it extracts, so calling it when nothing
             // can be processed makes the operator quadratic in the number of
             // wakeups (a real pathology during upstream snapshots and during
@@ -750,8 +749,8 @@ where
                 && PartialOrder::less_than(&persist_upper, &input_upper)
             {
                 // Step 1 already consolidated `push_buffer` through the chunker
-                // (which readies a complete chunk per `push_into`), so the
-                // chunker holds nothing pending here and we can seal directly.
+                // (which readies a complete chunk per `push_into`) and pushed
+                // those chunks into the batcher, so we can extract directly.
                 let (sealed, remaining_frontier) = A::extract(&mut batcher, input_upper.borrow());
 
                 let mut ineligible = Vec::new();
@@ -939,8 +938,8 @@ where
         (chain.unwrap_or_default(), frontier.to_owned())
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, mut chunk: Column<UpsertUpdate<T, O>>) {
-        Batcher::insert(batcher, &mut chunk);
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+        batcher.push_chunk(ColumnChunk::from_column(chunk));
     }
 
     async fn drain(

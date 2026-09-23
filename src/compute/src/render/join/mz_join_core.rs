@@ -147,8 +147,9 @@ where
                 "pre-loading finished",
             );
 
-            // We capture batch2's updates first and establish work second to avoid taking a `RefCell`
-            // lock on both traces at the same time, as they could be the same trace and this would panic.
+            // We capture batch2's updates first and establish work second to avoid taking a
+            // `RefCell` lock on both traces at the same time, as they could be the same trace and
+            // this would panic.
             let mut batch2_updates = Vec::new();
             trace2.map_spans(|batch2| {
                 trace!(
@@ -244,16 +245,23 @@ where
                     let trace2 = trace2_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
-                    // A message in a partially ordered scope can carry several capabilities.
-                    // Their meet lower bounds every time in the message's batches, so it is a
-                    // valid time to advance the opposing trace's updates to.
                     let capability = capability.retain_stamp(0);
-                    let meet = capability
-                        .iter()
-                        .map(|c| c.time().clone())
-                        .reduce(|a, b| a.meet(&b))
-                        .expect("non-empty stamp");
+                    let meet = capability_meet(&capability);
                     for batch1 in data.drain(..) {
+                        // The preload boundary and `acknowledged1` are both uppers of whole
+                        // stream batches or of trace merges of them, so an arriving batch lies
+                        // wholly on one side of each. A batch spanning the preload boundary would
+                        // be partly joined twice, one spanning `acknowledged1` mis-accounted.
+                        mz_ore::soft_assert_or_log!(
+                            PartialOrder::less_equal(batch1.upper(), &preload_upper1)
+                                || PartialOrder::less_equal(&preload_upper1, batch1.lower()),
+                            "batch spans the preload boundary",
+                        );
+                        mz_ore::soft_assert_or_log!(
+                            PartialOrder::less_equal(&acknowledged1, batch1.lower())
+                                || PartialOrder::less_equal(batch1.upper(), &acknowledged1),
+                            "batch spans the acknowledged frontier",
+                        );
                         // Ignore any pre-loaded data, which was joined at start-up. This tests the
                         // fixed preload boundary, not `acknowledged1`, which `advance_upper` can
                         // move past an in-flight batch whose updates trace merges consolidated away.
@@ -320,16 +328,23 @@ where
                     let trace1 = trace1_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
-                    // A message in a partially ordered scope can carry several capabilities.
-                    // Their meet lower bounds every time in the message's batches, so it is a
-                    // valid time to advance the opposing trace's updates to.
                     let capability = capability.retain_stamp(0);
-                    let meet = capability
-                        .iter()
-                        .map(|c| c.time().clone())
-                        .reduce(|a, b| a.meet(&b))
-                        .expect("non-empty stamp");
+                    let meet = capability_meet(&capability);
                     for batch2 in data.drain(..) {
+                        // The preload boundary and `acknowledged2` are both uppers of whole
+                        // stream batches or of trace merges of them, so an arriving batch lies
+                        // wholly on one side of each. A batch spanning the preload boundary would
+                        // be partly joined twice, one spanning `acknowledged2` mis-accounted.
+                        mz_ore::soft_assert_or_log!(
+                            PartialOrder::less_equal(batch2.upper(), &preload_upper2)
+                                || PartialOrder::less_equal(&preload_upper2, batch2.lower()),
+                            "batch spans the preload boundary",
+                        );
+                        mz_ore::soft_assert_or_log!(
+                            PartialOrder::less_equal(&acknowledged2, batch2.lower())
+                                || PartialOrder::less_equal(batch2.upper(), &acknowledged2),
+                            "batch spans the acknowledged frontier",
+                        );
                         // Ignore any pre-loaded data, which was joined at start-up. This tests the
                         // fixed preload boundary, not `acknowledged2`, which `advance_upper` can
                         // move past an in-flight batch whose updates trace merges consolidated away.
@@ -517,6 +532,19 @@ where
             }
         },
     )
+}
+
+/// The lattice meet of the times of `capabilities`.
+///
+/// A message in a partially ordered scope can carry several capabilities. Their meet lower bounds
+/// every time in the message's batches, so it is a valid time to advance the opposing trace's
+/// updates to. Panics if `capabilities` is empty.
+fn capability_meet<T: Lattice + timely::progress::Timestamp>(capabilities: &CapabilitySet<T>) -> T {
+    capabilities
+        .iter()
+        .map(|c| c.time().clone())
+        .reduce(|a, b| a.meet(&b))
+        .expect("message stamped with no capabilities")
 }
 
 /// Work collected by the join operator.

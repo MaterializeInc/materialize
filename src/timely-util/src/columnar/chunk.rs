@@ -1811,7 +1811,7 @@ mod tests {
             } else {
                 chunked(&input, &cuts).into()
             };
-                        let batch = ChunkBatch::new(chunks);
+            let batch = ChunkBatch::new(chunks);
 
             let mut probe_col = <u64 as Columnar>::Container::default();
             for key in &probe_keys {

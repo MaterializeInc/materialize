@@ -17,9 +17,11 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use mz_repr::Diff;
-use mz_row_spine::RowValBuilder;
-use mz_timely_util::columnar::batcher::Chunker;
+use mz_repr::{Diff, Row};
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowValBuilder};
+use mz_timely_util::columnar::batcher::{Chunker, ColumnChunker};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, UnchunkBuilder};
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher};
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
 use mz_timely_util::operator::ConsolidatingBatcher;
 
@@ -118,11 +120,31 @@ pub type RowErrSpine<T, R> = RowValSpine<DataflowErrorSer, T, R>;
 pub type RowErrBatcher<T, R, Chu> = RowValBatcher<DataflowErrorSer, T, R, Chu>;
 pub type RowErrBuilder<T, R> = RowValBuilder<DataflowErrorSer, T, R>;
 
-// Batchers over columnation chains. `Chu` melds raw input into chunks, `Se` seals an
-// extracted chain: a spine builder to arrange it, `ChainSealer` to merely consolidate it.
+// Batchers over columnation chains. `Chu` melds raw input into chunks, and `Se`, a spine
+// builder, seals an extracted chain into a batch. Consolidation that wants the chain itself
+// uses `mz_timely_util::operator::ConsolidatingBatcher` instead.
 pub type KeyBatcher<K, T, D, Chu, Se> = KeyValBatcher<K, (), T, D, Chu, Se>;
 pub type KeyValBatcher<K, V, T, D, Chu, Se> =
     MergeBatcher<Chu, ColInternalMerger<(K, V), T, D>, Se>;
+
+// Row-to-row arrangement batchers, one per `ArrangementBatcher` flavor. `C` is the input
+// container the columnation chunker melds.
+pub type RowRowChunkedBatcher<T> = AccountedChunkBatcher<
+    (Row, Row),
+    T,
+    Diff,
+    UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
+>;
+pub type RowRowColumnarBatcher<T> = Col2ValColBatcher<
+    Row,
+    Row,
+    T,
+    Diff,
+    ColumnChunker<((Row, Row), T, Diff)>,
+    RowRowColPagedBuilder<T, Diff>,
+>;
+pub type RowRowColumnationBatcher<C, T> =
+    Col2ValBatcher<Row, Row, T, Diff, Chunker<C>, RowRowBuilder<T, Diff>>;
 
 /// The batcher a consolidation wants: chunks `Vec` input, hands the chain back unsealed.
 pub type ConsolidateKeyValBatcher<K, V, T, D> =

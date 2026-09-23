@@ -17,6 +17,10 @@
 //! One row per `(process_id, source, metric)`, so a metric that moves every sample does not drag
 //! the stable ones through a retraction with it.
 
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use mz_metrics::usage::{MetricKey, observations};
 use mz_ore::cast::CastFrom;
@@ -25,9 +29,6 @@ use mz_repr::{Datum, Timestamp};
 use mz_row_spine::RowRowBuilder;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, batcher, columnar_exchange};
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::ExchangeCore;
 use timely::dataflow::operators::generic::OutputBuilder;
@@ -111,7 +112,11 @@ pub(super) fn construct(
         columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>,
     );
     let trace = stream
-        .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>, RowRowSpine<_, _>>(exchange, "Arrange ResourceUsage", MergeBatcher::new)
+        .mz_arrange_core::<
+            _,
+            Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
+            RowRowSpine<_, _>,
+        >(exchange, "Arrange ResourceUsage", MergeBatcher::new)
         .trace;
     let token: Rc<dyn std::any::Any> = Rc::new(());
     let collection = LogCollection { trace, token };

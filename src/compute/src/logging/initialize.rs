@@ -5,6 +5,11 @@
 
 //! Initialization of logging dataflows.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
@@ -19,10 +24,6 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
 use timely::ContainerBuilder;
 use timely::container::{ContainerBuilder as _, PushInto};
 use timely::logging::{TimelyEvent, TimelyEventBuilder};

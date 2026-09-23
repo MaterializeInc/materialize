@@ -1686,7 +1686,7 @@ const BATCHES_PER_LEVEL: usize = 2;
 ///
 /// The `Spine` is a general-purpose trace implementation based on collection
 /// and merging immutable batches of updates. It is generic with respect to the
-/// batch type, and can be instantiated for any implementor of `trace::Batch`.
+/// batch type.
 ///
 /// ## Design
 ///

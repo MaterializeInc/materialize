@@ -82,6 +82,13 @@
 //! table's metadata to reflect the new snapshots, including updating the
 //! `mz-frontier` property to track progress.
 
+use std::cmp::Ordering;
+use std::collections::VecDeque;
+use std::convert::Infallible;
+use std::future::Future;
+use std::time::Instant;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
+
 use anyhow::{Context, anyhow};
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
@@ -142,12 +149,6 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-use std::collections::VecDeque;
-use std::convert::Infallible;
-use std::future::Future;
-use std::time::Instant;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
@@ -2341,10 +2342,8 @@ mod tests {
     }
 
     mod with_ready_batches {
-        use differential_dataflow::batcher::Batcher;
         use differential_dataflow::trace::Description;
         use differential_dataflow::trace::implementations::Vector;
-        use mz_row_spine::ArcOrdValBatcher;
 
         use super::*;
 
@@ -2360,25 +2359,12 @@ mod tests {
             (frontier(Some(lower)), frontier(upper))
         }
 
-        /// An input span with the given bounds.
-        ///
-        /// The pairing logic only looks at bounds, but a span with no updates carries no batch
-        /// and so is never written, so this seals one update at the span's lower bound.
+        /// An input span with the given bounds. The pairing logic under test
+        /// only looks at bounds, so the span holds no data.
         fn input(lower: u64, upper: Option<u64>) -> Span<Timestamp, ArcBatch<TestBatch>> {
             let (lower, upper) = span(lower, upper);
-            let mut updates = vec![(
-                (0u64, 0u64),
-                Timestamp::new(lower.elements()[0].into()),
-                Diff::ONE,
-            )];
-            let mut batcher = ArcOrdValBatcher::<u64, u64, Timestamp, Diff>::new(None, 0);
-            Batcher::<Vec<((u64, u64), Timestamp, Diff)>>::insert(&mut batcher, &mut updates);
-            let (batch, _frontier) = Batcher::<Vec<((u64, u64), Timestamp, Diff)>>::extract(
-                &mut batcher,
-                upper.borrow(),
-            );
             let since = Antichain::from_elem(Timestamp::MIN);
-            Span::new(Description::new(lower, upper, since), batch)
+            Span::new(Description::new(lower, upper, since), None)
         }
 
         #[derive(Debug, PartialEq)]

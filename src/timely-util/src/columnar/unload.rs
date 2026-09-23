@@ -19,8 +19,9 @@
 //! this crate); the method names and signatures match, so call sites survive
 //! a future switch to upstream re-exports unchanged.
 
-use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 use std::cmp::Ordering;
+
+use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 
 /// Look up a sorted set of keys in a chunk, copying the matching updates out
 /// into caller-owned staging.

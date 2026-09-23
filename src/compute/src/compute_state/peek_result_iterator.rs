@@ -5,15 +5,16 @@
 
 //! Code for extracting a peek result out of compute state/an arrangement.
 
+use std::iter::FusedIterator;
+use std::num::NonZeroI64;
+use std::ops::Range;
+
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, CursorList, cursor_list};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
-use std::iter::FusedIterator;
-use std::num::NonZeroI64;
-use std::ops::Range;
 use timely::order::PartialOrder;
 use timely::progress::Antichain;
 
@@ -24,6 +25,17 @@ use crate::compute_state::PeekRowIterationTracker;
 pub(super) type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
 pub(super) type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
+
+/// A cursor over all of `trace`'s batches, and the storage it borrows from.
+pub(super) fn trace_cursor<Tr>(trace: &mut Tr) -> (TraceCursor<Tr>, TraceStorage<Tr>)
+where
+    Tr: TraceReader<Batch: Navigable>,
+{
+    let batches = trace
+        .batches_through(Antichain::new().borrow())
+        .expect("trace is not compacted beyond the empty frontier");
+    cursor_list(batches)
+}
 
 pub(super) struct PeekResultIterator<Tr>
 where
@@ -193,11 +205,7 @@ where
         row_iteration_limit: Option<usize>,
         rows_iterated: usize,
     ) -> Self {
-        // `TraceReader` no longer builds cursors; take the batches and assemble one.
-        let batches = trace_reader
-            .batches_through(Antichain::new().borrow())
-            .expect("trace is not compacted beyond the empty frontier");
-        let (cursor, storage) = cursor_list(batches);
+        let (cursor, storage) = trace_cursor(trace_reader);
         Self::from_cursor(
             target_id,
             map_filter_project,

@@ -29,11 +29,10 @@ use mz_expr::Eval;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, UnchunkBuilder};
+use mz_timely_util::columnar::chunk::AccountedChunkBatcher;
+use mz_timely_util::columnar::columnar_exchange;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::operator::StreamExt;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -47,8 +46,10 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::typedefs::{RowRowAgent, RowRowEnter};
-use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
+use crate::typedefs::{
+    RowRowAgent, RowRowChunkedBatcher, RowRowColumnarBatcher, RowRowColumnationBatcher, RowRowEnter,
+};
+use mz_row_spine::RowRowSpine;
 
 /// Available linear join implementations.
 ///
@@ -669,34 +670,24 @@ where
     let exchange =
         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
     let arranged = match batcher {
-        ArrangementBatcher::Chunked => {
-            keyed.mz_arrange_core::<_, AccountedChunkBatcher<
-                (Row, Row),
-                T,
-                Diff,
-                UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
-            >, RowRowSpine<_, _>>(exchange, "JoinStage", AccountedChunkBatcher::new)
-        }
-        ArrangementBatcher::Columnar => {
-            keyed.mz_arrange_core::<_, Col2ValColBatcher<
-                _,
-                _,
-                _,
-                _,
-                batcher::ColumnChunker<_>,
-                RowRowColPagedBuilder<_, _>,
-            >, RowRowSpine<_, _>>(exchange, "JoinStage", MergeBatcher::new)
-        }
-        ArrangementBatcher::Columnation => keyed.mz_arrange_core::<_, Col2ValBatcher<
-            _,
-            _,
-            _,
-            _,
-            batcher::Chunker<_>,
-            RowRowBuilder<_, _>,
-        >, RowRowSpine<_, _>>(
-            exchange, "JoinStage", MergeBatcher::new
-        ),
+        ArrangementBatcher::Chunked => keyed
+            .mz_arrange_core::<_, RowRowChunkedBatcher<T>, RowRowSpine<_, _>>(
+                exchange,
+                "JoinStage",
+                AccountedChunkBatcher::new,
+            ),
+        ArrangementBatcher::Columnar => keyed
+            .mz_arrange_core::<_, RowRowColumnarBatcher<T>, RowRowSpine<_, _>>(
+                exchange,
+                "JoinStage",
+                MergeBatcher::new,
+            ),
+        ArrangementBatcher::Columnation => keyed
+            .mz_arrange_core::<_, RowRowColumnationBatcher<_, T>, RowRowSpine<_, _>>(
+                exchange,
+                "JoinStage",
+                MergeBatcher::new,
+            ),
     };
     (arranged, errs.as_collection())
 }

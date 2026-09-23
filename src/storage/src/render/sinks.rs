@@ -9,6 +9,9 @@
 
 //! Logic related to the creation of dataflow sinks.
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::SpanOf;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
@@ -21,8 +24,6 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use timely::dataflow::operators::Leave;
 use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;

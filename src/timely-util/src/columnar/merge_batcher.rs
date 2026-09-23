@@ -28,12 +28,13 @@
 //!
 //! [`differential_dataflow`]: differential_dataflow::trace::implementations::merge_batcher
 
+use std::collections::VecDeque;
+
 use columnar::{Columnar, Index, Len};
 use differential_dataflow::batcher::Batcher;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::logging::{BatcherEvent, Logger};
 use differential_dataflow::trace::implementations::merge_batcher::Sealer;
-use std::collections::VecDeque;
 use timely::Accountable;
 use timely::PartialOrder;
 use timely::container::{ContainerBuilder, PushInto, SizableContainer};
@@ -767,21 +768,21 @@ pub fn extract_chain<D, T, R, SinkShip, SinkKeep>(
 #[cfg(test)]
 #[allow(clippy::clone_on_ref_ptr)]
 mod tests {
-    /// The paged batcher under test, with no sealer: these tests read the chain directly.
-    type TestPagedBatcher = super::ColumnMergeBatcher<
-        crate::columnar::batcher::ColumnChunker<((u64, u64), u64, i64)>,
-        (u64, u64),
-        u64,
-        i64,
-        (),
-    >;
-
     use std::sync::Arc;
 
     use columnar::Index;
 
     use super::*;
     use crate::column_pager::{PageDecision, PageEvent, PageHint, PagingPolicy};
+
+    /// The paged batcher under test, with no sealer: these tests read the chain directly.
+    type TestPagedBatcher = ColumnMergeBatcher<
+        crate::columnar::batcher::ColumnChunker<((u64, u64), u64, i64)>,
+        (u64, u64),
+        u64,
+        i64,
+        (),
+    >;
 
     type KvUpdate = ((u64, u64), u64, i64);
 

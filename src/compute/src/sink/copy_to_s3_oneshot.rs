@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
@@ -18,9 +22,6 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::operator::{ConsolidatingBatcher, consolidate_pact};
 use mz_timely_util::probe::{Handle, ProbeNotify};
-use std::any::Any;
-use std::cell::RefCell;
-use std::rc::Rc;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;

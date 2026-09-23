@@ -170,15 +170,16 @@
 //! 11. Q.E.D
 //!     * _Proof: By <1>5 and <1>10_
 
+use std::cmp::{Ordering, Reverse};
+use std::collections::VecDeque;
+use std::collections::binary_heap::{BinaryHeap, PeekMut};
+use std::iter::FromIterator;
+
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolidation};
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
-use std::cmp::{Ordering, Reverse};
-use std::collections::VecDeque;
-use std::collections::binary_heap::{BinaryHeap, PeekMut};
-use std::iter::FromIterator;
 use timely::communication::{Pull, Push};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::CapabilitySet;

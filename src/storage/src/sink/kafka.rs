@@ -71,6 +71,15 @@
 //!
 //! [1]: https://github.com/confluentinc/librdkafka/blob/master/INTRODUCTION.md#message-reliability
 
+use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::rc::Rc;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
+
 use anyhow::{Context, anyhow, bail};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
@@ -122,14 +131,6 @@ use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::cell::RefCell;
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::rc::Rc;
-use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Weak};
-use std::time::Duration;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;

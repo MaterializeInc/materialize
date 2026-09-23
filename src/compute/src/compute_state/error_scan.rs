@@ -6,13 +6,12 @@
 //! An index peek's walk over its error trace, the phase that runs before
 //! [`PeekResultIterator`](super::peek_result_iterator::PeekResultIterator) walks the ok trace.
 
-use differential_dataflow::trace::cursor::cursor_list;
-use differential_dataflow::trace::{Cursor, TraceReader};
+use std::time::{Duration, Instant};
+
+use differential_dataflow::trace::Cursor;
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::{Diff, GlobalId, Timestamp};
-use std::time::{Duration, Instant};
 use timely::order::PartialOrder;
-use timely::progress::Antichain;
 use tracing::error;
 
 use crate::arrangement::manager::PaddedTrace;
@@ -56,10 +55,7 @@ impl ErrorScan {
     /// supply through [`ErrorScan::set_row_iteration_limit`] before each step.
     pub(super) fn new(errs: &mut ErrsHandle) -> Self {
         let scan_start = Instant::now();
-        let batches = errs
-            .batches_through(Antichain::new().borrow())
-            .expect("trace is not compacted beyond the empty frontier");
-        let (cursor, storage) = cursor_list(batches);
+        let (cursor, storage) = peek_result_iterator::trace_cursor(errs);
         let mut scan = Self::from_cursor(cursor, storage);
         scan.scan_time = scan_start.elapsed();
         scan

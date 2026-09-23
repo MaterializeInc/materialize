@@ -29,6 +29,11 @@
 //!     --sample-secs 30
 //! ```
 
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::implementations::Vector;
 use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
@@ -42,10 +47,6 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 use timely::dataflow::InputHandle;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Input;

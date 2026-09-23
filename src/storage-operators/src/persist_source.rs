@@ -1592,7 +1592,7 @@ mod tests {
     /// being processed. Also connects the `feedback` handle to its output.
     fn consumer_operator<
         'scope,
-        T: timely::progress::Timestamp + timely::order::TotalOrder,
+        T: timely::progress::Timestamp,
         O: Backpressureable + std::fmt::Debug,
     >(
         scope: Scope<'scope, T>,

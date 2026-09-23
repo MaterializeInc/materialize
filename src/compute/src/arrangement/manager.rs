@@ -9,15 +9,16 @@
 
 //! Management of arrangements across dataflows.
 
+use std::any::Any;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::time::Instant;
+
 use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{Span, TraceReader};
 use mz_repr::{Diff, GlobalId, Timestamp};
-use std::any::Any;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::time::Instant;
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;

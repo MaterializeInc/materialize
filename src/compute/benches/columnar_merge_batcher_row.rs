@@ -28,6 +28,8 @@
 //! consume the same pre-built [`Column<Tuple>`] inputs so the chunker
 //! sees identical input shape.
 
+use std::mem::size_of;
+
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use differential_dataflow::batcher::Batcher;
 use differential_dataflow::trace::implementations::merge_batcher::Merger;
@@ -38,7 +40,6 @@ use mz_timely_util::columnar::batcher::{Chunker, ColumnChunker, ColumnMerger};
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
 use mz_timely_util::operator::ConsolidatingBatcher;
 use rand::{Rng, SeedableRng, rngs::StdRng};
-use std::mem::size_of;
 use timely::container::ContainerBuilder;
 use timely::container::PushInto;
 use timely::progress::Antichain;

@@ -100,6 +100,16 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+use std::task::Poll;
+
 use ::columnar::{Columnar as ColumnarData, Index as ColumnarIndex, Push as ColumnarPush};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
@@ -139,15 +149,6 @@ use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::StreamExt;
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
-use std::any::Any;
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
-use std::convert::Infallible;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::{Rc, Weak};
-use std::sync::Arc;
-use std::task::Poll;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -2139,9 +2140,9 @@ where
             self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
                 // Times that we've observed on our input.
                 let mut pending_times: BTreeSet<mz_repr::Timestamp> = BTreeSet::new();
-                // Capabilities for the lower bound of `pending_times`, if any. A set rather
-                // than one capability: a message is stamped by a multiset of them, and
-                // inserting keeps the antichain, which is the earliest we need to hold.
+                // Capability for the lower bound of `pending_times`, if any. The time is
+                // totally ordered, so the set holds at most one capability, and inserting
+                // each message's capabilities keeps the earliest.
                 let mut retained_cap: Option<CapabilitySet<mz_repr::Timestamp>> = None;
 
                 let activator = scope.activator_for(info.address);

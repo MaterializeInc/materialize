@@ -15,6 +15,8 @@
 
 //! Common operator transformations on timely streams and differential collections.
 
+use std::hash::{BuildHasher, Hash, Hasher};
+
 use columnation::Columnation;
 use differential_dataflow::batcher::Batcher;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
@@ -24,7 +26,6 @@ use differential_dataflow::logging::BatcherEvent;
 use differential_dataflow::logging::Logger;
 use differential_dataflow::trace::implementations::merge_batcher::Merger;
 use differential_dataflow::{AsCollection, Collection, Hashable, VecCollection};
-use std::hash::{BuildHasher, Hash, Hasher};
 use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Capability;

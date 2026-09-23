@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::sync::{Arc, Weak};
+
 use differential_dataflow::batcher::Batcher;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -21,9 +25,6 @@ use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MER
 use mz_dyncfg::ConfigSet;
 use mz_row_spine::ArcBatch;
 use mz_timely_util::containers::HeapSize;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::sync::{Arc, Weak};
 use timely::Container;
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};

@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+use std::iter;
+use std::sync::LazyLock;
+
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable};
 use itertools::EitherOrBoth;
@@ -15,9 +19,6 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{
     CatalogItemId, ColumnName, Datum, Diff, Row, RowPacker, SqlColumnType, SqlScalarType,
 };
-use std::collections::BTreeMap;
-use std::iter;
-use std::sync::LazyLock;
 use timely::progress::Antichain;
 
 use crate::avro::DiffPair;

@@ -245,7 +245,7 @@ impl<T: Timestamp, CB: ContainerBuilder> AsyncOutputHandleInner<T, CB> {
         C: ShipUnder<T>,
     {
         if let Some(capability) = &self.capability
-            && cap.stamp() != capability.stamp()
+            && !cap.same_times(capability)
         {
             self.flush();
             self.capability = None;
@@ -448,17 +448,34 @@ pub fn sole_capability<T: Timestamp + TotalOrder>(
 pub trait ShipUnder<T: Timestamp>: CapabilityTrait<T> {
     /// The capabilities to hold while the data is buffered.
     fn to_set(&self) -> CapabilitySet<T>;
+
+    /// Whether `set` holds capabilities for exactly the times of `self`.
+    ///
+    /// Called per record, so it compares borrowed times rather than building stamps.
+    fn same_times(&self, set: &CapabilitySet<T>) -> bool;
 }
 
 impl<T: Timestamp> ShipUnder<T> for Capability<T> {
     fn to_set(&self) -> CapabilitySet<T> {
         std::iter::once(self.clone()).collect()
     }
+
+    fn same_times(&self, set: &CapabilitySet<T>) -> bool {
+        matches!(&set[..], [only] if only.time() == self.time())
+    }
 }
 
 impl<T: Timestamp> ShipUnder<T> for CapabilitySet<T> {
     fn to_set(&self) -> CapabilitySet<T> {
         self.clone()
+    }
+
+    fn same_times(&self, set: &CapabilitySet<T>) -> bool {
+        // Both sets are antichains, so equal lengths and containment make them equal.
+        self.len() == set.len()
+            && self
+                .iter()
+                .all(|cap| set.iter().any(|other| other.time() == cap.time()))
     }
 }
 

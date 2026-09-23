@@ -5,6 +5,15 @@
 
 //! Worker-local state for compute timely instances.
 
+use std::any::Any;
+use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::num::NonZeroUsize;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use differential_dataflow::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::TraceReader;
@@ -47,14 +56,6 @@ use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
-use std::any::Any;
-use std::cell::RefCell;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::num::NonZeroUsize;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;

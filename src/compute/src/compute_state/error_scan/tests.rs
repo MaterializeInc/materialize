@@ -10,8 +10,8 @@
 //! Tests of the fueled walk over a peek's error trace.
 
 use differential_dataflow::batcher::Batcher;
-use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::cursor::CursorList;
+use differential_dataflow::trace::{Navigable, TraceReader};
 use mz_expr::EvalError;
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::progress::Antichain;

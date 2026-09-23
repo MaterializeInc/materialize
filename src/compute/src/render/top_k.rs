@@ -11,6 +11,10 @@
 //!
 //! Consult [TopKPlan] documentation for details.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+
 use columnar::{Columnar, Index};
 use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
@@ -39,15 +43,13 @@ use mz_row_spine::{
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, Operator};
+use timely::dataflow::operators::{CapabilitySet, Operator};
+use timely::progress::Stamp;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
@@ -859,29 +861,26 @@ where
 {
     let mut datum_vec = mz_repr::DatumVec::new();
 
-    let mut aggregates = BTreeMap::new();
+    // Aggregates by the stamp of the messages they arrived in, each with the capabilities to
+    // emit it under. A record's own time can lie beyond its message's stamp, so bucketing by the
+    // stamp lets the aggregate ship once the frontier passes the stamp, not the record times.
+    let mut aggregates: BTreeMap<Stamp<T>, (CapabilitySet<T>, BTreeMap<_, _>)> = BTreeMap::new();
     let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
         order_key,
         left: DatumVec::new(),
         right: DatumVec::new(),
     }));
-    // The capability to emit each buffered time under, held until the input frontier passes
-    // that time.
-    let mut capabilities: BTreeMap<T, Capability<T>> = BTreeMap::new();
 
     collection
         .inner
         .unary_frontier(Pipeline, "TopKIntraTimeThinning", move |_cap, _info| {
             move |(input, chain), output| {
                 input.for_each_stamp(|cap, data| {
-                    // Bucket by the record's own time rather than the message's: a message is
-                    // stamped by a multiset of capabilities, so it has no one time, and the
-                    // records already carry the time their output is emitted at.
+                    let (_, agg_time) = aggregates
+                        .entry(cap.stamp().clone())
+                        .or_insert_with(|| (cap.retain_stamp(0), BTreeMap::new()));
                     for ((grp_row, row), record_time, diff) in data.flat_map(|data| data.drain(..))
                     {
-                        let agg_time = aggregates
-                            .entry(record_time.clone())
-                            .or_insert_with(BTreeMap::new);
                         let monoid = monoids::Top1MonoidLocal {
                             row,
                             shared: Rc::clone(&shared),
@@ -906,32 +905,24 @@ where
                         };
 
                         let topk = agg_time
-                            .entry(grp_row)
+                            .entry((grp_row, record_time))
                             .or_insert_with(move || topk_agg::TopKBatch::new(limit));
                         topk.update(monoid, diff.into_inner());
-                        // Each record's time is greater or equal to an element of the message's
-                        // stamp, so the capability can be delayed to it.
-                        capabilities
-                            .entry(record_time.clone())
-                            .or_insert_with(|| cap.delayed(&record_time, 0));
                     }
                 });
 
-                // A time no longer in advance of the input frontier can receive no further
-                // updates, so its aggregate is final.
+                // A stamp none of whose times is in advance of the input frontier can receive no
+                // further messages, so its aggregates are final.
                 let frontier = chain.frontier();
                 let complete: Vec<_> = aggregates
                     .keys()
-                    .filter(|time| !frontier.less_equal(time))
+                    .filter(|stamp| stamp.iter().all(|time| !frontier.less_equal(time)))
                     .cloned()
                     .collect();
-                for record_time in complete {
-                    let aggs = aggregates.remove(&record_time).expect("known to exist");
-                    let cap = capabilities
-                        .remove(&record_time)
-                        .expect("held for the time");
-                    let mut session = output.session(&cap);
-                    for (grp_row, topk) in aggs {
+                for stamp in complete {
+                    let (caps, aggs) = aggregates.remove(&stamp).expect("known to exist");
+                    let mut session = output.session(&caps);
+                    for ((grp_row, record_time), topk) in aggs {
                         session.give_iterator(topk.into_iter().map(|(monoid, diff)| {
                             (
                                 (grp_row.clone(), monoid.into_row()),
