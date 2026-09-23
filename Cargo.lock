@@ -9311,6 +9311,7 @@ dependencies = [
  "lz4_flex 0.12.1",
  "mz-ore",
  "num-traits",
+ "prometheus",
  "proptest",
  "rand 0.9.4",
  "serde",
