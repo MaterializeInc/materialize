@@ -31,6 +31,7 @@ ALTER SYSTEM SET hydration_history_collection_interval = '1s';
 # Pin retention too: CI randomizes it, and a short period would prune the
 # episodes asserted below before the assertions run.
 ALTER SYSTEM SET hydration_history_retention_period = '30d';
+ALTER SYSTEM SET replica_hydration_history_retention_period = '120d';
 # Keep both publications of the process resource observations fresh enough to
 # compare within the test's retry budget.
 ALTER SYSTEM SET mz_metrics_usage_refresh_interval = '1s';
@@ -558,16 +559,59 @@ snk           hydrated_test_4 true
 > DROP MATERIALIZED VIEW mv
 
 # Retention runs in the same sweep on the catalog server. It retracts aged-out rows
-# through the same OCC path, in bounded batches. A zero retention period expires
-# everything.
+# through the same OCC path, in bounded batches. Object retention must not expire
+# replica history.
+> CREATE TABLE retained_replica_history (
+      replica_id text, started_at timestamptz, process_id uint8
+  );
+
+> INSERT INTO retained_replica_history
+  SELECT replica_id, started_at, process_id
+  FROM mz_internal.mz_replica_hydration_history;
+
+> SELECT count(*) > 0 FROM retained_replica_history;
+true
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET hydration_history_retention_period = '0s';
 
 > SELECT count(*) FROM mz_internal.mz_object_hydration_history;
 0
 
+> SELECT count(*) FROM (
+      SELECT * FROM retained_replica_history
+      EXCEPT
+      SELECT replica_id, started_at, process_id
+      FROM mz_internal.mz_replica_hydration_history
+  );
+0
+
+# Conversely, replica retention must not expire object history.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET hydration_history_retention_period = '30d';
+ALTER SYSTEM SET replica_hydration_history_retention_period = '0s';
+
+> CREATE MATERIALIZED VIEW retention_probe AS SELECT * FROM t;
+
+> SELECT count(*) > 0
+  FROM mz_internal.mz_object_hydration_history AS h
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE o.name = 'retention_probe';
+true
+
 > SELECT count(*) FROM mz_internal.mz_replica_hydration_history;
 0
+
+> SELECT count(*) > 0
+  FROM mz_internal.mz_object_hydration_history AS h
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE o.name = 'retention_probe';
+true
+
+> DROP MATERIALIZED VIEW retention_probe;
+> DROP TABLE retained_replica_history;
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -743,6 +787,7 @@ WHERE o.name = 'episode_stuck'
 # one, which is not recorded (it never completes here) and carries B with it.
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET hydration_history_retention_period = '30d';
+ALTER SYSTEM SET replica_hydration_history_retention_period = '120d';
 
 > SELECT count(*),
          bool_and(h.status = 'hydrated'),

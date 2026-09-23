@@ -404,6 +404,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     postgres_fetch_slot_resume_lsn_interval
     privatelink_status_update_quota_per_minute
     read_then_write_max_dependencies
+    replica_hydration_history_retention_period
     replica_metrics_history_retention_interval
     replica_status_history_retention_window
     scram_iterations

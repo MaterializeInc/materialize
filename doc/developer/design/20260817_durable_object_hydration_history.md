@@ -198,6 +198,10 @@ then, best effort is the honest description of a sampler.
 
 ## Retention
 
+`hydration_history_retention_period` controls object history retention and defaults
+to 30 days. Replica history has a separate period, described in the
+[replica history design](20260827_durable_replica_hydration_history.md#retention-and-schema-evolution).
+
 Retention is another OCC mutation: it subscribes to rows older than the cutoff and
 writes their retractions at the observed frontier. Collection applies the same
 cutoff, so a still-live log row cannot resurrect an episode retention just

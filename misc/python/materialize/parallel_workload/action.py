@@ -3020,6 +3020,11 @@ class FlipFlagsAction(Action):
             "'1h'",
             "'30d'",
         ]
+        self.flags_with_values["replica_hydration_history_retention_period"] = [
+            "'0s'",
+            "'1min'",
+            "'120d'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
