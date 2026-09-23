@@ -1247,3 +1247,38 @@ acceptance. Keep reader maps from the existing boundary inspections. A controlle
 nonempty prepared-rewrite regression needs visibility into revision reuse and live
 holds. Approval for a small test observation hook is pending. Broader transaction
 access-path behavior remains deferred.
+
+### 2026-09-14: Scoped proof and existing retention costs
+
+The prepared-rewrite regression may use an environment-scoped Rust observation
+hook, inactive unless explicitly configured. It reports plain IDs, revisions and
+active hold minima without acquiring, cloning or extending protection or changing
+retry decisions. No SQL surface, durable state or general observer framework.
+
+The outage fixture may supply bounded ordinary input to give Persist compaction
+work independently of per-record inspection overhead. Keep the physical assertion,
+cutoff, grace, timeout and exact outputs. A universal scheduling theorem is not a
+landing requirement. Ordinary lease-refresh lag is an accepted existing M2 cost,
+not a new latency guarantee. Report observed retention costs and the unproven
+steady-state plateau without adding a longer campaign as an acceptance gate.
+
+### 2026-09-14: Sibling development binaries and historical-index verification
+
+Within the single-build scope, replica reconstruction configuration carries the
+writer's explicit written-plan namespace. The writer keeps its distinct
+development-build namespace and expression-cache isolation. Replica selections,
+plan bytes and ownership checks use that supplied namespace, with matching
+semantic versions, including prerelease, required before loading plans. The
+provisioner must pair compatible sibling binaries. Neither version equality nor
+successful decoding proves development-build compatibility. Reconstruction does
+not need an adapter connection, arbitrary selection fallback, cross-build repair
+or a new fingerprinting framework. Release-build behavior is unchanged.
+
+After two unmasked zero-replica history advances, the outage fixture may extend
+only the historical index's retention before starting its first replica. The
+original historical timestamp and reference read remain protected through
+hydration and comparison. This separates rolling retention from cold-start
+verification without changing physical cutoffs, grace, deadlines or exact
+outputs. The final historical query must execute through the reconstructed index,
+not merely explain a declared index candidate. Broader transaction behavior
+remains outside this change.

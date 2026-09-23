@@ -9398,6 +9398,32 @@ def workflow_adapter_loss(c: Composition) -> None:
             expected.add(n * 10)
             time.sleep(0.25)
 
+        # The two unmasked advances prove the 30s policy without a reader or
+        # executor. Only now extend this index's window to cover the reference
+        # read, hydration, and indexed read, each with its existing 420s budget.
+        c.sql(
+            "ALTER INDEX al_history_idx SET (RETAIN HISTORY = FOR '30m')",
+            service=adapter.name,
+            reuse_connection=False,
+        )
+
+        def peek_strategy_counts() -> dict[str, float]:
+            response = requests.get(
+                f"http://localhost:{c.port(adapter.name, 6878)}/metrics", timeout=10
+            )
+            response.raise_for_status()
+            counts = {"fast-path": 0.0, "persist-fast-path": 0.0}
+            for line in response.text.splitlines():
+                if not line.startswith("mz_time_to_first_row_seconds_count{"):
+                    continue
+                if not re.search(r'(?:\{|,)application_name="psql"(?:,|\})', line):
+                    continue
+                strategy = re.search(r'(?:\{|,)strategy="([^"]+)"', line)
+                assert strategy is not None, line
+                if strategy[1] in counts:
+                    counts[strategy[1]] += float(line.rsplit(" ", 1)[1])
+            return counts
+
         # Only now introduce a reader. Keep its logical-input hold through
         # hydration, without a manual reclaim or an artificial grace period.
         historical_query = sql.SQL(
@@ -9442,15 +9468,41 @@ def workflow_adapter_loss(c: Composition) -> None:
                                 )
                             )
                             plan = "\n".join(str(row[0]) for row in indexed.fetchall())
-                            if re.search(r"ReadIndex[^\n]*al_history_idx", plan):
+                            hydrated = c.sql_query(
+                                """SELECT bool_and(h.hydrated)
+                                   FROM mz_internal.mz_compute_hydration_statuses h
+                                   JOIN mz_indexes i ON i.id = h.object_id
+                                   WHERE i.name = 'al_history_idx'""",
+                                service=adapter.name,
+                                reuse_connection=False,
+                            )
+                            if hydrated == [(True,)] and re.search(
+                                r"ReadIndex[^\n]*al_history_idx", plan
+                            ):
                                 break
                             if time.monotonic() >= deadline:
                                 raise AssertionError(
-                                    f"Historical read must use the reconstructed index: {plan}"
+                                    f"Historical read must use the reconstructed index: {plan}, {hydrated=}"
                                 )
                             time.sleep(0.25)
+                        # Only this SELECT uses the psql metric label in this
+                        # fixture. The pgwire metric records the actual execution
+                        # strategy, so EXPLAIN alone or Persist fallback cannot pass.
+                        indexed.execute("SET application_name = 'psql'")
+                        before = peek_strategy_counts()
                         indexed.execute(historical_query)
                         assert indexed.fetchall() == historical_rows
+                        after = peek_strategy_counts()
+                        assert after["fast-path"] == before["fast-path"] + 1, (
+                            before,
+                            after,
+                        )
+                        assert (
+                            after["persist-fast-path"] == before["persist-fast-path"]
+                        ), (
+                            before,
+                            after,
+                        )
                 reference.execute("COMMIT")
 
         for name in outputs:
