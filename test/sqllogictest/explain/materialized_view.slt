@@ -164,9 +164,20 @@ Target cluster: quickstart
 EOF
 
 
-# drop the index
+# drop the index. mv reads from it, so the drop needs the unsafe flag to leave
+# the index orphaned, which is the scenario under test.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+----
+COMPLETE 0
+
 statement ok
 DROP INDEX accounts_balance_index;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
+----
+COMPLETE 0
 
 
 # The index is still used by the view

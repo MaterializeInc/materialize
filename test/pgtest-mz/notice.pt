@@ -14,30 +14,33 @@ ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP ROLE"}
 ReadyForQuery {"status":"I"}
 
+# Dropping an index that a materialized view or another index reads from is
+# refused and names the readers. Once the readers are gone, the drop succeeds
+# without a notice. The flag-on warning is covered by
+# test_drop_in_use_index_unsafe_flag_warns in src/environmentd/tests/sql.rs.
 send
 Query {"query": "create table t(a int, b int)"}
 Query {"query": "create index t_idx_a on t(a)"}
 Query {"query": "create materialized view mv1 as select * from t where b=7"}
 Query {"query": "create view v1 as select * from t union select * from t"}
 Query {"query": "create index v1_idx_a on v1(a)"}
+Query {"query": "drop index t_idx_a"}
 Query {"query": "drop index v1_idx_a"}
 Query {"query": "drop index t_idx_a"}
 Query {"query": "drop materialized view mv1"}
+Query {"query": "drop index t_idx_a"}
 Query {"query": "create index v1_idx_a on v1(a)"}
 Query {"query": "create materialized view mv2 as select * from t where a=5"}
 Query {"query": "drop index v1_idx_a"}
 Query {"query": "drop materialized view mv2"}
 Query {"query": "create index t_idx_a on t(a)"}
-Query {"query": "create materialized view mv2 as select * from t where a=5"}
-Query {"query": "drop index t_idx_a"}
-Query {"query": "create index t_idx_a on t(a)"}
 Query {"query": "create index v1_idx_a on v1(a)"}
 Query {"query": "drop index t_idx_a"}
 Query {"query": "drop index v1_idx_a"}
+Query {"query": "drop index t_idx_a"}
 ----
 
-# Ignore the notice messages because they change sometimes based on when things are internally dropped.
-until err_field_typs=SC
+until err_field_typs=SCM
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -68,12 +71,15 @@ CommandComplete {"tag":"CREATE VIEW"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"2BP01"},{"typ":"M","value":"cannot drop index \"t_idx_a\": still depended upon by materialized view \"mv1\", index \"v1_idx_a\""}]}
+ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"}]}
-CommandComplete {"tag":"DROP INDEX"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"2BP01"},{"typ":"M","value":"cannot drop index \"t_idx_a\": still depended upon by materialized view \"mv1\""}]}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP MATERIALIZED VIEW"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
@@ -85,16 +91,10 @@ CommandComplete {"tag":"DROP MATERIALIZED VIEW"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
-CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
-ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"}]}
-CommandComplete {"tag":"DROP INDEX"}
-ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE INDEX"}
 ReadyForQuery {"status":"I"}
-CommandComplete {"tag":"CREATE INDEX"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"2BP01"},{"typ":"M","value":"cannot drop index \"t_idx_a\": still depended upon by index \"v1_idx_a\""}]}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"}]}
 CommandComplete {"tag":"DROP INDEX"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"DROP INDEX"}

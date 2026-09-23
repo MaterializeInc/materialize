@@ -167,9 +167,20 @@ NULL
 NULL
 
 
-# Drop the catalog item associated with the notice.
+# Drop the catalog item associated with the notice. t_idx3 reads from t_idx1,
+# so the drop needs the unsafe flag to leave t_idx1 orphaned.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+----
+COMPLETE 0
+
 statement ok
 DROP INDEX t_idx1;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
+----
+COMPLETE 0
 
 
 # Verify that the notice is no longer shown in EXPLAIN.
