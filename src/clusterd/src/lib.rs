@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -23,6 +25,8 @@ use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_compute::sharing::ArrangementSharingRegistry;
+use mz_compute_client::multiplex::Multiplexer;
+use mz_compute_client::service::ComputeClient;
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -95,6 +99,13 @@ struct Args {
     /// Configuration for the compute Timely cluster.
     #[clap(long, env = "COMPUTE_TIMELY_CONFIG")]
     compute_timely_config: TimelyConfig,
+    /// Configuration for a second, interactive compute Timely cluster.
+    ///
+    /// When present, the process runs a second compute runtime alongside the maintenance runtime,
+    /// sharing the maintenance runtime's process ordinal and peer count but supplying its own
+    /// inter-worker addresses. When absent, the process runs exactly one compute runtime.
+    #[clap(long, env = "INTERACTIVE_COMPUTE_TIMELY_CONFIG")]
+    interactive_compute_timely_config: Option<TimelyConfig>,
     /// The index of the process in both Timely clusters.
     #[clap(long, env = "PROCESS")]
     process: usize,
@@ -186,6 +197,31 @@ struct Args {
 fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
     let ordinal = hostname.rsplit('-').next()?;
     ordinal.parse::<usize>().ok().map(|_| ordinal)
+}
+
+/// Derives the interactive compute runtime's `TimelyConfig` from the CLI arg, if present.
+///
+/// Sets the interactive config's process ordinal to match the maintenance runtime, since both
+/// runtimes are the same process. Asserts that the two runtimes span an equal number of Timely
+/// peers: the arrangement sharing registry pairs worker `i` of one runtime with worker `i` of the
+/// other, and reads are sound only because both shard keys across the same peer count.
+///
+/// Returns `None` when the arg is absent, in which case the process runs exactly one compute
+/// runtime.
+fn prepare_interactive_compute_config(
+    arg: Option<TimelyConfig>,
+    process: usize,
+    maintenance: &TimelyConfig,
+) -> Option<TimelyConfig> {
+    let mut interactive = arg?;
+    interactive.process = process;
+    let maintenance_peers = maintenance.workers * maintenance.addresses.len();
+    let interactive_peers = interactive.workers * interactive.addresses.len();
+    assert_eq!(
+        maintenance_peers, interactive_peers,
+        "interactive and maintenance compute runtimes must span an equal number of Timely peers",
+    );
+    Some(interactive)
 }
 
 pub fn main() {
@@ -438,111 +474,139 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // the slot a publisher on another runtime filled, so both must hold the same registry.
     let sharing_registry = ArrangementSharingRegistry::new();
 
-    if args.unified_cluster {
+    // Derive the interactive runtime's config before the maintenance config is moved into `serve`,
+    // since the equal-peers check needs both.
+    let interactive_compute_timely_config = prepare_interactive_compute_config(
+        args.interactive_compute_timely_config,
+        args.process,
+        &compute_timely_config,
+    );
+
+    let maintenance_role = if interactive_compute_timely_config.is_some() {
+        ComputeRuntimeRole::Maintenance
+    } else {
+        ComputeRuntimeRole::Solo
+    };
+
+    let compute_context = ComputeInstanceContext {
+        scratch_directory: args.scratch_directory.clone(),
+        worker_core_affinity: args.worker_core_affinity,
+        connection_context: connection_context.clone(),
+    };
+
+    // Build the storage server and the maintenance compute runtime. The unified cluster hosts
+    // storage objects on the maintenance runtime's workers, which leaves what an interactive
+    // runtime reads unchanged: it imports the arrangements maintenance publishes either way.
+    let (compute_client_builder, storage_server): (
+        Box<dyn Fn() -> Box<dyn ComputeClient> + Send>,
+        Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send>>,
+    ) = if args.unified_cluster {
         info!("running with a unified timely cluster");
 
         let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
             compute_timely_config,
-            ComputeRuntimeRole::Solo,
+            maintenance_role,
             &metrics_registry,
-            persist_clients,
-            sharing_registry,
-            txns_ctx,
-            tracing_handle,
-            ComputeInstanceContext {
-                scratch_directory: args.scratch_directory.clone(),
-                worker_core_affinity: args.worker_core_affinity,
-                connection_context: connection_context.clone(),
-            },
+            Arc::clone(&persist_clients),
+            sharing_registry.clone(),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            compute_context.clone(),
             SYSTEM_TIME.clone(),
             connection_context,
             StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
         )
         .await?;
-
-        info!(
-            "listening for storage controller connections on {}",
-            args.storage_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "storage_server",
-            transport::serve(
-                args.storage_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host.clone(),
-                Duration::MAX,
-                storage_client_builder,
-                cluster_server_metrics.for_server("storage"),
-            )
-            .instrument(info_span!("ctp", name = "storage")),
-        );
-
-        info!(
-            "listening for compute controller connections on {}",
-            args.compute_controller_listen_addr
-        );
-        mz_ore::task::spawn(
-            || "compute_server",
-            transport::serve(
-                args.compute_controller_listen_addr,
-                BUILD_INFO.semver_version(),
-                grpc_host,
-                Duration::MAX,
-                compute_client_builder,
-                cluster_server_metrics.for_server("compute"),
-            )
-            .instrument(info_span!("ctp", name = "compute")),
-        );
-
-        // Block forever.
-        return future::pending().await;
-    }
-
-    // Start storage server.
-    let storage_client_builder = mz_storage::serve(
-        storage_timely_config,
-        &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx.clone(),
-        Arc::clone(&tracing_handle),
-        SYSTEM_TIME.clone(),
-        connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
-    )
-    .await?;
-    info!(
-        "listening for storage controller connections on {}",
-        args.storage_controller_listen_addr
-    );
-    mz_ore::task::spawn(
-        || "storage_server",
-        transport::serve(
-            args.storage_controller_listen_addr,
+        let storage_server = transport::serve(
+            args.storage_controller_listen_addr.clone(),
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
             Duration::MAX,
             storage_client_builder,
             cluster_server_metrics.for_server("storage"),
         )
-        .instrument(info_span!("ctp", name = "storage")),
-    );
+        .instrument(info_span!("ctp", name = "storage"));
 
-    // Start compute server.
-    let compute_client_builder = mz_compute::server::serve(
-        compute_timely_config,
-        ComputeRuntimeRole::Solo,
-        &metrics_registry,
-        persist_clients,
-        sharing_registry,
-        txns_ctx,
-        tracing_handle,
-        ComputeInstanceContext {
-            scratch_directory: args.scratch_directory,
-            worker_core_affinity: args.worker_core_affinity,
+        (Box::new(compute_client_builder), Box::pin(storage_server))
+    } else {
+        // TODO: retire this two-cluster topology once the unified cluster has production
+        // mileage.
+
+        let storage_client_builder = mz_storage::serve(
+            storage_timely_config,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            SYSTEM_TIME.clone(),
             connection_context,
-        },
-    )
-    .await?;
+            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+        )
+        .await?;
+        let storage_server = transport::serve(
+            args.storage_controller_listen_addr.clone(),
+            BUILD_INFO.semver_version(),
+            grpc_host.clone(),
+            Duration::MAX,
+            storage_client_builder,
+            cluster_server_metrics.for_server("storage"),
+        )
+        .instrument(info_span!("ctp", name = "storage"));
+
+        let compute_client_builder = mz_compute::server::serve(
+            compute_timely_config,
+            maintenance_role,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            sharing_registry.clone(),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            compute_context.clone(),
+        )
+        .await?;
+        (Box::new(compute_client_builder), Box::pin(storage_server))
+    };
+
+    // With an interactive runtime, a `Multiplexer` fronts both runtimes on the single controller
+    // endpoint. Without one, the maintenance client builder serves it directly.
+    //
+    // Shared fate: the panic hook `main` installs covers both runtimes' threads, so a panic on
+    // either aborts the process. That bounds an interactive import's read hold to the life of the
+    // replica without a lease.
+    let compute_client_builder: Box<dyn Fn() -> Box<dyn ComputeClient> + Send> =
+        if let Some(interactive_config) = interactive_compute_timely_config {
+            let interactive_compute_client_builder = mz_compute::server::serve(
+                interactive_config,
+                ComputeRuntimeRole::Interactive,
+                &metrics_registry,
+                Arc::clone(&persist_clients),
+                sharing_registry.clone(),
+                txns_ctx.clone(),
+                Arc::clone(&tracing_handle),
+                compute_context.clone(),
+            )
+            .await?;
+            info!("started interactive compute runtime");
+
+            // Per controller connection, build a fresh multiplexer over one client from each
+            // runtime.
+            Box::new(move || {
+                let client: Box<dyn ComputeClient> = Box::new(Multiplexer::new(
+                    compute_client_builder(),
+                    interactive_compute_client_builder(),
+                ));
+                client
+            })
+        } else {
+            compute_client_builder
+        };
+
+    // NOTE: Neither server listens before every runtime is built. On a unified cluster the
+    // storage objects render on the maintenance runtime, whose compute logging is installed by the
+    // compute controller's `CreateInstance`, and a dataflow rendered before that never appears in
+    // compute introspection. Opening the storage listener while the interactive runtime was still
+    // starting gave a storage controller that whole startup to render first. This does not order
+    // the two controllers' connections, so the race of a single-runtime unified cluster remains.
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr
@@ -552,15 +616,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         transport::serve(
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
-            grpc_host.clone(),
+            grpc_host,
             Duration::MAX,
             compute_client_builder,
             cluster_server_metrics.for_server("compute"),
         )
         .instrument(info_span!("ctp", name = "compute")),
     );
-
-    // TODO: retire this two-cluster topology once the unified cluster has production mileage.
+    info!(
+        "listening for storage controller connections on {}",
+        args.storage_controller_listen_addr
+    );
+    mz_ore::task::spawn(|| "storage_server", storage_server);
 
     // Block forever.
     future::pending().await
@@ -580,7 +647,77 @@ fn is_connection_error(e: &std::io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::*;
+
+    fn timely_config(workers: usize, addresses: &[&str]) -> TimelyConfig {
+        TimelyConfig {
+            workers,
+            process: 0,
+            addresses: addresses.iter().map(|a| a.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[mz_ore::test]
+    fn prepare_interactive_config_absent_yields_single_runtime() {
+        let maintenance = timely_config(2, &["a", "b"]);
+        // With no interactive config supplied, the process runs exactly one compute runtime.
+        assert_eq!(
+            prepare_interactive_compute_config(None, 1, &maintenance),
+            None
+        );
+    }
+
+    #[mz_ore::test]
+    fn prepare_interactive_config_sets_process_and_accepts_equal_peers() {
+        let maintenance = timely_config(2, &["a", "b"]);
+        let arg = timely_config(2, &["c", "d"]);
+        let got = prepare_interactive_compute_config(Some(arg), 1, &maintenance)
+            .expect("interactive config present");
+        // The interactive runtime adopts the maintenance runtime's process ordinal.
+        assert_eq!(got.process, 1);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "equal number of Timely peers")]
+    fn prepare_interactive_config_rejects_unequal_peers() {
+        let maintenance = timely_config(2, &["a", "b"]);
+        // One worker over two processes is two peers; maintenance has four. Must fail.
+        let arg = timely_config(1, &["c", "d"]);
+        let _ = prepare_interactive_compute_config(Some(arg), 0, &maintenance);
+    }
+
+    #[mz_ore::test]
+    fn cli_parses_interactive_compute_timely_config() {
+        let cfg = timely_config(1, &["127.0.0.1:2102"]).to_string();
+        let base = |extra: Vec<&str>| {
+            let mut argv = vec![
+                "clusterd",
+                "--storage-timely-config",
+                &cfg,
+                "--compute-timely-config",
+                &cfg,
+                "--process",
+                "0",
+                "--environment-id",
+                "test-env",
+                "--secrets-reader=local-file",
+                "--secrets-reader-local-file-dir=/tmp",
+            ];
+            argv.extend(extra);
+            Args::try_parse_from(argv).expect("args parse")
+        };
+
+        // Absent flag leaves the interactive config unset, so the single-runtime path is taken.
+        assert!(base(vec![]).interactive_compute_timely_config.is_none());
+
+        // The new flag parses into an `Option<TimelyConfig>`.
+        let interactive = timely_config(1, &["127.0.0.1:2103"]).to_string();
+        let args = base(vec!["--interactive-compute-timely-config", &interactive]);
+        assert!(args.interactive_compute_timely_config.is_some());
+    }
 
     #[mz_ore::test]
     fn test_process_ordinal_from_hostname() {
