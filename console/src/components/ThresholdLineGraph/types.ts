@@ -11,7 +11,7 @@
 export interface ThresholdLineSeries<Datum> {
   /** Identifies the line across renders and in the highlight map. Must be unique. */
   key: string;
-  label: string;
+  label?: string;
   /**
    * This line's value at `datum`, or null where it has no reading. A null
    * breaks the line rather than bridging the gap.
