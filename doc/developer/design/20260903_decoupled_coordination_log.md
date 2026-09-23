@@ -1227,3 +1227,23 @@ requiring the SQL projection to consume unrelated replica updates. Those updates
 remain queued for normal application. Temporary comments follow their items'
 local SQL visibility, independently of durable membership and reclamation. The
 same-generation restart cleanup expectation remains a separate open question.
+
+### 2026-09-14: Bootstrap and acceptance boundaries
+
+Protected same-generation restart preserves potentially live foreign temporary
+owners. SQL namespace isolation is separate from durable inventory. Graceful close
+cleans up its owner, and promotion reclaims crashed-owner items, comments and
+storage mappings with finalization. Crashed-owner resources may remain until
+promotion. Unprotected cleanup is unchanged, without a session-liveness framework.
+
+Bootstrap must tolerate autonomous metadata publication throughout opening, not
+just at the final WAL lookup. Identity creation precedes runtime freezing. Pure
+catalog replay does not commit, while genuine initialization writes keep
+refresh, validation and fencing. Absorbed builtin rows belong in the initial reset
+vector until that reset completes, not in the live introspection writer.
+
+Retained catalog history needs attribution to actual Persist readers before cost
+acceptance. Keep reader maps from the existing boundary inspections. A controlled
+nonempty prepared-rewrite regression needs visibility into revision reuse and live
+holds. Approval for a small test observation hook is pending. Broader transaction
+access-path behavior remains deferred.

@@ -39,7 +39,7 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.kafka import Kafka
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -2430,7 +2430,9 @@ def workflow_catalog_publication_measurement(
 
     def inspect(item_id: str) -> dict:
         start = time.monotonic()
+        wall_start_ms = time.time_ns() // 1_000_000
         state = query(f"INSPECT SHARD '{item_id}'")[0][0]
+        wall_end_ms = time.time_ns() // 1_000_000
         end = time.monotonic()
         logical_start = time.monotonic()
         logical = query(f"""
@@ -2446,6 +2448,8 @@ def workflow_catalog_publication_measurement(
         return {
             "start": start,
             "end": end,
+            "wall_start_ms": wall_start_ms,
+            "wall_end_ms": wall_end_ms,
             "logical_frontiers_start": logical_start,
             "logical_frontiers_end": logical_end,
             "logical_frontiers": [
@@ -2462,7 +2466,15 @@ def workflow_catalog_publication_measurement(
                 for gid, read, write in logical
             ],
             "state": {
-                key: state[key] for key in ("shard_id", "seqno", "since", "upper")
+                key: state[key]
+                for key in (
+                    "shard_id",
+                    "seqno",
+                    "since",
+                    "upper",
+                    "leased_readers",
+                    "critical_readers",
+                )
             },
             "updates": sum(batch["len"] for batch in batches),
             "batch_count": len(batches),
@@ -3377,16 +3389,24 @@ def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> N
 
 
 def workflow_temporary_item_cleanup(c: Composition) -> None:
-    """Temporary tables and views are durable catalog items tagged with the
-    UUID of the session that created them (SQL-150), so they need explicit
-    cleanup on both paths out of a session.
+    """Check graceful cleanup and generation-scoped crash cleanup."""
+    for protected in (False, True):
+        with c.override(
+            Materialized(
+                deploy_generation=1,
+                sanity_restart=False,
+                system_parameter_defaults={
+                    "enable_catalog_read_protection": str(protected).lower(),
+                },
+            )
+        ):
+            _temporary_item_cleanup(c, protected)
 
-    Graceful close is handled by the session-close hook, which drops the
-    session's items in one catalog transaction. A crash never runs that hook,
-    so the items are instead reclaimed the next time the catalog is opened with
-    write intent, which fences out every previous owner and therefore every
-    session that could still own one.
-    """
+
+def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
+    # Protected same-generation opens preserve potentially live foreign owners.
+    # Crashed-owner resources may remain until promotion. Graceful session close
+    # and unprotected restart both reclaim their items without that delay.
 
     def forget_cached_conns() -> None:
         """Drop the connections `sql_query` caches.
@@ -3457,9 +3477,10 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
 
     wait_for(temp_item_counts, [(2, 2)], "both sessions' temporary items to appear")
 
-    sessions = query(f"""SELECT count(*) FROM mz_internal.mz_sessions
+    sessions = query(f"""SELECT connection_id, id::text FROM mz_internal.mz_sessions
             WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""")
-    assert sessions == [(2,)], f"both sessions should be in mz_sessions, saw {sessions}"
+    assert len(sessions) == 2, f"both sessions should be in mz_sessions, saw {sessions}"
+    session_ids = dict(sessions)
 
     # --- Graceful close: only the closing session's items go ------------------
 
@@ -3472,7 +3493,7 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
     )
     wait_for(
         f"""SELECT count(*) FROM mz_internal.mz_sessions
-            WHERE connection_id = {conn_ids["a"]}""",
+            WHERE id = '{session_ids[conn_ids["a"]]}'::uuid""",
         [(0,)],
         "session a's mz_sessions row to be retracted",
     )
@@ -3521,15 +3542,74 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
 
     wait_for(
         temp_item_counts,
-        [(0, 0)],
-        "the crashed session's temporary items to be reclaimed at boot",
+        [(1, 1)] if protected else [(0, 0)],
+        "temporary item inventory after same-generation restart",
     )
+    # Introspection inventories durable items across owners. Name resolution
+    # must not expose a foreign owner's temporary namespace to a new session.
+    for name in ("tt", "tv"):
+        try:
+            query(f"SELECT * FROM {name}")
+        except PsycopgError as error:
+            assert error.sqlstate == "42P01", str(error)
+        else:
+            raise UIError(f"a new session resolved the crashed owner's {name}")
+    # Connection IDs can be recycled. Session UUIDs identify the rows that must
+    # disappear across close and restart.
     wait_for(
         f"""SELECT count(*) FROM mz_internal.mz_sessions
-            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""",
+            WHERE id IN ('{session_ids[conn_ids["a"]]}'::uuid,
+                         '{session_ids[conn_ids["b"]]}'::uuid)""",
         [(0,)],
         "stale mz_sessions rows to be retracted at boot",
     )
+
+    if protected:
+        retained = c.sql_query(
+            """SELECT count(*) FROM mz_internal.mz_catalog_raw
+               WHERE data->>'kind' = 'Item'
+                 AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+            port=6877,
+            user="mz_system",
+        )
+        assert retained == [(2,)], f"same-generation open reclaimed owners: {retained}"
+        assert c.sql_query(temp_comment_count, port=6877, user="mz_system") == [(1,)]
+        assert (
+            c.sql_query(
+                f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+                WHERE data->>'kind' = 'StorageCollectionMetadata'
+                  AND data->'value'->>'shard' = '{temp_shard}'""",
+                port=6877,
+                user="mz_system",
+            )
+            == [(1,)]
+        ), "same-generation open removed a foreign storage mapping"
+        assert (
+            c.sql_query(
+                f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+                WHERE data->>'kind' = 'UnfinalizedShard'
+                  AND data->'key'->>'shard' = '{temp_shard}'""",
+                port=6877,
+                user="mz_system",
+            )
+            == [(0,)]
+        ), "same-generation open enqueued a foreign shard for finalization"
+
+        c.kill("materialized")
+        with c.override(
+            Materialized(
+                deploy_generation=2,
+                sanity_restart=False,
+                restart="on-failure",
+                system_parameter_defaults={"enable_catalog_read_protection": "true"},
+            )
+        ):
+            c.up("materialized")
+            c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, timeout=120)
+            c.promote_mz()
+            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, timeout=120)
+        forget_cached_conns()
+        wait_for(temp_item_counts, [(0, 0)], "SQL invisibility after promotion")
 
     # mz_tables and mz_views are projections. Only mz_catalog_raw shows whether
     # the durable rows themselves are gone, so a reclamation that merely stopped
