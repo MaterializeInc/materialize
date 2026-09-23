@@ -20,40 +20,40 @@ use syn::{Expr, Lit};
 use crate::shape::{Modifier, Shape};
 
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
+///
+/// Which arities accept which modifier is declared by the tables in [`crate::shape`],
+/// not here. [`reject_inapplicable`] enforces it.
 #[derive(Debug, Default, darling::FromMeta)]
 pub(crate) struct Modifiers {
-    /// An optional expression that evaluates to a boolean indicating whether the function is
-    /// monotone with respect to its arguments. Defined for unary and binary functions.
+    /// Whether the function is monotone with respect to its arguments. Binary functions
+    /// take a pair of expressions, one per argument.
     is_monotone: Option<Expr>,
-    /// Optional expression evaluating to a boolean: whether `is_monotone`'s
-    /// endpoint-sampling guarantee still holds when an operand may be infinite.
-    /// Set `false` for multiplication and division. Applies to binary functions.
+    /// Whether `is_monotone`'s endpoint-sampling guarantee still holds when an operand
+    /// may be infinite. Set `false` for multiplication and division.
     is_infinity_monotone: Option<Expr>,
-    /// The SQL name for the function. Applies to all functions.
+    /// The SQL name for the function.
     pub(crate) sqlname: Option<SqlName>,
-    /// Whether the function preserves uniqueness. Applies to unary functions.
+    /// Whether the function preserves uniqueness.
     preserves_uniqueness: Option<Expr>,
-    /// The inverse of the function, if it exists. Applies to unary functions.
+    /// The inverse of the function, if it exists.
     inverse: Option<Expr>,
-    /// The negated function, if it exists. Applies to binary functions.
+    /// The negated function, if it exists.
     negate: Option<Expr>,
-    /// Whether the function is an infix operator. Applies to binary functions, and needs to
-    /// be specified.
+    /// Whether the function is an infix operator.
     is_infix_op: Option<Expr>,
-    /// The output type of the function, if it cannot be inferred. Applies to all functions.
+    /// The output type of the function, if it cannot be inferred.
     pub(crate) output_type: Option<syn::Path>,
-    /// The output type of the function as an expression. Applies to binary and variadic functions.
+    /// The output type of the function as an expression.
     pub(crate) output_type_expr: Option<Expr>,
-    /// Optional expression evaluating to a boolean indicating whether the function could error.
-    /// Applies to all functions.
+    /// Whether the function could error.
     could_error: Option<Expr>,
-    /// Whether the function propagates nulls. Applies to binary and variadic functions.
+    /// Whether the function propagates nulls.
     propagates_nulls: Option<Expr>,
-    /// Whether the function introduces nulls. Applies to all functions.
+    /// Whether the function introduces nulls.
     pub(crate) introduces_nulls: Option<Expr>,
-    /// Whether the function is associative. Applies to variadic functions.
+    /// Whether the function is associative.
     is_associative: Option<Expr>,
-    /// Whether the function is a noop cast. Applies to unary functions.
+    /// Whether the function is a noop cast.
     is_eliminable_cast: Option<Expr>,
     /// Whether to generate a snapshot test for the function. Defaults to false.
     test: Option<bool>,
