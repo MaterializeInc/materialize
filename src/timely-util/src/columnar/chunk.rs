@@ -201,7 +201,7 @@ fn spill_target(enabled: bool, len_bytes: usize) -> Option<Pool> {
 }
 
 /// The pool committed chunks spill to, if any.
-fn spill_pool() -> Option<Pool> {
+pub(crate) fn spill_pool() -> Option<Pool> {
     resolve_pool(chunk_spill_enabled())
 }
 
@@ -387,7 +387,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// Append pieces of at most `COMMIT_BYTES`, preserving order and
     /// generational depth. A single update may exceed the bound because it
     /// cannot be split.
-    fn push_bounded(column: Column<(D, T, R)>, depth: u8, out: &mut VecDeque<Self>) {
+    pub(crate) fn push_bounded(column: Column<(D, T, R)>, depth: u8, out: &mut VecDeque<Self>) {
         let len = column.borrow().len();
         let bytes = column.length_in_bytes();
         if len <= 1 || bytes <= COMMIT_BYTES {
