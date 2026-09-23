@@ -3374,7 +3374,7 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 [[package]]
 name = "differential-dataflow"
 version = "0.25.1"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow?branch=master-next#8fd9cae7631fb4baad912be39f39a835fcee61ba"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow?branch=master-next#887672adaac926bdc3afeb7dfd4ec1e2d32c45f8"
 dependencies = [
  "columnar",
  "columnation",
@@ -3388,7 +3388,7 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.25.1"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow?branch=master-next#8fd9cae7631fb4baad912be39f39a835fcee61ba"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow?branch=master-next#887672adaac926bdc3afeb7dfd4ec1e2d32c45f8"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -11195,7 +11195,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "petgraph",
@@ -11216,7 +11216,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -13728,7 +13728,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.31.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#4eb3ee09681c209ebcaeced73548a9fbf8e1c71e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#9efd010790a4368c30be6d803f1e4066187179e2"
 dependencies = [
  "bincode",
  "byteorder",
@@ -13747,12 +13747,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.31.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#4eb3ee09681c209ebcaeced73548a9fbf8e1c71e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#9efd010790a4368c30be6d803f1e4066187179e2"
 
 [[package]]
 name = "timely_communication"
 version = "0.31.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#4eb3ee09681c209ebcaeced73548a9fbf8e1c71e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#9efd010790a4368c30be6d803f1e4066187179e2"
 dependencies = [
  "byteorder",
  "columnar",
@@ -13766,12 +13766,12 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.31.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#4eb3ee09681c209ebcaeced73548a9fbf8e1c71e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#9efd010790a4368c30be6d803f1e4066187179e2"
 
 [[package]]
 name = "timely_logging"
 version = "0.31.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#4eb3ee09681c209ebcaeced73548a9fbf8e1c71e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#9efd010790a4368c30be6d803f1e4066187179e2"
 dependencies = [
  "timely_container",
 ]
