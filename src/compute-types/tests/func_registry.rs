@@ -24,6 +24,8 @@
 //!   when producing it, and must bump `LIR_VERSION` so pinned plans of the
 //!   old version are replanned. Additions are the exception: a stored plan
 //!   cannot reference a variant that did not exist when it was written.
+//!   Whether the current version has shipped is recorded in
+//!   [`LIR_VERSION_POLICY`].
 //! * `func_registry_source.json`, the sources. Changes here need judgment, a
 //!   body may or may not have changed behavior, so they are reported without
 //!   demanding a bump.
@@ -36,7 +38,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_compute_types::plan::LIR_VERSION;
+use mz_compute_types::plan::{LIR_VERSION, LIR_VERSION_POLICY};
 use mz_expr::func::registry::{FuncRegistry, Record};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -257,10 +259,7 @@ fn func_registry_snapshot() {
              this is not a function change. The input_types and output_type fields\n\
              record what the sample probed, and a removed `name[label]` record is a\n\
              deleted labeled sample. In that case regenerate without bumping.\n\n\
-             If LIR version {LIR_VERSION} has already shipped, bump LIR_VERSION in\n\
-             src/compute-types/src/plan.rs so the change lands as a new version and\n\
-             version {LIR_VERSION}'s digest in '{DIGESTS_PATH}' stays as it is.\n\
-             If version {LIR_VERSION} is unshipped, regenerating in place is fine.\n\n\
+             {LIR_VERSION_POLICY}\n\n\
              {regenerate}",
             describe(&properties_diff),
         );
@@ -282,10 +281,9 @@ fn func_registry_snapshot() {
             "Scalar function registry changed without affecting stored plans!\n\n\
              {}\n\n\
              For a body_fingerprint change, review whether the new body alters the\n\
-             result for any input. If it does and LIR version {LIR_VERSION} has\n\
-             already shipped, bump LIR_VERSION in src/compute-types/src/plan.rs so\n\
-             stored plans are replanned. Otherwise, or if version {LIR_VERSION} is\n\
-             unshipped, regenerating in place is fine.\n\n\
+             result for any input. If it does, treat it as a change to the stable\n\
+             format.\n\n\
+             {LIR_VERSION_POLICY}\n\n\
              {regenerate}",
             informational.join("\n\n"),
         );
