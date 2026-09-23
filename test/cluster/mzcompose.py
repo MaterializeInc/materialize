@@ -6574,6 +6574,18 @@ def workflow_test_unified_storage_before_compute_connect(c: Composition) -> None
                   JOIN mz_sources s ON d.name = 'Source dataflow: ' || s.id
                   WHERE s.name = 's'
                 1
+
+                > SELECT count(*) > 0
+                  FROM mz_introspection.mz_storage_dataflow_global_ids sdgi
+                  JOIN mz_sources s ON sdgi.global_id = s.id
+                  WHERE s.name = 's'
+                true
+
+                > SELECT count(*) > 0
+                  FROM mz_introspection.mz_storage_stage_mapping ssm
+                  JOIN mz_sources s ON ssm.global_id = s.id
+                  WHERE s.name = 's' AND ssm.stage = 'Reader'
+                true
                 """))
 
 

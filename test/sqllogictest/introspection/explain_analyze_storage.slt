@@ -1,0 +1,1496 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# EXPLAIN ANALYZE for sources, tables from sources, and subsources. Sinks need
+# a reachable Kafka broker to be created, so they are covered in testdrive
+# (explain-analyze-storage.td).
+
+mode cockroach
+
+reset-server
+
+# Storage operators are visible in introspection only on a unified replica.
+# The topology is fixed when the replica is provisioned, so the parameter must
+# be set before the cluster is created.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unified_cluster = true
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER uc SIZE 'scale=1,workers=1';
+
+statement ok
+CREATE SOURCE auction IN CLUSTER uc FROM LOAD GENERATOR AUCTION (TICK INTERVAL '100ms') FOR ALL TABLES;
+
+statement ok
+CREATE TABLE bids_tbl FROM SOURCE auction (REFERENCE "auction"."bids");
+
+statement ok
+CREATE TABLE plain (x int);
+
+statement ok
+CREATE MATERIALIZED VIEW mv IN CLUSTER uc AS SELECT count(*) FROM plain;
+
+# Explainee validation.
+
+query error db error: ERROR: EXPLAIN ANALYZE \.\.\. FOR TABLE requires a table created from a source or a subsource, but materialize\.public\.plain is not
+EXPLAIN ANALYZE CPU FOR TABLE plain
+
+query error db error: ERROR: materialize\.public\.bids is a subsource, use EXPLAIN ANALYZE \.\.\. FOR TABLE materialize\.public\.bids
+EXPLAIN ANALYZE CPU FOR SOURCE bids
+
+query error db error: ERROR: materialize\.public\.auction_progress is a progress source, which has no dataflow of its own
+EXPLAIN ANALYZE CPU FOR SOURCE auction_progress
+
+query error db error: ERROR: materialize\.public\.plain is a table, not a source
+EXPLAIN ANALYZE CPU FOR SOURCE plain
+
+query error db error: ERROR: materialize\.public\.auction is a source, not a sink
+EXPLAIN ANALYZE CPU FOR SINK auction
+
+query error db error: ERROR: EXPLAIN ANALYZE HINTS is only supported for indexes and materialized views
+EXPLAIN ANALYZE HINTS FOR SOURCE auction
+
+query error db error: ERROR: EXPLAIN ANALYZE INGESTION is only supported for sources and tables created from sources
+EXPLAIN ANALYZE INGESTION FOR MATERIALIZED VIEW mv
+
+# CPU and MEMORY read the explainee's cluster's logs, so they require the
+# session to be on that cluster. A table from a source runs on its source's
+# cluster.
+
+simple
+EXPLAIN ANALYZE CPU FOR SOURCE auction
+----
+db error: ERROR: materialize.public.auction runs on cluster "uc", but the active cluster is "quickstart"
+HINT: Use SET cluster = uc to explain it.
+
+simple
+EXPLAIN ANALYZE MEMORY FOR TABLE bids_tbl AS SQL
+----
+db error: ERROR: materialize.public.bids_tbl runs on cluster "uc", but the active cluster is "quickstart"
+HINT: Use SET cluster = uc to explain it.
+
+# INGESTION reads catalog-server relations and works from any cluster.
+
+query T multiline
+EXPLAIN ANALYZE INGESTION FOR SOURCE auction AS SQL
+----
+WITH
+    objects AS
+    (
+        SELECT src.id AS id, true AS is_source
+        FROM mz_catalog.mz_sources AS src
+        WHERE src.id = 'u2'
+        UNION ALL
+            SELECT dep.object_id AS id, false AS is_source
+            FROM
+                mz_internal.mz_object_dependencies AS dep
+                    JOIN
+                        mz_catalog.mz_sources AS sub
+                        ON (dep.object_id = sub.id)
+            WHERE dep.referenced_object_id = 'u2' AND sub.type = 'subsource'
+        UNION ALL
+            SELECT t.id AS id, false AS is_source
+            FROM mz_catalog.mz_tables AS t
+            WHERE t.source_id = 'u2'
+    ),
+    statistics AS
+    (
+        SELECT DISTINCT ON (ss.id) ss.*
+        FROM
+            mz_internal.mz_source_statistics AS ss
+                JOIN objects AS o ON (ss.id = o.id)
+        ORDER BY ss.id, ss.updates_committed DESC
+    )
+SELECT
+    ms.name || '.' || mo.name AS object,
+    mss.status AS status,
+    CASE
+            WHEN ss.snapshot_committed THEN 1.00
+                WHEN
+                        ss.snapshot_records_known IS NULL
+                            OR
+                        ss.snapshot_records_known = 0
+                    THEN NULL
+                ELSE
+                    round(
+                        ss.snapshot_records_staged::numeric
+                        / ss.snapshot_records_known::numeric,
+                        2
+                    )
+        END
+        AS snapshot_progress,
+    CASE
+            WHEN o.is_source
+                    THEN ss.offset_known::numeric - ss.offset_committed::numeric
+                ELSE NULL
+        END
+        AS offset_lag,
+    ss.messages_received AS messages_received,
+    pg_size_pretty(ss.bytes_received::numeric) AS bytes_received,
+    ss.updates_committed AS updates_committed,
+    pg_size_pretty(ss.bytes_indexed::numeric) AS state_bytes,
+    ss.records_indexed AS state_records,
+    ss.rehydration_latency AS rehydration_latency,
+    wgl.lag AS wallclock_lag
+FROM
+    objects AS o
+        JOIN mz_catalog.mz_objects AS mo ON (o.id = mo.id)
+        JOIN mz_catalog.mz_schemas AS ms ON (mo.schema_id = ms.id)
+        LEFT JOIN mz_internal.mz_source_statuses AS mss ON (o.id = mss.id)
+        LEFT JOIN statistics AS ss ON (o.id = ss.id)
+        LEFT JOIN
+            mz_internal.mz_wallclock_global_lag AS wgl
+            ON (o.id = wgl.object_id)
+ORDER BY o.is_source DESC, object;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE INGESTION FOR TABLE bids_tbl AS SQL
+----
+WITH
+    objects AS
+    (SELECT 'u8' AS id, false AS is_source),
+    statistics AS
+    (
+        SELECT DISTINCT ON (ss.id) ss.*
+        FROM
+            mz_internal.mz_source_statistics AS ss
+                JOIN objects AS o ON (ss.id = o.id)
+        ORDER BY ss.id, ss.updates_committed DESC
+    )
+SELECT
+    ms.name || '.' || mo.name AS object,
+    mss.status AS status,
+    CASE
+            WHEN ss.snapshot_committed THEN 1.00
+                WHEN
+                        ss.snapshot_records_known IS NULL
+                            OR
+                        ss.snapshot_records_known = 0
+                    THEN NULL
+                ELSE
+                    round(
+                        ss.snapshot_records_staged::numeric
+                        / ss.snapshot_records_known::numeric,
+                        2
+                    )
+        END
+        AS snapshot_progress,
+    CASE
+            WHEN o.is_source
+                    THEN ss.offset_known::numeric - ss.offset_committed::numeric
+                ELSE NULL
+        END
+        AS offset_lag,
+    ss.messages_received AS messages_received,
+    pg_size_pretty(ss.bytes_received::numeric) AS bytes_received,
+    ss.updates_committed AS updates_committed,
+    pg_size_pretty(ss.bytes_indexed::numeric) AS state_bytes,
+    ss.records_indexed AS state_records,
+    ss.rehydration_latency AS rehydration_latency,
+    wgl.lag AS wallclock_lag
+FROM
+    objects AS o
+        JOIN mz_catalog.mz_objects AS mo ON (o.id = mo.id)
+        JOIN mz_catalog.mz_schemas AS ms ON (mo.schema_id = ms.id)
+        LEFT JOIN mz_internal.mz_source_statuses AS mss ON (o.id = mss.id)
+        LEFT JOIN statistics AS ss ON (o.id = ss.id)
+        LEFT JOIN
+            mz_internal.mz_wallclock_global_lag AS wgl
+            ON (o.id = wgl.object_id)
+ORDER BY o.is_source DESC, object;
+EOF
+
+statement ok
+SET cluster = uc
+
+query T multiline
+EXPLAIN ANALYZE CPU FOR SOURCE auction AS SQL
+----
+WITH
+    explainee AS
+    (
+        SELECT mo.global_id AS global_id
+        FROM mz_introspection.mz_mappable_objects AS mo
+        WHERE mo.name = 'materialize.public.auction'
+    ),
+    dataflow_objects AS
+    (
+        SELECT sdgi.id AS dataflow_id, sdgi.global_id AS global_id
+        FROM mz_introspection.mz_storage_dataflow_global_ids AS sdgi
+        WHERE
+            sdgi.id
+            = (
+                    SELECT max(e_sdgi.id)
+                    FROM
+                        mz_introspection.mz_storage_dataflow_global_ids
+                                AS e_sdgi
+                            JOIN
+                                explainee AS e
+                                ON (e_sdgi.global_id = e.global_id)
+                )
+    ),
+    leaf_operators AS
+    (
+        SELECT mdod.id::int8 AS operator_id
+        FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
+        WHERE
+            mdod.dataflow_id IN ( SELECT dataflow_id FROM dataflow_objects )
+                AND
+            mdod.id
+            NOT IN (
+            SELECT parent_id FROM mz_introspection.mz_dataflow_operator_parents
+            )
+    ),
+    stage_ranges AS
+    (
+        SELECT
+            ssm.global_id AS global_id,
+            ssm.stage_id AS stage_id,
+            ssm.parent_stage_id AS parent_stage_id,
+            ssm.nesting AS nesting,
+            ssm.stage AS stage,
+            ssm.operator_id_start AS operator_id_start,
+            ssm.operator_id_end AS operator_id_end
+        FROM
+            mz_introspection.mz_storage_stage_mapping AS ssm
+                JOIN
+                    dataflow_objects AS dfo
+                    ON
+                        (
+                            ssm.dataflow_id = dfo.dataflow_id
+                                AND
+                            ssm.global_id = dfo.global_id
+                        )
+    ),
+    stages AS
+    (
+        SELECT
+            0::uint8 AS stage_id,
+            0::uint2 AS nesting,
+            'Source auction' || ' (' || e.global_id || ')' AS operator
+        FROM explainee AS e
+        UNION ALL
+            SELECT DISTINCT
+                sr.stage_id AS stage_id,
+                sr.nesting AS nesting,
+                CASE
+                        WHEN sr.stage = 'Export'
+                                THEN
+                                    'Export '
+                                    || COALESCE(
+                                            ms.name || '.' || mo.name,
+                                            sr.global_id
+                                        )
+                                    || ' ('
+                                    || sr.global_id
+                                    || ')'
+                            ELSE sr.stage
+                    END
+                    AS operator
+            FROM
+                stage_ranges AS sr
+                    LEFT JOIN
+                        mz_internal.mz_object_global_ids AS mogi
+                        ON (sr.global_id = mogi.global_id)
+                    LEFT JOIN mz_catalog.mz_objects AS mo ON (mogi.id = mo.id)
+                    LEFT JOIN
+                        mz_catalog.mz_schemas AS ms
+                        ON (mo.schema_id = ms.id)
+    ),
+    stage_operators AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            so.operator_id AS operator_id
+        FROM
+            (
+                        SELECT sr.stage_id, sr.nesting, operator_id
+                        FROM
+                            stage_ranges AS sr
+                                 CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                        UNION ALL
+                            SELECT parent.stage_id, parent.nesting, operator_id
+                            FROM
+                                stage_ranges AS sr
+                                    JOIN
+                                        (
+                                                SELECT DISTINCT
+                                                    stage_id, nesting
+                                                FROM stage_ranges
+                                            )
+                                            AS parent
+                                        ON
+                                            (
+                                                sr.parent_stage_id
+                                                = parent.stage_id
+                                            )
+                                     CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                        UNION ALL
+                            SELECT 0::uint8, 0::uint2, lo.operator_id
+                            FROM leaf_operators AS lo
+                    )
+                    AS so
+                JOIN leaf_operators AS lo ON (so.operator_id = lo.operator_id)
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting
+    )
+SELECT
+    repeat(' ', nesting * 2) || s.operator AS operator,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
+FROM stages AS s LEFT JOIN summary_cpu AS sc USING(stage_id, nesting)
+ORDER BY stage_id, nesting;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE MEMORY FOR SOURCE auction AS SQL
+----
+WITH
+    explainee AS
+    (
+        SELECT mo.global_id AS global_id
+        FROM mz_introspection.mz_mappable_objects AS mo
+        WHERE mo.name = 'materialize.public.auction'
+    ),
+    dataflow_objects AS
+    (
+        SELECT sdgi.id AS dataflow_id, sdgi.global_id AS global_id
+        FROM mz_introspection.mz_storage_dataflow_global_ids AS sdgi
+        WHERE
+            sdgi.id
+            = (
+                    SELECT max(e_sdgi.id)
+                    FROM
+                        mz_introspection.mz_storage_dataflow_global_ids
+                                AS e_sdgi
+                            JOIN
+                                explainee AS e
+                                ON (e_sdgi.global_id = e.global_id)
+                )
+    ),
+    leaf_operators AS
+    (
+        SELECT mdod.id::int8 AS operator_id
+        FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
+        WHERE
+            mdod.dataflow_id IN ( SELECT dataflow_id FROM dataflow_objects )
+                AND
+            mdod.id
+            NOT IN (
+            SELECT parent_id FROM mz_introspection.mz_dataflow_operator_parents
+            )
+    ),
+    stage_ranges AS
+    (
+        SELECT
+            ssm.global_id AS global_id,
+            ssm.stage_id AS stage_id,
+            ssm.parent_stage_id AS parent_stage_id,
+            ssm.nesting AS nesting,
+            ssm.stage AS stage,
+            ssm.operator_id_start AS operator_id_start,
+            ssm.operator_id_end AS operator_id_end
+        FROM
+            mz_introspection.mz_storage_stage_mapping AS ssm
+                JOIN
+                    dataflow_objects AS dfo
+                    ON
+                        (
+                            ssm.dataflow_id = dfo.dataflow_id
+                                AND
+                            ssm.global_id = dfo.global_id
+                        )
+    ),
+    stages AS
+    (
+        SELECT
+            0::uint8 AS stage_id,
+            0::uint2 AS nesting,
+            'Source auction' || ' (' || e.global_id || ')' AS operator
+        FROM explainee AS e
+        UNION ALL
+            SELECT DISTINCT
+                sr.stage_id AS stage_id,
+                sr.nesting AS nesting,
+                CASE
+                        WHEN sr.stage = 'Export'
+                                THEN
+                                    'Export '
+                                    || COALESCE(
+                                            ms.name || '.' || mo.name,
+                                            sr.global_id
+                                        )
+                                    || ' ('
+                                    || sr.global_id
+                                    || ')'
+                            ELSE sr.stage
+                    END
+                    AS operator
+            FROM
+                stage_ranges AS sr
+                    LEFT JOIN
+                        mz_internal.mz_object_global_ids AS mogi
+                        ON (sr.global_id = mogi.global_id)
+                    LEFT JOIN mz_catalog.mz_objects AS mo ON (mogi.id = mo.id)
+                    LEFT JOIN
+                        mz_catalog.mz_schemas AS ms
+                        ON (mo.schema_id = ms.id)
+    ),
+    stage_operators AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            so.operator_id AS operator_id
+        FROM
+            (
+                        SELECT sr.stage_id, sr.nesting, operator_id
+                        FROM
+                            stage_ranges AS sr
+                                 CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                        UNION ALL
+                            SELECT parent.stage_id, parent.nesting, operator_id
+                            FROM
+                                stage_ranges AS sr
+                                    JOIN
+                                        (
+                                                SELECT DISTINCT
+                                                    stage_id, nesting
+                                                FROM stage_ranges
+                                            )
+                                            AS parent
+                                        ON
+                                            (
+                                                sr.parent_stage_id
+                                                = parent.stage_id
+                                            )
+                                     CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                        UNION ALL
+                            SELECT 0::uint8, 0::uint2, lo.operator_id
+                            FROM leaf_operators AS lo
+                    )
+                    AS so
+                JOIN leaf_operators AS lo ON (so.operator_id = lo.operator_id)
+    ),
+    summary_memory AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting
+    )
+SELECT
+    repeat(' ', nesting * 2) || s.operator AS operator,
+    pg_size_pretty(sm.total_memory) AS total_memory,
+    sm.total_records AS total_records
+FROM stages AS s LEFT JOIN summary_memory AS sm USING(stage_id, nesting)
+ORDER BY stage_id, nesting;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR SOURCE auction AS SQL
+----
+WITH
+    explainee AS
+    (
+        SELECT mo.global_id AS global_id
+        FROM mz_introspection.mz_mappable_objects AS mo
+        WHERE mo.name = 'materialize.public.auction'
+    ),
+    dataflow_objects AS
+    (
+        SELECT sdgi.id AS dataflow_id, sdgi.global_id AS global_id
+        FROM mz_introspection.mz_storage_dataflow_global_ids AS sdgi
+        WHERE
+            sdgi.id
+            = (
+                    SELECT max(e_sdgi.id)
+                    FROM
+                        mz_introspection.mz_storage_dataflow_global_ids
+                                AS e_sdgi
+                            JOIN
+                                explainee AS e
+                                ON (e_sdgi.global_id = e.global_id)
+                )
+    ),
+    leaf_operators AS
+    (
+        SELECT mdod.id::int8 AS operator_id
+        FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
+        WHERE
+            mdod.dataflow_id IN ( SELECT dataflow_id FROM dataflow_objects )
+                AND
+            mdod.id
+            NOT IN (
+            SELECT parent_id FROM mz_introspection.mz_dataflow_operator_parents
+            )
+    ),
+    stage_ranges AS
+    (
+        SELECT
+            ssm.global_id AS global_id,
+            ssm.stage_id AS stage_id,
+            ssm.parent_stage_id AS parent_stage_id,
+            ssm.nesting AS nesting,
+            ssm.stage AS stage,
+            ssm.operator_id_start AS operator_id_start,
+            ssm.operator_id_end AS operator_id_end
+        FROM
+            mz_introspection.mz_storage_stage_mapping AS ssm
+                JOIN
+                    dataflow_objects AS dfo
+                    ON
+                        (
+                            ssm.dataflow_id = dfo.dataflow_id
+                                AND
+                            ssm.global_id = dfo.global_id
+                        )
+    ),
+    stages AS
+    (
+        SELECT
+            0::uint8 AS stage_id,
+            0::uint2 AS nesting,
+            'Source auction' || ' (' || e.global_id || ')' AS operator
+        FROM explainee AS e
+        UNION ALL
+            SELECT DISTINCT
+                sr.stage_id AS stage_id,
+                sr.nesting AS nesting,
+                CASE
+                        WHEN sr.stage = 'Export'
+                                THEN
+                                    'Export '
+                                    || COALESCE(
+                                            ms.name || '.' || mo.name,
+                                            sr.global_id
+                                        )
+                                    || ' ('
+                                    || sr.global_id
+                                    || ')'
+                            ELSE sr.stage
+                    END
+                    AS operator
+            FROM
+                stage_ranges AS sr
+                    LEFT JOIN
+                        mz_internal.mz_object_global_ids AS mogi
+                        ON (sr.global_id = mogi.global_id)
+                    LEFT JOIN mz_catalog.mz_objects AS mo ON (mogi.id = mo.id)
+                    LEFT JOIN
+                        mz_catalog.mz_schemas AS ms
+                        ON (mo.schema_id = ms.id)
+    ),
+    stage_operators AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            so.operator_id AS operator_id
+        FROM
+            (
+                        SELECT sr.stage_id, sr.nesting, operator_id
+                        FROM
+                            stage_ranges AS sr
+                                 CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                        UNION ALL
+                            SELECT parent.stage_id, parent.nesting, operator_id
+                            FROM
+                                stage_ranges AS sr
+                                    JOIN
+                                        (
+                                                SELECT DISTINCT
+                                                    stage_id, nesting
+                                                FROM stage_ranges
+                                            )
+                                            AS parent
+                                        ON
+                                            (
+                                                sr.parent_stage_id
+                                                = parent.stage_id
+                                            )
+                                     CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                        UNION ALL
+                            SELECT 0::uint8, 0::uint2, lo.operator_id
+                            FROM leaf_operators AS lo
+                    )
+                    AS so
+                JOIN leaf_operators AS lo ON (so.operator_id = lo.operator_id)
+    ),
+    stage_workers AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            count(DISTINCT mse.worker_id) AS active_workers
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = so.operator_id)
+        WHERE mse.elapsed_ns > 0
+        GROUP BY so.stage_id, so.nesting
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting
+    ),
+    per_worker_cpu AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting, mse.worker_id
+    ),
+    summary_memory AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting
+    ),
+    per_worker_memory AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            mas.worker_id AS worker_id,
+            sum(mas.size) AS worker_memory,
+            sum(mas.records) AS worker_records
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting, mas.worker_id
+    )
+SELECT
+    repeat(' ', nesting * 2) || s.operator AS operator,
+    pwc.worker_id AS worker_id,
+    sw.active_workers AS active_workers,
+    CASE
+            WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0
+                    THEN round(pwc.worker_ns / sc.avg_ns, 2)
+                ELSE NULL
+        END
+        AS cpu_ratio,
+    pwc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
+    sc.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0
+                    THEN round(pwm.worker_memory / sm.avg_memory, 2)
+                ELSE NULL
+        END
+        AS memory_ratio,
+    pg_size_pretty(pwm.worker_memory) AS worker_memory,
+    pg_size_pretty(sm.avg_memory) AS avg_memory,
+    pg_size_pretty(sm.total_memory) AS total_memory,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0
+                    THEN round(pwm.worker_records / sm.avg_records, 2)
+                ELSE NULL
+        END
+        AS records_ratio,
+    pwm.worker_records AS worker_records,
+    sm.avg_records AS avg_records,
+    sm.total_records AS total_records
+FROM
+    stages AS s
+        LEFT JOIN stage_workers AS sw USING(stage_id, nesting)
+        LEFT JOIN summary_cpu AS sc USING(stage_id, nesting)
+        LEFT JOIN per_worker_cpu AS pwc USING(stage_id, nesting)
+        LEFT JOIN summary_memory AS sm USING(stage_id, nesting)
+        LEFT JOIN per_worker_memory AS pwm USING(stage_id, nesting)
+WHERE
+    (
+        pwm.worker_id = pwc.worker_id OR pwm.worker_id IS NULL
+            OR
+        pwc.worker_id IS NULL
+    )
+ORDER BY stage_id, nesting, worker_id;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR TABLE bids_tbl AS SQL
+----
+WITH
+    explainee AS
+    (
+        SELECT mo.global_id AS global_id
+        FROM mz_introspection.mz_mappable_objects AS mo
+        WHERE mo.name = 'materialize.public.bids_tbl'
+    ),
+    dataflow_objects AS
+    (
+        SELECT sdgi.id AS dataflow_id, sdgi.global_id AS global_id
+        FROM mz_introspection.mz_storage_dataflow_global_ids AS sdgi
+        WHERE
+            sdgi.id
+            = (
+                    SELECT max(e_sdgi.id)
+                    FROM
+                        mz_introspection.mz_storage_dataflow_global_ids
+                                AS e_sdgi
+                            JOIN
+                                explainee AS e
+                                ON (e_sdgi.global_id = e.global_id)
+                )
+    ),
+    leaf_operators AS
+    (
+        SELECT mdod.id::int8 AS operator_id
+        FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
+        WHERE
+            mdod.dataflow_id IN ( SELECT dataflow_id FROM dataflow_objects )
+                AND
+            mdod.id
+            NOT IN (
+            SELECT parent_id FROM mz_introspection.mz_dataflow_operator_parents
+            )
+    ),
+    stage_ranges AS
+    (
+        SELECT
+            ssm.global_id AS global_id,
+            ssm.stage_id AS stage_id,
+            ssm.parent_stage_id AS parent_stage_id,
+            ssm.nesting AS nesting,
+            ssm.stage AS stage,
+            ssm.operator_id_start AS operator_id_start,
+            ssm.operator_id_end AS operator_id_end
+        FROM
+            mz_introspection.mz_storage_stage_mapping AS ssm
+                JOIN
+                    dataflow_objects AS dfo
+                    ON
+                        (
+                            ssm.dataflow_id = dfo.dataflow_id
+                                AND
+                            ssm.global_id = dfo.global_id
+                        )
+        WHERE
+            ssm.global_id IN ( SELECT global_id FROM explainee )
+                OR
+            (ssm.parent_stage_id IS NULL AND ssm.stage <> 'Export')
+    ),
+    stages AS
+    (
+        SELECT DISTINCT
+            sr.stage_id AS stage_id,
+            sr.nesting AS nesting,
+            CASE
+                    WHEN sr.stage = 'Export'
+                            THEN
+                                'Export '
+                                || COALESCE(
+                                        ms.name || '.' || mo.name, sr.global_id
+                                    )
+                                || ' ('
+                                || sr.global_id
+                                || ')'
+                        WHEN sr.parent_stage_id IS NULL
+                            THEN sr.stage || ' (shared)'
+                        ELSE sr.stage
+                END
+                AS operator
+        FROM
+            stage_ranges AS sr
+                LEFT JOIN
+                    mz_internal.mz_object_global_ids AS mogi
+                    ON (sr.global_id = mogi.global_id)
+                LEFT JOIN mz_catalog.mz_objects AS mo ON (mogi.id = mo.id)
+                LEFT JOIN mz_catalog.mz_schemas AS ms ON (mo.schema_id = ms.id)
+    ),
+    stage_operators AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            so.operator_id AS operator_id
+        FROM
+            (
+                        SELECT sr.stage_id, sr.nesting, operator_id
+                        FROM
+                            stage_ranges AS sr
+                                 CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                        UNION ALL
+                            SELECT parent.stage_id, parent.nesting, operator_id
+                            FROM
+                                stage_ranges AS sr
+                                    JOIN
+                                        (
+                                                SELECT DISTINCT
+                                                    stage_id, nesting
+                                                FROM stage_ranges
+                                            )
+                                            AS parent
+                                        ON
+                                            (
+                                                sr.parent_stage_id
+                                                = parent.stage_id
+                                            )
+                                     CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                    )
+                    AS so
+                JOIN leaf_operators AS lo ON (so.operator_id = lo.operator_id)
+    ),
+    stage_workers AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            count(DISTINCT mse.worker_id) AS active_workers
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = so.operator_id)
+        WHERE mse.elapsed_ns > 0
+        GROUP BY so.stage_id, so.nesting
+    ),
+    summary_memory AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            sum(mas.size) AS total_memory,
+            sum(mas.records) AS total_records,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_memory,
+            CASE
+                    WHEN count(DISTINCT mas.worker_id) <> 0
+                            THEN
+                                sum(mas.records) / count(DISTINCT mas.worker_id)
+                        ELSE NULL
+                END
+                AS avg_records
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting
+    ),
+    per_worker_memory AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            mas.worker_id AS worker_id,
+            sum(mas.size) AS worker_memory,
+            sum(mas.records) AS worker_records
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_arrangement_sizes_per_worker AS mas
+                    ON (mas.operator_id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting, mas.worker_id
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting
+    ),
+    per_worker_cpu AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            mse.worker_id AS worker_id,
+            sum(mse.elapsed_ns) AS worker_ns
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting, mse.worker_id
+    )
+SELECT
+    repeat(' ', nesting * 2 - 2) || s.operator AS operator,
+    COALESCE(pwm.worker_id, pwc.worker_id) AS worker_id,
+    sw.active_workers AS active_workers,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_memory <> 0
+                    THEN round(pwm.worker_memory / sm.avg_memory, 2)
+                ELSE NULL
+        END
+        AS memory_ratio,
+    pg_size_pretty(pwm.worker_memory) AS worker_memory,
+    pg_size_pretty(sm.avg_memory) AS avg_memory,
+    pg_size_pretty(sm.total_memory) AS total_memory,
+    CASE
+            WHEN pwm.worker_id IS NOT NULL AND sm.avg_records <> 0
+                    THEN round(pwm.worker_records / sm.avg_records, 2)
+                ELSE NULL
+        END
+        AS records_ratio,
+    pwm.worker_records AS worker_records,
+    sm.avg_records AS avg_records,
+    sm.total_records AS total_records,
+    CASE
+            WHEN pwc.worker_id IS NOT NULL AND sc.avg_ns <> 0
+                    THEN round(pwc.worker_ns / sc.avg_ns, 2)
+                ELSE NULL
+        END
+        AS cpu_ratio,
+    pwc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed,
+    sc.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
+FROM
+    stages AS s
+        LEFT JOIN stage_workers AS sw USING(stage_id, nesting)
+        LEFT JOIN summary_memory AS sm USING(stage_id, nesting)
+        LEFT JOIN per_worker_memory AS pwm USING(stage_id, nesting)
+        LEFT JOIN summary_cpu AS sc USING(stage_id, nesting)
+        LEFT JOIN per_worker_cpu AS pwc USING(stage_id, nesting)
+WHERE
+    (
+        pwc.worker_id = pwm.worker_id OR pwc.worker_id IS NULL
+            OR
+        pwm.worker_id IS NULL
+    )
+ORDER BY stage_id, nesting, worker_id;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE CPU FOR TABLE bids AS SQL
+----
+WITH
+    explainee AS
+    (
+        SELECT mo.global_id AS global_id
+        FROM mz_introspection.mz_mappable_objects AS mo
+        WHERE mo.name = 'materialize.public.bids'
+    ),
+    dataflow_objects AS
+    (
+        SELECT sdgi.id AS dataflow_id, sdgi.global_id AS global_id
+        FROM mz_introspection.mz_storage_dataflow_global_ids AS sdgi
+        WHERE
+            sdgi.id
+            = (
+                    SELECT max(e_sdgi.id)
+                    FROM
+                        mz_introspection.mz_storage_dataflow_global_ids
+                                AS e_sdgi
+                            JOIN
+                                explainee AS e
+                                ON (e_sdgi.global_id = e.global_id)
+                )
+    ),
+    leaf_operators AS
+    (
+        SELECT mdod.id::int8 AS operator_id
+        FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
+        WHERE
+            mdod.dataflow_id IN ( SELECT dataflow_id FROM dataflow_objects )
+                AND
+            mdod.id
+            NOT IN (
+            SELECT parent_id FROM mz_introspection.mz_dataflow_operator_parents
+            )
+    ),
+    stage_ranges AS
+    (
+        SELECT
+            ssm.global_id AS global_id,
+            ssm.stage_id AS stage_id,
+            ssm.parent_stage_id AS parent_stage_id,
+            ssm.nesting AS nesting,
+            ssm.stage AS stage,
+            ssm.operator_id_start AS operator_id_start,
+            ssm.operator_id_end AS operator_id_end
+        FROM
+            mz_introspection.mz_storage_stage_mapping AS ssm
+                JOIN
+                    dataflow_objects AS dfo
+                    ON
+                        (
+                            ssm.dataflow_id = dfo.dataflow_id
+                                AND
+                            ssm.global_id = dfo.global_id
+                        )
+        WHERE
+            ssm.global_id IN ( SELECT global_id FROM explainee )
+                OR
+            (ssm.parent_stage_id IS NULL AND ssm.stage <> 'Export')
+    ),
+    stages AS
+    (
+        SELECT DISTINCT
+            sr.stage_id AS stage_id,
+            sr.nesting AS nesting,
+            CASE
+                    WHEN sr.stage = 'Export'
+                            THEN
+                                'Export '
+                                || COALESCE(
+                                        ms.name || '.' || mo.name, sr.global_id
+                                    )
+                                || ' ('
+                                || sr.global_id
+                                || ')'
+                        WHEN sr.parent_stage_id IS NULL
+                            THEN sr.stage || ' (shared)'
+                        ELSE sr.stage
+                END
+                AS operator
+        FROM
+            stage_ranges AS sr
+                LEFT JOIN
+                    mz_internal.mz_object_global_ids AS mogi
+                    ON (sr.global_id = mogi.global_id)
+                LEFT JOIN mz_catalog.mz_objects AS mo ON (mogi.id = mo.id)
+                LEFT JOIN mz_catalog.mz_schemas AS ms ON (mo.schema_id = ms.id)
+    ),
+    stage_operators AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            so.operator_id AS operator_id
+        FROM
+            (
+                        SELECT sr.stage_id, sr.nesting, operator_id
+                        FROM
+                            stage_ranges AS sr
+                                 CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                        UNION ALL
+                            SELECT parent.stage_id, parent.nesting, operator_id
+                            FROM
+                                stage_ranges AS sr
+                                    JOIN
+                                        (
+                                                SELECT DISTINCT
+                                                    stage_id, nesting
+                                                FROM stage_ranges
+                                            )
+                                            AS parent
+                                        ON
+                                            (
+                                                sr.parent_stage_id
+                                                = parent.stage_id
+                                            )
+                                     CROSS JOIN generate_series(sr.operator_id_start::int8, sr.operator_id_end::int8 - 1) AS operator_id
+                    )
+                    AS so
+                JOIN leaf_operators AS lo ON (so.operator_id = lo.operator_id)
+    ),
+    summary_cpu AS
+    (
+        SELECT
+            so.stage_id AS stage_id,
+            so.nesting AS nesting,
+            sum(mse.elapsed_ns) AS total_ns,
+            CASE
+                    WHEN count(DISTINCT mse.worker_id) <> 0
+                            THEN
+                                sum(mse.elapsed_ns)
+                                / count(DISTINCT mse.worker_id)
+                        ELSE NULL
+                END
+                AS avg_ns
+        FROM
+            stage_operators AS so
+                JOIN
+                    mz_introspection.mz_scheduling_elapsed_per_worker AS mse
+                    ON (mse.id = so.operator_id)
+        GROUP BY so.stage_id, so.nesting
+    )
+SELECT
+    repeat(' ', nesting * 2 - 2) || s.operator AS operator,
+    sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
+FROM stages AS s LEFT JOIN summary_cpu AS sc USING(stage_id, nesting)
+ORDER BY stage_id, nesting;
+EOF
+
+# The generated queries plan and run. An upsert source joins the auction
+# source on the cluster so both envelope kinds a load generator can produce
+# are covered.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_load_generator_key_value = true
+----
+COMPLETE 0
+
+statement ok
+CREATE SOURCE kv IN CLUSTER uc FROM LOAD GENERATOR KEY VALUE (KEYS 16, PARTITIONS 4, SNAPSHOT ROUNDS 3, SEED 123, VALUE SIZE 10, BATCH SIZE 2, TICK INTERVAL '100ms');
+
+statement ok
+CREATE TABLE kv_upsert FROM SOURCE kv INCLUDE KEY ENVELOPE UPSERT;
+
+# The stage mapping is logged when the dataflow is rendered, and the logging
+# dataflow publishes it within one introspection interval.
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+query B
+SELECT count(*) > 0 FROM mz_introspection.mz_storage_dataflow_global_ids sdgi JOIN mz_sources s ON (sdgi.global_id = s.id) WHERE s.name = 'auction'
+----
+true
+
+# Every export of the dataflow has an Export row, and the shared stages carry
+# the primary id.
+query TT
+SELECT DISTINCT CASE WHEN ssm.parent_stage_id IS NULL AND ssm.stage <> 'Export' THEN 'shared' ELSE 'export' END, ssm.stage
+FROM mz_introspection.mz_storage_stage_mapping ssm
+JOIN mz_introspection.mz_storage_dataflow_global_ids sdgi ON (ssm.global_id = sdgi.global_id)
+WHERE sdgi.id IN (
+  SELECT sdgi.id FROM mz_introspection.mz_storage_dataflow_global_ids sdgi JOIN mz_sources s ON (sdgi.global_id = s.id) WHERE s.name = 'auction'
+)
+ORDER BY 1, 2
+----
+export  Envelope␠NONE
+export  Export
+export  PersistSink
+export  Reclock
+shared  Healthcheck
+shared  Partition
+shared  Reader
+shared  Remap
+
+# Measurements, statistics, and statuses depend on timing. Masking every such
+# value leaves the tree structure and the object labels to compare.
+replace ^(NULL|starting|running|-?\d+(\.\d+)?( bytes| kB| MB| GB)?|\d{2}:\d{2}:\d{2}(\.\d+)?)$  <v>
+
+# A load generator source with one export per table. Every export has its own
+# subtree under the dataflow root, and a load generator has no Decode stage.
+query TT
+EXPLAIN ANALYZE CPU FOR SOURCE auction
+----
+Source␠auction␠(u2)  <v>
+␠␠Remap  <v>
+␠␠Reader  <v>
+␠␠Partition  <v>
+␠␠Healthcheck  <v>
+␠␠Export␠public.auction␠(u2)  <v>
+␠␠␠␠Reclock  <v>
+␠␠␠␠Envelope␠NONE  <v>
+␠␠␠␠PersistSink  <v>
+␠␠Export␠public.accounts␠(u3)  <v>
+␠␠␠␠Reclock  <v>
+␠␠␠␠Envelope␠NONE  <v>
+␠␠␠␠PersistSink  <v>
+␠␠Export␠public.auctions␠(u4)  <v>
+␠␠␠␠Reclock  <v>
+␠␠␠␠Envelope␠NONE  <v>
+␠␠␠␠PersistSink  <v>
+␠␠Export␠public.bids␠(u5)  <v>
+␠␠␠␠Reclock  <v>
+␠␠␠␠Envelope␠NONE  <v>
+␠␠␠␠PersistSink  <v>
+␠␠Export␠public.organizations␠(u6)  <v>
+␠␠␠␠Reclock  <v>
+␠␠␠␠Envelope␠NONE  <v>
+␠␠␠␠PersistSink  <v>
+␠␠Export␠public.users␠(u7)  <v>
+␠␠␠␠Reclock  <v>
+␠␠␠␠Envelope␠NONE  <v>
+␠␠␠␠PersistSink  <v>
+␠␠Export␠public.bids_tbl␠(u8)  <v>
+␠␠␠␠Reclock  <v>
+␠␠␠␠Envelope␠NONE  <v>
+␠␠␠␠PersistSink  <v>
+
+query TTTT
+EXPLAIN ANALYZE MEMORY, CPU FOR SOURCE auction
+----
+Source␠auction␠(u2)  <v>  <v>  <v>
+␠␠Remap  <v>  <v>  <v>
+␠␠Reader  <v>  <v>  <v>
+␠␠Partition  <v>  <v>  <v>
+␠␠Healthcheck  <v>  <v>  <v>
+␠␠Export␠public.auction␠(u2)  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>
+␠␠Export␠public.accounts␠(u3)  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>
+␠␠Export␠public.auctions␠(u4)  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>
+␠␠Export␠public.bids␠(u5)  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>
+␠␠Export␠public.organizations␠(u6)  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>
+␠␠Export␠public.users␠(u7)  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>
+␠␠Export␠public.bids_tbl␠(u8)  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>
+
+query TTTTTTTTTTTTTTT
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR SOURCE auction
+----
+Source␠auction␠(u2)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Remap  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Reader  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Partition  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Healthcheck  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Export␠public.auction␠(u2)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Export␠public.accounts␠(u3)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Export␠public.auctions␠(u4)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Export␠public.bids␠(u5)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Export␠public.organizations␠(u6)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Export␠public.users␠(u7)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Export␠public.bids_tbl␠(u8)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Reclock  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠Envelope␠NONE  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠␠␠PersistSink  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+
+# A table from a source shows its own subtree and the shared stages, without a
+# dataflow root.
+query TTTT
+EXPLAIN ANALYZE CPU, MEMORY FOR TABLE bids_tbl
+----
+Remap␠(shared)  <v>  <v>  <v>
+Reader␠(shared)  <v>  <v>  <v>
+Partition␠(shared)  <v>  <v>  <v>
+Healthcheck␠(shared)  <v>  <v>  <v>
+Export␠public.bids_tbl␠(u8)  <v>  <v>  <v>
+␠␠Reclock  <v>  <v>  <v>
+␠␠Envelope␠NONE  <v>  <v>  <v>
+␠␠PersistSink  <v>  <v>  <v>
+
+query TTTTTTTTTTT
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR TABLE bids
+----
+Remap␠(shared)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+Reader␠(shared)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+Partition␠(shared)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+Healthcheck␠(shared)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+Export␠public.bids␠(u5)  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Reclock  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠Envelope␠NONE  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+␠␠PersistSink  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+
+query TT
+EXPLAIN ANALYZE CPU FOR SOURCE kv
+----
+Source␠kv␠(u11)  <v>
+␠␠Remap  <v>
+␠␠Reader  <v>
+␠␠Partition  <v>
+␠␠Healthcheck  <v>
+␠␠Export␠public.kv_upsert␠(u12)  <v>
+␠␠␠␠Reclock  <v>
+␠␠␠␠Envelope␠UPSERT  <v>
+␠␠␠␠PersistSink  <v>
+
+query TT
+EXPLAIN ANALYZE CPU FOR TABLE kv_upsert
+----
+Remap␠(shared)  <v>
+Reader␠(shared)  <v>
+Partition␠(shared)  <v>
+Healthcheck␠(shared)  <v>
+Export␠public.kv_upsert␠(u12)  <v>
+␠␠Reclock  <v>
+␠␠Envelope␠UPSERT  <v>
+␠␠PersistSink  <v>
+
+# The source row comes first, followed by one row per export other than the
+# source's own.
+query TTTTTTTTTTT
+EXPLAIN ANALYZE INGESTION FOR SOURCE auction
+----
+public.auction  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+public.accounts  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+public.auctions  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+public.bids  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+public.bids_tbl  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+public.organizations  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+public.users  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+
+query TTTTTTTTTTT
+EXPLAIN ANALYZE INGESTION FOR SOURCE kv
+----
+public.kv  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+public.kv_upsert  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+
+query TTTTTTTTTTT
+EXPLAIN ANALYZE INGESTION FOR TABLE bids_tbl
+----
+public.bids_tbl  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>  <v>
+
+# Storage stages are attributed to their objects alongside compute objects.
+# The materialized view is reported under a transient id, whose number depends
+# on how many transient ids were allocated before it.
+replace ^t\d+$  t<id>
+
+query TTT rowsort
+EXPLAIN ANALYZE CLUSTER CPU
+----
+materialize.public.accounts  u3  <v>
+materialize.public.auction  u2  <v>
+materialize.public.auctions  u4  <v>
+materialize.public.bids  u5  <v>
+materialize.public.bids_tbl  u8  <v>
+materialize.public.kv  u11  <v>
+materialize.public.kv_upsert  u12  <v>
+materialize.public.mv  t<id>  <v>
+materialize.public.organizations  u6  <v>
+materialize.public.users  u7  <v>
+
+statement ok
+RESET cluster
+
+statement ok
+DROP SOURCE auction CASCADE
+
+statement ok
+DROP SOURCE kv CASCADE
+
+statement ok
+DROP CLUSTER uc CASCADE
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unified_cluster
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_load_generator_key_value
+----
+COMPLETE 0
