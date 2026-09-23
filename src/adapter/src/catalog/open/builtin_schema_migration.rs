@@ -478,6 +478,9 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_replica_hydration_history",
         ),
+        // Converting mz_object_global_ids from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
         MigrationStep::replacement(
             "26.44.0-dev.0",
             CatalogItemType::MaterializedView,

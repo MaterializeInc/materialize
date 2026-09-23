@@ -52,24 +52,24 @@ CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 statement ok
 CREATE TABLE lg_tbl FROM SOURCE lg (REFERENCE counter)
 
-# Assert that every user item's ID is equal to its global ID.
-query TTB rowsort
-SELECT o.name, count(*), bool_and(g.global_id = g.id)
+# Every user item in the schema has exactly one global ID.
+query TT rowsort
+SELECT o.name, count(*)
 FROM mz_internal.mz_object_global_ids g
 JOIN mz_objects o ON o.id = g.id
 JOIN mz_schemas s ON s.id = o.schema_id
 WHERE s.name = 'gids'
 GROUP BY o.name
 ----
-custom_list  1  true
-kc  1  true
-lg  1  true
-lg_tbl  1  true
-mv  1  true
-pw  1  true
-t  1  true
-t_idx  1  true
-v  1  true
+custom_list  1
+kc  1
+lg  1
+lg_tbl  1
+mv  1
+pw  1
+t  1
+t_idx  1
+v  1
 
 # Setup a table that will have multiple versions
 statement ok
@@ -95,6 +95,39 @@ FROM mz_internal.mz_object_global_ids
 WHERE id = (SELECT id FROM mz_tables WHERE name = 'versioned')
 ----
 3
+
+# APPLY REPLACEMENT moves a materialized view to the replacement's catalog ID.
+# Assert that one of its global IDs is not equal to its catalog ID and that
+# the global IDs are unique.
+statement ok
+CREATE MATERIALIZED VIEW rmv AS SELECT a FROM t
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rmv_r FOR rmv AS SELECT a FROM t WHERE a IS DISTINCT FROM 0
+
+statement ok
+ALTER MATERIALIZED VIEW rmv APPLY REPLACEMENT rmv_r
+
+query IB
+SELECT count(DISTINCT global_id), bool_and(global_id = id)
+FROM mz_internal.mz_object_global_ids
+WHERE id = (SELECT id FROM mz_materialized_views WHERE name = 'rmv')
+----
+2  false
+
+# Global IDs are unique, and the mapping covers mz_objects exactly: no
+# duplicate global ID, no object without a row, no row without an object.
+query III
+SELECT
+    (SELECT count(*) FROM (
+        SELECT global_id FROM mz_internal.mz_object_global_ids
+        GROUP BY global_id HAVING count(*) > 1)),
+    (SELECT count(*) FROM mz_objects o WHERE NOT EXISTS (
+        SELECT 1 FROM mz_internal.mz_object_global_ids g WHERE g.id = o.id)),
+    (SELECT count(*) FROM mz_internal.mz_object_global_ids g WHERE NOT EXISTS (
+        SELECT 1 FROM mz_objects o WHERE o.id = g.id))
+----
+0  0  0
 
 # Assert that temporary objects are included.
 
