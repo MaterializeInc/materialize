@@ -55,6 +55,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::SqlState;
 use tracing::{debug, info};
 
+#[path = "sql/prepared_rewrites.rs"]
+mod prepared_rewrites;
+
 /// A missing peer selection must not block unrelated compute installation or SQL,
 /// and dropping the pending index must release the publication barrier.
 #[mz_ore::test(tokio::test)]
