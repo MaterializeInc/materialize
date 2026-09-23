@@ -18,7 +18,7 @@ use itertools::Itertools;
 use mz_catalog::catalog::{Catalog, CatalogError, Op};
 use mz_catalog::durable::DurableCatalogError;
 use mz_catalog::durable::objects::ReplicaPlanOwner;
-use mz_catalog::expr_cache::{GlobalExpressions, expression_build_version};
+use mz_catalog::expr_cache::GlobalExpressions;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_client::logging::{ComputeLog, LogVariant};
@@ -59,7 +59,7 @@ async fn written_metric_survives_disconnect_and_export_replacement() {
 
 async fn run_metric_replacement() {
     let mut fixture = Box::pin(Fixture::new((1, 15_000), 20_000, false)).await;
-    let build = expression_build_version(fixture.config.build_info).to_string();
+    let build = fixture.config.reconstruction.plan_build.clone();
     let owner = ReplicaPlanOwner {
         replica_id: fixture.config.replica_id,
         name: LABEL.into(),

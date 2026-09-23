@@ -890,11 +890,10 @@ impl ReplicaEnactment {
     pub fn apply_catalog(
         &mut self,
         catalog: &Catalog,
+        build: &str,
         metadata: &storage_metadata::Resolution,
         apply_permissions: bool,
     ) {
-        let build = mz_catalog::expr_cache::expression_build_version(catalog.config().build_info)
-            .to_string();
         let ready: BTreeSet<_> = self
             .installed
             .iter()
@@ -907,7 +906,7 @@ impl ReplicaEnactment {
             let live = (id.is_transient()
                 && catalog
                     .state()
-                    .written_plan_replica_owner(*id, &build)
+                    .written_plan_replica_owner(*id, build)
                     .is_some_and(|owner| owner.replica_id == self.replica))
                 || catalog
                     .try_get_entry_by_global_id(id)

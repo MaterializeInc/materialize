@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::durable::TestCatalogStateBuilder;
-use mz_catalog::expr_cache::expression_build_version;
 use mz_catalog::read_protection::CLIENT_PROTECTION_UNCHANGED_GRACE;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
@@ -50,7 +49,7 @@ async fn exercise_liveness() {
     let config = &fixture.config;
     let cluster = config.cluster_id;
     let replica = config.replica_id;
-    let build = expression_build_version(config.build_info).to_string();
+    let build = config.reconstruction.plan_build.clone();
     // Open a native follower snapshot so bootstrap effects, including log indexes,
     // are absorbed exactly as they are by the production follower.
     let storage = TestCatalogStateBuilder::new(fixture.persist.clone())
@@ -270,7 +269,7 @@ async fn exercise_liveness() {
     timeout(Duration::from_secs(30), async {
         loop {
             driver.apply_progress(&catalog);
-            driver.apply_catalog(&catalog, &metadata, true);
+            driver.apply_catalog(&catalog, &build, &metadata, true);
             let progress = &driver.installed[&fixture.index].progress;
             if progress.hydrated == Some(true)
                 && progress
