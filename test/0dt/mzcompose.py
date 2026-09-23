@@ -515,6 +515,10 @@ def workflow_basic(c: Composition) -> None:
     c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
+        # drop_idx exists only to be dropped while mz_new is in read-only mode.
+        # Nothing reads from it, unlike t_idx, which mv reads from.
+        > CREATE TABLE drop_t (a int);
+        > CREATE INDEX drop_idx ON drop_t (a);
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
@@ -785,7 +789,7 @@ def workflow_basic(c: Composition) -> None:
         > INSERT INTO t VALUES (5, 6);
         > SELECT * FROM mv;
         9
-        > DROP INDEX t_idx
+        > DROP INDEX drop_idx
         > CREATE INDEX t_idx2 ON t (a, b)
         > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 
@@ -2354,6 +2358,10 @@ def workflow_ddl(c: Composition) -> None:
     c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
+        # drop_idx exists only to be dropped while mz_new is in read-only mode.
+        # Nothing reads from it, unlike t_idx, which mv reads from.
+        > CREATE TABLE drop_t (a int);
+        > CREATE INDEX drop_idx ON drop_t (a);
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
@@ -2628,7 +2636,7 @@ def workflow_ddl(c: Composition) -> None:
         > INSERT INTO t VALUES (5, 6);
         > SELECT * FROM mv;
         9
-        > DROP INDEX t_idx
+        > DROP INDEX drop_idx
         > CREATE INDEX t_idx2 ON t (a, b)
         > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 

@@ -336,11 +336,12 @@ SHOW INDEXES IN CLUSTER bar WHERE on = 'v';
 v_primary_idx v bar {?column?} (empty)
 v_primary_idx1 v bar {?column?} (empty)
 
-statement ok
-DROP INDEX v_primary_idx
-
+# v_primary_idx1 reads from v_primary_idx, so it goes first.
 statement ok
 DROP INDEX v_primary_idx1
+
+statement ok
+DROP INDEX v_primary_idx
 
 # Test valid DROPs
 

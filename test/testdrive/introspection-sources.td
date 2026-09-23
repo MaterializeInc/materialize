@@ -301,7 +301,17 @@ true true true true true
 > CREATE INDEX ii_t6 ON t6 (a)
 > CREATE VIEW t6_plus_1 AS SELECT a + 1 AS b FROM t6
 > CREATE INDEX ii_t6_plus_1 ON t6_plus_1 (b)
+
+# ii_t6_plus_1 reads from ii_t6, so dropping ii_t6 without CASCADE needs the
+# unsafe flag. That leaves ii_t6 running outside the catalog, which is the
+# scenario under test.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+
 > DROP INDEX ii_t6
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
 
 > SELECT name, records > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t6%'
 "Dataflow: materialize.public.ii_t6"        true

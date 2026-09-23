@@ -1349,13 +1349,14 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
-DROP INDEX i;
+# i1 reads from i, so it goes first.
+simple conn=child,user=child
+DROP INDEX i1;
 ----
 COMPLETE 0
 
-simple conn=child,user=child
-DROP INDEX i1;
+simple conn=joe,user=joe
+DROP INDEX i;
 ----
 COMPLETE 0
 
