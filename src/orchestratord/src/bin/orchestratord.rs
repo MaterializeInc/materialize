@@ -210,6 +210,18 @@ pub struct Args {
     ephemeral_volume_class: Option<String>,
     #[clap(long)]
     scheduler_name: Option<String>,
+
+    /// The Teleport endpoint to register the environmentd Service against,
+    /// e.g. `materialize.teleport.sh:443`. When unset, orchestratord writes
+    /// no Teleport labels or annotations on the environmentd Service.
+    #[clap(long)]
+    teleport_endpoint: Option<String>,
+    /// Required when `--teleport-endpoint` is set.
+    #[clap(long)]
+    teleport_stack_type: Option<String>,
+    /// Required when `--teleport-endpoint` is set.
+    #[clap(long)]
+    teleport_cluster_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
     #[clap(long)]
@@ -730,6 +742,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             disable_database_network_policies: args.disable_database_network_policies,
             tracing: args.tracing,
             orchestratord_namespace: namespace,
+            teleport_endpoint: args.teleport_endpoint,
+            teleport_stack_type: args.teleport_stack_type,
+            teleport_cluster_name: args.teleport_cluster_name,
         };
         move || {
             k8s_controller::Controller::namespaced_all(
