@@ -48,7 +48,7 @@ a log or a metric in the first place.
 
 - An AWS account, and the AWS region you want to run in.
 - Permission to run CloudFormation and create IAM roles in that account.
-- Quota in that account and region for the instance types, local NVMe storage, and IP addresses your environment needs. Your Materialize contact will size this with you.
+- Quota in that account and region for the instance types, local NVMe storage, and IP addresses your environment needs, including the temporary overlap while an upgrade rolls. Your Materialize contact will size this with you.
 - No inherited service control policy that blocks the permissions Materialize needs. Materialize cannot detect these in advance, so this is worth checking before you start.
 
 {{< tip >}}
@@ -161,7 +161,11 @@ or a metric.
 Materialize keeps your environment current, applying version upgrades the same
 way as Materialize Cloud: about weekly, driven from the Materialize control
 plane. Upgrades are rolling, so a new instance comes up alongside the old one
-before the old one is removed, and your account needs enough headroom for both.
+before the old one is removed, and your environment briefly runs both. The
+cluster autoscales to cover that overlap, so what you need is headroom in your
+AWS service quotas rather than idle instances: enough quota in your region for
+the temporary extra capacity, and availability in your Availability Zones for
+the instance types you run.
 Major versions are not skipped, and downgrades are not supported.
 
 ## Other clouds

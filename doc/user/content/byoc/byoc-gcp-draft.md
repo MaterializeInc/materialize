@@ -37,7 +37,7 @@ Your environment runs entirely in a dedicated GCP project that you create for Ma
 
 - A dedicated GCP project for Materialize, and the region you want to run in.
 - Permission to configure Workload Identity Federation and grant IAM roles on that project.
-- Quota in that project and region for the machine types, local SSDs, and IP addresses your environment needs. Your Materialize contact will size this with you.
+- Quota in that project and region for the machine types, local SSDs, and IP addresses your environment needs, including the temporary overlap while an upgrade rolls. Your Materialize contact will size this with you.
 - No inherited organization or folder policy that blocks the permissions Materialize needs. Materialize cannot detect these in advance, so this is worth checking before you start.
 - Your IdP details for SSO: metadata for Okta, Entra or another OIDC or SAML provider, and the group-to-role mapping you want.
 
@@ -89,7 +89,7 @@ The same set of logs and metrics is emitted both to your stack and to Materializ
 
 ## Upgrades
 
-Materialize keeps your environment current, applying version upgrades the same way as Materialize Cloud: about weekly, driven from the Materialize control plane. Upgrades are rolling, so a new instance comes up alongside the old one before the old one is removed, and your project needs enough headroom for both. Major versions are not skipped, and downgrades are not supported.
+Materialize keeps your environment current, applying version upgrades the same way as Materialize Cloud: about weekly, driven from the Materialize control plane. Upgrades are rolling, so a new instance comes up alongside the old one before the old one is removed, and your environment briefly runs both. Node pools autoscale to cover that overlap, so what you need is headroom in your GCP quota rather than idle nodes: enough quota in your region for the temporary extra capacity, and availability in your zones for the machine types you run. Major versions are not skipped, and downgrades are not supported.
 
 ## Frequently asked questions
 
