@@ -9,7 +9,7 @@ menu:
 
 As an **administrator** of a Materialize organization, you can provision groups
 from your identity provider (IdP) with [SCIM](https://scim.cloud/), assign those
-groups custom organization roles, and map the roles to database roles.
+groups organization roles, and map custom roles to database roles.
 
 The mapping has three layers:
 
@@ -35,11 +35,18 @@ does not create the other. Database privileges come from grants to the database
 role, not from the permissions selected when creating the organization role.
 {{< /important >}}
 
-The built-in **Organization Admin** and **Organization Member** roles control
-organization access. Retain **Organization Member** alongside your custom roles
-when users need its permissions. Assigning **Organization Admin** makes a user a
-Materialize superuser, so do not use it as the starting point for a role intended
-to grant limited database access.
+Materialize creates two reserved organization roles:
+
+| Role | JWT key |
+|------|---------|
+| **Organization Admin** | `MaterializePlatformAdmin` |
+| **Organization Member** | `MaterializePlatform` |
+
+You cannot edit or delete these roles, but you can assign them to SCIM groups.
+Retain **Organization Member** alongside custom roles when users need its
+permissions. Assigning **Organization Admin** makes a user a Materialize
+superuser, so do not use it as the starting point for a role intended to grant
+limited database access.
 
 {{< note >}}
 $TODO: Before publishing this setup, specify the first provider release with
@@ -150,6 +157,8 @@ Wait until the group appears under **Account** > **Account Settings** >
 **Groups**. Edit its role assignments and add the custom role created in
 [Step 3](#step-3-create-custom-organization-roles). Retain any built-in role
 assignments the group still needs, such as **Organization Member**.
+You can also assign either built-in role to a SCIM group without creating a
+custom role.
 
 For example, assign `analytics_reader` to the SCIM group `analytics-team`.
 Members receive the custom organization role through their group membership.
@@ -232,12 +241,14 @@ Grants and revokes performed by sync are recorded in
 
   Matching against reserved names is case-insensitive.
 
-  Do not create custom or database roles named `Organization Admin`,
-  `Organization Member`, `MaterializePlatformAdmin`, or `MaterializePlatform`.
-  These are built-in organization role names and keys, not custom database
-  access roles.
-* **Roles are never created or dropped.** Group sync only assigns and
-  unassigns role membership. An organization role only takes effect once you
+* **Built-in organization roles are reserved.** The names **Organization
+  Admin** and **Organization Member**, and their keys `MaterializePlatformAdmin`
+  and `MaterializePlatform`, belong to roles Materialize creates. You can map
+  SCIM groups to these roles, but cannot edit or delete the roles. Create a
+  separate custom organization role for database access mappings.
+* **Database roles are never created or dropped by sync.** Group sync only
+  assigns and unassigns database role membership. A custom organization role
+  grants database access only after you
   [create a matching database role](#step-5-create-matching-database-roles).
 * **Changes are not applied in real time.** Group membership changes are only
   applied when a user connects, never to a session that is already connected.
@@ -261,6 +272,11 @@ Create the SCIM integration with `materialize_scim_config` first. Configure your
 IdP to push groups, and wait for them to appear in Materialize. Then apply the
 role mapping. Terraform cannot wait for an IdP push simply by depending on the
 SCIM connection resource.
+
+To map a SCIM group to a built-in role, include `Admin` or `Member` in the
+`roles` set of `materialize_scim_group_roles`. These are Terraform's aliases for
+**Organization Admin** and **Organization Member**. Do not manage the built-in
+roles with `materialize_organization_role`.
 
 ```hcl
 resource "materialize_organization_role" "reader" {
