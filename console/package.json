@@ -103,7 +103,7 @@
     "react-hook-form": "^7.53.1",
     "react-intersection-observer": "^10.0.3",
     "react-oidc-context": "^3.3.0",
-    "react-router-dom": "^7.13.2",
+    "react-router-dom": "^6.30.6",
     "react-select": "^5.8.3",
     "react-virtualized-auto-sizer": "^1.0.24",
     "react-window": "^1.8.10",
