@@ -62,10 +62,10 @@ impl fmt::Display for PadChar {
     sqlname = "char_to_text",
     preserves_uniqueness = true,
     is_eliminable_cast = true,
-    inverse = to_unary!(super::CastStringToChar{
+    inverse = super::CastStringToChar{
         length: None,
         fail_on_len: false,
-    })
+    }
 )]
 fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
     a.0
