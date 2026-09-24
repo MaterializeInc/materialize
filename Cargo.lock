@@ -10855,7 +10855,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.19.12"
-source = "git+https://github.com/MaterializeInc/rust-postgres#a18ab2bc0783f624b6303882794c53e14b05d192"
+source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
@@ -10868,7 +10868,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres#a18ab2bc0783f624b6303882794c53e14b05d192"
+source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "openssl",
  "tokio",
@@ -10879,7 +10879,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.12"
-source = "git+https://github.com/MaterializeInc/rust-postgres#a18ab2bc0783f624b6303882794c53e14b05d192"
+source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "base64 0.22.1",
  "byteorder",
@@ -10896,7 +10896,7 @@ dependencies = [
 [[package]]
 name = "postgres-replication"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#a18ab2bc0783f624b6303882794c53e14b05d192"
+source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "byteorder",
  "bytes",
@@ -10911,7 +10911,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#a18ab2bc0783f624b6303882794c53e14b05d192"
+source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "bytes",
  "chrono",
@@ -13891,7 +13891,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.15"
-source = "git+https://github.com/MaterializeInc/rust-postgres#a18ab2bc0783f624b6303882794c53e14b05d192"
+source = "git+https://github.com/MaterializeInc/rust-postgres#fcca71c8a6ee351eda7b6dfcd607055fa9a6d302"
 dependencies = [
  "async-trait",
  "byteorder",
