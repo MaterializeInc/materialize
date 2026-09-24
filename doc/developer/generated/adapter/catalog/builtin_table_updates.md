@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/builtin_table_updates.rs
-revision: 7053f0b019
+revision: cb32836512
 ---
 
 # adapter::catalog::builtin_table_updates
