@@ -158,7 +158,7 @@ module "ec2nodeclass_generic" {
 }
 
 module "nodepool_generic" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-nodepool?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-nodepool?ref=v13.10.0"
 
   name            = local.nodeclass_name_generic
   nodeclass_name  = local.nodeclass_name_generic
