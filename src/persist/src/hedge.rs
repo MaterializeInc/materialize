@@ -64,7 +64,7 @@ use crate::metrics::BlobHedgeMetrics;
 
 pub(crate) const BLOB_HEDGED_GET_ENABLED: Config<bool> = Config::new(
     "persist_blob_hedged_get_enabled",
-    false,
+    true,
     "Whether to hedge slow blob gets with a second request on a separate \
     connection pool (Materialize).",
     ParameterScope::Environment,
