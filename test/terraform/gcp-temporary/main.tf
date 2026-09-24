@@ -170,7 +170,7 @@ module "materialize_nodepool" {
 
 # 3. Set up PostgreSQL database instance for Materialize metadata storage
 module "database" {
-  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/database?ref=v13.2.1"
+  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/database?ref=v13.10.0"
   depends_on = [module.networking]
 
   databases = [local.database_config.database]
