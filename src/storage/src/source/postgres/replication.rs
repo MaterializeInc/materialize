@@ -314,7 +314,11 @@ pub(crate) fn render<'scope>(
             for stat in config.statistics.values() {
                 stat.set_offset_committed(resume_lsn.offset);
             }
-            trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
+            tracing::info!(
+                %id,
+                "timely-{worker_id} replication reader started lsn={resume_lsn}, \
+                    waiting for snapshot to complete"
+            );
 
             // Emitting an initial probe before we start waiting for rewinds ensures that we will
             // have a timestamp binding in the remap collection while the snapshot is processed.

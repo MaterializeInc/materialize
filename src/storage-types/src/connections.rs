@@ -2447,7 +2447,8 @@ impl PostgresConnection<InlinedConnection> {
             .port(self.port)
             .dbname(&self.database)
             .user(&self.user.get_string(in_task, secrets_reader).await?)
-            .ssl_mode(self.tls_mode);
+            .ssl_mode(self.tls_mode)
+            .application_name("materialize");
         if let Some(password) = self.password {
             let password = secrets_reader
                 .read_string_in_task_if(in_task, password)

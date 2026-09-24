@@ -412,13 +412,6 @@ pub(crate) fn render<'scope>(
                 definite_error_cap_set,
             ]: &mut [_; 5] = caps.try_into().unwrap();
 
-            trace!(
-                %id,
-                "timely-{worker_id} initializing table reader \
-                    with {} tables to snapshot",
-                    tables_to_snapshot.len()
-            );
-
             let connection_config = connection
                 .connection
                 .config(
@@ -433,6 +426,12 @@ pub(crate) fn render<'scope>(
             // This first slot is the permanent slot that will be used for reading the replication
             // stream.  A temporary slot is created further on to capture table snapshots.
             let replication_client = if is_snapshot_leader {
+                tracing::info!(
+                    %id,
+                    "timely-{worker_id} (leader) initializing table reader \
+                        with {} tables to snapshot",
+                    tables_to_snapshot.len()
+                );
                 let client = connection_config
                     .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
                     .await?;
@@ -472,8 +471,17 @@ pub(crate) fn render<'scope>(
             let client = match replication_client {
                 Some(client) => {
                     let tmp_slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
+                    tracing::info!(
+                        %id,
+                        "timely-{worker_id} (leader) creating temporary replication slot {tmp_slot}"
+                    );
                     let (snapshot_id, snapshot_lsn) =
                         export_snapshot(&client, &tmp_slot, true).await?;
+                    tracing::info!(
+                        %id,
+                        "timely-{worker_id} (leader) exported snapshot {snapshot_id} \
+                            @ {snapshot_lsn}"
+                    );
 
                     // Check PostgreSQL version. Ctid range scans are only efficient on PG >= 14
                     // due to improvements in TID range scan support.
@@ -771,13 +779,16 @@ pub(crate) fn render<'scope>(
             // The exporting worker should wait for all the other workers to commit before dropping
             // its client since this is what holds the exported transaction alive.
             if is_snapshot_leader {
-                trace!(%id, "timely-{worker_id} waiting for all workers to finish");
+                tracing::info!(
+                    %id,
+                    "timely-{worker_id} (leader) finished COPY, waiting for all workers to finish"
+                );
                 *snapshot_cap_set = CapabilitySet::new();
                 while snapshot_input.next().await.is_some() {}
-                trace!(%id, "timely-{worker_id} (leader) comitting COPY transaction");
+                tracing::info!(%id, "timely-{worker_id} (leader) committing COPY transaction");
                 simple_query(&client, sql!("COMMIT")).await?;
             } else {
-                trace!(%id, "timely-{worker_id} comitting COPY transaction");
+                tracing::info!(%id, "timely-{worker_id} committing COPY transaction");
                 simple_query(&client, sql!("COMMIT")).await?;
                 *snapshot_cap_set = CapabilitySet::new();
             }
