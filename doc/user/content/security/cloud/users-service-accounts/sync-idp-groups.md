@@ -49,9 +49,10 @@ superuser, so do not use it as the starting point for a role intended to grant
 limited database access.
 
 {{< note >}}
-$TODO: Before publishing this setup, confirm organization role management is
-enabled and verify the production JWT claim configuration used for database role
-sync. Confirm how to obtain the JWT key for a role created in the Console.
+$TODO: Before publishing this setup, verify that `oidc_group_role_sync_enabled`
+is enabled by default for Cloud organizations and confirm the production
+`oidc_group_claim` setting used for database role sync. Confirm how to obtain
+the JWT key for a role created in the Console.
 {{< /note >}}
 
 ## Before you begin
@@ -65,8 +66,6 @@ sync. Confirm how to obtain the JWT key for a role created in the Console.
 
 * You must have an identity provider that supports SCIM 2.0 provisioning
   (e.g., Okta or Microsoft Entra ID).
-* Your organization must have role mapping and custom organization role
-  management enabled. Contact Materialize support to enable them.
 * Only users assigned the **Organization Admin** role can manage provisioning,
   groups, and custom organization roles.
 * Group-to-role sync applies on **connection**, never mid-session. Materialize
