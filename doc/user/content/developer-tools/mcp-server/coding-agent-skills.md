@@ -66,13 +66,14 @@ npx skills remove materialize-dbt materialize-debug-freshness materialize-terraf
 ```
 
 ## Install as a plugin
+If you use Claude Code or Codex, you can also install all the skills using a single
+plugin. This allows you to keep skills updated automatically. 
 
-Claude Code and Codex can install all skills as one plugin, named
-`materialize`, instead of using `npx skills`. Use one method or the other, or
-each skill loads twice. Plugin skills are namespaced, for example
-`materialize:mz-dbt`.
+When the skills are installed using the plugin, they are namespaced, for example `materialize:mz-dbt`.
 
-For Claude Code:
+Don't install skills using both the plugin and `npx skills`, as this would result in duplicate installations.
+
+### Claude Code:
 
 ```
 /plugin marketplace add MaterializeInc/agent-skills
@@ -85,7 +86,7 @@ auto-update**. Claude Code then checks for updates in the background and asks
 you to run `/reload-plugins` when there is one. To update by hand, run `/plugin marketplace update materialize`, then `/plugin update
 materialize@materialize`, then `/reload-plugins`.
 
-For Codex:
+### Codex:
 
 ```bash
 codex plugin marketplace add MaterializeInc/agent-skills
