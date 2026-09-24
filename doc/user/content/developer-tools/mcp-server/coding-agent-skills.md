@@ -126,6 +126,18 @@ This grants access to just that one skill's directory. If you have multiple skil
 and want to cover them all at once, you can broaden the path to
 `~/.claude/skills`, though scoping to a single skill is the safer default.
 
+If you installed the skills [as a plugin](#install-as-a-plugin), grant the
+plugin's cache directory instead. The directory below it changes with every
+plugin update, so grant the parent:
+
+```json
+{
+  "permissions": {
+    "additionalDirectories": ["~/.claude/plugins/cache/materialize"]
+  }
+}
+```
+
 Claude Code's `auto` permission mode also removes the prompts, but applies to
 all tools rather than just this directory.
 
