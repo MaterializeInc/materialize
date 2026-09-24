@@ -16,6 +16,7 @@ import {
   Text,
   Th,
   Thead,
+  Tooltip,
   Tr,
   useDisclosure,
   useTheme,
@@ -31,7 +32,7 @@ import DeleteObjectMenuItem from "~/components/DeleteObjectMenuItem";
 import ErrorBox from "~/components/ErrorBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import OverflowMenu, { OVERFLOW_BUTTON_WIDTH } from "~/components/OverflowMenu";
-import { ClustersIcon } from "~/icons";
+import { ClustersIcon, InfoIcon } from "~/icons";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import {
   EmptyListHeader,
@@ -169,16 +170,20 @@ interface ReplicaTableProps {
 const ReplicaTable = (props: ReplicaTableProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const showDiskColumn = props.replicas.some((r) => r.disk);
-
+  const metricToolTip = (
+    <Tooltip label="Current value">
+      <InfoIcon mb={1} />
+    </Tooltip>
+  );
   return (
     <Table variant="standalone" data-testid="cluster-table" borderRadius="xl">
       <Thead>
         <Tr>
           <Th>Name</Th>
           <Th>Size</Th>
-          <Th>CPU (current)</Th>
-          <Th>Heap Utilization (current)</Th>
-          {showDiskColumn && <Th>Disk (current)</Th>}
+          <Th>CPU {metricToolTip}</Th>
+          <Th>Heap Utilization {metricToolTip}</Th>
+          {showDiskColumn && <Th>Disk {metricToolTip}</Th>}
           <Th width={OVERFLOW_BUTTON_WIDTH}></Th>
         </Tr>
       </Thead>
