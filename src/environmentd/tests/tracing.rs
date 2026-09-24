@@ -93,13 +93,11 @@ async fn test_expected_spans() {
         ] {
             let spans = storage
                 .all_spans()
-                .filter(|span| span.metadata().name() == name)
+                // `message_command` also names a separate DEBUG function span.
+                .filter(|span| span.metadata().name() == name && *span.metadata().level() == level)
                 .collect::<Vec<_>>();
             assert!(!spans.is_empty(), "missing span: {name}");
             assert!(spans.iter().any(|span| span.stats().entered > 0), "{name}");
-            for span in spans {
-                assert_eq!(*span.metadata().level(), level, "{name}");
-            }
         }
     }
 }
