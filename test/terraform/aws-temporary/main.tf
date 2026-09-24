@@ -102,7 +102,7 @@ module "base_node_group" {
 # v21 clusters do not bootstrap CoreDNS either, so the deployment, its service
 # account and the kube-dns Service are created here.
 module "coredns" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/coredns?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/coredns?ref=v13.10.0"
 
   node_selector                      = local.base_node_labels
   disable_default_coredns_autoscaler = false
