@@ -23,7 +23,38 @@ project's conventions: one object per file, file paths map to qualified
 names, how the deployment lifecycle works, unit test syntax, and how to get
 detailed help with `mz-deploy help <command>`.
 
-The skill is not installed by default. Install it in your project with:
+The skill is not installed by default. You can install it for yourself as a
+plugin, or install it in the project so that everyone who works in the
+repository gets it. Choose one, since installing both loads the skill twice.
+
+### Install as a plugin
+
+If you use Claude Code or Codex, install the Materialize agent skills plugin,
+which includes the `mz-deploy` skill. The plugin is installed for your user
+account and applies to all your projects.
+
+{{< tabs >}}
+{{< tab "Claude Code" >}}
+```
+/plugin marketplace add MaterializeInc/agent-skills
+/plugin install materialize@materialize
+```
+{{< /tab >}}
+{{< tab "Codex" >}}
+```bash
+codex plugin marketplace add MaterializeInc/agent-skills
+codex plugin add materialize@materialize
+```
+{{< /tab >}}
+{{< /tabs >}}
+
+To keep the plugin up to date, see [Agent
+Skills](/developer-tools/mcp-server/coding-agent-skills/#install-as-a-plugin).
+
+### Install in the project
+
+To share the skill with everyone who works in the repository, install it in
+the project with:
 
 ```sh
 npx -y skills add MaterializeInc/agent-skills -a universal -a claude-code --project
