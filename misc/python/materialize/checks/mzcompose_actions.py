@@ -454,15 +454,17 @@ class WaitReadyMz(MzcomposeAction):
 class PromoteMz(MzcomposeAction):
     """Promote environmentd to leader, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#post-apileaderpromote"""
 
-    def __init__(self, mz_service: str = "materialized", *, retire: str | None) -> None:
-        """See `Composition.promote_mz` for `retire`."""
+    def __init__(
+        self, mz_service: str = "materialized", *, retire_mz_service: str | None
+    ) -> None:
+        """See `Composition.promote_mz` for `retire_mz_service`."""
         self.mz_service = mz_service
-        self.retire = retire
+        self.retire_mz_service = retire_mz_service
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.promote_mz(self.mz_service, retire=self.retire)
+        c.promote_mz(self.mz_service, retire_mz_service=self.retire_mz_service)
 
         # Wait until new Materialize is ready to handle queries
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, self.mz_service)
