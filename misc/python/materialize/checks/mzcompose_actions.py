@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+from contextlib import nullcontext
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +26,7 @@ from materialize.mzcompose.services.materialized import DeploymentStatus, Materi
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
+from materialize.ui import CommandFailureCausedUIError
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
@@ -269,18 +271,48 @@ class SetupIcebergTesting(MzcomposeAction):
 
 class KillMz(MzcomposeAction):
     def __init__(
-        self, mz_service: str = "materialized", capture_logs: bool = False
+        self,
+        mz_service: str = "materialized",
+        capture_logs: bool = False,
+        fenced: bool = False,
     ) -> None:
+        """Kill `mz_service`.
+
+        Set `fenced` for a deployment that another one has fenced out. Its
+        environmentd may exit on its own, with code 0, before or while the kill
+        lands, so a container that is already gone and any exit code are
+        accepted.
+        """
         self.mz_service = mz_service
         self.capture_logs = capture_logs
+        self.fenced = fenced
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
         # Don't fail since we are careful to explicitly kill and collect logs
-        # of the services thus started
-        with c.override(Materialized(name=self.mz_service), fail_on_new_service=False):
-            c.kill(self.mz_service, wait=True)
+        # of the services thus started. A service the composition already
+        # defines needs no override. Overriding re-acquires its image, which
+        # exits in CI once a scenario has changed the materialized fingerprint,
+        # e.g. with BumpVersion.
+        with (
+            nullcontext()
+            if self.mz_service in c.compose["services"]
+            else c.override(
+                Materialized(name=self.mz_service), fail_on_new_service=False
+            )
+        ):
+            if self.fenced:
+                try:
+                    c.kill(self.mz_service, wait=False)
+                except CommandFailureCausedUIError:
+                    # The container can stop on its own between compose
+                    # listing it and killing it, which fails the kill.
+                    if c.is_running(self.mz_service):
+                        raise
+                c.wait(self.mz_service)
+            else:
+                c.kill(self.mz_service, wait=True)
 
             if self.capture_logs:
                 c.capture_logs(self.mz_service)
