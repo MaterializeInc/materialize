@@ -1259,4 +1259,190 @@ mod tests {
             vec![(1, 0..10), (2, 10..20), (3, 20..21)]
         );
     }
+
+    /// None of the SDK timeouts covers a response body, so a body that stops
+    /// arriving is bounded only by the SDK's stalled-stream protection (on by
+    /// default for downloads). The hedged-gets design relies on it, so these
+    /// tests pin it against a fake S3 endpoint.
+    mod stalled_body {
+        use std::net::SocketAddr;
+
+        use mz_dyncfg::{ConfigSet, ConfigUpdates};
+        use mz_ore::task::{AbortOnDropHandle, JoinSetExt};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::task::JoinSet;
+
+        use crate::hedge::{BLOB_HEDGED_GET_ENABLED, HedgeSibling, HedgedBlob};
+        use crate::metrics::BlobHedgeMetrics;
+
+        use super::*;
+
+        const BODY_LEN: usize = 1024 * 1024;
+
+        /// The production defaults of the `persist_blob_*_timeout` configs.
+        #[derive(Debug)]
+        struct ProdKnobs;
+
+        impl BlobKnobs for ProdKnobs {
+            fn operation_timeout(&self) -> Duration {
+                Duration::from_secs(180)
+            }
+            fn operation_attempt_timeout(&self) -> Duration {
+                Duration::from_secs(90)
+            }
+            fn connect_timeout(&self) -> Duration {
+                Duration::from_secs(7)
+            }
+            fn read_timeout(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+            fn is_cc_active(&self) -> bool {
+                false
+            }
+        }
+
+        /// A fake S3 endpoint on 127.0.0.1. A GET of the key `target` gets a
+        /// response head promising `BODY_LEN` bytes, then the body, or, if
+        /// `stall` is set, no body byte at all while the connection stays
+        /// open. Every other key gets a 404 NoSuchKey, which is what the health
+        /// check in `S3Blob::open` expects.
+        struct FakeS3 {
+            addr: SocketAddr,
+            _accept: AbortOnDropHandle<()>,
+        }
+
+        impl FakeS3 {
+            async fn start(stall: bool) -> FakeS3 {
+                let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+                let addr = listener.local_addr().expect("local addr");
+                let accept = mz_ore::task::spawn(|| "fake_s3_accept", async move {
+                    // Dropping this task aborts every connection handler.
+                    let mut conns = JoinSet::new();
+                    loop {
+                        let (stream, _) = listener.accept().await.expect("accept");
+                        conns.spawn_named(|| "fake_s3_conn", serve(stream, stall));
+                    }
+                })
+                .abort_on_drop();
+                FakeS3 {
+                    addr,
+                    _accept: accept,
+                }
+            }
+
+            async fn open(&self) -> S3Blob {
+                let config = S3BlobConfig::new(
+                    "bucket".into(),
+                    "prefix".into(),
+                    None,
+                    Some(format!("http://{}", self.addr)),
+                    Some("us-east-1".into()),
+                    Some(("user".into(), "pass".into())),
+                    Box::new(ProdKnobs),
+                    S3BlobMetrics::new(&MetricsRegistry::new()),
+                )
+                .await
+                .expect("config");
+                S3Blob::open(config).await.expect("open")
+            }
+        }
+
+        async fn serve(mut stream: TcpStream, stall: bool) {
+            let mut buf = Vec::new();
+            loop {
+                let head_end = loop {
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos;
+                    }
+                    let mut chunk = [0u8; 4096];
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                };
+                let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
+                buf.drain(..head_end + 4);
+                let path = head.split_whitespace().nth(1).unwrap_or_default();
+                if !path.contains("/target") {
+                    let body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                                <Error><Code>NoSuchKey</Code></Error>";
+                    let resp = format!(
+                        "HTTP/1.1 404 Not Found\r\n\
+                         Content-Type: application/xml\r\n\
+                         Content-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                    if stream.write_all(resp.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                let mut resp = format!(
+                    "HTTP/1.1 206 Partial Content\r\n\
+                     ETag: \"etag\"\r\n\
+                     Content-Range: bytes 0-{last}/{BODY_LEN}\r\n\
+                     Content-Type: application/octet-stream\r\n\
+                     Content-Length: {BODY_LEN}\r\n\r\n",
+                    last = BODY_LEN - 1,
+                )
+                .into_bytes();
+                if !stall {
+                    resp.resize(resp.len() + BODY_LEN, b'x');
+                }
+                if stream.write_all(&resp).await.is_err() {
+                    return;
+                }
+                if stall {
+                    // Hold the connection open until the client closes it.
+                    let mut chunk = [0u8; 4096];
+                    while let Ok(n) = stream.read(&mut chunk).await {
+                        if n == 0 {
+                            return;
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+
+        #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+        async fn stalled_body_fails_the_get() {
+            let server = FakeS3::start(true).await;
+            let blob = server.open().await;
+            // The protection fires after about 6 s without a byte. The
+            // generous timeout only catches a get that hangs.
+            let res = tokio::time::timeout(Duration::from_secs(60), blob.get("target"))
+                .await
+                .expect("a stalled body must fail the get, not hang it");
+            assert!(res.is_err(), "unexpected success");
+        }
+
+        #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+        async fn hedge_rescues_stalled_body() {
+            let primary_server = FakeS3::start(true).await;
+            let sibling_server = FakeS3::start(false).await;
+            let primary: Arc<dyn Blob> = Arc::new(primary_server.open().await);
+            let sibling: Arc<dyn Blob> = Arc::new(sibling_server.open().await);
+            let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
+            let mut updates = ConfigUpdates::default();
+            updates.add(&BLOB_HEDGED_GET_ENABLED, true);
+            updates.apply(&cfg);
+            let metrics = BlobHedgeMetrics::new(&MetricsRegistry::new());
+            let blob = HedgedBlob::new(
+                primary,
+                HedgeSibling::Isolated(sibling),
+                Arc::new(cfg),
+                metrics.clone(),
+            );
+            let res = tokio::time::timeout(Duration::from_secs(60), blob.get("target"))
+                .await
+                .expect("the hedge must rescue the get");
+            let bytes = res.expect("get").expect("blob exists");
+            assert_eq!(bytes.len(), BODY_LEN);
+            assert_eq!(metrics.won.get(), 1);
+        }
+    }
 }
