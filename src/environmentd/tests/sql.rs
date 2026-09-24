@@ -60,7 +60,7 @@ mod prepared_rewrites;
 
 /// A missing peer selection must not block unrelated compute installation or SQL,
 /// and dropping the pending index must release the publication barrier.
-#[mz_ore::test(tokio::test)]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_peer_index_pending_installation() {
     use mz_catalog::durable::{
         CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
@@ -75,16 +75,13 @@ async fn test_peer_index_pending_installation() {
         batch_execute(&internal, sql!("SET CLUSTER = default"))
             .await
             .unwrap();
-        batch_execute(
-            &client,
-            sql!(
-                "CREATE TABLE peer_input (a int); \
-                 INSERT INTO peer_input VALUES (1), (2), (3); \
-                 CREATE INDEX peer_template ON peer_input (a)"
-            ),
-        )
-        .await
-        .unwrap();
+        for statement in [
+            sql!("CREATE TABLE peer_input (a int)"),
+            sql!("INSERT INTO peer_input VALUES (1), (2), (3)"),
+            sql!("CREATE INDEX peer_template ON peer_input (a)"),
+        ] {
+            batch_execute(&client, statement).await.unwrap();
+        }
 
         let catalog_version = mz_environmentd::BUILD_INFO.semver_version();
         let persist = server
