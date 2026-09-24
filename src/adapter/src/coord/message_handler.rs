@@ -39,6 +39,7 @@ use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::AdapterNotice;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
@@ -47,7 +48,6 @@ use crate::coord::{
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::{AdapterNotice, TimestampContext};
 
 /// How long an introspection subscribe must have been delivering data before
 /// the arrangement sizes snapshot trusts its replica's rows.
@@ -1146,28 +1146,7 @@ impl Coordinator {
         let mut cached_oracle_ts = BTreeMap::new();
 
         for (conn_id, mut read_txn) in std::mem::take(&mut self.pending_linearize_read_txns) {
-            if let TimestampContext::TimelineTimestamp {
-                timeline,
-                chosen_ts,
-                oracle_ts,
-            } = read_txn.timestamp_context()
-            {
-                let oracle_ts = match oracle_ts {
-                    Some(oracle_ts) => oracle_ts,
-                    None => {
-                        // There was no oracle timestamp, so no need to delay.
-                        ready_txns.push(read_txn);
-                        continue;
-                    }
-                };
-
-                if chosen_ts <= oracle_ts {
-                    // Chosen ts was already <= the oracle ts, so we're good
-                    // to go!
-                    ready_txns.push(read_txn);
-                    continue;
-                }
-
+            if let Some((timeline, chosen_ts)) = read_txn.timestamp_to_linearize() {
                 // See what the oracle timestamp is now and delay when needed.
                 let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
                 let current_oracle_ts = match current_oracle_ts {
@@ -1205,23 +1184,7 @@ impl Coordinator {
 
             let now = Instant::now();
             for ready_txn in ready_txns {
-                let span = tracing::debug_span!("retire_read_results");
-                ready_txn.otel_ctx.attach_as_parent_to(&span);
-                let _entered = span.enter();
-                self.metrics
-                    .linearize_message_seconds
-                    .with_label_values(&[
-                        ready_txn.txn.label(),
-                        if ready_txn.num_requeues == 0 {
-                            "true"
-                        } else {
-                            "false"
-                        },
-                    ])
-                    .observe((now - ready_txn.created).as_secs_f64());
-                if let Some((ctx, result)) = ready_txn.txn.finish() {
-                    ctx.retire(result);
-                }
+                ready_txn.finish(&self.metrics, now);
             }
         }
 
