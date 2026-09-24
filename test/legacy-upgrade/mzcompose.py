@@ -290,11 +290,11 @@ def test_upgrade_from_version(
                 c.await_mz_deployment_status(
                     DeploymentStatus.READY_TO_PROMOTE, mz_service
                 )
-                c.promote_mz(mz_service)
-                c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
-                mz_service = (
+                other_mz_service = (
                     "materialized2" if mz_service == "materialized" else "materialized"
                 )
+                c.promote_mz(mz_service, retire=other_mz_service)
+                mz_service = other_mz_service
                 deploy_generation += 1
 
     print("Upgrading to final version")
@@ -318,8 +318,10 @@ def test_upgrade_from_version(
     with c.override(mz_to):
         c.up(mz_service)
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
-        c.promote_mz(mz_service)
-        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+        c.promote_mz(
+            mz_service,
+            retire="materialized2" if mz_service == "materialized" else "materialized",
+        )
 
     with c.override(
         Testdrive(

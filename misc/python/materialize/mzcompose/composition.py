@@ -1331,7 +1331,8 @@ class Composition:
                     with self.override(Materialized()):
                         self.up("materialized")
                 else:
-                    self.promote_mz()
+                    # The previous generation was killed above.
+                    self.promote_mz(retire=None)
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
@@ -1798,7 +1799,19 @@ class Composition:
             f"Timed out waiting for {mz_service} to reach Mz deployment status {status.value}, still in status {result.get('status')}"
         )
 
-    def promote_mz(self, mz_service: str = "materialized") -> None:
+    def promote_mz(
+        self, mz_service: str = "materialized", *, retire: str | None
+    ) -> None:
+        """Promote `mz_service` to leader and retire the generation it replaces.
+
+        `retire` names the service running the previous generation. Once
+        `mz_service` is leader, the `retire` service is killed with
+        `kill_fenced_mz`, as the orchestrator removes an old generation after a
+        promotion. Pass `None` only when no other generation runs, or when the
+        caller handles the fenced generation itself, for example by observing
+        it stop on its own or by calling `kill_fenced_mz` later.
+        """
+        assert retire != mz_service, f"cannot retire the promoted {mz_service}"
         result = json.loads(
             self.exec(
                 mz_service,
@@ -1811,6 +1824,40 @@ class Composition:
             ).stdout
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
+
+        if retire is not None:
+            # Kill the old generation only after the new one has fenced it.
+            self.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+            self.kill_fenced_mz(retire)
+
+    def kill_fenced_mz(self, mz_service: str) -> None:
+        """Kill a Materialize service that a newer generation has fenced out.
+
+        `mz_service` must be defined in the composition. A container that has
+        already stopped and any exit code are accepted. The killed container
+        keeps its logs, and the next `down` or the CI hook collects them.
+        """
+        # The fenced environmentd exits with code 0. A container started with
+        # `restart="on-failure"` then sleeps instead of exiting (see the
+        # materialized entrypoint), and the clusterd processes it spawned keep
+        # running. The new generation's process orchestrator cannot reap them,
+        # because they run in another container's PID namespace.
+        #
+        # NOTE: Do not wrap this in an override. Overriding re-acquires the
+        # image, which exits in CI once the materialized fingerprint changed,
+        # e.g. after a version bump.
+        assert (
+            mz_service in self.compose["services"]
+        ), f"{mz_service} is not defined in the composition"
+        try:
+            self.kill(mz_service, wait=False)
+        except CommandFailureCausedUIError:
+            # A container without a restart policy stops on its own once
+            # fenced. If it stops between compose listing it and killing it,
+            # the kill fails.
+            if self.is_running(mz_service):
+                raise
+        self.wait(mz_service)
 
     def cloud_hostname(
         self, quiet: bool = False, timeout_secs: int = 180, poll_interval: float = 2.0

@@ -179,15 +179,13 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
             c.await_mz_deployment_status(
                 DeploymentStatus.READY_TO_PROMOTE, state.mz_service
             )
-            c.promote_mz(state.mz_service)
-            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, state.mz_service)
-            c.stop(
-                (
+            c.promote_mz(
+                state.mz_service,
+                retire=(
                     "materialized2"
                     if state.mz_service == "materialized"
                     else "materialized"
                 ),
-                wait=True,
             )
 
         # Balancerd's resolver is fixed at startup and still points at the
