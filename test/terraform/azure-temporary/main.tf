@@ -261,7 +261,7 @@ module "self_signed_cluster_issuer" {
 
 # 7. Install Materialize Operator
 module "operator" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/operator?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/operator?ref=v13.10.0"
 
   name_prefix = var.name_prefix
   location    = var.location
