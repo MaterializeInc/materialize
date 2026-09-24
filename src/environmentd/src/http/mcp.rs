@@ -190,8 +190,7 @@ struct ClientInfo {
 #[serde(rename_all = "snake_case")]
 enum ToolsCallParams {
     // Agent endpoint tools
-    // Uses an ignored empty struct so MCP clients sending `"arguments": {}` can deserialize.
-    GetDataProducts(#[serde(default)] ()),
+    GetDataProducts(NoArguments),
     GetDataProductDetails(GetDataProductDetailsParams),
     ReadDataProduct(ReadDataProductParams),
     Query(QueryParams),
@@ -199,15 +198,25 @@ enum ToolsCallParams {
     QuerySystemCatalog(QuerySystemCatalogParams),
 }
 
+/// Arguments of a tool that takes none. A struct rather than `()`, because
+/// `serde_json::from_value` rejects `{}` for `()` when the workspace enables
+/// `preserve_order`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoArguments {}
+
 /// `arguments` is optional in the MCP spec, but adjacent tagging requires the
-/// content key, so a call that omits it is given an empty object.
+/// content key, so a call that omits it, or sends `null`, is given `{}`.
 fn deserialize_tools_call<'de, D>(deserializer: D) -> Result<ToolsCallParams, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let mut params = serde_json::Value::deserialize(deserializer)?;
     if let serde_json::Value::Object(fields) = &mut params {
-        fields.entry("arguments").or_insert_with(|| json!({}));
+        let arguments = fields.entry("arguments").or_insert(serde_json::Value::Null);
+        if arguments.is_null() {
+            *arguments = json!({});
+        }
     }
     serde_json::from_value(params).map_err(serde::de::Error::custom)
 }
@@ -2378,7 +2387,7 @@ mod tests {
             assert!(
                 matches!(
                     req.method,
-                    McpMethod::ToolsCall(ToolsCallParams::GetDataProducts(()))
+                    McpMethod::ToolsCall(ToolsCallParams::GetDataProducts(NoArguments {}))
                 ),
                 "for {body}"
             );
