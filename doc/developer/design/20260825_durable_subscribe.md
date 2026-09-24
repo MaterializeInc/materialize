@@ -207,43 +207,44 @@ hold provides, and it is provided to whoever can read the collection: a plain
 `SUBSCRIBE TO <target> AS OF <x>` for any `x` in the window also works, and works
 *because* a subscription is holding `since` back.
 
-### One hold, not two
+### The attached dataflow's own hold
 
-A running subscribe dataflow needs its input to stay readable, and today the
-compute controller gives it a hold pinned at the dataflow's as-of that never
-relaxes for the collection's lifetime. `forward_implied_capabilities` in
-`src/compute-client/src/controller/instance.rs` is the only thing that would
-relax it, and it returns early unless the cluster has no replicas, then skips
-write-only collections with the comment "Collection is write-only, i.e. a sink."
-Its own documentation names the consequence: forwarding is what "relaxes read
-holds on inputs to forwarded collections, allowing their compaction".
+An attach runs an ordinary subscribe dataflow, and that dataflow takes its own
+read holds on the target. Those holds do not pin the attach-time as-of. The
+compute controller tracks a subscribe as a write-only collection, and
+`maybe_update_global_write_frontier` in
+`src/compute-client/src/controller/instance.rs` downgrades a write-only
+collection's implied read hold to one step behind its write frontier each time
+that frontier advances. The input holds follow, as do the per-replica input
+holds, which track the replica's input frontier. A running subscribe therefore
+holds its input only at what it has not yet emitted.
 
-Left alone, that defeats the feature. A client that connects once and stays
-connected acknowledges faithfully, its position tracks the write frontier, the
-acknowledgement deadline never fires, and `since` sits at its attach-time as-of forever.
-Retention would be bounded only across reconnections, which is the abnormal
-case.
+The two holds compose with no integration. The client can only acknowledge what
+it has received, so `H` trails the dataflow's hold, and the target's `since` is
+bounded by `H` alone. While the client stays connected and acknowledges,
+retention is the unacknowledged window, which is the bound the success criteria
+ask for. After a disconnect the dataflow's hold is released and the
+subscription's hold remains.
 
-Therefore the subscription's hold **is** the dataflow's input floor. The durable
-attach installs no separate pinned hold; the dataflow reads behind the
-subscription's hold, and the hold moves when the client acknowledges. This is
-also why the general objection in `forward_implied_capabilities` does not apply
-here. That comment worries that advancing a sink's capability could skip input
-times across a replica restart, with no way to know whether the external
-consumer had seen them. A durable subscription answers exactly that question:
-`H` is the client's own statement about what it has processed, so restarting at
-`H` is correct by construction rather than a guess.
+The one exception is a cluster with no replicas. There the write frontier stops
+advancing, and `forward_implied_capabilities` skips write-only collections, so
+the attached dataflow keeps its hold at the last emitted time until the reader
+disconnects. That hold is no older than what the client received, and it lasts
+only as long as the session.
 
 ### Object model
 
 ```mzsql
-CREATE DURABLE SUBSCRIPTION <name> ON <object> WITH (ACKNOWLEDGE WITHIN <interval>);
-CREATE DURABLE SUBSCRIPTION <name> WITH (ACKNOWLEDGE WITHIN <interval>) AS <select>;
+CREATE DURABLE SUBSCRIPTION <name> ON <object> [<envelope>] WITH (ACKNOWLEDGE WITHIN <interval>);
+CREATE DURABLE SUBSCRIPTION <name> WITH (ACKNOWLEDGE WITHIN <interval>) AS <select> [<envelope>];
 ALTER DURABLE SUBSCRIPTION <name> SET (ACKNOWLEDGE WITHIN <interval>);
 ALTER DURABLE SUBSCRIPTION <name> RESET;
 ALTER DURABLE SUBSCRIPTION <name> OWNER TO <role>;
 DROP DURABLE SUBSCRIPTION [IF EXISTS] <name>;
 ```
+
+`<envelope>` is `ENVELOPE UPSERT (KEY (...))` or `ENVELOPE DEBEZIUM (KEY (...))`,
+as in `SUBSCRIBE`. See "Attaching" for why both are supported.
 
 The option is spelled to mirror `RETAIN HISTORY FOR '1h'`, the adjacent retention
 control, rather than as a `TTL` acronym. It names the obligation it imposes on
@@ -279,9 +280,10 @@ gate that is off in production would fail catalog boot.
 
 The `AS <select>` form accepts a projection and filter over a single collection,
 which is exactly the class that lowers to a map-filter-project pushed into the
-persist read. That class needs no state, no dataflow, and no rehydration, and
-therefore no reconciliation point of its own, which is what keeps it compatible
-with a hold on the underlying collection. Filters and projections commute with
+persist read. An attach still builds a dataflow, as every `SUBSCRIBE` does, but
+a dataflow of this class holds no state and has nothing to rehydrate, and so has
+no reconciliation point of its own, which is what keeps it compatible with a
+hold on the underlying collection. Filters and projections commute with
 differencing, and a projection that collapses distinct rows merely consolidates
 their diffs into a valid stream over the projected relation.
 
@@ -331,26 +333,46 @@ redundant data; the failure mode of an off-by-one as-of is missing data.
 arithmetic trap, so a batch consumer can drain up to a timestamp, commit,
 acknowledge that same timestamp, and exit.
 
-Three clauses of plain `SUBSCRIBE` are rejected on this form. `ENVELOPE UPSERT`
-and `ENVELOPE DEBEZIUM` cannot be produced correctly when resuming without a
-snapshot, because neither the sink nor the server holds the prior value for a key
-the resumed stream has not seen, and since `SNAPSHOT` defaults to `false` here
-the broken combination would be the default one. `AS OF AT LEAST` asks the system
-to choose a timestamp no earlier than a floor, which conflicts with resolving the
-as-of from `H`. `WITHIN TIMESTAMP ORDER BY` is unaffected and remains available,
-since it only orders rows within a timestamp.
+One clause of plain `SUBSCRIBE` is rejected on this form. `AS OF AT LEAST` asks
+the system to choose a timestamp no earlier than a floor, which conflicts with
+resolving the as-of from `H`.
 
-Rejecting the envelopes reads like ruling out the keyed consumer, so it is worth
-saying why it does not. A consumer that maintains its own replica already holds
-the prior value, which is why every sync engine surveyed keeps its own previous
-state rather than asking the upstream for it. The raw diff stream is what those
-consumers want, and it gives them more than a Postgres feed does: every
-retraction carries the **full old row**, which is `REPLICA IDENTITY FULL`
-semantics by construction, with no per-table configuration and no table
-ownership. `WITHIN TIMESTAMP ORDER BY mz_diff` then orders every retraction
-before every addition within a timestamp, which is exactly the ordering an
-insert-or-replace store needs. So the keyed consumer is served by the default
-form, not excluded from it.
+`ENVELOPE UPSERT` and `ENVELOPE DEBEZIUM` are supported, and they belong to the
+definition rather than the attach for the same reason the projection does: they
+fix the row shape the client applies and deduplicates against. Both envelopes
+are compatible with resuming because both are stateless per timestamp.
+`process_response` in `src/adapter/src/active_compute_sink.rs` groups each batch
+by timestamp and key and maps the shape of each group to one output row. A lone
+addition is an upsert, or a Debezium insert. A lone retraction is a delete. A
+retraction paired with an addition is an upsert, and its Debezium before-image
+is the retracted row itself. Any other shape is a key violation. Nothing is read
+from earlier timestamps, and a batch always ends at a frontier, so no group
+straddles a batch or a resume boundary. A resumed stream therefore produces the
+same rows for a timestamp that the original stream produced.
+
+Key-violation detection is per timestamp in plain `SUBSCRIBE` too, and resuming
+weakens it in one place only. Duplicate values for a key that already existed at
+the as-of are reported when they arrive together in a snapshot, so a resume
+without a snapshot does not report them. Whichever earlier read took the
+snapshot reported them, and the reconcile mode under "Snapshot on resume"
+reports them again. An envelope emits at most one row per key per timestamp,
+not per batch, since one batch spans every timestamp up to a progress message,
+so a consumer applies rows in `mz_timestamp` order. `WITHIN TIMESTAMP ORDER BY`
+cannot be combined with an envelope, as in plain `SUBSCRIBE`, and remains
+available on a subscription defined without one.
+
+The raw diff stream stays the default, and it is what a consumer that maintains
+its own replica wants. Every sync engine surveyed keeps its own previous state
+rather than asking the upstream for it. For those consumers the diff stream
+gives more than a Postgres feed does: every retraction carries the **full old
+row**, which is `REPLICA IDENTITY FULL` semantics by construction, with no
+per-table configuration and no table ownership. `WITHIN TIMESTAMP ORDER BY
+mz_diff` then orders every retraction before every addition within a timestamp.
+The default order is by row, not by diff, so a consumer that relies on
+retractions arriving first must request that order. That clause is gated behind
+`enable_within_timestamp_order_by_in_subscribe`, which defaults to off, so until
+it ships such a consumer sorts each timestamp itself or uses an envelope. The envelopes serve the
+consumer that writes into a key-value store and wants one operation per key.
 
 ### Snapshot on resume
 
@@ -400,11 +422,12 @@ acknowledgement at all, so this is a requirement rather than a recommendation.
 exists on the target, dataflow construction imports the index instead of the
 source, which puts a compute collection in the id bundle, and subscribe
 constrains its as-of by `least_valid_read()` over the whole bundle. The
-subscription holds the storage `since`; the index's compute `since` follows the
-one-second default, so a resume from an older position would fail with
-`AdapterError::ImpossibleTimestampConstraints`. For an indexed relation, which
-is the normal case for the console, that would make every resume fail. Reading
-from storage is also the cheaper path, since it avoids rehydration.
+subscription holds the storage `since`, while the index's compute `since`
+follows the one-second default, so a resume from an older position would fail
+with `AdapterError::ImpossibleTimestampConstraints`. For an indexed relation,
+which is the normal case for the console, that would make every resume fail.
+The price is a persist read where an index import would have read memory, which
+is the cost of the history being durable.
 
 Attach takes an epoch and fences any previous reader, whose stream errors out.
 Fencing rather than lease expiry suits the intended clients, because a
@@ -585,6 +608,38 @@ Filtering is the better default and positioning is the better optimization. The
 consumer keeps owning correctness either way, which is where it has to live,
 since only the consumer knows what it committed.
 
+### Consuming several subscriptions
+
+A consumer that needs one consistent cut across several collections, for
+example to keep several search indexes or tables at the same timestamp, reads one
+subscription per collection and delivers only up to their common frontier, the
+minimum over the latest progress message of each stream. It applies every
+stream's updates below that frontier in one step, records the frontier, and
+then acknowledges each subscription up to it. The acknowledgements need not be
+atomic, because each is a claim the consumer has already made true by
+committing, and a crash between them only leaves some subscriptions retaining
+more than they need.
+
+Recovery after expiry needs no grouped operation, and the global timestamp order
+is the reason. A reset places each expired subscription at its own position
+`t_i`, which the attach reports in its opening progress message and which stamps
+every snapshot row. The consumer attaches each expired subscription `WITH
+(RESET)` and each live one as usual, then re-establishes the joint cut at `t*`,
+the largest `t_i`. It buffers every stream until its progress passes `t*`, and
+then applies in one step the snapshot and the diffs through `t*` for each reset
+collection, and the diffs through `t*` for each live one. The snapshot replaces
+what the consumer held for that collection, so rows absent from it are deleted.
+Every position involved stays readable: a live subscription's hold is at or
+below its `H`, and a reset one's hold starts at its `t_i`, both at or below
+`t*`.
+
+The price is buffering. The consumer holds each reset stream's diffs between its
+`t_i` and `t*`, which grows with the spread between the resets rather than with
+the outage, and it holds or stages the snapshots, which any consistent
+re-snapshot of several collections must do regardless. A grouped reset that
+placed every member at one timestamp would remove only the first cost, so it is
+listed under "Follow-up work" rather than required.
+
 ### Scale
 
 The target is one to ten thousand concurrent subscriptions, which are
@@ -701,12 +756,18 @@ Then the cases that would otherwise fail silently:
   wall-clock, so drive it with a very short deadline rather than by waiting.
 * **`DROP` of the target without `CASCADE`** fails while a subscription exists.
 * **Rejected surface**: temporal filters, multi-collection `FROM`, joins and
-  aggregations, `ENVELOPE UPSERT`, `ENVELOPE DEBEZIUM`, and `AS OF AT LEAST`.
+  aggregations, and `AS OF AT LEAST`.
+* **Envelopes across a resume.** Define a subscription with `ENVELOPE UPSERT`
+  and with `ENVELOPE DEBEZIUM`, update a key on both sides of an acknowledged
+  position, resume, and assert the resumed rows match those a single
+  uninterrupted `SUBSCRIBE` with the same envelope produced for the same
+  timestamps.
 * **Acknowledging at or below the current position** is accepted as a no-op.
 * **A consistent cut across two subscriptions**: buffer both to the same
   timestamp and assert the union matches a `SELECT ... AS OF` at that timestamp.
-  This is the property that makes the single-target restriction tolerable, so it
-  should be asserted rather than assumed.
+  Then expire one, reset it, re-establish the cut at the reset position, and
+  assert the same. This is the property that makes the single-target
+  restriction tolerable, so it should be asserted rather than assumed.
 
 ### Known quirks and interactions
 
@@ -755,15 +816,12 @@ Documenting them is deliberate; fixing them is separable work.
   new shape: the arity changes *at a timestamp*, so a boundary does exist even
   under `SNAPSHOT = false`.
 
-* **Combining several subscriptions is safe but unassisted.** Because a timestamp
-  is a global cut, a consumer reading N collections can buffer each stream until
-  its progress message passes `t` and then apply the union at `t` as a
-  transactionally consistent snapshot. That works today and needs nothing from
-  us, but the consumer pays for it: liveness is the minimum over N, so one
-  `REFRESH` target paces the whole set; expiry is per-subscription, so one
-  expiry breaks the joint cut and recovery is per-collection; and each checkpoint
-  costs N `ACKNOWLEDGE` statements. The recipe should be documented, and it is
-  the argument for the multi-target follow-up.
+* **Combining several subscriptions is safe but unassisted.** The recipe under
+  "Consuming several subscriptions" needs nothing new from us, but the consumer
+  pays for it. Liveness is the minimum over N, so one `REFRESH` target paces the
+  whole set. Expiry is per subscription, so one expiry breaks the joint cut until
+  the consumer re-establishes it. Each checkpoint costs N `ACKNOWLEDGE`
+  statements. These costs are the argument for the multi-target follow-up.
 
 * **Timelines are not comparable.** Collections in different timelines have
   incomparable timestamps, so the recipe above is unsound across them. A
@@ -900,13 +958,14 @@ change streams, and log-based consumer groups do not provide. The single-target
 design here is the smaller first step, and multiple targets extend the same hold
 and cursor machinery rather than requiring a different one.
 
+**A grouped reset.** Resetting several expired subscriptions at one timestamp
+would spare a multi-collection consumer the buffering described under
+"Consuming several subscriptions". It needs a single timestamp readable on every
+target, chosen the way a multi-collection `SELECT` chooses one.
+
 **As-of selection for newly created objects.** The quirk above is worth fixing
 on its own merits: a new dataflow needs a readable as-of, not the oldest
 readable one.
-
-**Relaxing sink input holds in general.** This design special-cases durable
-subscriptions because their consumer's position is known. The same reasoning may
-generalize to other sinks that track consumer progress.
 
 ## Open questions
 

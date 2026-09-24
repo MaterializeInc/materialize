@@ -604,8 +604,9 @@ Materialize tracks your position for you. You report progress with
 [`ACKNOWLEDGE`](/sql/acknowledge/), Materialize retains exactly the history you
 have not acknowledged, and you resume without supplying a timestamp. `SNAPSHOT`
 defaults to `false` on this form, and a requested snapshot is taken at your
-acknowledged position. `ENVELOPE UPSERT`, `ENVELOPE DEBEZIUM`, and `AS OF AT
-LEAST` are not supported on this form. Only one reader may use a durable
+acknowledged position. An envelope, if any, is part of the subscription's
+definition rather than this statement, and `AS OF AT LEAST` is not supported on
+this form. Only one reader may use a durable
 subscription at a time, and subscribing again takes over from the previous
 reader.
 

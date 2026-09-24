@@ -40,12 +40,14 @@ processed. See [Delivery semantics](#delivery-semantics).
 
 ```mzsql
 CREATE DURABLE SUBSCRIPTION <name> ON <object_name>
+[ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
 WITH (ACKNOWLEDGE WITHIN <interval>)
 ;
 
 CREATE DURABLE SUBSCRIPTION <name>
 WITH (ACKNOWLEDGE WITHIN <interval>) AS
 SELECT <columns> FROM <object_name> [WHERE <predicate>]
+[ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
 ;
 ```
 
@@ -55,6 +57,7 @@ SELECT <columns> FROM <object_name> [WHERE <predicate>]
 | `<object_name>` | The source, table, or materialized view to subscribe to. |
 | `ACKNOWLEDGE WITHIN` | **Required.** How long you may go without acknowledging. A positive [interval](/sql/types/interval/) value, for example `'1m'`. See [Acknowledgement deadline](#acknowledgement-deadline). |
 | `AS SELECT ...` | An optional projection and filter over a single object. See [Supported objects and queries](#supported-objects-and-queries). |
+| `ENVELOPE UPSERT` / `ENVELOPE DEBEZIUM` | An optional output envelope, with the same meaning as for [`SUBSCRIBE`](/sql/subscribe/#envelope-upsert). See [Envelopes](#envelopes). |
 
 ## Details
 
@@ -74,8 +77,8 @@ data at all, and an index lives in the memory of a single cluster, so in neither
 case is there durable history to retain.
 
 The `AS SELECT` form accepts a projection and a filter over a **single** object.
-Materialize evaluates them while reading the object, so this form builds no
-dataflow, adds no compute cost, and resumes exactly as the `ON <object_name>`
+Materialize evaluates them while reading the object, so this form keeps no
+state, has nothing to rehydrate, and resumes exactly as the `ON <object_name>`
 form does. This covers selecting a subset of columns, computing derived columns,
 and filtering rows.
 
@@ -216,10 +219,26 @@ bandwidth; asking for the wrong starting timestamp costs data.
 bounded batch: read `UP TO` a timestamp, commit, acknowledge `UP TO` that same
 timestamp, and disconnect.
 
-`ENVELOPE UPSERT`, `ENVELOPE DEBEZIUM`, and `AS OF AT LEAST` are not supported
-on a durable subscription. The envelopes cannot be produced correctly when
-resuming without a snapshot, because neither the sink nor Materialize holds the
-prior value for a key the resumed stream has not seen.
+`AS OF AT LEAST` is not supported on a durable subscription, because the
+starting position comes from your acknowledgement rather than from a floor.
+
+### Envelopes
+
+`ENVELOPE UPSERT` and `ENVELOPE DEBEZIUM` are part of the subscription's
+definition, so every reader receives the same row shape. They behave as they do
+for a plain [`SUBSCRIBE`](/sql/subscribe/#envelope-upsert), and they behave the
+same after a resume: Materialize computes each output row from the changes to
+one key at one timestamp, including the Debezium before-image, which is the
+retracted row. Nothing depends on what an earlier connection received.
+
+An envelope emits at most one row per key **per timestamp**. A batch between two
+progress messages can span several timestamps, so apply rows in `mz_timestamp`
+order rather than assuming one row per key per batch.
+
+Key violations are detected within a timestamp, as for a plain `SUBSCRIBE`. When
+you resume without a snapshot, duplicate values that already existed at your
+position are not reported again. Reconnect with `SNAPSHOT true` to have them
+reported.
 
 ### Snapshots
 
@@ -302,6 +321,29 @@ This is deliberate. It means a client that reconnects does not have to wait for
 its own abandoned connection to time out. It also means you should not point two
 application instances at the same durable subscription, and if you do, they will
 take turns rather than share the work.
+
+### Reading several subscriptions consistently
+
+Materialize timestamps are a single order across all objects, so one timestamp
+names a consistent state of every object you read. To keep several destinations
+in step, for example two search indexes or two tables in another database, create
+one subscription per object and read them together:
+
+1.  Track the latest progress message of each stream. Their minimum is the
+    common frontier.
+1.  Apply every stream's updates below the common frontier in one step, and
+    record that frontier.
+1.  Acknowledge each subscription up to the common frontier. The
+    acknowledgements do not need to be atomic, because each one only claims
+    what you have already committed.
+
+If one or more of the subscriptions [expires](#expiry), subscribe to each
+expired one `WITH (RESET)` and to the others as usual. Each reset lands at its
+own position, which is the `mz_timestamp` of its snapshot rows and of its first
+progress message. Take the largest of those positions, buffer every stream until
+its progress passes it, and then apply everything up to it in one step. For each
+reset object, the snapshot replaces what you held, so delete rows it does not
+contain. The result is again a consistent state of all objects at one timestamp.
 
 ### Changes to the target object
 
