@@ -344,7 +344,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_blob_connect_timeout
     persist_blob_hedged_get_budget_ratio
     persist_blob_hedged_get_delay
-    persist_blob_hedged_get_enabled
     persist_blob_hedged_get_max_concurrent
     persist_blob_hedged_get_warm_interval
     persist_blob_operation_attempt_timeout

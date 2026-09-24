@@ -295,7 +295,7 @@ Five dyncfgs, all readable per call so LaunchDarkly changes apply live:
 
 | Name | Default | Purpose |
 | --- | --- | --- |
-| `persist_blob_hedged_get_enabled` | `false` | Master switch for hedging. |
+| `persist_blob_hedged_get_enabled` | `true` | Master switch for hedging. |
 | `persist_blob_hedged_get_delay` | `2s` | Time in flight before the hedge fires. |
 | `persist_blob_hedged_get_max_concurrent` | `2` | Memory bound. |
 | `persist_blob_hedged_get_budget_ratio` | `0.01` | Rate bound. |
@@ -494,12 +494,13 @@ configuration becomes worthwhile together with delay injection in
 
 ## Rollout
 
-The feature ships dark: the code path is present everywhere, but hedging
-is off by default in production (and on in CI, see Testing) until enabled
-at runtime. Enablement happens per environment through LaunchDarkly, which
-requires the LD flags (at minimum `persist_blob_hedged_get_enabled` and
-the delay) to be created first: until then the dyncfgs exist only with
-their code defaults. On enablement,
+The feature shipped dark: the code path was present everywhere, but
+hedging was off by default (and on in CI, see Testing) until enabled at
+runtime. Cloud enabled it per environment through LaunchDarkly, in steps
+that reached every cloud environment. The compiled-in default is now on,
+which enables hedging for deployments that do not set the parameter, such
+as self-managed ones. `enabled = false` remains the kill switch. On
+enablement,
 expect the old detection signals to fade (see Observability),
 `hedges_fired` to run at a low background rate (measured on a busy
 reference environment: gets over the 2s delay ran at roughly 4 per day
