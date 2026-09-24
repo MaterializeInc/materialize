@@ -29,12 +29,14 @@ This generates:
 
 The macro determines function arity from parameter count and types, after excluding `&self` receivers and trailing `&RowArena` parameters:
 
-| Effective params | Dispatches to | Notes |
-|---|---|---|
-| 0 | Error | Nullary functions are not supported. |
-| 1 | `EagerUnaryFunc` | Supports `&RowArena` and `&self`. |
-| 2 | `EagerBinaryFunc` | Supports `&RowArena` and `&self`. |
-| 3+ | `EagerVariadicFunc` | Supports `&RowArena` and `&self`. |
+| Effective params | Dispatches to |
+|---|---|
+| 0 | Error: nullary functions are not supported. |
+| 1 | `EagerUnaryFunc` |
+| 2 | `EagerBinaryFunc` |
+| 3+ | `EagerVariadicFunc` |
+
+Every arity accepts a `&self` receiver and a trailing `&RowArena`.
 
 **Exception:** If any parameter uses `Variadic<T>` or `OptionalArg<T>`, the function is always treated as variadic, regardless of parameter count.
 
@@ -194,7 +196,8 @@ struct's own state rather than being a fixed string, so the call site keeps a
 hand-written `Display` impl. `RangeCreate` is an example: it picks between
 `int4range`, `int8range`, `daterange`, `numrange`, `tsrange`, and `tstzrange` based on
 its `elem_type` field. Setting it to `true` rejects `sqlname`, whose only reader is the
-suppressed impl.
+suppressed impl, and requires a `&self` receiver, since a unit struct has no state to
+display.
 
 * **Type:** `bool`
 * **Default:** `false`
@@ -208,8 +211,8 @@ arity's table is rejected with an error naming both the modifier and the arity.
 
 ### Struct name
 
-The struct name can be specified as the first positional argument, at any arity.
-This is required when a `&self` receiver is present (the struct is defined externally):
+The struct name defaults to the camel-cased function name, and the first positional argument to the `sqlfunc` macro overrides it.
+With a `&self` receiver the macro does not define the struct, so the name must match the one defined externally:
 
 ```rust
 #[sqlfunc(
@@ -228,8 +231,7 @@ fn array_fill<'a>(
 }
 ```
 
-Without a `&self` receiver, the struct name defaults to the camel-cased function name.
-It can still be overridden with the first positional argument:
+Without `&self`, the macro defines the struct under that name:
 
 ```rust
 #[sqlfunc(Replace, sqlname = "replace")]
@@ -252,7 +254,6 @@ Without `&self`, the macro generates the struct itself (with standard derives) i
 
 A trailing `&RowArena` parameter gives the function access to temporary storage for allocating return values that borrow from the arena.
 It is excluded from arity detection and from the generated `Input` type.
-The arena is always passed to unary, binary, and variadic `call` implementations (the trait requires it); for functions that don't use it, the parameter is simply unused.
 
 ## Variadic functions
 
@@ -384,14 +385,13 @@ Two shapes stay hand-written by design.
 * Functions generic over an `Eval` implementor, which hold sub-expressions in a `Box<E>`
   or a `Box<[E]>` and evaluate them per element. The macro would need to emit an
   implementation generic over a struct type parameter with a trait bound, which is a
-  different mechanism from the type-parameter erasure it applies today. The nine
+  different mechanism from the type-parameter erasure it applies. The
   `impl<E: Eval> LazyUnaryFunc` blocks under `src/expr/src/scalar/func/impls/` are these.
 * Functions that do not evaluate every operand. The macro emits `Eager*`
   implementations, which evaluate all arguments before dispatch. `And`, `Or`,
   `Coalesce`, `Greatest`, `Least`, `ErrorIfNull`, and `CaseLiteral` are these.
 
-The ten remaining hand-written `LazyUnaryFunc` implementations under
-`src/expr/src/scalar/func/impls/` are in neither category, and all ten are convertible.
-Nine allocate their output into a `RowArena`, which `EagerUnaryFunc::call` now supplies.
-`RecordGet` returns a field borrowed from its input, so it needs no arena, only an
-`output_type_expr` reading `input_type`.
+Hand-written `LazyUnaryFunc` implementations under `src/expr/src/scalar/func/impls/`
+outside both categories are convertible. One that allocates its output gets a
+`RowArena` from `EagerUnaryFunc::call`, and `RecordGet`, which returns a field borrowed
+from its input, needs only an `output_type_expr` reading `input_type`.
