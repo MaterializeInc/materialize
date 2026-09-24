@@ -9055,6 +9055,8 @@ def workflow_adapter_loss(c: Composition) -> None:
             time.sleep(0.25)
         # Controls ingest the same Kafka records into a separate shard. Their
         # permitted stalls must not hold back the source-only compaction check.
+        # The zero-replica retention input has no compute readers. Readers on
+        # the shared recovery input can leave valid Persist leases after SIGKILL.
         c.testdrive(
             dedent(f"""
             > CREATE CONNECTION al_kafka TO KAFKA
@@ -9064,8 +9066,13 @@ def workflow_adapter_loss(c: Composition) -> None:
             > CREATE TABLE al_input FROM SOURCE al_source
               (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
               WITH (RETAIN HISTORY = FOR '1s')
+            > CREATE SOURCE al_history_source IN CLUSTER cluster1
+              FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
+            > CREATE TABLE al_history_input FROM SOURCE al_history_source
+              (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
+              WITH (RETAIN HISTORY = FOR '1s')
             > CREATE CLUSTER al_history REPLICAS ()
-            > CREATE INDEX al_history_idx IN CLUSTER al_history ON al_input (text)
+            > CREATE INDEX al_history_idx IN CLUSTER al_history ON al_history_input (text)
               WITH (RETAIN HISTORY = FOR '30s')
             > CREATE SOURCE al_control_source IN CLUSTER cluster1
               FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
@@ -9112,10 +9119,11 @@ def workflow_adapter_loss(c: Composition) -> None:
                 """SELECT r.name, s.shard_id FROM mz_internal.mz_storage_shards s
                    JOIN mz_internal.mz_object_global_ids g ON g.global_id = s.object_id
                    JOIN mz_catalog.mz_relations r ON r.id = g.id
-                   WHERE r.name IN ('al_input', 'al_source_mv')""",
+                   WHERE r.name IN ('al_input', 'al_source_mv', 'al_history_input')""",
                 service=adapter.name,
             )
         )
+        history_shard = shards.pop("al_history_input")
         assert set(shards) == {"al_input", "al_source_mv"}, shards
         metric_names = {"mz_metric_arrangement_sizes", "mz_metric_dataflow_errors"}
         deadline = time.monotonic() + timeout
@@ -9137,6 +9145,9 @@ def workflow_adapter_loss(c: Composition) -> None:
         c.kill(adapter.name)
         try:
             absent()
+            history_before = inspect(history_shard)
+            assert history_before["upper"], history_before
+            history_threshold = history_before["upper"][0] - 1
             before = {name: inspect(shard) for name, shard in shards.items()}
             assert all(state["upper"] for state in before.values()), before
             thresholds = {name: state["upper"][0] - 1 for name, state in before.items()}
@@ -9310,13 +9321,13 @@ def workflow_adapter_loss(c: Composition) -> None:
             c.sql_query(
                 """SELECT o.name, g.global_id FROM mz_objects o
                    JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
-                   WHERE o.name IN ('al_input', 'al_history_idx')""",
+                   WHERE o.name IN ('al_history_input', 'al_history_idx')""",
                 service=adapter.name,
                 reuse_connection=False,
             )
         )
-        assert set(history_ids) == {"al_input", "al_history_idx"}, history_ids
-        input_id = history_ids["al_input"]
+        assert set(history_ids) == {"al_history_input", "al_history_idx"}, history_ids
+        input_id = history_ids["al_history_input"]
         index_id = history_ids["al_history_idx"]
         assert input_id.startswith("u"), input_id
         input_json_id = {"User": int(input_id[1:])}
@@ -9326,7 +9337,7 @@ def workflow_adapter_loss(c: Composition) -> None:
         while True:
             # Observe Persist first, so this timestamp is strictly historical at
             # the catalog snapshot. Leave room on both sides of the 30s window.
-            state = inspect(shards["al_input"])
+            state = inspect(history_shard)
             response = requests.get(
                 f"http://localhost:{c.port(adapter.name, 6878)}/api/catalog/dump",
                 timeout=10,
@@ -9357,7 +9368,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             # pass. The input's own 1s policy cannot account for this history.
             if (
                 len(input_since) == 1
-                and thresholds["al_input"] < state["since"][0] <= historical_ts
+                and history_threshold < state["since"][0] <= historical_ts
                 and input_since[0] <= historical_ts
                 and (
                     index_since is None
@@ -9427,7 +9438,7 @@ def workflow_adapter_loss(c: Composition) -> None:
         # Only now introduce a reader. Keep its logical-input hold through
         # hydration, without a manual reclaim or an artificial grace period.
         historical_query = sql.SQL(
-            "SELECT text FROM al_input ORDER BY text AS OF {}"
+            "SELECT text FROM al_history_input ORDER BY text AS OF {}"
         ).format(sql.Literal(historical_ts))
         with c.sql_connection(service=adapter.name) as reference_conn:
             with reference_conn.cursor() as reference:
@@ -9477,7 +9488,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                                 reuse_connection=False,
                             )
                             if hydrated == [(True,)] and re.search(
-                                r"ReadIndex[^\n]*al_history_idx", plan
+                                r"(?:ReadIndex|Indexed)[^\n]*al_history_idx", plan
                             ):
                                 break
                             if time.monotonic() >= deadline:

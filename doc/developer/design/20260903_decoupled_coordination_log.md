@@ -1282,3 +1282,35 @@ verification without changing physical cutoffs, grace, deadlines or exact
 outputs. The final historical query must execute through the reconstructed index,
 not merely explain a declared index candidate. Broader transaction behavior
 remains outside this change.
+
+### 2026-09-14: Isolated retention input and frozen M2 acceptance scope
+
+The zero-replica retention input and index are established before the adapter
+outage on a shard without readers from the compute replicas deliberately killed
+by the recovery checks. The shared-input outage and recovery checks remain intact.
+This isolates retention advancement from valid abandoned Persist reader leases,
+without changing production leases, reclamation, scheduling or proof deadlines.
+
+The CI135583 failure reproduced with its prebuilt images. At the failed deadline,
+a killed compute replica's input reader still had a valid 15-minute lease. The
+reader subsequently expired normally and Persist since advanced without
+intervention. This is fixture interference, not evidence of a production defect.
+
+M2 acceptance scope is frozen. The targeted DDL regressions and bounded throughput
+checks have sufficient passing evidence. Finish the agreed native outcomes, fix
+concrete CI regressions and continue the agreed upstream integration. Preserve
+behavioral contracts while simplifying incidental fixture arrangements. Do not
+add scenarios, stronger guarantees, observability or a lease-expiry campaign.
+Escalate correctness problems, user-visible changes or disproportionate cost.
+
+The complete native workflow passes locally with CI135583 binaries and this
+fixture correction. It proves physical compaction past cutoff `1790241677000`,
+adapter-absent compute recovery with fresh value 1220, source/sink recovery with
+1230, and two unmasked retention advances. Historical timestamp `1790242378001`
+is read through the reconstructed index with equal reference rows, one additional
+pgwire fast-path execution and no Persist-fast-path execution. All three resumed
+MV/sink outputs match exactly: 132 values from 0 through 1310 in steps of 10.
+The EXPLAIN matcher accepts both `ReadIndex` and fast-path `Indexed` rendering.
+Syntax, Black, Ruff and whitespace checks pass. Host memory pressure delayed
+startup, but the workflow's proof deadlines and assertions were unchanged.
+This closes the native runtime proof, not the remaining CI regressions.
