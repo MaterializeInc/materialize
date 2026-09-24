@@ -41,11 +41,11 @@ processed. See [Delivery semantics](#delivery-semantics).
 ```mzsql
 CREATE DURABLE SUBSCRIPTION <name> ON <object_name>
 [ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
-WITH (ACKNOWLEDGE WITHIN <interval>)
+WITH (ACKNOWLEDGE WITHIN <interval> [, START AT = <timestamp>])
 ;
 
 CREATE DURABLE SUBSCRIPTION <name>
-WITH (ACKNOWLEDGE WITHIN <interval>) AS
+WITH (ACKNOWLEDGE WITHIN <interval> [, START AT = <timestamp>]) AS
 SELECT <columns> FROM <object_name> [WHERE <predicate>]
 [ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
 ;
@@ -56,6 +56,7 @@ SELECT <columns> FROM <object_name> [WHERE <predicate>]
 | `<name>` | A name for the subscription. Used by [`SUBSCRIBE`](/sql/subscribe/) and [`ACKNOWLEDGE`](/sql/acknowledge/). |
 | `<object_name>` | The source, table, or materialized view to subscribe to. |
 | `ACKNOWLEDGE WITHIN` | **Required.** How long you may go without acknowledging. A positive [interval](/sql/types/interval/) value, for example `'1m'`. See [Acknowledgement deadline](#acknowledgement-deadline). |
+| `START AT` | Optional. The position to start from instead of the creation time, with the same meaning as a value passed to [`ACKNOWLEDGE ... UP TO`](/sql/acknowledge/). See [Starting position](#starting-position). |
 | `AS SELECT ...` | An optional projection and filter over a single object. See [Supported objects and queries](#supported-objects-and-queries). |
 | `ENVELOPE UPSERT` / `ENVELOPE DEBEZIUM` | An optional output envelope, with the same meaning as for [`SUBSCRIBE`](/sql/subscribe/#envelope-upsert). See [Envelopes](#envelopes). |
 
@@ -68,6 +69,24 @@ acknowledgement deadline starts running from then. Reading it for the first time
 therefore gives you the state as of creation, not as of now, so create a
 subscription at the point you are ready to start consuming rather than well in
 advance.
+
+`START AT` starts the subscription at a position you already hold instead. The
+value means what it means for [`ACKNOWLEDGE ... UP TO`](/sql/acknowledge/):
+everything strictly before it counts as processed, so you pass the timestamp you
+recorded, with no `- 1`. Creation fails if that history is no longer retained.
+
+This is how you move from [recording your own
+timestamps](/transform-data/patterns/durable-subscriptions/) to a durable
+subscription without a gap or a snapshot:
+
+1.  Create the subscription with `START AT` set to your last committed progress
+    timestamp, while your history retention period still covers it.
+1.  Stop your old reader and subscribe `USING DURABLE SUBSCRIPTION` with `AS OF`
+    your committed timestamp minus one.
+1.  Acknowledge as usual. Keep recording your own timestamp if you need
+    exactly-once processing.
+1.  Remove the history retention period from the object once nothing else
+    relies on it, so that history is not retained twice.
 
 ### Supported objects and queries
 
@@ -211,7 +230,14 @@ at `T`.
 If you would rather not carry that arithmetic, omit `AS OF` and filter instead.
 Every update carries `mz_timestamp`, so a consumer that has committed through `T`
 can drop everything below `T` on arrival. Receiving data you already have costs
-bandwidth; asking for the wrong starting timestamp costs data.
+bandwidth, and asking for the wrong starting timestamp costs data.
+
+Filtering is only safe while the subscription starts at or before `T - 1`. If the
+subscription was dropped and recreated under the same name, or
+[reset](#expiry), it starts later, and a filter hides the missing updates. Check
+the first progress message, which carries the starting timestamp, and treat a
+value above `T - 1` as a gap. Passing `AS OF T - 1` fails loudly in that case
+instead.
 
 {{</ warning >}}
 

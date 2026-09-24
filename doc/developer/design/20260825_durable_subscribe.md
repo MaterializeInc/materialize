@@ -235,8 +235,10 @@ only as long as the session.
 ### Object model
 
 ```mzsql
-CREATE DURABLE SUBSCRIPTION <name> ON <object> [<envelope>] WITH (ACKNOWLEDGE WITHIN <interval>);
-CREATE DURABLE SUBSCRIPTION <name> WITH (ACKNOWLEDGE WITHIN <interval>) AS <select> [<envelope>];
+CREATE DURABLE SUBSCRIPTION <name> ON <object> [<envelope>]
+    WITH (ACKNOWLEDGE WITHIN <interval> [, START AT = <timestamp>]);
+CREATE DURABLE SUBSCRIPTION <name>
+    WITH (ACKNOWLEDGE WITHIN <interval> [, START AT = <timestamp>]) AS <select> [<envelope>];
 ALTER DURABLE SUBSCRIPTION <name> SET (ACKNOWLEDGE WITHIN <interval>);
 ALTER DURABLE SUBSCRIPTION <name> RESET;
 ALTER DURABLE SUBSCRIPTION <name> OWNER TO <role>;
@@ -255,6 +257,16 @@ mechanism.
 
 `ACKNOWLEDGE WITHIN` is required. Making it optional would mean a default of unbounded
 retention, which is the failure mode this feature exists to avoid.
+
+A new subscription starts at its creation time by default. `WITH (START AT =
+<timestamp>)` starts it elsewhere, and takes the value with the meaning
+`ACKNOWLEDGE ... UP TO` gives it: everything strictly before the timestamp counts
+as processed, so `H := timestamp - 1`. Creation acquires the hold at `H` in the
+same step and fails if the target's `since` is already beyond `H`, so a start
+position is either readable or rejected. This exists for consumers that already
+hold a position, above all a consumer migrating from the manual pattern, which
+has a committed `T` and a `RETAIN HISTORY` window still covering it. See
+"Migrating from the manual pattern".
 
 The object is a durable `create_sql`-based catalog item. Item kind is derived by
 parsing the `create_sql` prefix via `item_type()`, so no new durable item shape
@@ -278,19 +290,49 @@ gate that is off in production would fail catalog boot.
 
 ### Query scope
 
-The `AS <select>` form accepts a projection and filter over a single collection,
-which is exactly the class that lowers to a map-filter-project pushed into the
-persist read. An attach still builds a dataflow, as every `SUBSCRIBE` does, but
-a dataflow of this class holds no state and has nothing to rehydrate, and so has
-no reconciliation point of its own, which is what keeps it compatible with a
-hold on the underlying collection. Filters and projections commute with
-differencing, and a projection that collapses distinct rows merely consolidates
-their diffs into a valid stream over the projected relation.
+The `AS <select>` form accepts a projection and filter over a single collection.
+The restriction is about cost, not correctness. Materialize computes every
+collection as a deterministic function of its inputs at each timestamp, which is
+what lets independent replicas of one dataflow agree. So for any query over held
+inputs, a fresh dataflow at as-of `H` emits the same changes after `H` that the
+original stream emitted, possibly consolidated differently, and a client that
+holds the query's result at `H` stays correct. What a general query changes is
+the cost of an attach:
 
-Everything else is rejected: joins, aggregations, `DISTINCT`, subqueries, and
-more than one collection in the `FROM` clause. Temporal filters over `mz_now()`
-are rejected too, because they are not map-filter-project, they require a
-dataflow, and they restructure retractions into the far future.
+* **It rehydrates on every attach.** The dataflow computes the query over its
+  inputs as of `H` before it emits its first change, which costs work in
+  proportion to the inputs rather than to the unacknowledged window. Every
+  reconnection would again be a data-volume event, which is the problem this
+  design exists to remove.
+* **It holds state per reader.** Joins and reductions arrange their inputs, so
+  each connected reader would own a stateful dataflow, which does not reach the
+  population under "Scale".
+* **It spreads retention.** Every transitive storage input must be held at `H`
+  and read from storage, since index history is not durable, so history is
+  retained on every input and no existing arrangement is reused.
+
+A projection and filter avoids all three, under one condition the current code
+does not meet: the attach must not read the snapshot. `optimize_dataflow_snapshot`
+in `src/transform/src/dataflow.rs` elides the snapshot only for a sink that
+exports an import directly. It treats every `Get` inside an object to build as
+requiring a snapshot, and it forces one whenever operators are pushed into the
+persist read, because a temporal filter lets snapshot data produce changes after
+the as-of. Today `SUBSCRIBE t` therefore resumes without reading the snapshot,
+while `SUBSCRIBE (SELECT a FROM t WHERE p)` reads all of it. The attach needs
+that pass to elide the snapshot for a projection and filter without a temporal
+predicate. Temporal filters stay rejected, because they genuinely need the
+snapshot.
+
+Everything else is rejected too: joins, aggregations, `DISTINCT`, subqueries,
+and more than one collection in the `FROM` clause. Such a query is served by
+materializing it and subscribing to the view, which pays hydration once, in a
+cluster the user chose, and shares the result across readers. An implicit
+materialized view per subscription would do the same with less ceremony, but it
+hides a standing compute and storage cost behind a statement that reads like a
+cursor, and it gives the subscription a cluster, a hydration state, and a
+lifecycle it otherwise does not have. The restriction is also the cheap direction
+to be wrong in: accepting more queries later is backward compatible, while
+narrowing an accepted surface is not.
 
 The projection lives in the definition rather than being chosen per attach. Both
 are sound, since `H` is a frontier on the underlying collection and any
@@ -323,10 +365,19 @@ Keeping the ordinary semantics keeps the `-1`. Under `SNAPSHOT = false`, an
 as-of of `t` emits times strictly greater than `t`, so a consumer resuming at its
 committed position `T` must pass `T - 1`. This is a documented pitfall rather
 than a solved problem, and it is a silent one: passing `T` skips every update at
-`T`. Consumers that would rather not carry the arithmetic have a strictly safer
-option, since updates carry `mz_timestamp`: omit `AS OF`, resume from `H`, and
-discard everything below `T` on receipt. The failure mode of a filter is
-redundant data; the failure mode of an off-by-one as-of is missing data.
+`T`. Consumers that would rather not carry the arithmetic have a safer option,
+since updates carry `mz_timestamp`: omit `AS OF`, resume from `H`, and discard
+everything below `T` on receipt. The failure mode of a filter is redundant data,
+and the failure mode of an off-by-one as-of is missing data.
+
+The filter is safe only while `H <= T - 1`, and the subscription's identity can
+break that without the consumer noticing. Dropping and recreating a subscription
+under the same name, or an operator's `RESET`, moves `H` past `T`, and a filter
+then hides the missing range, whereas `AS OF T - 1` would fail loudly. A
+filtering consumer must therefore check the opening progress message, which
+carries the as-of, and treat a value above `T - 1` as a gap. A library that
+holds `T` should position the read instead, since it performs the arithmetic in
+one place.
 
 `UP TO` is also accepted. It constrains the upper edge, where the
 `!up_to.less_equal(time)` boundary yields a clean half-open interval and no
@@ -600,13 +651,16 @@ supplies the retention guarantee that the history back to `H` is still there. It
 has two ways to skip what it already has:
 
 * **Discard on receipt.** Resume from `H` and drop every update below `T`. Costs
-  bandwidth proportional to the unacknowledged window, and cannot lose data.
-* **Position the read.** Pass `AS OF T - 1`. Costs nothing, and loses data
-  silently if the arithmetic is wrong.
+  bandwidth proportional to the unacknowledged window, and loses data silently
+  if `H` has moved past `T`, unless the consumer checks the opening progress
+  message as "Attaching" describes.
+* **Position the read.** Pass `AS OF T - 1`. Costs nothing, fails loudly if `H`
+  has moved past `T`, and loses data silently if the arithmetic is wrong.
 
-Filtering is the better default and positioning is the better optimization. The
-consumer keeps owning correctness either way, which is where it has to live,
-since only the consumer knows what it committed.
+Filtering with the check suits a hand-written client, and positioning suits a
+library, which gets the arithmetic right once for every user. The consumer keeps
+owning correctness either way, which is where it has to live, since only the
+consumer knows what it committed.
 
 ### Consuming several subscriptions
 
@@ -639,6 +693,29 @@ the outage, and it holds or stages the snapshots, which any consistent
 re-snapshot of several collections must do regardless. A grouped reset that
 placed every member at one timestamp would remove only the first cost, so it is
 listed under "Follow-up work" rather than required.
+
+### Migrating from the manual pattern
+
+A consumer on the manual pattern holds a committed position `T` in its own store
+and relies on `RETAIN HISTORY` to keep `T - 1` readable. It moves to a durable
+subscription without a gap and without a snapshot:
+
+1. Create the subscription `WITH (START AT = T)`, using the stored position
+   unchanged. Creation fails if `RETAIN HISTORY` no longer covers `T - 1`, in
+   which case the consumer has already lost history and must reset.
+2. Stop the old reader, and attach the new one with `AS OF T - 1`, or with the
+   position it has committed since, which can only be later.
+3. Acknowledge as usual, and keep writing `T` in the consumer's own transaction
+   if it needs exactly-once.
+4. Remove the `RETAIN HISTORY` setting once no other reader depends on it,
+   since otherwise history is retained twice over.
+
+Without `START AT` the migration still works for a consumer that is running:
+create the subscription, let the old reader commit past `H + 1`, and then
+switch. A consumer that is down during the migration cannot advance, and would
+be left choosing between a gap and a reconciling snapshot, which is why the
+option exists. The deadline runs from creation in both cases, so the switch must
+complete within `ACKNOWLEDGE WITHIN`.
 
 ### Scale
 
@@ -763,6 +840,11 @@ Then the cases that would otherwise fail silently:
   uninterrupted `SUBSCRIBE` with the same envelope produced for the same
   timestamps.
 * **Acknowledging at or below the current position** is accepted as a no-op.
+* **`START AT` below the target's `since`** fails at creation, and `START AT`
+  within the window resumes with neither a gap nor a snapshot.
+* **A recreated subscription.** Drop and recreate under the same name, attach
+  with `AS OF T - 1`, and assert the attach fails rather than streaming from the
+  new position.
 * **A consistent cut across two subscriptions**: buffer both to the same
   timestamp and assert the union matches a `SELECT ... AS OF` at that timestamp.
   Then expire one, reset it, re-establish the cut at the reset position, and
@@ -916,6 +998,12 @@ most.
 hold because the reader is the only consumer. It duplicates compute and storage
 whenever consumers share a query, and one object per consumer does not reach the
 target scale.
+
+**Arbitrary queries without an output shard.** Correct, since a fresh dataflow
+at `H` reproduces the original stream's changes, but every attach rehydrates the
+query from its inputs and every connected reader owns a stateful dataflow. See
+"Query scope", which also explains why this is the direction that can be
+relaxed later without breaking anyone.
 
 **Cursor state in `create_sql`, or outside the catalog.** The former makes every
 flush a catalog transaction with an audit entry and a moving `SHOW CREATE`; the
