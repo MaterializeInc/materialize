@@ -12,7 +12,7 @@ import { InferResult, sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 import {
-  buildClusterReplicaUtilizationTable,
+  buildLatestClusterReplicaUtilizationTable,
   getOwners,
 } from "~/api/materialize/expressionBuilders";
 
@@ -23,7 +23,7 @@ export function buildClusterReplicasWithUtilizationQuery(clusterId: string) {
     .innerJoin("mz_clusters as c", "c.id", "cr.cluster_id")
     .innerJoin("mz_cluster_replica_sizes as crs", "crs.size", "cr.size")
     .innerJoin(
-      buildClusterReplicaUtilizationTable().as("cru"),
+      buildLatestClusterReplicaUtilizationTable(clusterId).as("cru"),
       "cr.id",
       "cru.replica_id",
     )
