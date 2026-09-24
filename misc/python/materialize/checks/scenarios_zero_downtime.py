@@ -50,8 +50,11 @@ def wait_ready_and_promote(
         # read-only mode then sleeps instead of exiting (see the materialized
         # entrypoint), and the clusterd processes it spawned keep running.
         # Remove the previous generation like the orchestrator does after a
-        # promotion, so that generations do not accumulate.
-        KillMz(capture_logs=True, mz_service=previous_mz_service, fenced=True),
+        # promotion, so that generations do not accumulate. The killed container
+        # keeps its logs until the next `up`, `down` or the CI hook collects
+        # them. Capturing only its logs here would skip every other service's
+        # lines since the last capture.
+        KillMz(mz_service=previous_mz_service, fenced=True),
     ]
 
 

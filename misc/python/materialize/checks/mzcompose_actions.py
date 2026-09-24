@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+from contextlib import nullcontext
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -288,8 +289,17 @@ class KillMz(MzcomposeAction):
         c = e.mzcompose_composition()
 
         # Don't fail since we are careful to explicitly kill and collect logs
-        # of the services thus started
-        with c.override(Materialized(name=self.mz_service), fail_on_new_service=False):
+        # of the services thus started. A service the composition already
+        # defines needs no override. Overriding re-acquires its image, which
+        # exits in CI once a scenario has changed the materialized fingerprint,
+        # e.g. with BumpVersion.
+        with (
+            nullcontext()
+            if self.mz_service in c.compose["services"]
+            else c.override(
+                Materialized(name=self.mz_service), fail_on_new_service=False
+            )
+        ):
             if self.fenced:
                 c.kill(self.mz_service, wait=False)
                 c.wait(self.mz_service)
