@@ -102,7 +102,7 @@ class MaterializeApplication(CloudtestApplicationBase):
         ]
 
     def get_images(self) -> list[str]:
-        return ["environmentd", "clusterd", "testdrive", "postgres"]
+        return ["environmentd", "clusterd", "testdrive", "postgres", "minio", "mc"]
 
     def register_vpc_endpoint(self) -> None:
         self.kubectl(
