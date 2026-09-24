@@ -1546,9 +1546,11 @@ mod tests {
                     (descs_input, data_input, button)
                 });
 
-            // The operator waits on persist off the timely scheduler, so a plain `step` can find
-            // the worker idle while the operator is still starting up. Parking hands the thread
-            // over until its waker fires, which is what lets the operator keep up with the script.
+            // We want the operator to finish processing before we advance the script,
+            // but when the operator is waiting for persist,
+            // a plain timely `step` will find no work to do and return immediately.
+            // So we repeatedly `step_or_park`, where `park`ing the thread forces a delay,
+            // allowing the operator to finish waiting for persist and do its work on the next `step`.
             fn pump(worker: &mut timely::worker::Worker) {
                 // no solid reason for this number, it's a selection that seems high enough to
                 // work reliably, but not create a ton of delay (~32ms parked).
@@ -1616,9 +1618,8 @@ mod tests {
         }
     }
 
-    /// Persist clients with part bounds validation on. Both settings default off in code but are
-    /// turned on in production, so an append has to run under them to say anything about the
-    /// bounds the sink writes.
+    /// Turn on part bounds validation so _append_ checks the bounds the sink writes.
+    /// Both settings default off in code but are turned on in production.
     fn test_persist_clients() -> Arc<PersistClientCache> {
         let persist_cfg =
             PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
