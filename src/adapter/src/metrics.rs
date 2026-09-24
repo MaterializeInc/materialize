@@ -40,6 +40,7 @@ pub struct Metrics {
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
+    pub linearize_read_fast_path: IntCounter,
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_records: IntCounterVec,
     pub statement_logging_unsampled_bytes: IntCounter,
@@ -172,6 +173,10 @@ impl Metrics {
                 help: "The number of seconds it takes to linearize strict serializable messages",
                 var_labels: ["type", "immediately_handled"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            linearize_read_fast_path: registry.register(metric!(
+                name: "mz_linearize_read_fast_path_total",
+                help: "The number of ordinary strict serializable reads already linearized at transaction end",
             )),
             time_to_first_row_seconds: registry.register(metric! {
                 name: "mz_time_to_first_row_seconds",
