@@ -67,7 +67,7 @@ npx skills remove materialize-dbt materialize-debug-freshness materialize-terraf
 
 ## Install as a plugin
 If you use Claude Code or Codex, you can also install all the skills using a single
-plugin. This allows you to keep skills updated automatically. 
+plugin. This allows you to keep skills updated automatically.
 
 When the skills are installed using the plugin, they are namespaced, for example `materialize:mz-dbt`.
 
