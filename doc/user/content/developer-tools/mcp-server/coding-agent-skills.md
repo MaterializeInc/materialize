@@ -21,10 +21,6 @@ coding agent access to Materialize documentation and reference material so it
 can provide more accurate assistance when writing queries, setting up sources,
 creating materialized views, and more.
 
-## Skills
-
-{{% include-headless "/headless/agent-skills-table" %}}
-
 ## Installation
 
 You can install the Materialize agent skills in one of two ways:
@@ -129,6 +125,10 @@ globally:
 npx skills remove materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
 npx skills add MaterializeInc/agent-skills
 ```
+
+## Skills
+
+{{% include-headless "/headless/agent-skills-table" %}}
 
 ## SQL language server plugin
 
