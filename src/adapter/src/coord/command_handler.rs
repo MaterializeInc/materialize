@@ -358,7 +358,19 @@ impl Coordinator {
                     include_durable_upper,
                 } => {
                     let durable_upper = if include_durable_upper {
-                        Some(self.catalog().current_upper_if_in_sync().await)
+                        let mut upper = self.catalog().current_upper_if_in_sync().await;
+                        if upper
+                            .as_ref()
+                            .is_err_and(|error| error.is_catalog_out_of_sync())
+                        {
+                            // Catch up once in this turn. Further contention retries
+                            // belong to the caller, not an on-loop retry loop.
+                            upper = match self.refresh_catalog_after_conflict().await {
+                                Ok(()) => self.catalog().current_upper_if_in_sync().await,
+                                Err(error) => Err(error),
+                            };
+                        }
+                        Some(upper)
                     } else {
                         None
                     };

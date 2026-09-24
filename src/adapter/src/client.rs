@@ -1164,21 +1164,36 @@ impl SessionClient {
                 .await;
             let reader = initial.catalog.open_diagnostic_reader().await?;
             // Capture uncached state after acquiring the continuous durable reader.
-            let snapshot = self
-                .send_without_session(|tx| Command::CatalogSnapshot {
-                    tx,
-                    include_durable_upper: true,
+            // Only acquisition retries. Reconstruction and comparison must use
+            // one certified prefix and must not hide a genuine inconsistency.
+            let acquired = mz_ore::retry::Retry::default()
+                .max_tries(5)
+                .retry_async(|_| async {
+                    use mz_ore::retry::RetryResult;
+                    let snapshot = self
+                        .send_without_session(|tx| Command::CatalogSnapshot {
+                            tx,
+                            include_durable_upper: true,
+                        })
+                        .await;
+                    match snapshot.durable_upper.expect("requested durable prefix") {
+                        Ok(upper) => RetryResult::Ok((snapshot.catalog, upper)),
+                        Err(error) if error.is_catalog_out_of_sync() => {
+                            RetryResult::RetryableErr(error)
+                        }
+                        Err(error) => RetryResult::FatalErr(error),
+                    }
                 })
                 .await;
-            let upper = match snapshot.durable_upper.expect("requested durable prefix") {
-                Ok(upper) => upper,
+            let (catalog, upper) = match acquired {
+                Ok(snapshot) => snapshot,
                 Err(error) => {
                     reader.expire().await;
                     return Err(error);
                 }
             };
             let input = reader.into_snapshot_at(upper).await?;
-            snapshot.catalog.check_durable_consistency(input).await
+            catalog.check_durable_consistency(input).await
         }
         .await;
         result.map_err(|error: AdapterError| serde_json::json!(error.to_string()))

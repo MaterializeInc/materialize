@@ -546,6 +546,14 @@ fn dataflow_error_code(error: &DataflowError) -> SqlState {
 }
 
 impl AdapterError {
+    /// Whether committed catalog updates must be applied before retrying admission.
+    pub(crate) fn is_catalog_out_of_sync(&self) -> bool {
+        matches!(self, Self::Catalog(error)
+        if matches!(&error.kind, mz_catalog::memory::error::ErrorKind::Durable(
+            mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+        )))
+    }
+
     pub fn into_response(self, severity: Severity) -> ErrorResponse {
         ErrorResponse {
             severity,
