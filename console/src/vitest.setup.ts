@@ -41,9 +41,10 @@ configure({ asyncUtilTimeout: 10_000 });
 
 // Mocks
 
-// Mock the facades for the frontegg and oidc libraries
+// Mock the facades for the frontegg, oidc and ory libraries
 vi.mock("~/external-library-wrappers/frontegg");
 vi.mock("~/external-library-wrappers/oidc");
+vi.mock("~/external-library-wrappers/ory");
 vi.mock("~/hooks/useFlags", () => {
   return { useFlags: () => ({}) };
 });

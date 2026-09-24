@@ -9,7 +9,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
-import { Navigate, Route } from "react-router-dom";
+import { Navigate, Route, useSearchParams } from "react-router-dom";
 
 import { hasActiveSession, LOGIN_PATH } from "~/api/materialize/auth";
 import { LaunchDarklyProvider } from "~/components/LaunchDarkly";
@@ -27,21 +27,36 @@ import { SentryRoutes } from "~/sentry";
 
 import { Login } from "./auth/Login";
 import { OidcCallback } from "./auth/OidcCallback";
+import { OryLoginPage } from "./auth/ory/OryLoginPage";
 
 // Redirect already-signed-in users off the login page. The password session
 // cookie is httpOnly, so probe the server; a live OIDC token skips the probe.
-const LoginRoute = () => {
+export const LoginRoute = () => {
+  const [searchParams] = useSearchParams();
+  // Ory marks a request it sent here to be authenticated: `flow` from Kratos,
+  // `login_challenge` from Hydra on behalf of an OAuth2 client. Either means
+  // this page is the identity provider's login UI for the duration of that
+  // request rather than the console's own front door.
+  const isOryFlow =
+    searchParams.has("flow") || searchParams.has("login_challenge");
+
   const { data: oidcManager } = useOidcManagerQuery();
   const hasOidcToken = Boolean(oidcManager?.getIdToken());
 
   const { data: hasCookieSession } = useQuery({
     queryKey: ["hasActiveSession"],
     queryFn: hasActiveSession,
-    enabled: !hasOidcToken,
+    enabled: !hasOidcToken && !isOryFlow,
     staleTime: Infinity,
     retry: false,
   });
 
+  // Checked before the signed-in redirect below: a client may ask someone who
+  // already has a session to re-authenticate, and sending them to the app
+  // instead would strand the flow with no way to finish.
+  if (isOryFlow) {
+    return <OryLoginPage />;
+  }
   if (hasOidcToken || hasCookieSession) {
     return <Navigate to="/" replace />;
   }

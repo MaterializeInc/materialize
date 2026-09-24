@@ -19,6 +19,11 @@ export const AuthProvider = ({ children }: React.PropsWithChildren) => children;
 
 export const hasAuthParams = vi.fn(() => false);
 
+export const useOidcManagerQuery = vi.fn(() => ({
+  data: undefined as { getIdToken: () => string | undefined } | undefined,
+  isLoading: false,
+}));
+
 export class MzOidcUserManager {
   getIdToken = vi.fn(() => undefined);
   getUserManager = vi.fn();
