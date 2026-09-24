@@ -54,6 +54,14 @@ repository:
 npx skills update
 ```
 
+The skills were renamed to the `mz-` prefix. If you installed them before the
+rename, remove the old copies so each skill appears only once. Add `-g` if you
+installed them globally:
+
+```bash
+npx skills remove materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
+```
+
 ## Install as a plugin
 
 Claude Code and Codex can also install the skills as one plugin, named
