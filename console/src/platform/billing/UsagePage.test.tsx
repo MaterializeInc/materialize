@@ -17,6 +17,7 @@ import {
   buildCloudOrganizationsResponse,
   buildCloudRegionsReponse,
   buildCreditsResponse,
+  buildDailyCostBreakdownErrorResponse,
   buildDailyCostBreakdownResponse,
   buildInvoicesResponse,
 } from "~/api/mocks/cloudGlobalApiHandlers";
@@ -248,6 +249,54 @@ describe("UsagePage", () => {
     expect(
       await screen.findByText("An error occurred loading your usage"),
     ).toBeVisible();
+  });
+
+  it("shows the backend's real message and a request id for a structured API error (SAS-172)", async () => {
+    server.use(
+      buildDailyCostBreakdownErrorResponse({
+        apiError: {
+          reason: "upstream_limit_exceeded",
+          message:
+            "This account has more billing configuration than we can currently summarize. Contact support with the reference below.",
+          requestId: "22222222-2222-2222-2222-222222222222",
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+    expect(
+      await screen.findByText(
+        "This account has more billing configuration than we can currently summarize. Contact support with the reference below.",
+      ),
+    ).toBeVisible();
+    expect(await screen.findByTestId("api-error-request-id")).toHaveTextContent(
+      "22222222-2222-2222-2222-222222222222",
+    );
+    // The generic fallback must not also render alongside the real message.
+    expect(
+      screen.queryByText("An error occurred loading your usage"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not show a request id for a validation error (the caller's own request, not something support needs to look up)", async () => {
+    server.use(
+      buildDailyCostBreakdownErrorResponse({
+        status: 400,
+        apiError: {
+          reason: "validation",
+          message: "startDate cannot be more than 100 days in the past",
+          requestId: "33333333-3333-3333-3333-333333333333",
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+    expect(
+      await screen.findByText(
+        "startDate cannot be more than 100 days in the past",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByTestId("api-error-request-id"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows an empty state when the window has no usage", async () => {
