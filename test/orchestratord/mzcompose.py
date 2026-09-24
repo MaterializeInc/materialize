@@ -17,7 +17,6 @@ import datetime
 import json
 import os
 import random
-import re
 import shutil
 import signal
 import subprocess
@@ -771,17 +770,9 @@ class BalancerdNodeSelector(Modification):
         retry(check, 240)
 
 
-def _minio_image() -> str:
-    """The MinIO image the current tree's manifest uses, read from the file so the
-    two cannot drift."""
-    manifest = MZ_ROOT / "misc" / "helm-charts" / "testing" / "minio.yaml"
-    for line in manifest.read_text().splitlines():
-        if line.strip().startswith("image:"):
-            return line.split("image:", 1)[1].strip()
-    raise ValueError(f"no image line in {manifest}")
-
-
-MINIO_IMAGE = _minio_image()
+# Must match the `persist_backend_url` in the install-on-local-kind docs, which
+# replaces the MinIO URL shipped in misc/helm-charts/testing/materialize.yaml.
+RUSTFS_PERSIST_URL = "s3://rustfsadmin:rustfsadmin@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Frustfs.materialize.svc.cluster.local%3A9000&region=us-east-1"
 
 # Must match test/orchestratord/priorityclass.yaml.
 PRIORITY_CLASS_NAME = "mz-test-priority"
@@ -2430,12 +2421,10 @@ def workflow_documentation_defaults(
             "misc/helm-charts/operator/values.yaml",
             os.path.join(dir, "sample-values.yaml"),
         )
-        # MinIO is test scaffolding rather than part of the release, so always
-        # use the local manifest. Copies at older release tags reference the
-        # `minio/minio` Docker Hub image, which MinIO has deleted.
+        # The docs fetch RustFS from main rather than a release tag.
         shutil.copyfile(
-            "misc/helm-charts/testing/minio.yaml",
-            os.path.join(dir, "sample-minio.yaml"),
+            "misc/helm-charts/testing/rustfs.yaml",
+            os.path.join(dir, "sample-rustfs.yaml"),
         )
         files = {
             "sample-postgres.yaml": "misc/helm-charts/testing/postgres.yaml",
@@ -2447,20 +2436,6 @@ def workflow_documentation_defaults(
                 shutil.copyfile(path, os.path.join(dir, file))
             else:
                 content = download_repo_file_at_tag(path, str(version))
-                if file == "sample-minio.yaml":
-                    # Every released tag's manifest still says `image:
-                    # minio/minio`, which resolves to docker.io, where MinIO
-                    # deleted the repository (#38802, #38824). The published
-                    # files cannot be changed, so point the downloaded copy at
-                    # the image the current tree uses. Everything else in the
-                    # manifest is exercised as published.
-                    content = re.sub(
-                        rb"^(\s*image:\s*)minio/minio\s*$",
-                        rb"\g<1>" + MINIO_IMAGE.encode(),
-                        content,
-                        count=1,
-                        flags=re.MULTILINE,
-                    )
                 with open(os.path.join(dir, file), "wb") as f:
                     f.write(content)
 
@@ -2472,7 +2447,7 @@ def workflow_documentation_defaults(
         spawn.runv(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-postgres.yaml")]
         )
-        spawn.runv(["kubectl", "apply", "-f", os.path.join(dir, "sample-minio.yaml")])
+        spawn.runv(["kubectl", "apply", "-f", os.path.join(dir, "sample-rustfs.yaml")])
         spawn.runv(["kubectl", "get", "all", "-n", "materialize"])
 
         wait_for_crd_established()
@@ -2484,7 +2459,18 @@ def workflow_documentation_defaults(
                 "materialize",
                 "--for=condition=Available",
                 "--timeout=300s",
-                "deployment/minio",
+                "deployment/rustfs",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Complete",
+                "--timeout=300s",
+                "job/rustfs-setup",
             ]
         )
         spawn.runv(
@@ -2507,6 +2493,7 @@ def workflow_documentation_defaults(
             materialize_setup[2]["spec"][
                 "environmentdImageRef"
             ] = f"materialize/environmentd:{version}"
+        materialize_setup[1]["stringData"]["persist_backend_url"] = RUSTFS_PERSIST_URL
         if version >= MzVersion.parse_mz("v26.0.0"):
             # Self-managed v25.1/2 don't require a license key yet
             materialize_setup[1]["stringData"]["license_key"] = os.environ[

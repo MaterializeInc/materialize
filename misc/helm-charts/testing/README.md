@@ -1,10 +1,11 @@
 # Local Manual Testing
 
-This directory contains simple examples for deploying MinIO, PostgreSQL, and Redpanda instances in a Kubernetes cluster. These configurations are intended for testing purposes only.
+This directory contains simple examples for deploying MinIO, RustFS, PostgreSQL, and Redpanda instances in a Kubernetes cluster. These configurations are intended for testing purposes only.
 
 ## Contents
 
 - **minio.yaml**: Deploys a MinIO object storage service.
+- **rustfs.yaml**: Deploys a RustFS object storage service.
 - **postgres.yaml**: Deploys a PostgreSQL database.
 - **redpanda.yaml**: Deploys a Redpanda Kafka-compatible streaming platform.
 - **datagen.yaml**: Deploys a Datagen service to generate test data for Redpanda.
