@@ -286,7 +286,7 @@ module "database" {
 
 # 6. Setup S3 bucket for Materialize
 module "storage" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/storage?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/storage?ref=v13.10.0"
 
   name_prefix            = var.name_prefix
   bucket_lifecycle_rules = []
