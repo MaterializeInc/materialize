@@ -192,7 +192,7 @@ module "ec2nodeclass_materialize" {
 }
 
 module "nodepool_materialize" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-nodepool?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-nodepool?ref=v13.10.0"
 
   name            = local.nodeclass_name_materialize
   nodeclass_name  = local.nodeclass_name_materialize
