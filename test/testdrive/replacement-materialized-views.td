@@ -68,6 +68,14 @@ name cluster    comment
 mv   quickstart ""
 rp   quickstart ""
 
+$ set-from-sql var=old-mv-writer
+SELECT global_id FROM mz_internal.mz_object_global_ids
+JOIN mz_materialized_views USING (id) WHERE name = 'mv'
+
+$ set-from-sql var=new-mv-writer
+SELECT global_id FROM mz_internal.mz_object_global_ids
+JOIN mz_materialized_views USING (id) WHERE name = 'rp'
+
 > ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 
 > SHOW MATERIALIZED VIEWS
@@ -79,6 +87,13 @@ mv   quickstart ""
 3  2
 7  4
 11 6
+
+# The retained storage alias must not retain a live compute-writer row.
+# Testdrive retries until the replacement is observed and the old row retires.
+> SELECT bool_and(object_id = '${new-mv-writer}')
+  FROM mz_cluster_replica_frontiers
+  WHERE object_id IN ('${old-mv-writer}', '${new-mv-writer}')
+true
 
 
 # Test: aborted replacement workflow

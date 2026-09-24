@@ -649,7 +649,7 @@ impl ReplicaEnactment {
                         .all(|id| self.installed.contains_key(id))
                 })
                 .context("pending compute plans do not form an installable DAG")?;
-            let plan = plans.remove(position);
+            let mut plan = plans.remove(position);
             let as_of = plan.as_of.clone().expect("selected as_of");
             let source_holds: BTreeMap<_, _> = if as_of.is_empty() {
                 BTreeMap::new()
@@ -701,13 +701,19 @@ impl ReplicaEnactment {
                     },
                 );
             }
-            if !as_of.is_empty() {
-                let plan = plan.into_render_plan::<_, anyhow::Error>(
-                    |id| Ok((metadata.metadata[&id].clone(), uppers[&id].clone())),
-                    |id| Ok(metadata.metadata[&id].clone()),
-                )?;
-                self.io.send(ComputeCommand::CreateDataflow(Box::new(plan)));
+            if as_of.is_empty() {
+                // A sealed selection needs only export reporting state. Workers
+                // must expose completion to current and reconnecting observers,
+                // without rendering or acquiring any input protection.
+                plan.source_imports.clear();
+                plan.index_imports.clear();
+                plan.objects_to_build.clear();
             }
+            let plan = plan.into_render_plan::<_, anyhow::Error>(
+                |id| Ok((metadata.metadata[&id].clone(), uppers[&id].clone())),
+                |id| Ok(metadata.metadata[&id].clone()),
+            )?;
+            self.io.send(ComputeCommand::CreateDataflow(Box::new(plan)));
         }
         // Every creation is ordered before any policy advancement or export DROP.
         // Runtime TraceAgents now own each import's execution protection.
@@ -917,12 +923,10 @@ impl ReplicaEnactment {
             if !live && self.local.frontier(*id).is_empty() {
                 collection.retired = true;
                 collection.window = None;
-                if !collection.as_of.is_empty() {
-                    self.io.send(ComputeCommand::AllowCompaction {
-                        id: *id,
-                        frontier: Antichain::new(),
-                    });
-                }
+                self.io.send(ComputeCommand::AllowCompaction {
+                    id: *id,
+                    frontier: Antichain::new(),
+                });
                 continue;
             }
             if !collection.scheduled

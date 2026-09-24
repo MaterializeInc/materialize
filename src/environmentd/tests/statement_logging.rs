@@ -1041,6 +1041,15 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     let mut ddl = server.connect_internal(postgres::NoTls).unwrap();
 
+    // The session cache is weak. Keep its planning-equivalent allocation alive
+    // when catalog_mut() uses Arc::make_mut before entering the failpoint.
+    let catalog = server.server.runtime().block_on(
+        server
+            .server
+            .inner()
+            .adapter_client()
+            .catalog_snapshot_expensive(),
+    );
     // Populate this session's catalog snapshot cache, so the measured statement
     // below needs nothing from the stalled coordinator.
     client.execute("SELECT 1", &[]).unwrap();
@@ -1065,6 +1074,7 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
     // waiting for completion so retries can catch up with peer publications.
     fail::remove("catalog_transact");
     stall.join().unwrap();
+    drop(catalog);
 
     let mut internal = server.connect_internal(postgres::NoTls).unwrap();
     let query = "
