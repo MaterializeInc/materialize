@@ -198,6 +198,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
+    cluster_reconfiguration_allowed_lag
     cluster_soften_az_affinity
     cluster_soften_az_affinity_weight
     cluster_soften_replication_anti_affinity
@@ -234,6 +235,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     default_cluster_reconfiguration_timeout
     default_hydration_burst_linger
     default_timestamp_interval
+    disabled_metric_sinks
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
@@ -243,6 +245,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
     enable_background_alter_cluster
+    enable_cluster_reconfiguration_lag_gate
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
@@ -292,6 +295,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_simplify_from_less_existence
     enable_simplify_quantified_comparisons
     enable_time_at_time_zone
+    enable_unified_cluster
     enable_union_cancellation_after_relation_cse
     enable_unlimited_retain_history
     enable_will_distinct_propagation
@@ -483,6 +487,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_multi_replica_sources
     enable_reduce_reduction
     enable_repr_typecheck
+    enable_storage_introspection_logs
     enable_unified_cluster_arrangment
     enable_yugabyte_connection
     enable_zero_downtime_cluster_reconfiguration

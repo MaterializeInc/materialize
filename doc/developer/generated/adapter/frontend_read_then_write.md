@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_read_then_write.rs
-revision: ab330a3fad
+revision: d1834c1394
 ---
 
 # adapter::frontend_read_then_write

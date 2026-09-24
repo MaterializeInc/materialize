@@ -24,7 +24,8 @@ reference these objects is not allowed.
 
 ## `mz_object_global_ids`
 
-The `mz_object_global_ids` table maps Materialize catalog item IDs to global IDs.
+The `mz_object_global_ids` materialized view maps Materialize catalog item
+IDs to global IDs.
 
 <!-- RELATION_SPEC mz_internal.mz_object_global_ids -->
 | Field        | Type     | Meaning                                                                                             |
@@ -727,6 +728,8 @@ The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-
 
 ## `mz_object_hydration_history`
 
+{{< warn-if-unreleased v26.42 >}}
+
 The `mz_object_hydration_history` table records completed hydration of indexes and
 materialized views, with one row for each time a dataflow hydrated on a replica.
 By default, rows are retained for 30 days while collection is enabled. Disabling
@@ -741,6 +744,20 @@ multi-process replica, timestamps come from process-local logging clocks and inc
 their clock skew. A process whose clock is ahead can be absent at the sampled
 logical timestamp, so the recorded finish can precede the latest process's finish.
 
+Only indexes and materialized views are recorded. Sources, including upsert
+sources, contribute no rows here and do not gate the completion of a replica
+episode in [`mz_replica_hydration_history`](#mz_replica_hydration_history).
+That table's peaks measure whole replica processes rather than individual
+dataflows, so they include a source's memory and disk only for work finished
+before the episode was recorded.
+
+`object_id` is a global ID rather than a catalog item ID, so join
+[`mz_object_global_ids`](#mz_object_global_ids) to reach the index or
+materialized view. To recover the name and size of a replica that has since been
+replaced, join [`mz_cluster_replica_history`](#mz_cluster_replica_history). For
+how to use these columns to choose a cluster size, see [Optimize cluster
+size](/clusters/sizing/).
+
 <!-- RELATION_SPEC mz_internal.mz_object_hydration_history -->
 | Field          | Type                         | Meaning                                                                                                                  |
 | -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -754,6 +771,8 @@ logical timestamp, so the recorded finish can precede the latest process's finis
 
 ## `mz_replica_hydration_history`
 
+{{< warn-if-unreleased v26.42 >}}
+
 The `mz_replica_hydration_history` table records successful replica hydration
 episodes. An episode begins when a maintained compute dataflow is installed on
 a fully hydrated replica and finishes when every running maintained compute
@@ -762,8 +781,26 @@ dataflow has hydrated.
 By default, rows are retained for 30 days while collection is enabled. Recording
 is best effort, and only the latest completed episode visible in each collection
 is recorded. Resource peaks cover the replica processes' lifetimes through
-collection, not only the hydration episode. On a multi-process replica, the
-table records the largest peak reported by any process.
+collection, not only the hydration episode. Each episode has one row per process,
+so memory and disk peaks can be compared across processes to identify skew.
+Episode timing and object count describe the whole replica, not each process.
+Do not sum object counts across process rows. Summing process peaks does not
+give a simultaneous replica-wide peak, since they can occur at different times.
+
+{{< note >}}
+**Multi-process replicas.** `peak_memory_bytes` is a single process's
+high-water mark, not the replica's. On a multi-process size it does not capture
+the replica's true peak, and no way to combine the per-process marks into one is
+established. Size from these peaks only on a single-process size.
+{{< /note >}}
+
+Because memory and disk limits apply to each replica process independently,
+compare `peak_memory_bytes` against
+[`mz_cluster_replica_sizes.memory_bytes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes),
+which is also per process. Join
+[`mz_cluster_replica_history`](#mz_cluster_replica_history) for the size the
+episode ran at, since that row survives the replica. For how to use these
+columns to choose a cluster size, see [Optimize cluster size](/clusters/sizing/).
 
 <!-- RELATION_SPEC mz_internal.mz_replica_hydration_history -->
 | Field               | Type                         | Meaning                                                                                                                  |
@@ -772,10 +809,11 @@ table records the largest peak reported by any process.
 | `cluster_id`        | [`text`]                     | The ID of the replica's cluster.                                                                                          |
 | `started_at`        | [`timestamp with time zone`] | The earliest maintained compute dataflow installation in the hydration episode.                                         |
 | `finished_at`       | [`timestamp with time zone`] | The latest maintained compute dataflow hydration in the hydration episode.                                               |
-| `object_count`      | [`uint8`]                    | The number of maintained compute dataflows in the hydration episode.                                                     |
-| `peak_memory_bytes` | [`uint8`]                    | The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
-| `peak_disk_bytes`   | [`uint8`]                    | The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
+| `object_count`      | [`uint8`]                    | The number of maintained compute dataflows in the hydration episode. Includes the replica's system introspection dataflows, so it exceeds the number of indexes and materialized views you created. |
+| `peak_memory_bytes` | [`uint8`]                    | The process-lifetime cgroup memory high-water mark when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
+| `peak_disk_bytes`   | [`uint8`]                    | The process-lifetime scratch-filesystem or swap high-water mark when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
 | `status`            | [`text`]                     | The hydration episode's status. Currently always `hydrated`.                                                             |
+| `process_id`        | [`uint8`]                    | The ID of a process within the replica. Episode timing and object_count are replica-wide and repeated for each process. |
 
 ## `mz_object_transitive_dependencies`
 

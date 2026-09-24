@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/client.rs
-revision: 2e6c03ac43
+revision: c8a2857de2
 ---
 
 # mz-deploy::client
@@ -15,7 +15,7 @@ Scoped sub-clients:
 * `deployment_ops` — blue/green lifecycle: staging, hydration monitoring, cutover, abort.
 * `validation` — pre-deployment checks that the target environment matches expected state.
 * `type_info` — `SHOW COLUMNS` queries to generate/refresh the `types.lock` data-contract file.
-Supporting submodules: `models` (shared data structures), `errors` (`ConnectionError`, `DatabaseValidationError`), `dev_overlays` (`DevOverlaysClient`).
+Supporting submodules: `models` (shared data structures), `errors` (`ConnectionError`, `DatabaseValidationError`), `dev_overlays` (`DevOverlaysClient`), `humanized_type` (converts `DataType` values to display strings for hover and diagnostic output).
 
 `quote_identifier` double-quotes a SQL identifier, escaping embedded double quotes.
 `sql_placeholders(n)` builds a `$1, $2, …, $n` placeholder string for parameterized queries.

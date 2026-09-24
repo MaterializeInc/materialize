@@ -172,6 +172,16 @@ pub struct InternalCommandSender {
 }
 
 impl InternalCommandSender {
+    /// Creates a sender from externally provided parts, for hosts that
+    /// route internal commands through their own sequencing channel instead of
+    /// `setup_command_sequencer`.
+    pub fn from_parts(
+        tx: mpsc::Sender<InternalStorageCommand>,
+        activator: Rc<RefCell<Option<Activator>>>,
+    ) -> Self {
+        Self { tx, activator }
+    }
+
     /// Broadcasts the given command to all workers.
     pub fn send(&self, cmd: InternalStorageCommand) {
         if self.tx.send(cmd).is_err() {

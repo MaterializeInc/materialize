@@ -24,6 +24,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -46,7 +47,7 @@ use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
-use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
+use mz_ore::metrics::{ComputedGauge, ComputedUIntGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::task::{JoinSetExt, spawn};
@@ -54,7 +55,8 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ErrorResponse, FrontendMessage,
-    FrontendStartupMessage, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3, decode_startup,
+    FrontendStartupMessage, MAX_STARTUP_FRAME_SIZE, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
+    VERSION_3, decode_startup,
 };
 use mz_server_core::{
     Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
@@ -72,13 +74,13 @@ use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 use tower::Service;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
-    has_tracing_config_update, tracing_config,
+    INJECT_PROXY_PROTOCOL_HEADER_HTTP, MAX_CONNECTIONS, PRE_RESOLVED_TIMEOUT,
+    SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT, has_tracing_config_update, tracing_config,
 };
 
 /// Balancer build information.
@@ -315,6 +317,7 @@ impl BalancerService {
         };
 
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
+        let limiter = ConnectionLimiter::new(&self.cfg.metrics_registry, self.configs.clone());
 
         let mut set = JoinSet::new();
         let mut server_handles = Vec::new();
@@ -338,6 +341,8 @@ impl BalancerService {
                 tls: pgwire_tls,
                 internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
+                limiter: Arc::clone(&limiter),
+                configs: self.configs.clone(),
                 now: SYSTEM_TIME.clone(),
             };
             let (handle, stream) = self.pgwire;
@@ -370,6 +375,7 @@ impl BalancerService {
                 resolve_template: Arc::from(addr),
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
+                limiter,
                 configs: self.configs.clone(),
                 internal_tls: self.cfg.internal_tls,
             };
@@ -502,6 +508,8 @@ impl Drop for GaugeGuard {
 struct ServerMetricsConfig {
     connection_status: IntCounterVec,
     active_connections: IntGaugeVec,
+    pre_resolved_connections: IntGaugeVec,
+    pre_resolved_timeouts: IntCounterVec,
     tenant_connections: IntGaugeVec,
     tenant_connection_rx: IntCounterVec,
     tenant_connection_tx: IntCounterVec,
@@ -518,6 +526,16 @@ impl ServerMetricsConfig {
         let active_connections = registry.register(metric!(
             name: "mz_balancer_connection_active",
             help: "Count of currently open network connections.",
+            var_labels: ["source"],
+        ));
+        let pre_resolved_connections = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_connection_active",
+            help: "Count of open network connections that have not yet resolved a backend.",
+            var_labels: ["source"],
+        ));
+        let pre_resolved_timeouts = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_timeout_total",
+            help: "Count of connections closed for not resolving a backend within the pre-resolved timeout.",
             var_labels: ["source"],
         ));
         let tenant_connections = registry.register(metric!(
@@ -543,6 +561,8 @@ impl ServerMetricsConfig {
         Self {
             connection_status,
             active_connections,
+            pre_resolved_connections,
+            pre_resolved_timeouts,
             tenant_connections,
             tenant_connection_rx,
             tenant_connection_tx,
@@ -583,6 +603,19 @@ impl ServerMetrics {
             .into()
     }
 
+    fn pre_resolved_connections(&self) -> GaugeGuard {
+        self.inner
+            .pre_resolved_connections
+            .with_label_values(&[self.source])
+            .into()
+    }
+
+    fn pre_resolved_timeout(&self) -> IntCounter {
+        self.inner
+            .pre_resolved_timeouts
+            .with_label_values(&[self.source])
+    }
+
     fn tenant_connections(&self, tenant: &str) -> GaugeGuard {
         self.inner
             .tenant_connections
@@ -613,54 +646,326 @@ impl ServerMetrics {
     }
 }
 
+/// Ceiling on the number of client connections proxied at once, shared by the pgwire and HTTPS
+/// listeners.
+///
+/// balancerd's memory use scales with the number of connections it proxies. Without a ceiling it
+/// keeps accepting until the container is OOM killed, which drops every established connection.
+/// Refusing new connections instead sheds only the load we cannot serve.
+#[derive(Debug)]
+struct ConnectionLimiter {
+    configs: ConfigSet,
+    active: AtomicU32,
+    /// Whether connections are currently being refused, so that reaching and clearing the limit
+    /// are logged once each rather than once per connection.
+    limited: AtomicBool,
+    rejected: IntCounter,
+    _limit: ComputedUIntGauge,
+}
+
+impl ConnectionLimiter {
+    fn new(registry: &MetricsRegistry, configs: ConfigSet) -> Arc<Self> {
+        let rejected = registry.register(metric!(
+            name: "mz_balancer_connection_rejected_total",
+            help: "Count of connections refused because the connection limit was reached.",
+        ));
+        let limit = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_limit",
+                help: "Maximum number of connections proxied at once, 0 if unlimited.",
+            ),
+            {
+                let configs = configs.clone();
+                move || u64::from(MAX_CONNECTIONS.get(&configs))
+            },
+        );
+        Arc::new(ConnectionLimiter {
+            configs,
+            active: AtomicU32::new(0),
+            limited: AtomicBool::new(false),
+            rejected,
+            _limit: limit,
+        })
+    }
+
+    /// Reserves capacity for one connection, or returns `None` if the limit has been reached, in
+    /// which case the caller must refuse the connection.
+    fn acquire(self: &Arc<Self>) -> Option<ConnectionGuard> {
+        let limit = MAX_CONNECTIONS.get(&self.configs);
+        let unlimited = limit == 0;
+        match self
+            .active
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                (unlimited || active < limit).then(|| active + 1)
+            }) {
+            Ok(prev) => {
+                // Only clear the limited state once comfortably below the limit, so that
+                // connections churning at the ceiling do not flap the log lines.
+                if unlimited || prev + 1 <= limit - limit / 10 {
+                    if self.limited.swap(false, Ordering::Relaxed) {
+                        info!("accepting new connections again, limit is {limit}");
+                    }
+                }
+                Some(ConnectionGuard(Arc::clone(self)))
+            }
+            Err(active) => {
+                self.rejected.inc();
+                if !self.limited.swap(true, Ordering::Relaxed) {
+                    warn!(
+                        "refusing new connections: at the limit of {limit} connections \
+                        ({active} active)"
+                    );
+                }
+                None
+            }
+        }
+    }
+}
+
+/// Releases the connection reserved by [`ConnectionLimiter::acquire`] when dropped.
+struct ConnectionGuard(Arc<ConnectionLimiter>);
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Answers the client with a final message and flushes it.
+///
+/// [`FramedConn::send`] only enqueues into a buffer, so a rejection that is not flushed reaches
+/// the client as a bare socket close rather than the error it was given. Every path that answers
+/// the client and then stops has to flush, because the connection is dropped as soon as it
+/// returns.
+async fn reject<A>(conn: &mut FramedConn<A>, err: ErrorResponse) -> Result<(), io::Error>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    conn.send(err).await?;
+    conn.flush().await
+}
+
+/// Runs the pre-resolved phase under [`PRE_RESOLVED_TIMEOUT`], counting an overrun.
+///
+/// `fut` must cover TLS negotiation, startup, authentication, and backend resolution.
+/// Proxying must run after it completes, outside the deadline. A zero timeout leaves
+/// `fut` unbounded.
+async fn under_pre_resolved_timeout<F, T, E>(
+    timeout: Duration,
+    metrics: &ServerMetrics,
+    fut: F,
+) -> Result<T, E>
+where
+    F: Future<Output = Result<T, E>>,
+    E: From<io::Error>,
+{
+    if timeout.is_zero() {
+        return fut.await;
+    }
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(result) => result,
+        Err(_) => {
+            metrics.pre_resolved_timeout().inc();
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out before resolving a backend",
+            )
+            .into())
+        }
+    }
+}
+
 pub enum CancellationResolver {
     Directory(PathBuf),
     Static(String),
 }
 
 struct PgwireBalancer {
+    /// Read for [`PRE_RESOLVED_TIMEOUT`] at connection time.
+    configs: ConfigSet,
     tls: Option<ReloadingTlsConfig>,
     internal_tls: bool,
     cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<BalancerResolver>,
     metrics: ServerMetrics,
+    limiter: Arc<ConnectionLimiter>,
     now: NowFn,
 }
 
 impl PgwireBalancer {
+    /// Negotiates pgwire startup and resolves a backend.
+    ///
+    /// Returns `None` after a client disconnect, a flushed rejection, or a dispatched
+    /// cancellation request.
+    async fn pre_resolve(
+        conn: Connection,
+        tls: Option<ReloadingTlsConfig>,
+        resolver: &BalancerResolver,
+        cancellation_resolver: Arc<CancellationResolver>,
+        conn_uuid: Uuid,
+        metrics: &ServerMetrics,
+    ) -> Result<
+        Option<(
+            FramedConn<Connection>,
+            ResolvedAddr,
+            BTreeMap<String, String>,
+        )>,
+        anyhow::Error,
+    > {
+        let peer_addr = conn.peer_addr();
+        let mut conn = Conn::Unencrypted(conn);
+        loop {
+            let message = decode_startup(&mut conn, MAX_STARTUP_FRAME_SIZE).await?;
+            conn = match message {
+                // Clients sometimes hang up during the startup sequence, e.g.
+                // because they receive an unacceptable response to an
+                // `SslRequest`. This is considered a graceful termination.
+                None => return Ok(None),
+
+                Some(FrontendStartupMessage::Startup {
+                    version,
+                    mut params,
+                }) => {
+                    let mut conn = FramedConn::new(conn);
+                    let rejected = SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
+                    let peer_addr = match peer_addr {
+                        Ok(addr) => addr.ip(),
+                        Err(e) => {
+                            error!("Invalid peer_addr {:?}", e);
+                            reject(
+                                &mut conn,
+                                ErrorResponse::fatal(rejected, "invalid peer address"),
+                            )
+                            .await?;
+                            return Ok(None);
+                        }
+                    };
+                    debug!(
+                        %conn_uuid, %peer_addr,
+                        "starting new pgwire connection in balancer",
+                    );
+                    let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
+                    if prev.is_some() {
+                        reject(
+                            &mut conn,
+                            ErrorResponse::fatal(
+                                rejected,
+                                format!("invalid parameter '{CONN_UUID_KEY}'"),
+                            ),
+                        )
+                        .await?;
+                        return Ok(None);
+                    }
+
+                    let forwarded_for = params.insert(
+                        MZ_FORWARDED_FOR_KEY.to_string(),
+                        peer_addr.to_string().clone(),
+                    );
+                    if let Some(_) = forwarded_for {
+                        reject(
+                            &mut conn,
+                            ErrorResponse::fatal(
+                                rejected,
+                                format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
+                            ),
+                        )
+                        .await?;
+                        return Ok(None);
+                    };
+
+                    let Some(resolved) = Self::resolve_destination(
+                        &mut conn,
+                        version,
+                        &params,
+                        resolver,
+                        tls.map(|tls| tls.mode),
+                        metrics,
+                    )
+                    .await?
+                    else {
+                        return Ok(None);
+                    };
+                    return Ok(Some((conn, resolved, params)));
+                }
+
+                Some(FrontendStartupMessage::CancelRequest {
+                    conn_id,
+                    secret_key,
+                }) => {
+                    spawn(|| "cancel request", async move {
+                        cancel_request(conn_id, secret_key, &cancellation_resolver).await;
+                    });
+                    // Do not wait on cancel requests to return because cancellation is best
+                    // effort.
+                    return Ok(None);
+                }
+
+                Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
+                    (Conn::Unencrypted(mut conn), Some(tls)) => {
+                        conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
+                        let mut ssl_stream = SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
+                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            let _ = ssl_stream.get_mut().shutdown().await;
+                            return Err(e.into());
+                        }
+                        Conn::Ssl(ssl_stream)
+                    }
+                    (mut conn, _) => {
+                        conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                        conn
+                    }
+                },
+
+                Some(FrontendStartupMessage::GssEncRequest) => {
+                    conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                    conn
+                }
+            }
+        }
+    }
+
     #[mz_ore::instrument(level = "debug")]
-    async fn run<'a, A>(
+    /// Resolves a destination for the connection, or answers the client saying why it cannot.
+    ///
+    /// `Ok(None)` means the rejection has been flushed and the connection is finished.
+    async fn resolve_destination<'a, A>(
         conn: &'a mut FramedConn<A>,
         version: i32,
-        params: BTreeMap<String, String>,
+        params: &BTreeMap<String, String>,
         resolver: &BalancerResolver,
         tls_mode: Option<TlsMode>,
-        internal_tls: bool,
         metrics: &ServerMetrics,
-    ) -> Result<(), io::Error>
+    ) -> Result<Option<ResolvedAddr>, io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
         if version != VERSION_3 {
-            return conn
-                .send(ErrorResponse::fatal(
+            reject(
+                conn,
+                ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "server does not support the client's requested protocol version",
-                ))
-                .await;
+                ),
+            )
+            .await?;
+            return Ok(None);
         }
 
         let Some(user) = params.get("user") else {
-            return conn
-                .send(ErrorResponse::fatal(
+            reject(
+                conn,
+                ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "user parameter required",
-                ))
-                .await;
+                ),
+            )
+            .await?;
+            return Ok(None);
         };
 
         if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
-            return conn.send(err).await;
+            reject(conn, err).await?;
+            return Ok(None);
         }
 
         let resolved = match resolver.resolve(conn, user, metrics).await {
@@ -681,12 +986,25 @@ impl PgwireBalancer {
                         SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
                     }
                 };
-                return conn
-                    .send(ErrorResponse::fatal(sql_state, err.to_string()))
-                    .await;
+                reject(conn, ErrorResponse::fatal(sql_state, err.to_string())).await?;
+                return Ok(None);
             }
         };
 
+        Ok(Some(resolved))
+    }
+
+    /// Proxies a resolved connection until either side closes.
+    async fn proxy<'a, A>(
+        conn: &'a mut FramedConn<A>,
+        resolved: ResolvedAddr,
+        params: BTreeMap<String, String>,
+        internal_tls: bool,
+        metrics: &ServerMetrics,
+    ) -> Result<(), io::Error>
+    where
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+    {
         let _active_guard = resolved
             .tenant
             .as_ref()
@@ -837,120 +1155,44 @@ impl mz_server_core::Server for PgwireBalancer {
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
+        let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
         let conn_uuid = epoch_to_uuid_v7(&(self.now)());
-        let peer_addr = conn.peer_addr();
         conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
             let active_guard = outer_metrics.active_connections();
             let result: Result<(), anyhow::Error> = async move {
-                let mut conn = Conn::Unencrypted(conn);
-                loop {
-                    let message = decode_startup(&mut conn).await?;
-                    conn = match message {
-                        // Clients sometimes hang up during the startup sequence, e.g.
-                        // because they receive an unacceptable response to an
-                        // `SslRequest`. This is considered a graceful termination.
-                        None => return Ok(()),
+                let Some(_conn_guard) = limiter.acquire() else {
+                    return Ok(());
+                };
+                let pre_resolved = inner_metrics.pre_resolved_connections();
 
-                        Some(FrontendStartupMessage::Startup {
-                            version,
-                            mut params,
-                        }) => {
-                            let mut conn = FramedConn::new(conn);
-                            let rejected =
-                                SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
-                            let peer_addr = match peer_addr {
-                                Ok(addr) => addr.ip(),
-                                Err(e) => {
-                                    error!("Invalid peer_addr {:?}", e);
-                                    return Ok(conn
-                                        .send(ErrorResponse::fatal(
-                                            rejected,
-                                            "invalid peer address",
-                                        ))
-                                        .await?);
-                                }
-                            };
-                            debug!(
-                                %conn_uuid, %peer_addr,
-                                "starting new pgwire connection in balancer",
-                            );
-                            let prev =
-                                params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
-                            if prev.is_some() {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        rejected,
-                                        format!("invalid parameter '{CONN_UUID_KEY}'"),
-                                    ))
-                                    .await?);
-                            }
+                let destination = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &inner_metrics,
+                    Self::pre_resolve(
+                        conn,
+                        tls,
+                        &resolver,
+                        cancellation_resolver,
+                        conn_uuid,
+                        &inner_metrics,
+                    ),
+                )
+                .await?;
 
-                            let forwarded_for = params.insert(
-                                MZ_FORWARDED_FOR_KEY.to_string(),
-                                peer_addr.to_string().clone(),
-                            );
-                            if let Some(_) = forwarded_for {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        rejected,
-                                        format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
-                                    ))
-                                    .await?);
-                            };
+                let Some((mut conn, resolved, params)) = destination else {
+                    return Ok(());
+                };
+                drop(pre_resolved);
 
-                            Self::run(
-                                &mut conn,
-                                version,
-                                params,
-                                &resolver,
-                                tls.map(|tls| tls.mode),
-                                internal_tls,
-                                &inner_metrics,
-                            )
-                            .await?;
-                            conn.flush().await?;
-                            return Ok(());
-                        }
-
-                        Some(FrontendStartupMessage::CancelRequest {
-                            conn_id,
-                            secret_key,
-                        }) => {
-                            spawn(|| "cancel request", async move {
-                                cancel_request(conn_id, secret_key, &cancellation_resolver).await;
-                            });
-                            // Do not wait on cancel requests to return because cancellation is best
-                            // effort.
-                            return Ok(());
-                        }
-
-                        Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
-                            (Conn::Unencrypted(mut conn), Some(tls)) => {
-                                conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                                let mut ssl_stream =
-                                    SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
-                                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                    let _ = ssl_stream.get_mut().shutdown().await;
-                                    return Err(e.into());
-                                }
-                                Conn::Ssl(ssl_stream)
-                            }
-                            (mut conn, _) => {
-                                conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                                conn
-                            }
-                        },
-
-                        Some(FrontendStartupMessage::GssEncRequest) => {
-                            conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                            conn
-                        }
-                    }
-                }
+                PgwireBalancer::proxy(&mut conn, resolved, params, internal_tls, &inner_metrics)
+                    .await?;
+                conn.flush().await?;
+                Ok(())
             }
             .await;
             drop(active_guard);
@@ -1107,17 +1349,71 @@ async fn cancel_request(
     }
 }
 
+/// Writes an HTTP error response to a client and closes the connection.
+///
+/// The proxied connections are raw TCP streams, so the HTTP framing has to be written by hand.
+/// Errors are ignored: the connection is going away regardless.
+async fn send_http_error(client_stream: &mut Box<dyn ClientStream>, status: &str, body: &str) {
+    let response = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: text/plain\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        body.len(),
+    );
+    let _ = client_stream.write_all(response.as_bytes()).await;
+    let _ = client_stream.shutdown().await;
+}
+
 struct HttpsBalancer {
     resolver: Arc<TenantDnsResolver>,
     tls: Option<ReloadingSslContext>,
     resolve_template: Arc<str>,
     port: u16,
     metrics: Arc<ServerMetrics>,
+    limiter: Arc<ConnectionLimiter>,
     configs: ConfigSet,
     internal_tls: bool,
 }
 
 impl HttpsBalancer {
+    /// Negotiates TLS and resolves a backend using the client's SNI hostname.
+    async fn pre_resolve(
+        conn: Connection,
+        tls_context: Option<ReloadingSslContext>,
+        resolver: &TenantDnsResolver,
+        resolve_template: &str,
+        port: u16,
+    ) -> Result<(Box<dyn ClientStream>, ResolvedAddr, SocketAddr), anyhow::Error> {
+        let peer_addr = conn.peer_addr().context("fetching peer addr")?;
+        let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) = match tls_context
+        {
+            Some(tls_context) => {
+                let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
+                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                    let _ = ssl_stream.get_mut().shutdown().await;
+                    return Err(e.into());
+                }
+                let servername: Option<String> =
+                    ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                        match sn.split_once('.') {
+                            Some((left, _right)) => left,
+                            None => sn,
+                        }
+                        .into()
+                    });
+                debug!("Found sni servername: {servername:?} (https)");
+                (Box::new(ssl_stream), servername)
+            }
+            _ => (Box::new(conn), None),
+        };
+        let resolved =
+            Self::resolve(resolver, resolve_template, port, servername.as_deref()).await?;
+        Ok((client_stream, resolved, peer_addr))
+    }
+
     async fn resolve(
         resolver: &TenantDnsResolver,
         resolve_template: &str,
@@ -1203,37 +1499,24 @@ impl mz_server_core::Server for HttpsBalancer {
         let port = self.port;
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
-        let peer_addr = conn.peer_addr();
+        let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
-                let peer_addr = peer_addr.context("fetching peer addr")?;
-                let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
-                    match tls_context {
-                        Some(tls_context) => {
-                            let mut ssl_stream =
-                                SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
-                            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                let _ = ssl_stream.get_mut().shutdown().await;
-                                return Err(e.into());
-                            }
-                            let servername: Option<String> =
-                                ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                                    match sn.split_once('.') {
-                                        Some((left, _right)) => left,
-                                        None => sn,
-                                    }
-                                    .into()
-                                });
-                            debug!("Found sni servername: {servername:?} (https)");
-                            (Box::new(ssl_stream), servername)
-                        }
-                        _ => (Box::new(conn), None),
-                    };
-                let resolved =
-                    Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
-                        .await?;
+                let Some(_conn_guard) = limiter.acquire() else {
+                    return Ok(());
+                };
+                let pre_resolved = inner_metrics.pre_resolved_connections();
+
+                let (mut client_stream, resolved, peer_addr) = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &inner_metrics,
+                    Self::pre_resolve(conn, tls_context, &resolver, &resolve_template, port),
+                )
+                .await?;
+                drop(pre_resolved);
                 let inner_active_guard = resolved
                     .tenant
                     .as_ref()
@@ -1242,24 +1525,12 @@ impl mz_server_core::Server for HttpsBalancer {
                     Ok(stream) => stream,
                     Err(e) => {
                         error!("failed to connect to upstream server: {e}");
-                        let body = "upstream server not available";
-                        // We know this is an HTTPs stream (see name
-                        // HttpsBalancer), but we actually don't care what type
-                        // of traffic it is and we only use raw tcp streams.In
-                        // order to respond with HTTP we have to write this as a
-                        // raw http message.
-                        let response = format!(
-                            "HTTP/1.1 502 Bad Gateway\r\n\
-                             Content-Type: text/plain\r\n\
-                             Content-Length: {}\r\n\
-                             Connection: close\r\n\
-                             \r\n\
-                             {}",
-                            body.len(),
-                            body
-                        );
-                        let _ = client_stream.write_all(response.as_bytes()).await;
-                        let _ = client_stream.shutdown().await;
+                        send_http_error(
+                            &mut client_stream,
+                            "502 Bad Gateway",
+                            "upstream server not available",
+                        )
+                        .await;
                         return Ok(());
                     }
                 };
@@ -1654,6 +1925,8 @@ struct ResolvedAddr {
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
+
     use super::*;
 
     #[mz_ore::test]
@@ -1725,5 +1998,65 @@ mod tests {
         assert_eq!(strip_ipv6_brackets("host.example.com"), "host.example.com");
         assert_eq!(strip_ipv6_brackets("[unclosed"), "[unclosed");
         assert_eq!(strip_ipv6_brackets("unopened]"), "unopened]");
+    }
+
+    #[mz_ore::test]
+    fn test_connection_limiter() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let set_max = |max: u32| {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&MAX_CONNECTIONS, max);
+            updates.apply(&configs);
+        };
+
+        set_max(2);
+        let limiter = ConnectionLimiter::new(&MetricsRegistry::new(), configs.clone());
+        let first = limiter.acquire().expect("under the limit");
+        let second = limiter.acquire().expect("at the limit");
+        assert!(limiter.acquire().is_none());
+        assert_eq!(limiter.rejected.get(), 1);
+
+        // A connection closing frees capacity for a new one.
+        drop(second);
+        let _third = limiter.acquire().expect("capacity freed");
+        drop(first);
+
+        // Lowering the limit below the current count refuses new connections but leaves the
+        // established ones alone.
+        set_max(1);
+        assert!(limiter.acquire().is_none());
+
+        // Zero disables the limit.
+        set_max(0);
+        assert!(limiter.acquire().is_some());
+    }
+
+    /// A zero timeout disables the deadline, which is what leaves the phase unbounded.
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_pre_resolved_timeout_zero_disables() {
+        let metrics = ServerMetrics::new(
+            ServerMetricsConfig::register_into(&MetricsRegistry::new()),
+            "pgwire",
+        );
+
+        // Zero lets the phase run as long as it likes. The paused clock makes the hour free.
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+            Ok::<(), io::Error>(())
+        };
+        assert!(
+            under_pre_resolved_timeout(Duration::ZERO, &metrics, slow)
+                .await
+                .is_ok()
+        );
+        assert_eq!(metrics.pre_resolved_timeout().get(), 0);
+
+        // Anything else bounds it, and the overrun is counted.
+        let stalled = std::future::pending::<Result<(), io::Error>>();
+        let err = under_pre_resolved_timeout(Duration::from_secs(30), &metrics, stalled)
+            .await
+            .expect_err("a phase that never finishes must be cut short");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(metrics.pre_resolved_timeout().get(), 1);
     }
 }

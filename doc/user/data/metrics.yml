@@ -237,6 +237,14 @@ metrics:
   - source
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_connection_limit
+  help: Maximum number of connections proxied at once, 0 if unlimited.
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_rejected_total
+  help: Count of connections refused because the connection limit was reached.
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_status
   help: Count of completed network connections, by status
   labels:
@@ -249,6 +257,18 @@ metrics:
   labels:
   - build_type
   - version
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_pre_resolved_connection_active
+  help: Count of open network connections that have not yet resolved a backend.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_pre_resolved_timeout_total
+  help: Count of connections closed for not resolving a backend within the pre-resolved timeout.
+  labels:
+  - source
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_balancer_tenant_connection_active

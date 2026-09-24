@@ -33,13 +33,12 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, UnchunkBuilder};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
-use mz_timely_util::columnar::{
-    Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
-};
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
-use timely::container::CapacityContainerBuilder;
+use timely::container::NoopBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -51,7 +50,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
-use crate::render::columnar::{CollectionEdge, flat_map_datums};
+use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -447,16 +446,16 @@ pub(crate) fn distinct_errs_collection<'a, T: RenderTimestamp>(
 #[derive(Clone)]
 pub struct CollectionBundle<'scope, T: RenderTimestamp> {
     pub collection: Option<(
-        CollectionEdge<'scope, T>,
+        ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )>,
     pub arranged: BTreeMap<Vec<LirScalarExpr>, ArrangementFlavor<'scope, T>>,
 }
 
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
-    /// Construct a new collection bundle from a [`CollectionEdge`] and an error stream.
+    /// Construct a new collection bundle from a [`ColCollection`] and an error stream.
     pub fn from_edge(
-        oks: CollectionEdge<'scope, T>,
+        oks: ColCollection<'scope, T>,
         errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) -> Self {
         Self {
@@ -603,7 +602,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         &self,
         key: Option<&[LirScalarExpr]>,
     ) -> (
-        CollectionEdge<'scope, T>,
+        ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         // Any operator that uses this method was told to use a particular
@@ -686,7 +685,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let (ok_stream, err_stream) = flat_map_datums::<_, DCB, _>(oks, max_demand, logic);
+            let (ok_stream, err_stream) =
+                flat_map_datums::<_, DCB, _>(oks, "CollectionFlatMap", max_demand, logic);
             let errs = errs.concat(err_stream.as_collection());
             (ok_stream, errs)
         }
@@ -939,7 +939,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
     ) -> (
-        CollectionEdge<'scope, T>,
+        ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         // Unwrap the stable-serialization row wrapper, seeking works on
@@ -1166,14 +1166,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// teeing the stream.
     fn arrange_collection(
         name: &String,
-        oks: CollectionEdge<'scope, T>,
+        oks: ColCollection<'scope, T>,
         key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
         batcher: ArrangementBatcher,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
-        CollectionEdge<'scope, T>,
+        ColCollection<'scope, T>,
     ) {
         // Spelled out rather than `map_fallible`, whose closure cannot return the references
         // a columnar stream is pushed from.
@@ -1189,12 +1189,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             let (err_output, err_stream) = builder.new_output();
             let mut err_output = OutputBuilder::from(err_output);
             let (passthrough_output, passthrough_stream) = builder.new_output();
-            // The passthrough forwards the input `Column` unchanged; its builder's container
-            // type must match the input so `give_container` can hand the batch through.
-            let mut passthrough_output = OutputBuilder::<
-                _,
-                CapacityContainerBuilder<Column<(Row, T, Diff)>>,
-            >::from(passthrough_output);
+            let mut passthrough_output =
+                OutputBuilder::<_, NoopBuilder<Column<(Row, T, Diff)>>>::from(passthrough_output);
             let mut input = builder.new_input(oks.inner, Pipeline);
             builder.set_notify_for(0, FrontierInterest::Never);
             builder.build(move |_capabilities| {
@@ -1233,7 +1229,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                                 }
                             }
                         }
-                        passthrough_output.session(&time).give_container(data);
+                        passthrough_output
+                            .session_with_builder(&time)
+                            .give_container(data);
                     });
                 }
             });
@@ -1243,11 +1241,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let exchange =
             ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
         let oks = match batcher {
-            ArrangementBatcher::ColumnarPaged => ok_stream.mz_arrange_core::<
+            ArrangementBatcher::Chunked => ok_stream.mz_arrange_core::<
                 _,
-                batcher::ColumnChunker<_>,
-                Col2ValPagedBatcher<_, _, _, _>,
-                RowRowColPagedBuilder<_, _>,
+                ChunkChunker<(Row, Row), T, Diff>,
+                AccountedChunkBatcher<(Row, Row), T, Diff>,
+                UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
                 RowRowSpine<_, _>,
             >(exchange, name),
             ArrangementBatcher::Columnar => ok_stream.mz_arrange_core::<
@@ -1567,6 +1565,48 @@ mod tests {
 
         assert!(ok.is_empty());
         assert!(!err.is_empty());
+    }
+
+    /// The passthrough forwards every input record, including those whose key
+    /// evaluation errored, so a consumer of the bundle's collection sees the
+    /// unarranged input rather than the ok side of the arrangement.
+    #[mz_ore::test]
+    fn arrange_collection_passthrough_forwards_input() {
+        let rows = test_rows();
+        let mut expected: Vec<(Row, Timestamp, Diff)> = rows
+            .iter()
+            .map(|(row, t)| (row.clone(), Timestamp::from(*t), Diff::ONE))
+            .collect();
+        expected.sort();
+
+        let key = vec![LirScalarExpr::literal(
+            Err(EvalError::DivisionByZero),
+            ReprScalarType::Int32,
+        )];
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (_arranged, _errs, passthrough) =
+                    CollectionBundle::<Timestamp>::arrange_collection(
+                        &"col".to_string(),
+                        vec_to_columnar(collection),
+                        key,
+                        vec![0, 1],
+                        ArrangementBatcher::Columnation,
+                    );
+                let captured = columnar_to_vec(passthrough).inner.capture();
+
+                let max_time = rows.iter().map(|(_, t)| *t).max().unwrap_or(0);
+                for (row, time) in rows {
+                    input.update_at(row, Timestamp::from(time), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(max_time + 1));
+                input.flush();
+                captured
+            })
+        });
+
+        assert_eq!(extract_row_updates(captured), expected);
     }
 
     fn extract_row_updates(

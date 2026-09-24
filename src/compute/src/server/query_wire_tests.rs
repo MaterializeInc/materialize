@@ -11,6 +11,8 @@ use super::*;
 use command_channel::Origin;
 use mz_compute_client::protocol::response::PeekResponse;
 
+use crate::command_channel::UnifiedCommand::Compute;
+
 #[mz_ore::test]
 fn routing_retirement_without_local_endpoint_is_bounded() {
     let mut routing = ResponseRouting::default();
@@ -74,9 +76,8 @@ fn unfinished_lifecycle_initialization_services_queries() {
             registry.clone(),
             1,
             Arc::clone(&peek_permits),
-            None,
         );
-        let (commands, command_rx) = command_channel::render(timely_worker);
+        let (commands, command_rx) = command_channel::render(timely_worker, None);
         let (responses, mut response_rx) = mpsc::unbounded_channel();
         let mut worker = Worker {
             timely_worker,
@@ -91,7 +92,7 @@ fn unfinished_lifecycle_initialization_services_queries() {
             metrics_registry: registry,
             workers_per_process: 1,
             peek_permits,
-            storage_log_reader: None,
+            storage: None,
         };
         let state = worker.compute_state.take();
         let early_query = Uuid::new_v4();
@@ -250,7 +251,7 @@ fn unfinished_lifecycle_initialization_services_queries() {
 #[mz_ore::test]
 fn query_origin_does_not_change_lifecycle_nonce() {
     timely::execute_directly(|worker| {
-        let (tx, rx) = command_channel::render(worker);
+        let (tx, rx) = command_channel::render(worker, None);
         let mut receiver = CommandReceiver::new(rx, 0);
         let query = Uuid::new_v4();
         let lifecycle = Uuid::new_v4();
@@ -283,7 +284,9 @@ fn query_origin_does_not_change_lifecycle_nonce() {
         ));
         assert!(matches!(
             receiver.try_recv(),
-            Ok(Some(ComputeCommand::InitializationComplete))
+            Ok(Some(WorkerCommand::Compute(
+                ComputeCommand::InitializationComplete
+            )))
         ));
         assert_eq!(receiver.nonce, Some(lifecycle));
         worker.drop_dataflow(0);
@@ -296,7 +299,7 @@ fn multiplexes_queries_without_replacing_lifecycle() {
     let _guard = runtime.enter();
     let handle = runtime.handle().clone();
     timely::execute_directly(move |worker| {
-        let (command_tx, command_rx) = command_channel::render(worker);
+        let (command_tx, command_rx) = command_channel::render(worker, None);
         let (clients, client_rx) = mpsc::unbounded_channel();
         let (responses, response_rx) = mpsc::unbounded_channel();
         spawn_channel_adapter(client_rx, command_tx, response_rx, 0);
@@ -323,7 +326,7 @@ fn multiplexes_queries_without_replacing_lifecycle() {
             .unwrap();
         assert!(matches!(
             next(),
-            (Some(ComputeCommand::InitializationComplete), Origin::Lifecycle(n))
+            Compute(Some(ComputeCommand::InitializationComplete), Origin::Lifecycle(n))
                 if n == lifecycle
         ));
         let q1 = Uuid::new_v4();
@@ -334,7 +337,7 @@ fn multiplexes_queries_without_replacing_lifecycle() {
             .unwrap();
         assert!(matches!(
             next(),
-            (Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == q1
+            Compute(Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == q1
         ));
         let (q2_tx, mut q2_rx) = connect(q2);
         q2_tx
@@ -342,7 +345,7 @@ fn multiplexes_queries_without_replacing_lifecycle() {
             .unwrap();
         assert!(matches!(
             next(),
-            (Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == q2
+            Compute(Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == q2
         ));
         let mut sender = ResponseSender::new(responses, 0);
         sender.set_nonce(lifecycle);
@@ -394,7 +397,7 @@ fn multiplexes_queries_without_replacing_lifecycle() {
             .unwrap();
         assert!(matches!(
             next(),
-            (Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == delayed
+            Compute(Some(ComputeCommand::HelloQuery { .. }), Origin::Query(n)) if n == delayed
         ));
         handle.block_on(async {
             for response in expected {
@@ -410,14 +413,14 @@ fn multiplexes_queries_without_replacing_lifecycle() {
         new_tx.send(ComputeCommand::InitializationComplete).unwrap();
         assert!(matches!(
             next(),
-            (Some(ComputeCommand::InitializationComplete), Origin::Lifecycle(n))
+            Compute(Some(ComputeCommand::InitializationComplete), Origin::Lifecycle(n))
                 if n == replacement
         ));
         assert!(life_rx.is_closed());
         assert!(!q1_rx.is_closed());
         assert!(!q2_rx.is_closed());
         drop(q1_tx);
-        assert!(matches!(next(), (None, Origin::Query(n)) if n == q1));
+        assert!(matches!(next(), Compute(None, Origin::Query(n)) if n == q1));
         q2_tx
             .send(ComputeCommand::CancelPeek {
                 uuid: Uuid::new_v4(),
@@ -425,7 +428,7 @@ fn multiplexes_queries_without_replacing_lifecycle() {
             .unwrap();
         assert!(matches!(
             next(),
-            (Some(ComputeCommand::CancelPeek { .. }), Origin::Query(n)) if n == q2
+            Compute(Some(ComputeCommand::CancelPeek { .. }), Origin::Query(n)) if n == q2
         ));
         // The permanent sequencer retains its capability by contract.
         worker.drop_dataflow(0);

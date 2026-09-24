@@ -142,15 +142,17 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, RowArena, 
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::StreamExt;
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
+use timely::dataflow::operators::vec::Filter;
 use timely::dataflow::operators::vec::ToStream;
-use timely::dataflow::operators::vec::{BranchWhen, Filter};
 use timely::dataflow::operators::{Capability, Operator, Probe, probe};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
@@ -168,11 +170,12 @@ use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::columnar::{
-    columnar_consolidate, columnar_negate, columnar_to_vec, concat_many, vec_to_columnar,
+    ColCollection, RecTimestamp, columnar_consolidate, columnar_leave_dynamic, columnar_negate,
+    concat_many, flat_map_datums,
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
+use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
@@ -645,6 +648,66 @@ where
         Arranged::<'outer, Tr>::flat_map_batches(oks, move |a, b| [logic(a, b)]).enter(self.scope)
     }
 
+    /// Extracts a filtered index's contents onto the columnar collection edge, discarding
+    /// batches that the snapshot covers.
+    ///
+    /// `logic` packs each `(key, val)` pair into the row buffer it is handed. The buffer is
+    /// reused across records and pushed borrowed, so a pair that carries many times costs one
+    /// pack rather than an owned [`Row`] per time.
+    ///
+    /// The `TotalOrder` bound is what makes discarding a batch by its upper safe.
+    fn import_filtered_index_edge<'outer, Tr>(
+        &self,
+        arranged: Arranged<'outer, Tr>,
+        start_signal: StartSignal,
+        mut logic: impl FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>, &mut Row) + 'static,
+    ) -> ColCollection<'g, T>
+    where
+        Tr: TraceReader<Time = mz_repr::Timestamp, Batch: Navigable> + Clone,
+        mz_repr::Timestamp: TotalOrder,
+        BatchCursor<Tr>: Cursor<Time = mz_repr::Timestamp, Diff = Diff>,
+    {
+        let as_of = self.as_of_frontier.clone();
+        arranged
+            .stream
+            .with_start_signal(start_signal)
+            .unary::<ColumnBuilder<(Row, mz_repr::Timestamp, Diff)>, _, _, _>(
+                Pipeline,
+                "IndexToColumnar",
+                move |_cap, _info| {
+                    let mut row_buf = Row::default();
+                    move |input, output| {
+                        input.for_each(|time, data| {
+                            let mut session = output.session_with_builder(&time);
+                            for batch in data.iter() {
+                                if <Antichain<mz_repr::Timestamp> as PartialOrder>::less_equal(
+                                    batch.upper(),
+                                    &as_of,
+                                ) {
+                                    continue;
+                                }
+                                let mut cursor = batch.cursor();
+                                while let Some(key) = cursor.get_key(batch) {
+                                    while let Some(val) = cursor.get_val(batch) {
+                                        logic(key, val, &mut row_buf);
+                                        cursor.map_times(batch, |t, d| {
+                                            let t = <BatchCursor<Tr> as Cursor>::owned_time(t);
+                                            let d = <BatchCursor<Tr> as Cursor>::owned_diff(d);
+                                            session.give((&*row_buf, &t, &d));
+                                        });
+                                        cursor.step_val(batch);
+                                    }
+                                    cursor.step_key(batch);
+                                }
+                            }
+                        });
+                    }
+                },
+            )
+            .as_collection()
+            .enter(self.scope)
+    }
+
     pub(crate) fn import_index<'outer>(
         &mut self,
         outer: Scope<'outer, mz_repr::Timestamp>,
@@ -705,15 +768,16 @@ where
                         let mut datums = DatumVec::new();
                         let (permutation, _thinning) =
                             permutation_for_arrangement(&idx.key, typ.arity());
-                        self.import_filtered_index_collection(
+                        self.import_filtered_index_edge(
                             oks,
                             start_signal.clone(),
-                            move |k: DatumSeq, v: DatumSeq| {
+                            move |k: DatumSeq, v: DatumSeq, row: &mut Row| {
                                 let temp_storage = RowArena::new();
                                 let mut datums_borrow = datums.borrow();
                                 k.extend_datums(&temp_storage, &mut datums_borrow, None);
                                 v.extend_datums(&temp_storage, &mut datums_borrow, None);
-                                SharedRow::pack(permutation.iter().map(|i| datums_borrow[*i]))
+                                row.packer()
+                                    .extend(permutation.iter().map(|i| datums_borrow[*i]));
                             },
                         )
                     };
@@ -722,9 +786,7 @@ where
                         start_signal,
                         |e, _| e.clone(),
                     );
-                    // The filtered index collection is row-shaped and already
-                    // consolidated, so the encode here is non-consolidating.
-                    CollectionBundle::from_edge(vec_to_columnar(oks), errs)
+                    CollectionBundle::from_edge(oks, errs)
                 }
             };
             self.update_id(Id::Global(idx.on_id), bundle);
@@ -1043,24 +1105,16 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                     Variable::new(self.scope, Product::new(Default::default(), inner));
 
                 if variable_read.contains(id) {
-                    // The feedback `Variable` stays `Vec`, so each iteration crosses
-                    // the container boundary twice, encoded here for the readers and
-                    // decoded where the value is fed back. The encode is a stateless,
-                    // timestamp-agnostic pass-through, so it leaves the iterative
-                    // frontier and the fixpoint alone.
                     self.insert_id(
                         Id::Local(*id),
-                        CollectionBundle::from_edge(
-                            vec_to_columnar(oks_collection),
-                            err_collection,
-                        ),
+                        CollectionBundle::from_edge(oks_collection, err_collection),
                     );
                 }
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
-            // The decoded value is kept so the extraction below reuses it rather than
-            // decoding the same stream twice.
-            let mut decoded_oks = BTreeMap::new();
+            // The bound value is kept so the extraction below reuses it rather than
+            // reaching back into a bundle that forward reads have since collapsed.
+            let mut bound_oks = BTreeMap::new();
             let mut rec_iter = recs.into_iter().peekable();
             while let Some(RecBind { id, value, limit }) = rec_iter.next() {
                 let last = rec_iter.peek().is_none();
@@ -1069,8 +1123,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
-                let oks = columnar_to_vec(oks);
-                decoded_oks.insert(id, oks.clone());
+                bound_oks.insert(id, oks.clone());
                 // Collapses what forward reads see. `err_v` below feeds reads rendered before this
                 // binding and is collapsed separately; without this, a `Get` in a later rec binding
                 // or in the body resolves to the bundle stored here and compounds level over level,
@@ -1080,28 +1133,58 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                    oks,
-                    "LetRecConsolidation",
-                );
+                let mut oks = columnar_consolidate(oks, "LetRecConsolidation");
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
                     // these results would go into the `max_iter + 1`th iteration.
-                    let (in_limit, over_limit) =
-                        oks.inner.branch_when(move |Product { inner: ps, .. }| {
-                            // The iteration number, or if missing a zero (as trailing zeros are truncated).
-                            let iteration_index = *ps.get(level).unwrap_or(&0);
-                            // The pointstamp starts counting from 0, so we need to add 1.
-                            iteration_index + 1 >= limit.max_iters.into()
-                        });
-                    oks = VecCollection::new(in_limit);
+                    //
+                    // The split consults each update's own time. A container's capability
+                    // is only a lower bound on the times it carries, so deciding per
+                    // container by capability could retain updates from an iteration
+                    // beyond the one the capability names.
+                    //
+                    // The predicate reads the time out of the column into `time`, whose
+                    // coordinate vector it reuses across records.
+                    let mut time = RecTimestamp::default();
+                    let (over_limit, in_limit) = oks
+                        .inner
+                        .partition_by::<ColumnBuilder<(Row, RecTimestamp, Diff)>, _>(
+                            "LetRecLimit",
+                            move |(_data, reference, _diff)| {
+                                time.copy_from(*reference);
+                                // The iteration number, or zero if absent, since trailing zero
+                                // coordinates are truncated.
+                                let iteration_index = time.inner.get(level).copied().unwrap_or(0);
+                                // The pointstamp starts counting from 0, so we need to add 1.
+                                iteration_index + 1 >= limit.max_iters.into()
+                            },
+                        );
+                    oks = Collection::new(in_limit);
                     if !limit.return_at_limit {
-                        err = err.concat(VecCollection::new(over_limit).map(move |_data| {
-                            DataflowErrorSer::from(EvalError::LetRecLimitExceeded(
-                                format!("{}", limit.max_iters.get()).into(),
-                            ))
-                        }));
+                        // One error per record that passed the limit, replacing the record.
+                        // `flat_map_datums` reads the record without decoding it, and the ok
+                        // side stays empty, so the builder it names never ships a container.
+                        let (_, over_limit) = flat_map_datums::<
+                            _,
+                            CapacityContainerBuilder<Vec<(Row, RecTimestamp, Diff)>>,
+                            _,
+                        >(
+                            Collection::new(over_limit),
+                            "LetRecLimitExceeded",
+                            0,
+                            move |_datums, time, diff, _ok_session, err_session| {
+                                err_session.give((
+                                    DataflowErrorSer::from(EvalError::LetRecLimitExceeded(
+                                        format!("{}", limit.max_iters.get()).into(),
+                                    )),
+                                    time,
+                                    diff,
+                                ));
+                                1
+                            },
+                        );
+                        err = err.concat(over_limit.as_collection());
                     }
                 }
 
@@ -1131,15 +1214,13 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
                 let (_, err) = bundle.collection.unwrap();
-                let oks = decoded_oks
+                let oks = bound_oks
                     .remove(&id)
-                    .expect("rec binding decoded while rendering above");
-                // `leave_dynamic` has already stripped the iteration coordinate, so
-                // this encode runs in the parent scope.
+                    .expect("rec binding bound while rendering above");
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_edge(
-                        vec_to_columnar(oks.leave_dynamic(level + 1)),
+                        columnar_leave_dynamic(oks, level + 1),
                         err.leave_dynamic(level + 1),
                     ),
                 );

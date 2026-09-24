@@ -30,7 +30,9 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 use iceberg::TableIdent;
 use iceberg::io::{GCS_TOKEN, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN};
 use iceberg_catalog_rest::{StorageCredential, TokenProvider};
-use iceberg_storage_opendal::{AwsCredential, GcsCredential, GcsToken, ProvideCredential};
+use iceberg_storage_opendal::{
+    AwsCredential, AzdlsCredential, GcsCredential, GcsToken, ProvideCredential,
+};
 use mz_ore::error::ErrorExt;
 use reqsign_core::time::Timestamp;
 use reqwest::StatusCode;
@@ -118,6 +120,59 @@ impl VendedCredential for GcsCredential {
 
     fn expires_at(&self) -> Option<Timestamp> {
         self.token.as_ref().and_then(|token| token.expires_at)
+    }
+}
+
+impl VendedCredential for AzdlsCredential {
+    const STORE: &'static str = "ADLS";
+
+    fn from_vended(vended: &StorageCredential) -> reqsign_core::Result<Self> {
+        let mut sas_token = None;
+        let mut expires_at = None;
+        for (prop, val) in vended.config.iter() {
+            if prop.starts_with("adls.sas-token.") {
+                // Some iceberg catalogs send multiple `adls.sas-token.<account>` properties, with
+                // different suffixes. We just take the first one, and ignore the rest.
+                if sas_token.is_none() {
+                    sas_token = Some(val.clone());
+                }
+            }
+            if prop.starts_with("adls.sas-token-expires-at-ms.") {
+                if expires_at.is_some() {
+                    return Err(reqsign_core::Error::credential_invalid(format!(
+                        "vended Iceberg storage credential for prefix {} has multiple \
+                         {prop} properties",
+                        vended.prefix
+                    )));
+                }
+                expires_at = vended_expires_at(vended, prop)?;
+            }
+        }
+        match (sas_token, expires_at) {
+            (Some(sas_token), Some(expires_at)) => Ok(AzdlsCredential::with_sas_token_expires_at(
+                &sas_token, expires_at,
+            )),
+            (Some(sas_token), None) => {
+                warn!(
+                    prefix = vended.prefix,
+                    "vended Iceberg storage credential has a SAS token but no expiry; \
+                     re-fetching on a short interval"
+                );
+                Ok(AzdlsCredential::with_sas_token(&sas_token))
+            }
+            (None, _) => Err(reqsign_core::Error::credential_invalid(format!(
+                "vended Iceberg storage credential for prefix {} has no \
+                 adls.sas-token.<account> property",
+                vended.prefix
+            ))),
+        }
+    }
+
+    fn expires_at(&self) -> Option<Timestamp> {
+        match self {
+            AzdlsCredential::SasToken { expires_at, .. } => *expires_at,
+            _ => None,
+        }
     }
 }
 

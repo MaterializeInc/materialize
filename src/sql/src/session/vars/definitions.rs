@@ -638,6 +638,19 @@ pub static METRICS_RETENTION: VarDefinition = VarDefinition::new(
     false,
 );
 
+/// Curated metric sinks to keep from running, as a comma-separated list of names from `CURATED`
+/// in `mz_adapter::coord::metric_sink`. An entry naming no definition is tolerated, so a rollback
+/// that drops a definition needs no lockstep edit here.
+///
+/// Denying tears the sink down on replicas already running it; undenying puts it back. It
+/// subtracts from `enable_metric_sink`: with that flag off nothing installs regardless.
+pub static DISABLED_METRIC_SINKS: VarDefinition = VarDefinition::new(
+    "disabled_metric_sinks",
+    value!(Vec<Ident>; Vec::new()),
+    "Curated metric sinks to tear down and keep from installing, comma-separated (Materialize).",
+    false,
+);
+
 pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
     "allowed_cluster_replica_sizes",
     value!(Vec<Ident>; Vec::new()),
@@ -2203,12 +2216,6 @@ feature_flags!(
     {
         name: enable_worker_core_affinity,
         desc: "set core affinity for replica worker threads",
-        default: false,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_storage_introspection_logs,
-        desc: "forward storage timely logging events into compute's introspection dataflow",
         default: false,
         enable_for_item_parsing: false,
     },

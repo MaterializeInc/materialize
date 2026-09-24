@@ -266,7 +266,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.97.1"
+rust-version = "1.98.1"
 
 [workspace.dependencies]
 ahash = { version = "0.8.12", default-features = false }
@@ -325,6 +325,7 @@ columnation = "0.1.2"
 compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
 console-subscriber = "0.5.0"
+core_affinity = "0.8.3"
 crc32fast = "1.5.0"
 criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam = "0.8.4"
@@ -335,7 +336,7 @@ csv-async = { version = "1.3.1", features = ["tokio"] }
 csv-core = "0.1.13"
 ctor = "1.0.10"
 custom-labels = "0.4.6"
-darling = "0.23.0"
+darling = "0.24.1"
 datadriven = "0.9.0"
 deadpool = { version = "0.9.5", default-features = false, features = ["managed"] }
 deadpool-postgres = "0.10.3"
@@ -439,7 +440,7 @@ phf_codegen = "0.13.1"
 pin-project = "1.1.13"
 postgres = "0.19.12"
 postgres-openssl = "0.5.2"
-postgres-protocol = "0.6.9"
+postgres-protocol = "0.6.12"
 postgres-replication = "0.6.7"
 postgres-types = { version = "0.2.11", features = ["with-chrono-0_4", "with-uuid-1"] }
 postgres_array = "0.11.0"
@@ -447,7 +448,7 @@ pprof = "0.15.0"
 pprof_util = "0.8.2"
 predicates = "3.1.4"
 pretty = "0.12.5"
-prettyplease = "0.2"
+prettyplease = "0.3"
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
 prometheus = { version = "0.14.0", default-features = false, features = ["protobuf"] }
 protobuf = { version = "3.7.2", default-features = false }
@@ -513,7 +514,7 @@ static_assertions = "1.1"
 strsim = "0.11.1"
 subtle = "2.6.1"
 supports-color = "3.0.2"
-syn = { version = "2.0.119", features = ["extra-traits", "full", "parsing", "printing"] }
+syn = { version = "3.0.5", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
 sysinfo = "0.29.11"
 tabled = "0.21.0"
@@ -676,9 +677,9 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 # NOTE: The `[workspace.dependencies]` version requirement above must stay
 # semver-compatible with this revision's crate version, otherwise Cargo drops
 # these patches into `[[patch.unused]]` and silently builds against crates.io.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "985929c6c5cc7083bac30c881e7ec43ec4d57b64" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "985929c6c5cc7083bac30c881e7ec43ec4d57b64" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "985929c6c5cc7083bac30c881e7ec43ec4d57b64" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.

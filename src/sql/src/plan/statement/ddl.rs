@@ -1659,6 +1659,7 @@ pub fn plan_create_subsource(
             SourceExportStatementDetails::Postgres {
                 table,
                 cast_oid_full_range,
+                initial_lsn,
             } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
                 column_casts: crate::pure::postgres::generate_column_casts(
                     scx,
@@ -1667,6 +1668,7 @@ pub fn plan_create_subsource(
                     cast_oid_full_range,
                 )?,
                 table,
+                initial_lsn,
             }),
             SourceExportStatementDetails::MySql {
                 table,
@@ -1824,6 +1826,7 @@ pub fn plan_create_table_from_source(
         SourceExportStatementDetails::Postgres {
             table,
             cast_oid_full_range,
+            initial_lsn,
         } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
             column_casts: crate::pure::postgres::generate_column_casts(
                 scx,
@@ -1832,6 +1835,7 @@ pub fn plan_create_table_from_source(
                 cast_oid_full_range,
             )?,
             table,
+            initial_lsn,
         }),
         SourceExportStatementDetails::MySql {
             table,

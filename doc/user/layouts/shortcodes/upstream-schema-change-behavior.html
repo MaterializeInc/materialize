@@ -69,7 +69,12 @@ ingestion.
 
 Dropping a `NOT NULL`, `UNIQUE`, or `PRIMARY KEY` constraint that existed when
 the table was created puts the affected table into an error state.
-
+{{ if $is_postgres }}
+If using the new [`CREATE SOURCE` and `CREATE TABLE FROM
+SOURCE`](/sql/create-source/postgres-v2/) syntax, you can safely drop such a
+constraint by first excluding it in Materialize. See [Handle upstream
+constraint drop](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop).
+{{ end }}
 {{ else -}}
 Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
@@ -137,6 +142,20 @@ Materialize ingests from one of them.
 Removing the capture instance that Materialize is using puts the affected table
 into an error state. Removing a capture instance that Materialize is not using does not affect
 ingestion.
+
+### Disabling CDC on a table
+
+Running `sys.sp_cdc_disable_table` removes the capture instance Materialize is
+ingesting from, which puts the affected table into an error state. The other
+tables in the source keep replicating. You can recover without re-creating the
+whole source by dropping just the affected table in Materialize:
+
+```mzsql
+DROP TABLE table_1;
+```
+
+Then re-create it, optionally after re-enabling CDC on the upstream table with
+`sys.sp_cdc_enable_table`.
 
 {{ end -}}
 ### Table-level operations

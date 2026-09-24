@@ -23,6 +23,7 @@ use iceberg::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Operation, Snapshot, SnapshotReference,
     SnapshotRetention, Struct,
 };
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{CatalogBuilder, MemoryCatalog, Namespace, TableCommit, TableUpdate};
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::SqlScalarType;
@@ -57,10 +58,10 @@ fn data_file(table: &Table, name: &str, records: u64) -> DataFile {
         .unwrap()
 }
 
-/// Publishes the competing batch after the loser's transaction refresh, but
+/// Publishes the competing batch after the loser's table refresh, but
 /// before its catalog CAS. The inner catalog checks the real requirements and
 /// produces the conflict, rather than the wrapper fabricating an error.
-/// Conflicts may be retried within Iceberg or by the sink's outer retry loop.
+/// Conflicts are retried by the sink's outer retry loop.
 #[derive(Debug)]
 struct CompetingCatalog {
     inner: MemoryCatalog,
@@ -214,8 +215,10 @@ async fn overlapping_batch_retry_does_not_duplicate_records() {
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &Antichain::from_elem(Timestamp::new(0)),
+        &Antichain::from_elem(Timestamp::new(10)),
         &metrics,
     )
     .await;
@@ -233,6 +236,7 @@ async fn overlapping_batch_retry_does_not_duplicate_records() {
 
     // Match the caller's retry contract: only Table is refreshed, while file
     // descriptors and batch bounds are retained across attempts.
+    let twenty = Antichain::from_elem(Timestamp::new(20));
     let (_, result) = Retry::default()
         .max_tries(5)
         .retry_async_with_state(table, |_, table| {
@@ -244,8 +248,10 @@ async fn overlapping_batch_retry_does_not_duplicate_records() {
                 &catalog,
                 "test",
                 "sink",
+                GlobalId::User(1),
                 1,
                 &ten,
+                &twenty,
                 &metrics,
             )
         })
@@ -260,7 +266,7 @@ async fn overlapping_batch_retry_does_not_duplicate_records() {
     let records: u64 = snapshot.summary().additional_properties["total-records"]
         .parse()
         .unwrap();
-    let (upper, version) = retrieve_upper_from_snapshots(table.metadata())
+    let (upper, _, version) = retrieve_upper_from_snapshots(table.metadata())
         .unwrap()
         .unwrap();
     assert_eq!(version, 1);
@@ -284,8 +290,10 @@ async fn overlapping_batch_retry_does_not_duplicate_records() {
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &upper,
+        &Antichain::from_elem(Timestamp::new(20)),
         &metrics,
     )
     .await;
@@ -296,7 +304,11 @@ async fn overlapping_batch_retry_does_not_duplicate_records() {
 fn assert_progress(table: &Table, upper: u64, version: u64, records: u64) {
     assert_eq!(
         retrieve_upper_from_snapshots(table.metadata()).unwrap(),
-        Some((Antichain::from_elem(Timestamp::new(upper)), version))
+        Some((
+            Antichain::from_elem(Timestamp::new(upper)),
+            GlobalId::User(1),
+            version,
+        ))
     );
     assert_eq!(
         table
@@ -324,17 +336,37 @@ async fn initial_snapshot_nonzero_as_of_is_cas_protected() {
     let (table, result) = try_commit_batch(
         table,
         properties(15),
+        vec![initial.clone()],
+        vec![],
+        &catalog,
+        "test",
+        "sink",
+        GlobalId::User(1),
+        1,
+        &Antichain::from_elem(Timestamp::new(14)),
+        &Antichain::from_elem(Timestamp::new(15)),
+        &metrics,
+    )
+    .await;
+    assert!(matches!(result, RetryResult::RetryableErr(_)), "{result:?}");
+    // The winner published the same batch. Reload acknowledges it without
+    // republishing the initial records.
+    let (table, result) = try_commit_batch(
+        table,
+        properties(15),
         vec![initial],
         vec![],
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &Antichain::from_elem(Timestamp::new(14)),
+        &Antichain::from_elem(Timestamp::new(15)),
         &metrics,
     )
     .await;
-    assert!(matches!(result, RetryResult::FatalErr(_)), "{result:?}");
+    assert!(matches!(result, RetryResult::Ok(())), "{result:?}");
     assert_progress(&table, 15, 1, 5);
 
     // Metadata-only changes do not prevent initialization at a nonzero as_of.
@@ -369,8 +401,10 @@ async fn initial_snapshot_nonzero_as_of_is_cas_protected() {
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &Antichain::from_elem(Timestamp::new(14)),
+        &Antichain::from_elem(Timestamp::new(15)),
         &metrics,
     )
     .await;
@@ -391,8 +425,10 @@ async fn expired_materialize_progress_behind_replace_fails_closed() {
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &lower,
+        &Antichain::from_elem(Timestamp::new(15)),
         &metrics,
     )
     .await;
@@ -466,7 +502,7 @@ async fn expired_materialize_progress_behind_replace_fails_closed() {
     );
 
     // A prepared batch that matched the durable upper before expiration must
-    // also stop after its transaction refresh, without publishing its files.
+    // also stop after its table refresh, without publishing its files.
     let file = data_file(&stale, "15-20", 5);
     let (_, result) = try_commit_batch(
         stale,
@@ -476,8 +512,10 @@ async fn expired_materialize_progress_behind_replace_fails_closed() {
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &Antichain::from_elem(Timestamp::new(15)),
+        &Antichain::from_elem(Timestamp::new(20)),
         &metrics,
     )
     .await;
@@ -540,13 +578,31 @@ async fn newer_version_fences_even_at_matching_lower() {
     let (table, result) = try_commit_batch(
         table,
         properties(20),
-        vec![file],
+        vec![file.clone()],
         vec![],
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &Antichain::from_elem(Timestamp::new(10)),
+        &Antichain::from_elem(Timestamp::new(20)),
+        &metrics,
+    )
+    .await;
+    assert!(matches!(result, RetryResult::RetryableErr(_)), "{result:?}");
+    let (table, result) = try_commit_batch(
+        table,
+        properties(20),
+        vec![file.clone()],
+        vec![],
+        &catalog,
+        "test",
+        "sink",
+        GlobalId::User(1),
+        1,
+        &Antichain::from_elem(Timestamp::new(10)),
+        &Antichain::from_elem(Timestamp::new(20)),
         &metrics,
     )
     .await;
@@ -572,8 +628,10 @@ async fn uncertain_commit_and_failed_reload_do_not_republish() {
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &Antichain::from_elem(Timestamp::new(10)),
+        &Antichain::from_elem(Timestamp::new(20)),
         &metrics,
     )
     .await;
@@ -582,16 +640,35 @@ async fn uncertain_commit_and_failed_reload_do_not_republish() {
     let (table, result) = try_commit_batch(
         stale,
         properties(20),
-        vec![file],
+        vec![file.clone()],
         vec![],
         &catalog,
         "test",
         "sink",
+        GlobalId::User(1),
         1,
         &Antichain::from_elem(Timestamp::new(10)),
+        &Antichain::from_elem(Timestamp::new(20)),
         &metrics,
     )
     .await;
-    assert!(matches!(result, RetryResult::FatalErr(_)), "{result:?}");
+    assert!(matches!(result, RetryResult::RetryableErr(_)), "{result:?}");
+    assert!(table.metadata().current_snapshot().is_none());
+    let (table, result) = try_commit_batch(
+        table,
+        properties(20),
+        vec![file.clone()],
+        vec![],
+        &catalog,
+        "test",
+        "sink",
+        GlobalId::User(1),
+        1,
+        &Antichain::from_elem(Timestamp::new(10)),
+        &Antichain::from_elem(Timestamp::new(20)),
+        &metrics,
+    )
+    .await;
+    assert!(matches!(result, RetryResult::Ok(())), "{result:?}");
     assert_progress(&table, 20, 1, 10);
 }

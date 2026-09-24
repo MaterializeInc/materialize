@@ -21,9 +21,15 @@ skip = [
     # One-time exception for base64 due to its prevalence in the crate graph.
     { name = "base64", version = "0.13.1" },
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
-    # transitively depends on. They just released v2.0 which not all crates have
-    # migrated to yet.
+    # transitively depends on, so major versions linger for years. We are on v3;
+    # roughly 60 transitive dependencies still pull v2, among them `prost-build`,
+    # `tonic-build`, `kube-derive`, `zerocopy-derive`, and `tracing-attributes`.
+    # A few stragglers still pull v1.
     { name = "syn", version = "1.0.107" },
+    { name = "syn", version = "2.0.119" },
+    # `prettyplease` exposes `syn` types in its API, so `prost-build` holds the
+    # v2-based release back until it moves to `syn` v3.
+    { name = "prettyplease", version = "0.2.37" },
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
     { name = "ordered-float", version = "2.10.1" },
     { name = "ordered-float", version = "4.6.0" },
@@ -113,6 +119,10 @@ skip = [
     { name = "darling_macro", version = "0.21.2" },
     { name = "darling_core", version = "0.21.2" },
     { name = "darling", version = "0.21.2" },
+    # `kube-derive` and `serde_with_macros` are still on the `syn` v2 release.
+    { name = "darling_macro", version = "0.23.0" },
+    { name = "darling_core", version = "0.23.0" },
+    { name = "darling", version = "0.23.0" },
     { name = "typed-builder", version = "0.20.1" },
     { name = "typed-builder-macro", version = "0.20.1" },
     # chrono-tz
@@ -138,7 +148,7 @@ skip = [
     { name = "arrow-schema", version = "57.2.0" },
     { name = "arrow-select", version = "57.2.0" },
     { name = "arrow-string", version = "57.1.0" },
-    # opendal 0.57 and reqsign 3.x (both via iceberg) are on the next generation
+    # opendal 0.59 and reqsign 3.x (both via iceberg) are on the next generation
     # of the RustCrypto crates, while the rest of the workspace is still on the
     # current one.
     { name = "base64", version = "0.23.1" },
@@ -150,6 +160,11 @@ skip = [
     { name = "md-5", version = "0.11.0" },
     { name = "sha1", version = "0.11.0" },
     { name = "sha2", version = "0.11.0" },
+    # reqsign-azure-storage 3.2 moved to pem 4, while jsonwebtoken, and so most
+    # of the workspace, is still on pem 3. The ADLS credential loader needs the
+    # `expires_at` field that 3.2 added to `Credential::SasToken`, so the older
+    # reqsign that would converge here is not an option.
+    { name = "pem", version = "4.0.0" },
     # Held back by mz-timely-util; iceberg and the persist crates use 0.13.
     { name = "lz4_flex", version = "0.12.1" },
     # Used by dynfmt; iceberg/typetag pulls in v0.4.
@@ -251,6 +266,7 @@ wrappers = [
     "reqsign-google",
     "reqwest",
     "rustls",
+    "rustls-platform-verifier",
     "sqlparser",
     "tokio-postgres",
     "tokio-tungstenite",
@@ -321,8 +337,6 @@ ignore = [
     # untrusted XML.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
-    # `bitmaps` is unmaintained
-    "RUSTSEC-2026-0247",
     # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
     "RUSTSEC-2026-0253",
     # `h2` unbounded empty DATA frames, only patched in `h2 >=0.4.16`. Our

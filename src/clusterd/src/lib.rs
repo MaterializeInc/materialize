@@ -41,7 +41,6 @@ use mz_service::transport;
 use mz_service::transport::ClusterServerMetrics;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_types::connections::ConnectionContext;
-use mz_timely_util::capture::arc_event_link;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
@@ -191,10 +190,11 @@ struct Args {
     #[clap(long)]
     worker_core_affinity: bool,
 
-    /// Forward storage's timely logging events to compute so storage operators appear in
-    /// `mz_introspection.mz_dataflow_*` tables.
-    #[clap(long)]
-    enable_storage_introspection_logs: bool,
+    /// Host storage objects on the compute Timely cluster instead of building a separate
+    /// storage Timely cluster. The storage and compute controller protocols are served
+    /// unchanged, from the same cluster.
+    #[clap(long, env = "UNIFIED_CLUSTER")]
+    unified_cluster: bool,
 }
 
 /// The process ordinal for a StatefulSet pod, taken from the trailing
@@ -486,38 +486,69 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
-    // We assume each storage worker has a corresponding compute worker that can process its logs.
-    assert_eq!(
-        storage_timely_config.workers, compute_timely_config.workers,
-        "storage and compute must have equal workers-per-process",
-    );
-
-    // Create per-worker bridges for forwarding storage timely logging events to compute.
-    let (storage_log_writers, storage_log_readers) = if args.enable_storage_introspection_logs {
-        (0..storage_timely_config.workers)
-            .map(|_| arc_event_link())
-            .unzip()
-    } else {
-        (Vec::new(), Vec::new())
-    };
-
-    // Start storage server.
     let replica_owned =
         mz_controller_types::clusters::REPLICA_OWNED_COMPUTE && args.catalog_cluster_id.is_some();
-    let mut storage_server = mz_storage::server::serve_with_replica(
-        storage_timely_config,
-        replica_owned,
-        &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx.clone(),
-        Arc::clone(&tracing_handle),
-        SYSTEM_TIME.clone(),
-        connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
-        storage_log_writers,
-    )
-    .await?;
-    let storage_client_builder = storage_server.client_builder();
+    let (mut compute_server, storage_endpoint, storage_client_builder): (
+        _,
+        _,
+        Box<dyn Fn() -> Box<dyn mz_storage_client::client::StorageClient> + Send + Sync>,
+    ) = if args.unified_cluster {
+        info!("running with a unified timely cluster");
+        let (server, endpoint, builder) = mz_compute::server::serve_unified(
+            compute_timely_config,
+            ComputeRuntimeRole::Solo,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory.clone(),
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context: connection_context.clone(),
+            },
+            SYSTEM_TIME.clone(),
+            connection_context,
+            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+        )
+        .await?;
+        (server, endpoint, Box::new(builder))
+    } else {
+        let mut storage_server = mz_storage::server::serve_with_replica(
+            storage_timely_config,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            SYSTEM_TIME.clone(),
+            connection_context.clone(),
+            StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
+        )
+        .await?;
+        let compute_server = mz_compute::server::serve(
+            compute_timely_config,
+            ComputeRuntimeRole::Solo,
+            replica_owned,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory,
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context,
+            },
+        )
+        .await?;
+        let endpoint = storage_server.take_replica();
+        (
+            compute_server,
+            endpoint,
+            Box::new(storage_server.client_builder()),
+        )
+    };
+
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
@@ -535,26 +566,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .instrument(info_span!("ctp", name = "storage")),
     );
 
-    // Start compute server.
-    let mut compute_server = mz_compute::server::serve(
-        compute_timely_config,
-        ComputeRuntimeRole::Solo,
-        replica_owned,
-        &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx,
-        tracing_handle,
-        ComputeInstanceContext {
-            scratch_directory: args.scratch_directory,
-            worker_core_affinity: args.worker_core_affinity,
-            connection_context,
-        },
-        storage_log_readers,
-    )
-    .await?;
     if let Some(config) = follower_config {
         let endpoint = compute_server.take_replica();
-        let storage_endpoint = storage_server.take_replica();
         let replica_owned = endpoint.is_some();
         let registry = metrics_registry.clone();
         mz_ore::task::spawn(|| "catalog_follower", async move {
@@ -592,7 +605,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .instrument(info_span!("ctp", name = "compute")),
     );
 
-    // TODO: unify storage and compute servers to use one timely cluster.
+    // TODO: retire this two-cluster topology once the unified cluster has production mileage.
 
     // Block forever.
     future::pending().await

@@ -89,7 +89,6 @@ async fn replica_progress_outlives_query_factory() {
                 mz_secrets::InMemorySecretsController::new(),
             )),
         },
-        Vec::new(),
     )
     .await
     .unwrap();

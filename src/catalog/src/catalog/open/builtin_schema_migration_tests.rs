@@ -46,6 +46,118 @@ fn hydration_history_forced_migration_policy() {
     }
 }
 
+/// A builtin that the source version never had has no shard registered. An `Evolution` step for
+/// it, registered at a version above the source, must be skipped rather than bail out: the leader
+/// allocates the shard at the target schema during bootstrap, and a read-only process that bailed
+/// here would crash-loop. Regression test for SQL-713 (upgrade from before
+/// `mz_replica_hydration_history` existed to a version that evolves it).
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_evolution_skips_builtin_without_shard() {
+    configure_tracing_for_turmoil();
+
+    let mut sim = turmoil::Builder::new().build();
+    let persist_location = init_persist(&mut sim);
+
+    let (old_object, old_builtin) = make_builtin_table("old_table".into());
+    let (new_object, new_builtin) = make_builtin_table("new_table".into());
+    let mut system_objects = BTreeMap::new();
+    // Present in the source version with the pre-evolution schema: the durable fingerprint is
+    // stale and a shard exists, so the step must evolve it.
+    system_objects.insert(
+        old_object.clone(),
+        ObjectInfo {
+            global_id: GlobalId::System(1),
+            shard_id: Some(ShardId::new()),
+            builtin: evolve_builtin_desc(old_builtin),
+            fingerprint: old_builtin.fingerprint(),
+        },
+    );
+    // Introduced after the source version. Catalog open has just added its mapping at the current
+    // fingerprint and no shard exists for it yet, which is what a real upgrade from before the
+    // builtin existed looks like.
+    system_objects.insert(
+        new_object.clone(),
+        ObjectInfo {
+            global_id: GlobalId::System(2),
+            shard_id: None,
+            builtin: new_builtin,
+            fingerprint: new_builtin.fingerprint(),
+        },
+    );
+
+    let source_version = Version::new(0, 1, 0);
+    let target_version = Version::new(0, 3, 0);
+    let steps = vec![
+        MigrationStep {
+            version: Version::new(0, 2, 0),
+            object: old_object.clone(),
+            mechanism: Mechanism::Evolution,
+        },
+        MigrationStep {
+            version: Version::new(0, 3, 0),
+            object: new_object.clone(),
+            mechanism: Mechanism::Evolution,
+        },
+    ];
+
+    let migration_shard_id = ShardId::new();
+    let result = Rc::new(RefCell::new(None));
+
+    for (name, read_only) in [("read-only", true), ("leader", false)] {
+        let system_objects = system_objects.clone();
+        let steps = steps.clone();
+        let host_result = Rc::clone(&result);
+        let source_version = source_version.clone();
+        let target_version = target_version.clone();
+        let persist_location = persist_location.clone();
+        sim.host(name, move || {
+            let system_objects = system_objects.clone();
+            let steps = steps.clone();
+            let result = Rc::clone(&host_result);
+            let source_version = source_version.clone();
+            let target_version = target_version.clone();
+            let persist_location = persist_location.clone();
+            async move {
+                let persist_cache = PersistClientCache::new_for_turmoil();
+                let persist_client = persist_cache.open(persist_location).await.unwrap();
+                let migration = Migration {
+                    source_version,
+                    target_version,
+                    deploy_generation: 1,
+                    system_objects,
+                    migration_shard: migration_shard_id,
+                    config: BuiltinItemMigrationConfig {
+                        persist_client,
+                        read_only,
+                        force_migration: None,
+                    },
+                };
+                let res = migration.run(&steps).await;
+                result
+                    .borrow_mut()
+                    .replace((read_only, res.map(|r| r.new_fingerprints)));
+                Ok(())
+            }
+        });
+        sim.bounce(name);
+        while result.borrow().is_none() {
+            sim.step().unwrap();
+        }
+        let (was_read_only, res) = result.borrow_mut().take().unwrap();
+        assert_eq!(was_read_only, read_only);
+        let fingerprints = res.unwrap_or_else(|e| panic!("{name}: migration failed: {e}"));
+        assert!(
+            fingerprints.contains_key(&old_object),
+            "{name}: the builtin with a shard must be evolved"
+        );
+        assert!(
+            !fingerprints.contains_key(&new_object),
+            "{name}: the builtin without a shard must be skipped"
+        );
+    }
+}
+
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
 fn test_builtin_schema_migration() {

@@ -120,7 +120,6 @@ async fn exercise_liveness() {
             worker_core_affinity: false,
             connection_context: config.connection_context.clone(),
         },
-        Vec::new(),
     )
     .await
     .unwrap();

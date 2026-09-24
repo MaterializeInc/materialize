@@ -14,15 +14,14 @@ use crate::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SOURCE_REFERENCES,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OPERATORS, MZ_PSEUDO_TYPES,
+    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SOURCE_REFERENCES, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
 };
 use crate::durable::SourceReferences;
 use crate::memory::error::Error;
 use crate::memory::objects::{
-    CatalogEntry, CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table,
-    TableDataSource, Type,
+    CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table, TableDataSource, Type,
 };
 use bytesize::ByteSize;
 use ipnet::IpNet;
@@ -260,24 +259,7 @@ impl CatalogState {
             updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
         }
 
-        updates.extend(Self::pack_item_global_id_update(entry, diff));
-
         updates
-    }
-
-    fn pack_item_global_id_update(
-        entry: &CatalogEntry,
-        diff: Diff,
-    ) -> impl Iterator<Item = BuiltinTableUpdate<&'static BuiltinTable>> + use<'_> {
-        let id = entry.id().to_string();
-        let global_ids = entry.global_ids();
-        global_ids.map(move |global_id| {
-            BuiltinTableUpdate::row(
-                &*MZ_OBJECT_GLOBAL_IDS,
-                Row::pack_slice(&[Datum::String(&id), Datum::String(&global_id.to_string())]),
-                diff,
-            )
-        })
     }
 
     fn pack_history_retention_strategy_update(

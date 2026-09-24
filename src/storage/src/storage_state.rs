@@ -159,6 +159,7 @@ pub struct Worker<'w> {
     pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
+    discard_responses: ResponseSender,
     peers: BTreeMap<Uuid, Peer>,
     lifecycle: Option<Uuid>,
     initialization: Option<Vec<StorageCommand>>,
@@ -166,6 +167,89 @@ pub struct Worker<'w> {
     query_ready: bool,
     replica_commands: Option<mpsc::UnboundedReceiver<crate::replica::ReplicaCommand>>,
     replica_progress: Option<mz_cluster::replica_progress::Sender<crate::replica::WorkerResponse>>,
+}
+
+/// Complete storage worker state between turns on a shared Timely host.
+/// Detaching releases only the Timely borrow, not client or execution state.
+pub struct GuestWorker {
+    /// The channel over which communication handles for newly connected clients
+    /// are delivered.
+    client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
+    /// The state associated with collection ingress and egress.
+    storage_state: StorageState,
+    discard_responses: ResponseSender,
+    peers: BTreeMap<Uuid, Peer>,
+    lifecycle: Option<Uuid>,
+    initialization: Option<Vec<StorageCommand>>,
+    queries: BTreeMap<Uuid, Query>,
+    query_ready: bool,
+    replica_commands: Option<mpsc::UnboundedReceiver<crate::replica::ReplicaCommand>>,
+    replica_progress: Option<mz_cluster::replica_progress::Sender<crate::replica::WorkerResponse>>,
+}
+
+impl GuestWorker {
+    /// Borrows the host to dispatch commands or perform periodic work.
+    pub fn attach(self, timely_worker: &mut TimelyWorker) -> Worker<'_> {
+        let Self {
+            client_rx,
+            storage_state,
+            discard_responses,
+            peers,
+            lifecycle,
+            initialization,
+            queries,
+            query_ready,
+            replica_commands,
+            replica_progress,
+        } = self;
+        Worker {
+            timely_worker,
+            client_rx,
+            storage_state,
+            discard_responses,
+            peers,
+            lifecycle,
+            initialization,
+            queries,
+            query_ready,
+            replica_commands,
+            replica_progress,
+        }
+    }
+
+    /// Whether arrivals are queued that have already unparked the host.
+    pub fn busy(&self) -> bool {
+        !self.client_rx.is_empty()
+            || self
+                .replica_commands
+                .as_ref()
+                .is_some_and(|rx| !rx.is_empty())
+            || self.peers.values().any(|peer| !peer.commands.is_empty())
+            || !self.storage_state.async_worker.is_empty()
+    }
+
+    /// Bounds host parking by storage's periodic reporting deadlines.
+    pub fn park_duration(&self, last_maintenance: Instant, last_stats_time: Instant) -> Duration {
+        storage_park_duration(&self.storage_state, last_maintenance, last_stats_time)
+    }
+}
+
+fn storage_park_duration(
+    state: &StorageState,
+    last_maintenance: Instant,
+    last_stats_time: Instant,
+) -> Duration {
+    let stats = state
+        .storage_configuration
+        .parameters
+        .statistics_collection_interval
+        .saturating_sub(last_stats_time.elapsed());
+    match (last_maintenance + state.server_maintenance_interval)
+        .checked_duration_since(Instant::now())
+    {
+        Some(maintenance) => maintenance.min(stats),
+        None => stats,
+    }
 }
 
 impl<'w> Worker<'w> {
@@ -194,6 +278,135 @@ impl<'w> Worker<'w> {
         let (internal_cmd_tx, internal_cmd_rx) =
             internal_control::setup_command_sequencer(timely_worker);
 
+        let storage_state = StorageState::new_guest(
+            timely_worker.index(),
+            timely_worker.peers(),
+            internal_cmd_tx,
+            Some(internal_cmd_rx),
+            metrics,
+            now,
+            connection_context,
+            instance_context,
+            persist_clients,
+            txns_ctx,
+            tracing_handle,
+            shared_rocksdb_write_buffer_manager,
+        );
+
+        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
+        // be fields of `Worker` instead of `StorageState`, but at least for the
+        // command flow sources and sinks need access to that. We can refactor
+        // this once we have a clearer boundary between what sources/sinks need
+        // and the full "power" of the internal command flow, which should stay
+        // internal to the worker/not be exposed to source/sink implementations.
+        Self::from_state(timely_worker, client_rx, storage_state)
+    }
+
+    /// Attaches client routing to storage state on its hosting Timely worker.
+    pub fn from_state(
+        timely_worker: &'w mut TimelyWorker,
+        client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
+        storage_state: StorageState,
+    ) -> Self {
+        Self {
+            timely_worker,
+            client_rx,
+            storage_state,
+            discard_responses: mpsc::unbounded_channel().0,
+            peers: BTreeMap::new(),
+            lifecycle: None,
+            initialization: None,
+            queries: BTreeMap::new(),
+            query_ready: false,
+            replica_commands: None,
+            replica_progress: None,
+        }
+    }
+
+    /// Releases the host borrow while retaining all storage worker state.
+    pub fn into_guest(self) -> GuestWorker {
+        let Self {
+            timely_worker: _,
+            client_rx,
+            storage_state,
+            discard_responses,
+            peers,
+            lifecycle,
+            initialization,
+            queries,
+            query_ready,
+            replica_commands,
+            replica_progress,
+        } = self;
+        GuestWorker {
+            client_rx,
+            storage_state,
+            discard_responses,
+            peers,
+            lifecycle,
+            initialization,
+            queries,
+            query_ready,
+            replica_commands,
+            replica_progress,
+        }
+    }
+
+    /// Enables native execution on every guest worker, returning its endpoint on worker zero.
+    pub fn enable_replica_guest(&mut self) -> Option<crate::server::ReplicaStorageBuilder> {
+        let (commands, responses) = self.enable_replica();
+        (self.timely_worker.index() == 0).then(|| {
+            crate::server::ReplicaStorageBuilder((
+                commands,
+                std::thread::current(),
+                responses,
+                self.timely_worker.peers(),
+            ))
+        })
+    }
+
+    /// Installs native ingress and progress in the existing worker runtime.
+    /// Call once on every worker, before running or accepting connections.
+    pub(crate) fn enable_replica(
+        &mut self,
+    ) -> (
+        mpsc::UnboundedSender<crate::replica::ReplicaCommand>,
+        mpsc::UnboundedReceiver<(usize, crate::replica::WorkerResponse)>,
+    ) {
+        assert!(self.replica_progress.is_none());
+        let (progress, responses) = mz_cluster::replica_progress::render(self.timely_worker);
+        self.replica_progress = Some(progress);
+        self.storage_state.executions = Some(Default::default());
+        let (commands, receiver) = mpsc::unbounded_channel();
+        if self.timely_worker.index() == 0 {
+            self.replica_commands = Some(receiver);
+        }
+        (commands, responses)
+    }
+}
+
+impl StorageState {
+    /// Creates per-worker storage state, for hosting on any Timely worker.
+    ///
+    /// The caller provides the internal command channel endpoints: the native storage worker wires
+    /// them to the sequencer dataflow, a foreign host wires the sender to its own sequencing
+    /// channel and passes no receiver, since it dispatches internal commands itself.
+    /// Must be called on the hosting worker's thread, because the async worker unparks the
+    /// creating thread.
+    pub fn new_guest(
+        timely_worker_index: usize,
+        timely_worker_peers: usize,
+        internal_cmd_tx: InternalCommandSender,
+        internal_cmd_rx: Option<InternalCommandReceiver>,
+        metrics: StorageMetrics,
+        now: NowFn,
+        connection_context: ConnectionContext,
+        instance_context: StorageInstanceContext,
+        persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
+        tracing_handle: Arc<TracingHandle>,
+        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
+    ) -> Self {
         let storage_configuration =
             StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs());
 
@@ -240,8 +453,8 @@ impl<'w> Worker<'w> {
             oneshot_ingestions: BTreeMap::new(),
             query_owners: BTreeMap::new(),
             now,
-            timely_worker_index: timely_worker.index(),
-            timely_worker_peers: timely_worker.peers(),
+            timely_worker_index,
+            timely_worker_peers,
             instance_context,
             persist_clients,
             txns_ctx,
@@ -249,8 +462,8 @@ impl<'w> Worker<'w> {
             sink_write_frontiers: BTreeMap::new(),
             dropped_ids: Vec::new(),
             aggregated_statistics: AggregatedStatistics::new(
-                timely_worker.index(),
-                timely_worker.peers(),
+                timely_worker_index,
+                timely_worker_peers,
             ),
             shared_status_updates: Default::default(),
             latest_status_updates: Default::default(),
@@ -269,43 +482,7 @@ impl<'w> Worker<'w> {
             server_maintenance_interval: Duration::ZERO,
         };
 
-        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
-        // be fields of `Worker` instead of `StorageState`, but at least for the
-        // command flow sources and sinks need access to that. We can refactor
-        // this once we have a clearer boundary between what sources/sinks need
-        // and the full "power" of the internal command flow, which should stay
-        // internal to the worker/not be exposed to source/sink implementations.
-        Self {
-            timely_worker,
-            client_rx,
-            storage_state,
-            peers: BTreeMap::new(),
-            lifecycle: None,
-            initialization: None,
-            queries: BTreeMap::new(),
-            query_ready: false,
-            replica_commands: None,
-            replica_progress: None,
-        }
-    }
-
-    /// Installs native ingress and progress in the existing worker runtime.
-    /// Call once on every worker, before running or accepting connections.
-    pub(crate) fn enable_replica(
-        &mut self,
-    ) -> (
-        mpsc::UnboundedSender<crate::replica::ReplicaCommand>,
-        mpsc::UnboundedReceiver<(usize, crate::replica::WorkerResponse)>,
-    ) {
-        assert!(self.replica_progress.is_none());
-        let (progress, responses) = mz_cluster::replica_progress::render(self.timely_worker);
-        self.replica_progress = Some(progress);
-        self.storage_state.executions = Some(Default::default());
-        let (commands, receiver) = mpsc::unbounded_channel();
-        if self.timely_worker.index() == 0 {
-            self.replica_commands = Some(receiver);
-        }
-        (commands, responses)
+        storage_state
     }
 }
 
@@ -382,8 +559,9 @@ pub struct StorageState {
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
     pub internal_cmd_tx: InternalCommandSender,
-    /// Receiver for cluster-internal storage commands.
-    pub internal_cmd_rx: InternalCommandReceiver,
+    /// Receiver for cluster-internal storage commands. `None` when the state is hosted outside
+    /// the storage server, whose host dispatches internal commands itself.
+    pub internal_cmd_rx: Option<InternalCommandReceiver>,
 
     /// When this replica/cluster is in read-only mode it must not affect any
     /// changes to external state. This flag can only be changed by a
@@ -512,31 +690,11 @@ impl StorageInstanceContext {
 impl<'w> Worker<'w> {
     /// Services lifecycle and query endpoints without blocking on initialization.
     pub fn run(&mut self) {
-        // The last time we reported statistics.
         let mut last_stats_time = Instant::now();
-
-        // The last time we did periodic maintenance.
-        let mut last_maintenance = std::time::Instant::now();
-        let (discard_responses, _) = mpsc::unbounded_channel();
-
+        let mut last_maintenance = Instant::now();
         loop {
-            // Native ingress joins the same global order as queries, restarts,
-            // and async worker responses before mutating worker bookkeeping.
-            if let Some(commands) = &mut self.replica_commands {
-                for _ in 0..commands.len() + 1 {
-                    match commands.try_recv() {
-                        Ok(command) => self
-                            .storage_state
-                            .internal_cmd_tx
-                            .send(InternalStorageCommand::Replica(command)),
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => panic!("replica storage ingress lost"),
-                    }
-                }
-            }
-            self.poll_clients();
-            // Client disconnection alone must not stop maintained work. Closing the
-            // container's endpoint channel, with no clients left, ends the worker.
+            self.process_guest(&mut last_maintenance, &mut last_stats_time);
+            // Endpoint loss alone must not stop maintained execution.
             if self.replica_progress.is_none()
                 && self.client_rx.is_closed()
                 && self.client_rx.is_empty()
@@ -544,54 +702,6 @@ impl<'w> Worker<'w> {
             {
                 return;
             }
-            // A disconnected lifecycle may ignore responses. Query results are routed
-            // separately and maintained work continues while no lifecycle is attached.
-            let response_tx = self
-                .lifecycle
-                .filter(|_| self.initialization.is_none())
-                .and_then(|n| self.peers.get(&n))
-                .map(|p| p.responses.clone())
-                .unwrap_or_else(|| discard_responses.clone());
-            let config = &self.storage_state.storage_configuration;
-            let stats_interval = config.parameters.statistics_collection_interval;
-
-            let maintenance_interval = self.storage_state.server_maintenance_interval;
-
-            let now = std::time::Instant::now();
-            // Determine if we need to perform maintenance, which is true if `maintenance_interval`
-            // time has passed since the last maintenance.
-            let sleep_duration;
-            if now >= last_maintenance + maintenance_interval {
-                last_maintenance = now;
-                sleep_duration = None;
-
-                self.report_frontier_progress(&response_tx);
-                if let Some(executions) = &mut self.storage_state.executions {
-                    for response in executions.report() {
-                        self.replica_progress
-                            .as_ref()
-                            .expect("native progress")
-                            .send(response.into());
-                    }
-                }
-            } else {
-                // We didn't perform maintenance, sleep until the next maintenance interval.
-                let next_maintenance = last_maintenance + maintenance_interval;
-                sleep_duration = Some(next_maintenance.saturating_duration_since(now))
-            }
-
-            // Ask Timely to execute a unit of work.
-            //
-            // If there are no pending commands or responses from the async
-            // worker, we ask Timely to park the thread if there's nothing to
-            // do. We rely on another thread unparking us when there's new work
-            // to be done, e.g., when sending a command or when new Kafka
-            // messages have arrived.
-            //
-            // It is critical that we allow Timely to park iff there are no
-            // pending commands or responses. The command may have already been
-            // consumed by the call to `client_rx.recv`. See:
-            // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
             if self.client_rx.is_empty()
                 && self
                     .replica_commands
@@ -600,37 +710,78 @@ impl<'w> Worker<'w> {
                 && self.peers.values().all(|p| p.commands.is_empty())
                 && self.storage_state.async_worker.is_empty()
             {
-                // Make sure we wake up again to report any pending statistics updates.
-                let mut park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
-                if let Some(sleep_duration) = sleep_duration {
-                    park_duration = std::cmp::min(sleep_duration, park_duration);
-                }
-                self.timely_worker.step_or_park(Some(park_duration));
+                let park =
+                    storage_park_duration(&self.storage_state, last_maintenance, last_stats_time);
+                self.timely_worker.step_or_park(Some(park));
             } else {
                 self.timely_worker.step();
             }
-
-            // Rerport any dropped ids
-            self.report_dropped_ids(&response_tx);
-
-            self.process_oneshot_ingestions(&response_tx);
-
-            self.report_status_updates(&response_tx);
-
-            if last_stats_time.elapsed() >= stats_interval {
-                self.report_storage_statistics(&response_tx);
-                last_stats_time = Instant::now();
-            }
-
-            // Handle responses from the async worker.
-            while let Ok(response) = self.storage_state.async_worker.try_recv() {
-                self.handle_async_worker_response(response);
-            }
-
-            // Handle any received commands.
-            while let Some(command) = self.storage_state.internal_cmd_rx.try_recv() {
+            while let Some(command) = self
+                .storage_state
+                .internal_cmd_rx
+                .as_ref()
+                .expect("storage server always wires a receiver")
+                .try_recv()
+            {
                 self.handle_internal_storage_command(command);
             }
+        }
+    }
+
+    /// Processes arrivals and periodic duties without stepping the host or reading the lane.
+    /// Internal commands must be dispatched separately in the host's common order.
+    pub fn process_guest(&mut self, last_maintenance: &mut Instant, last_stats_time: &mut Instant) {
+        // Native ingress joins the same global order as queries, restarts,
+        // and async worker responses before mutating worker bookkeeping.
+        if let Some(commands) = &mut self.replica_commands {
+            for _ in 0..commands.len() + 1 {
+                match commands.try_recv() {
+                    Ok(command) => self
+                        .storage_state
+                        .internal_cmd_tx
+                        .send(InternalStorageCommand::Replica(command)),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => panic!("replica storage ingress lost"),
+                }
+            }
+        }
+        self.poll_clients();
+        while let Ok(response) = self.storage_state.async_worker.try_recv() {
+            self.handle_async_worker_response(response);
+        }
+        // A disconnected lifecycle may ignore responses. Query results are routed
+        // separately and maintained work continues while no lifecycle is attached.
+        let response_tx = self
+            .lifecycle
+            .filter(|_| self.initialization.is_none())
+            .and_then(|n| self.peers.get(&n))
+            .map(|p| p.responses.clone())
+            .unwrap_or_else(|| self.discard_responses.clone());
+        let now = Instant::now();
+        if now >= *last_maintenance + self.storage_state.server_maintenance_interval {
+            *last_maintenance = now;
+            self.report_frontier_progress(&response_tx);
+            if let Some(executions) = &mut self.storage_state.executions {
+                for response in executions.report() {
+                    self.replica_progress
+                        .as_ref()
+                        .expect("native progress")
+                        .send(response.into());
+                }
+            }
+        }
+        self.report_dropped_ids(&response_tx);
+        self.process_oneshot_ingestions(&response_tx);
+        self.report_status_updates(&response_tx);
+        if last_stats_time.elapsed()
+            >= self
+                .storage_state
+                .storage_configuration
+                .parameters
+                .statistics_collection_interval
+        {
+            self.report_storage_statistics(&response_tx);
+            *last_stats_time = Instant::now();
         }
     }
 
@@ -1517,7 +1668,8 @@ impl<'w> Worker<'w> {
         let _ = response_tx.send(response);
     }
 
-    fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
+    /// Forward completed oneshot ingestion results to the coordinator.
+    pub fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
         for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
             if !self.storage_state.query_owners.contains_key(ingestion_id)
                 && (self.lifecycle.is_none() || self.initialization.is_some())

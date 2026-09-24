@@ -1327,6 +1327,11 @@ def workflow_avro_record_type(c: Composition, parser: WorkflowArgumentParser) ->
     assert result.returncode == 0, f"stage --dry-run failed: {result.stderr}"
 
     with c.test_case("upgrade-from-an-unreadable-lock-file"):
+        # The `lock` run above wrote types.lock from inside the mz-deploy
+        # container, so on the bind mount it belongs to root and the host-side
+        # write below cannot overwrite it. The directory is ours, so unlink
+        # first, as the other cases that plant a lock file do.
+        types_lock.unlink(missing_ok=True)
         # What a version 1 lock file holds for this column: the pseudo-type
         # token, with no way to rebuild the record. It has to load, and
         # reconstruction has to say what to do about it.

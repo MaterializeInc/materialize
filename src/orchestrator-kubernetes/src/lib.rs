@@ -65,6 +65,11 @@ pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
 const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
+/// How many attempts of a failed worker command log at warn level before later attempts log at
+/// error level. With the retry backoff starting at 125ms, the first error-level attempt comes
+/// about 4s after the first failure, so a Kubernetes API error that clears on retry, such as a
+/// new service account's RBAC that has not yet propagated, does not reach Sentry.
+const RETRY_WARN_ATTEMPTS: usize = 5;
 
 const POD_TEMPLATE_HASH_ANNOTATION: &str = "environmentd.materialize.cloud/pod-template-hash";
 
@@ -1478,12 +1483,29 @@ impl OrchestratorWorker {
             F: Fn() -> U,
             U: Future<Output = Result<R, K8sError>>,
         {
+            let start = Instant::now();
             Retry::default()
                 .clamp_backoff(Duration::from_secs(10))
-                .retry_async(|_| {
-                    f().map_err(
-                        |error| tracing::error!(%cmd_type, "orchestrator call failed: {error}"),
-                    )
+                .retry_async(|state| {
+                    f().map_err(move |error| {
+                        let attempt = state.i + 1;
+                        let elapsed = start.elapsed();
+                        if state.i < RETRY_WARN_ATTEMPTS {
+                            tracing::warn!(
+                                %cmd_type,
+                                attempt,
+                                ?elapsed,
+                                "orchestrator call failed: {error}"
+                            );
+                        } else {
+                            tracing::error!(
+                                %cmd_type,
+                                attempt,
+                                ?elapsed,
+                                "orchestrator call failed: {error}"
+                            );
+                        }
+                    })
                 })
                 .await
                 .expect("always retries on error")

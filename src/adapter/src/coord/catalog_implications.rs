@@ -37,6 +37,7 @@ use mz_adapter_types::compaction::{CompactionWindow, SINCE_GRANULARITY};
 use mz_catalog::expr_cache::{GlobalExpressions, latest_item_version};
 use mz_catalog::memory::implications::{
     CatalogImplication, CatalogImplicationKind, CatalogImplications, ParsedStateUpdate,
+    ParsedStateUpdateKind,
 };
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, MetricSink, Source, Table,
@@ -56,6 +57,7 @@ use mz_ore::task;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
 use mz_sql::plan::ConnectionDetails;
+use mz_sql::session::vars::{DISABLED_METRIC_SINKS, Var};
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::connections::inline::{InlinedConnection, IntoInlineConnection};
@@ -94,6 +96,10 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
 
+        let reconcile_metric_sinks = catalog_updates.iter().any(|update| {
+            matches!(&update.kind, ParsedStateUpdateKind::SystemConfiguration { durable }
+                if durable.name.eq_ignore_ascii_case(DISABLED_METRIC_SINKS.name()))
+        });
         let build =
             crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
                 .to_string();
@@ -131,6 +137,9 @@ impl Coordinator {
             compaction_bounds,
         )
         .await?;
+        if reconcile_metric_sinks {
+            self.reconcile_metric_sinks().await;
+        }
         if let Some(notice_updates) = notice_updates {
             notice_updates.await;
         }
@@ -2530,10 +2539,6 @@ impl Coordinator {
     ) {
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
-        let enable_storage_introspection_logs = self
-            .catalog()
-            .system_config()
-            .enable_storage_introspection_logs();
 
         // This replica's scoped (replica-local) overrides were pushed into the
         // controller's per-replica layer before this loop, by the
@@ -2550,7 +2555,6 @@ impl Coordinator {
                 role,
                 replica_config,
                 enable_worker_core_affinity,
-                enable_storage_introspection_logs,
             )
             .expect("creating replicas must not fail");
 

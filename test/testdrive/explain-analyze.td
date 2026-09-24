@@ -68,7 +68,7 @@ materialize.blue.t_idx      <XXX>        <XXX>
 > EXPLAIN ANALYZE CPU FOR INDEX mz_internal.mz_console_cluster_utilization_overview_ind;
 operator                     total_elapsed
 -----------------------------------------
-"Arrange (#17{cluster_id})" <XXX>
+"Arrange (#20{cluster_id})" <XXX>
 "  Stream <XXX>" <null>
 "Returning Map/Filter/Project" <XXX>
 "  Union" <XXX>
@@ -98,7 +98,7 @@ operator                     total_elapsed
 "l3 = Delta Join [%0 » %1 » %2 » %3 » %4 » %5] [%1 » %0 » %2 » %3 » %4 » %5] [%2 » %0 » %1 » %3 » %4 » %5] [%3 » %0 » %1 » %2 » %4 » %5] [%4 » %0 » %1 » %2 » %3 » %5] [%5 » %0 » %1 » %2 » %3 » %4]" <XXX>
 "  Arrange (#0{replica_id})" <XXX>
 "    Arranged l0" <null>
-"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
+"  Arrange (#1{replica_id}, #6{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
 "        Read l2" <XXX>

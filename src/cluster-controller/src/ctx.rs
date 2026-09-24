@@ -430,6 +430,22 @@ pub trait ClusterControllerCtx: Send {
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId>;
 
+    /// Returns the subset of `replicas` that satisfy [`Self::hydrated_replicas`]
+    /// and the configured compute lag allowance. Each compute collection's
+    /// output frontier must be within that allowance of the furthest output
+    /// frontier among its hosting `reference` replicas. Storage remains
+    /// hydration-only. Disabling the lag gate checks only hydration.
+    ///
+    /// Callers supply the replicas cut-over will retire as `reference`.
+    /// An empty reference set means nothing can regress, so hydration suffices.
+    /// Hydration-burst timing uses [`Self::hydrated_replicas`] instead.
+    async fn ready_replicas(
+        &mut self,
+        cluster_id: ClusterId,
+        replicas: &[ReplicaId],
+        reference: &BTreeSet<ReplicaId>,
+    ) -> BTreeSet<ReplicaId>;
+
     /// Whether `cluster_id` has at least one hydratable (dataflow-backed) object
     /// bound to it: an index, materialized view, ingestion source, or sink.
     ///

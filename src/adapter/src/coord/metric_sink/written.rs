@@ -23,9 +23,9 @@ use mz_repr::{GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::validate_metric_sink_prefix;
-use mz_sql::session::vars::ENABLE_METRIC_SINK;
+use mz_sql::session::vars::{DISABLED_METRIC_SINKS, ENABLE_METRIC_SINK, Var};
 
-use super::{CURATED, CuratedMetricSink, ensure_reads_only_logs};
+use super::{CURATED, CuratedMetricSink, ensure_reads_only_logs, metric_sink_denied};
 use crate::AdapterError;
 use crate::catalog::{Catalog, CatalogState, Op};
 use crate::coord::Coordinator;
@@ -38,8 +38,9 @@ impl Coordinator {
             && self.catalog().state().catalog_read_protection_enabled()
     }
 
-    /// Admit only replicas created by this transaction. A flag change alone must
-    /// neither backfill existing replicas nor withdraw their selections.
+    /// Admit new replicas and reconcile denylist changes in the same transaction.
+    /// An `enable_metric_sink` change alone neither backfills existing replicas
+    /// nor withdraws their selections.
     pub(in crate::coord) async fn prepare_replica_metric_sinks(
         &self,
         conn_id: Option<&ConnectionId>,
@@ -56,7 +57,14 @@ impl Coordinator {
                 _ => None,
             })
             .collect();
-        if replicas.is_empty() {
+        let may_change_denylist = ops.iter().any(|op| match op {
+            Op::UpdateSystemConfiguration { name, .. } | Op::ResetSystemConfiguration { name } => {
+                name.eq_ignore_ascii_case(DISABLED_METRIC_SINKS.name())
+            }
+            Op::ResetAllSystemConfiguration => true,
+            _ => false,
+        });
+        if replicas.is_empty() && !may_change_denylist {
             return Ok(());
         }
         let revision = self.catalog().transient_revision();
@@ -106,7 +114,8 @@ impl Coordinator {
 }
 
 /// `replicas == None` denotes bootstrap. Otherwise only those new replicas are
-/// eligible, including replicas of clusters born in the same transaction.
+/// eligible, unless the candidate changes the denylist. Denylist changes reconcile
+/// all replicas, but do not withdraw non-denied selections when admission is off.
 async fn prepare_selections(
     catalog: &Catalog,
     candidate: Arc<CatalogState>,
@@ -122,28 +131,35 @@ async fn prepare_selections(
     }
     let build = Catalog::expression_build_version(candidate.config().build_info).to_string();
     let enabled = ENABLE_METRIC_SINK.enabled(candidate.system_config());
+    let denylist_changed = candidate.system_config().disabled_metric_sinks()
+        != catalog.system_config().disabled_metric_sinks();
     let owned: BTreeMap<_, _> = candidate
         .written_plans()
         .iter()
         .filter(|((_, version), selection)| version == &build && selection.replica_owner.is_some())
         .map(|((id, _), selection)| (*id, selection))
         .collect();
-    if !enabled {
-        return Ok(if replicas.is_none() {
-            owned
-                .into_iter()
-                .map(|(id, selection)| Op::SetWrittenPlan {
-                    id,
+    let mut retractions = Vec::new();
+    if replicas.is_none() || denylist_changed {
+        for (id, selection) in &owned {
+            let owner = selection.replica_owner.as_ref().expect("owned selection");
+            if (replicas.is_none() && !enabled)
+                || (CURATED.iter().any(|d| d.name == owner.name)
+                    && metric_sink_denied(candidate.system_config(), &owner.name))
+            {
+                retractions.push(Op::SetWrittenPlan {
+                    id: *id,
                     build_version: build.clone(),
                     expected_revision: Some(selection.revision),
                     revision: None,
                     imports: BTreeSet::new(),
                     replica_owner: selection.replica_owner.clone(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        });
+                });
+            }
+        }
+    }
+    if !enabled {
+        return Ok(retractions);
     }
     let existing: BTreeSet<_> = owned
         .values()
@@ -158,17 +174,19 @@ async fn prepare_selections(
     let mut missing = Vec::new();
     for replica in candidate.for_system_session().get_cluster_replicas() {
         let replica_id = replica.replica_id();
-        if replicas.is_some_and(|replicas| !replicas.contains(&replica_id)) {
+        if !denylist_changed && replicas.is_some_and(|replicas| !replicas.contains(&replica_id)) {
             continue;
         }
         for definition in CURATED {
-            if !existing.contains(&(replica_id, definition.name)) {
+            if !metric_sink_denied(candidate.system_config(), definition.name)
+                && !existing.contains(&(replica_id, definition.name))
+            {
                 missing.push((replica.cluster_id(), replica_id, definition));
             }
         }
     }
     if missing.is_empty() {
-        return Ok(Vec::new());
+        return Ok(retractions);
     }
     // The durable user allocator is the high-water mark, even after every
     // selection has been dropped. These IDs are never SQL catalog items.
@@ -233,7 +251,8 @@ async fn prepare_selections(
             *replica_owner = Some(owners[id].clone());
         }
     }
-    Ok(selections)
+    retractions.extend(selections);
+    Ok(retractions)
 }
 
 fn plan_definition(

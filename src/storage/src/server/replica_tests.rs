@@ -95,7 +95,6 @@ async fn native_storage_outlives_queries() {
         mz_ore::now::SYSTEM_TIME.clone(),
         ConnectionContext::for_tests(Arc::new(mz_secrets::InMemorySecretsController::new())),
         StorageInstanceContext::new(None, None),
-        Vec::new(),
     )
     .await
     .unwrap();

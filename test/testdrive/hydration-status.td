@@ -73,6 +73,17 @@ si true
   LIMIT 1;
 hydrated 0
 
+# System clusters participate in the collection rotation too.
+> SELECT count(*) > 0,
+         bool_and(h.status = 'hydrated'
+                  AND h.finished_at IS NOT NULL
+                  AND h.started_at <= h.finished_at)
+  FROM mz_internal.mz_replica_hydration_history AS h
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  JOIN mz_catalog.mz_clusters AS c ON c.id = r.cluster_id AND c.id = h.cluster_id
+  WHERE c.name = 'mz_catalog_server';
+true true
+
 # Test adding new compute dataflows.
 
 > CREATE TABLE t (a int)
@@ -172,7 +183,7 @@ FROM mz_introspection.mz_cluster_replica_resource_usage
 # default can raise this bound for sanitizer overhead.
 $ set-sql-timeout duration=20s
 
-> SELECT rh.status, rh.object_count,
+> SELECT rh.process_id, rh.status, rh.object_count,
          rh.started_at = oh.installed_at,
          rh.finished_at = oh.hydrated_at
   FROM mz_internal.mz_replica_hydration_history AS rh
@@ -181,19 +192,22 @@ $ set-sql-timeout duration=20s
    AND oh.installed_at = rh.started_at
   JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = oh.object_id
   JOIN mz_catalog.mz_objects AS o ON o.id = g.id
-  WHERE o.name = 'replica_episode_idx';
-hydrated 1 true true
+  WHERE o.name = 'replica_episode_idx'
+  ORDER BY rh.process_id;
+0 hydrated 1 true true
+1 hydrated 1 true true
 
 # The Prometheus registry and resource-usage log publish the same process
 # sampler independently. A Prometheus scrape after collection can observe a
-# higher process-lifetime peak, so the value is bracketed by the maximum across
-# process resource logs before collection and the maximum across Prometheus
-# series after it rather than required to equal the later scrape. Metric
-# availability must agree.
+# higher process-lifetime peak, so the maximum recorded peak is bracketed by
+# the maximum across process resource logs before collection and the maximum
+# across Prometheus series after it rather than required to equal the later
+# scrape. Metric availability must agree.
 > SET cluster_replica = hydrated_test_1
 
 > WITH recorded AS (
-      SELECT rh.peak_memory_bytes, rh.peak_disk_bytes
+      SELECT max(rh.peak_memory_bytes) AS peak_memory_bytes,
+             max(rh.peak_disk_bytes) AS peak_disk_bytes
       FROM mz_internal.mz_replica_hydration_history AS rh
       JOIN mz_internal.mz_object_hydration_history AS oh
         ON oh.replica_id = rh.replica_id

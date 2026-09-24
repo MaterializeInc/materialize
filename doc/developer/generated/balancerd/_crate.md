@@ -1,6 +1,6 @@
 ---
 source: src/balancerd/src/lib.rs
-revision: d381007629
+revision: a8d6814f12
 ---
 
 # balancerd
@@ -11,6 +11,7 @@ For pgwire, the balancer reads the startup message, then resolves the destinatio
 Resolution errors are typed as `ResolveError`, which distinguishes `InvalidPassword` (authentication failure), `Client` (client protocol violation, logged at `warn!`), `Upstream` (tenant backend unreachable, logged at `warn!`), and `Internal` (server-side fault, logged at `error!`); each maps to an appropriate `SqlState` code in the error sent to the client.
 For HTTPS, `HttpsBalancer` resolves using a `TenantDnsResolver`. In multi-tenant mode the pgwire and HTTPS listeners share one `TenantDnsResolver`; in static mode HTTPS gets its own.
 `BalancerService` drives three listeners (pgwire, HTTPS, internal HTTP) managed by `mz-server-core::serve`; dynamic configuration is synced from LaunchDarkly or a file at startup and periodically thereafter.
+A single `ConnectionLimiter` (backed by the `balancerd_max_connections` dyncfg, default 5000) is shared by the pgwire and HTTPS listeners. When the limit is reached, pgwire connections receive a fatal `ErrorResponse` with SQLSTATE 53300 and HTTPS connections receive a raw 503. Setting the limit to zero disables it. The internal HTTP listener is not subject to the limit. Two metrics accompany it: `mz_balancer_connection_rejected_total` counts refused connections and `mz_balancer_connection_limit` exposes the current ceiling.
 `TenantDnsResolver` wraps a `hickory_resolver::TokioResolver` (built from the system DNS configuration, with caching disabled) and provides `resolve_sni` (substitutes an SNI label into a template to get a hostname, then calls `resolve`), `resolve` (resolves CNAME to extract tenant, then A records for the IP), and `resolve_addr` (A records only, for when the tenant is already known). IP literals are returned directly without a DNS query. The helper `extract_tenant_from_cname` parses the tenant UUID from an environmentd CNAME target of the form `<service>.environment-<tenant_id>-<index>.svc.cluster.local`.
 Key dependencies are `mz-frontegg-auth`, `mz-server-core`, `mz-pgwire-common`, `mz-dyncfg-launchdarkly`, `mz-dyncfg-file`, and `hickory-resolver`.
 

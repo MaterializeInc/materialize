@@ -59,7 +59,13 @@ fn drive(worker: &mut Worker<'_>, done: impl Fn(&Worker<'_>) -> bool) {
         worker.poll_clients();
         worker.timely_worker.step();
         worker.process_oneshot_ingestions(&discard_responses);
-        while let Some(command) = worker.storage_state.internal_cmd_rx.try_recv() {
+        while let Some(command) = worker
+            .storage_state
+            .internal_cmd_rx
+            .as_ref()
+            .expect("storage server always wires a receiver")
+            .try_recv()
+        {
             worker.handle_internal_storage_command(command);
         }
         if done(worker) {

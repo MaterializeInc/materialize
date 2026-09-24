@@ -220,7 +220,13 @@ fn step(worker: &mut Worker<'_>, startup: bool) {
             worker.handle_async_worker_response(response);
         }
     }
-    while let Some(command) = worker.storage_state.internal_cmd_rx.try_recv() {
+    while let Some(command) = worker
+        .storage_state
+        .internal_cmd_rx
+        .as_ref()
+        .expect("storage server always wires a receiver")
+        .try_recv()
+    {
         worker.handle_internal_storage_command(command);
     }
     let (discard, _) = mpsc::unbounded_channel();

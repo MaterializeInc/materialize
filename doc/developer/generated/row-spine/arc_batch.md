@@ -1,6 +1,6 @@
 ---
 source: src/row-spine/src/arc_batch.rs
-revision: 98ea0cc1cc
+revision: feff142553
 ---
 
 # mz-row-spine::arc_batch
@@ -15,5 +15,5 @@ Differential's `Rc`-backed spines are worker-local: an `Rc<B>` cannot be sent ac
 
 * `ArcBatch<B>` — transparent newtype around `Arc<B>`. Implements `BatchReader`, `Batch`, and `Navigable` by delegation; `Deref`s to `B` so callers can reach batch fields directly (e.g., `batch.0` reaches the inner `Arc` for pointer-identity tracking in batch-size logging).
 * `ArcBatchCursor<C>` — cursor over an `ArcBatch`, delegating to the inner batch's cursor type `C`. The `Storage` associated type is `ArcBatch<C::Storage>`.
-* `ArcBuilder<Bld>` — `Builder` wrapping an inner builder `Bld`; seals each completed batch into an `Arc` via `ArcBatch::new`. Used as the builder type for all `ArcBatch`-backed spines.
+* `ArcBuilder<Bld>` — `Builder` wrapping an inner builder `Bld`; seals each completed batch into an `Arc` via `ArcBatch::new`. Used as the builder type for all `ArcBatch`-backed spines. Also implements `mz_timely_util::columnar::chunk::ChainState` by delegating to the inner builder, allowing columnar chunk-based builders to be wrapped without losing chain-state observation.
 * `ArcMerger<B>` — `Merger` for `ArcBatch<B>`, delegating merge work to `B::Merger` and wrapping the result in `ArcBatch::new`.

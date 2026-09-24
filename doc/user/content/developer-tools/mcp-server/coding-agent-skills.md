@@ -3,9 +3,9 @@ title: Agent Skills
 description: "Add Materialize skills to coding agents like Claude Code, Codex, Cursor, and others."
 menu:
   main:
-    parent: "mcp-server"
-    name: "Install skills"
-    weight: 7
+    parent: "developer-tools"
+    name: "Agent Skills"
+    weight: 5
 aliases:
   - /integrations/coding-agent-skills/
 ---

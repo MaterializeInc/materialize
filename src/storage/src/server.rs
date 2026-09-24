@@ -24,12 +24,8 @@ use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_service::client::GenericClient;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
-use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
 use timely::PartialOrder;
-use timely::logging::{
-    ChannelsEvent, MessagesEvent, OperatesEvent, ScheduleEvent, ShutdownEvent, TimelyEvent,
-};
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, oneshot};
@@ -78,7 +74,7 @@ impl StorageServer {
 /// Continuously drain responses, which aggregate all global workers. Channel loss
 /// is fatal. This endpoint has no reconnect or reconciliation handshake.
 pub struct ReplicaStorage {
-    _runtime: Arc<Mutex<TimelyContainer<Config>>>,
+    _runtime: Arc<dyn Send + Sync>,
     commands: mpsc::UnboundedSender<ReplicaCommand>,
     worker: std::thread::Thread,
     responses: mpsc::UnboundedReceiver<(usize, WorkerResponse)>,
@@ -266,6 +262,71 @@ type ReplicaChannels = (
     usize,
 );
 
+/// Native storage channels awaiting their host's runtime owner.
+/// The host retains execution independently of listener and connection lifetimes.
+pub struct ReplicaStorageBuilder(pub(crate) ReplicaChannels);
+
+impl ReplicaStorageBuilder {
+    /// Attaches the process-lifetime runtime owner to the native endpoint.
+    pub fn build(self, runtime: Arc<impl Send + Sync + 'static>) -> ReplicaStorage {
+        let (commands, worker, responses, peers) = self.0;
+        ReplicaStorage {
+            _runtime: runtime,
+            commands,
+            worker,
+            responses,
+            next_sequence: 1,
+            peers,
+            inputs: BTreeMap::new(),
+            current: BTreeMap::new(),
+            restarts: BTreeSet::new(),
+            starts: BTreeMap::new(),
+            output_generations: OutputGenerations::default(),
+            outputs: BTreeMap::new(),
+        }
+    }
+}
+
+/// Applies storage role validation and retains the Timely host for a guest connection.
+pub fn guest_client<C: StorageClient + 'static>(
+    client: C,
+    replica_owned: bool,
+    runtime: Arc<impl Send + Sync + 'static>,
+) -> Box<dyn StorageClient> {
+    let client = mz_storage_client::client::RoleClient::new(client);
+    let inner: Box<dyn StorageClient> = if replica_owned {
+        Box::new(QueryOnly(client))
+    } else {
+        Box::new(client)
+    };
+    Box::new(GuestClient {
+        inner,
+        _runtime: runtime,
+    })
+}
+
+struct GuestClient {
+    inner: Box<dyn StorageClient>,
+    _runtime: Arc<dyn Send + Sync>,
+}
+
+impl std::fmt::Debug for GuestClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuestClient").finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl GenericClient<StorageCommand, StorageResponse> for GuestClient {
+    async fn send(&mut self, command: StorageCommand) -> anyhow::Result<()> {
+        self.inner.send(command).await
+    }
+
+    async fn recv(&mut self) -> anyhow::Result<Option<StorageResponse>> {
+        self.inner.recv().await
+    }
+}
+
 // RoleClient owns handshake validation. This runtime boundary additionally
 // excludes lifecycle connections without changing the shared storage protocol.
 #[derive(Debug)]
@@ -314,15 +375,7 @@ struct Config {
     pub metrics: StorageMetrics,
     /// Shared rocksdb write buffer manager
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
-    /// Number of timely workers in this process, for local-index computation.
-    pub workers_per_process: usize,
-    /// Per-worker writers for forwarding timely logging events to compute,
-    /// indexed by local worker index.
-    pub timely_log_writers: Arc<Mutex<Vec<Option<TimelyLogWriter>>>>,
 }
-
-/// Per-worker writer handle for forwarding timely logging events to compute.
-pub(crate) type TimelyLogWriter = Arc<EventLink<mz_repr::Timestamp, Vec<(Duration, TimelyEvent)>>>;
 
 /// Initiates a timely dataflow computation, processing storage commands.
 pub async fn serve(
@@ -334,7 +387,6 @@ pub async fn serve(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-    timely_log_writers: Vec<TimelyLogWriter>,
 ) -> Result<impl Fn() -> Box<dyn StorageClient> + use<>, anyhow::Error> {
     Ok(serve_with_replica(
         timely_config,
@@ -346,7 +398,6 @@ pub async fn serve(
         now,
         connection_context,
         instance_context,
-        timely_log_writers,
     )
     .await?
     .client_builder())
@@ -365,23 +416,12 @@ pub async fn serve_with_replica(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-    timely_log_writers: Vec<TimelyLogWriter>,
 ) -> Result<StorageServer, anyhow::Error> {
     let (ready_tx, ready_rx) = if replica_owned && timely_config.process == 0 {
         let (tx, rx) = oneshot::channel();
         (Some(tx), Some(rx))
     } else {
         (None, None)
-    };
-    let workers_per_process = timely_config.workers;
-    // Normalize the log-writer vec to exactly one slot per worker in this process.
-    // Empty input means logging is disabled; pad with `None` so index-based access is
-    // always in bounds.
-    let timely_log_writers = if timely_log_writers.is_empty() {
-        (0..workers_per_process).map(|_| None).collect()
-    } else {
-        assert_eq!(timely_log_writers.len(), workers_per_process);
-        timely_log_writers.into_iter().map(Some).collect()
     };
     let config = Config {
         replica_owned,
@@ -397,8 +437,6 @@ pub async fn serve_with_replica(
         // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the
         // first worker attempts to initialize it.
         shared_rocksdb_write_buffer_manager: Default::default(),
-        workers_per_process,
-        timely_log_writers: Arc::new(Mutex::new(timely_log_writers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
 
@@ -408,20 +446,10 @@ pub async fn serve_with_replica(
     let replica = match ready_rx {
         Some(rx) => {
             let (commands, worker, responses, peers) = rx.await?;
-            Some(ReplicaStorage {
-                _runtime: Arc::clone(&timely_container),
-                commands,
-                worker,
-                responses,
-                next_sequence: 1,
-                peers,
-                inputs: BTreeMap::new(),
-                current: BTreeMap::new(),
-                restarts: BTreeSet::new(),
-                starts: BTreeMap::new(),
-                output_generations: OutputGenerations::default(),
-                outputs: BTreeMap::new(),
-            })
+            Some(
+                ReplicaStorageBuilder((commands, worker, responses, peers))
+                    .build(Arc::clone(&timely_container)),
+            )
         }
         None => None,
     };
@@ -447,65 +475,6 @@ impl ClusterSpec for Config {
             mpsc::UnboundedSender<StorageResponse>,
         )>,
     ) {
-        // Register a timely logger that forwards events to the compute logging dataflow.
-        // Assign by local worker index so storage worker x matches compute worker x.
-        let local_index = timely_worker.index() % self.workers_per_process;
-        let writer = self.timely_log_writers.lock().unwrap()[local_index].take();
-        if let Some(writer) = writer {
-            use timely::dataflow::operators::capture::{Event, EventPusher};
-            use timely::logging::TimelyEventBuilder;
-
-            // We use an approach similar to compute's logging: wrap the writer in
-            // a BatchLogger that translates Logger callbacks into Event pushes,
-            // then register the Logger with timely's log_register.
-            let interval_ms = 1000u128; // 1 second batching interval
-            let mut time_ms = mz_repr::Timestamp::from(0u64);
-            let mut event_pusher = writer;
-            let now = std::time::Instant::now();
-            let start_offset = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .expect("Failed to get duration since Unix epoch");
-
-            let logger = timely::logging_core::Logger::<TimelyEventBuilder>::new(
-                now,
-                start_offset,
-                move |time: &std::time::Duration,
-                      data: &mut Option<Vec<(std::time::Duration, TimelyEvent)>>| {
-                    if let Some(mut data) = data.take() {
-                        // Filter park/unpark events and remap IDs before handing events
-                        // off to compute. Compute's park tracking assumes a single
-                        // timely runtime; mixing in storage's park events would break
-                        // it. Remapping ensures storage operator/channel IDs don't
-                        // collide with compute's.
-                        data.retain_mut(|(_, event)| {
-                            if matches!(event, TimelyEvent::Park(_)) {
-                                return false;
-                            }
-                            remap_timely_event_ids(event);
-                            true
-                        });
-                        event_pusher.push(Event::Messages(time_ms, data));
-                    } else {
-                        // Advance progress.
-                        let new_time_ms: u64 = (((time.as_millis() / interval_ms) + 1)
-                            * interval_ms)
-                            .try_into()
-                            .expect("must fit");
-                        let new_time_ms = mz_repr::Timestamp::from(new_time_ms);
-                        if time_ms < new_time_ms {
-                            event_pusher
-                                .push(Event::Progress(vec![(new_time_ms, 1), (time_ms, -1)]));
-                            time_ms = new_time_ms;
-                        }
-                    }
-                },
-            );
-
-            if let Some(mut register) = timely_worker.log_register() {
-                register.insert_logger("timely", logger);
-            }
-        }
-
         let mut worker = Worker::new(
             timely_worker,
             client_rx,
@@ -536,58 +505,6 @@ impl ClusterSpec for Config {
             }
         }
         worker.run();
-    }
-}
-
-/// Offset added to storage operator/channel IDs to avoid collisions with compute IDs.
-///
-/// Large enough that compute IDs (which start from 0 and grow) will never reach it,
-/// but small enough to be representable as a `u64` with room for many storage operators.
-const STORAGE_ID_OFFSET: usize = 1 << 48;
-
-/// Remaps operator, channel, and address IDs in a `TimelyEvent` so that events
-/// forwarded to compute's logging dataflow don't collide with compute's IDs.
-fn remap_timely_event_ids(event: &mut TimelyEvent) {
-    match event {
-        TimelyEvent::Operates(OperatesEvent { id, addr, .. }) => {
-            *id = id.wrapping_add(STORAGE_ID_OFFSET);
-            if let Some(first) = addr.first_mut() {
-                *first = first.wrapping_add(STORAGE_ID_OFFSET);
-            }
-        }
-        TimelyEvent::Channels(ChannelsEvent {
-            id,
-            scope_addr,
-            source,
-            target,
-            ..
-        }) => {
-            *id = id.wrapping_add(STORAGE_ID_OFFSET);
-            if let Some(first) = scope_addr.first_mut() {
-                *first = first.wrapping_add(STORAGE_ID_OFFSET);
-            }
-            source.0 = source.0.wrapping_add(STORAGE_ID_OFFSET);
-            target.0 = target.0.wrapping_add(STORAGE_ID_OFFSET);
-        }
-        TimelyEvent::Shutdown(ShutdownEvent { id }) => {
-            *id = id.wrapping_add(STORAGE_ID_OFFSET);
-        }
-        TimelyEvent::Schedule(ScheduleEvent { id, .. }) => {
-            *id = id.wrapping_add(STORAGE_ID_OFFSET);
-        }
-        TimelyEvent::Messages(MessagesEvent { channel, .. }) => {
-            *channel = channel.wrapping_add(STORAGE_ID_OFFSET);
-            // source/target in Messages are worker IDs, not operator IDs.
-        }
-        TimelyEvent::PushProgress(e) => {
-            e.op_id = e.op_id.wrapping_add(STORAGE_ID_OFFSET);
-        }
-        TimelyEvent::CommChannels(e) => {
-            e.identifier = e.identifier.wrapping_add(STORAGE_ID_OFFSET);
-        }
-        TimelyEvent::Park(_) | TimelyEvent::Text(_) => {
-            // No IDs to remap.
-        }
     }
 }
 

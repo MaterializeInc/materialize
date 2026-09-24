@@ -104,8 +104,10 @@ class MetricSink(Check):
                 3
 
                 # The curated sinks come back too, re-installed from the static list
-                # rather than re-parsed from a catalog item.
-                > SELECT count(DISTINCT labels -> 'sink') FROM mz_introspection.mz_cluster_prometheus_metrics
+                # rather than re-parsed from a catalog item. Curated sinks landed in
+                # v26.42, so a multi-version upgrade validates intermediate leaders that
+                # predate them; gate this assertion to versions that have the feature.
+                >[version>=2604200] SELECT count(DISTINCT labels -> 'sink') FROM mz_introspection.mz_cluster_prometheus_metrics
                   WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
                     AND labels -> 'sink' IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
                 2

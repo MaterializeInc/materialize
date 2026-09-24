@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: 4e012ea88d
+revision: bdb21878e5
 ---
 
 # mz-sql-parser::parser
@@ -16,7 +16,7 @@ The right-hand side of `IS [NOT] DISTINCT FROM` is parsed at the precedence of t
 A parenthesized `(SHOW …)` query at statement level is unwrapped to a bare `Statement::Show` when it carries no CTEs, ORDER BY, LIMIT, or OFFSET, keeping the AST independent of redundant outer parens.
 `parse_explain_timestamp` accepts `TEXT`, `JSON`, and `DOT` as format keywords; `DOT` produces `ExplainFormat::Dot`, matching the behavior of `parse_explain_plan`. An `EXPLAIN TIMESTAMP AS DOT FOR <query>` statement parses successfully and reaches the sequencer's existing unsupported-format error path rather than panicking.
 Iceberg sink mode parsing accepts `UPSERT` or `APPEND` as valid values.
-The `ACCESS` keyword in connection option parsing dispatches on a second keyword: `KEY ID` resolves to `ConnectionOptionName::AccessKeyId`, while `DELEGATION` resolves to `ConnectionOptionName::AccessDelegation`. The `OAUTH2` keyword requires `SERVER URL` to follow, resolving to `ConnectionOptionName::Oauth2ServerUrl`.
+The `ACCESS` keyword in connection option parsing dispatches on a second keyword: `KEY ID` resolves to `ConnectionOptionName::AccessKeyId`, while `DELEGATION` resolves to `ConnectionOptionName::AccessDelegation`. The `OAUTH2` keyword requires `SERVER URL` to follow, resolving to `ConnectionOptionName::Oauth2ServerUrl`. The `STORAGE` keyword requires `PROVIDER` to follow, resolving to `ConnectionOptionName::StorageProvider`.
 `parse_option_map` peeks ahead for `[` before committing to a map literal; a bare `map` identifier in an option-value position therefore falls through to `parse_item_name` rather than causing a parse error.
 `EXECUTE UNIT TEST <name> FOR <target> [AT TIME <expr>] [MOCK <view_def>, ...] EXPECTED <result_def>` is parsed by `parse_execute_unit_test`; individual mock clauses are parsed by `parse_mock_view_def`. Both methods are called from `parse_execute` after the leading `EXECUTE UNIT TEST` tokens are consumed.
 The private method `parse_list_value<T, F>` optionally consumes `=`, then parses a comma-separated list enclosed in parentheses or brackets using a provided closure, returning `Vec<T>`.
@@ -31,3 +31,4 @@ The `Precedence` enum is `pub(crate)` and serves as the single source of truth f
 `CREATE METRIC SINK [IF NOT EXISTS] <name> [IN CLUSTER <cluster>] FROM <source> [WITH (PREFIX = ...)]` is parsed by `parse_create_metric_sink`, which is dispatched from `parse_create` when the next two tokens are `METRIC SINK`. The only supported `WITH` option is `PREFIX`, parsed by `parse_create_metric_sink_option`.
 
 `SHOW METRIC SINKS [IN CLUSTER <cluster>]` is handled in `parse_show_objects`: `parse_object_type` recognizes the two-token sequence `METRIC SINKS` and returns `ObjectType::MetricSink`, which is then dispatched to `ShowObjectType::MetricSink { in_cluster }`. `SHOW CREATE METRIC SINK <name>` is handled in `parse_show_create` by matching the three-token sequence `CREATE METRIC SINK` and producing `ShowStatement::ShowCreateMetricSink`.
+In `parse_table_from_source_options`, the `EXCLUDE` keyword dispatches on a second keyword: `COLUMNS` yields `TableFromSourceOptionName::ExcludeColumns` (parsing a sequence of identifiers as before), `CONSTRAINTS` yields `TableFromSourceOptionName::ExcludeConstraints` (parsing a sequence of string literals, since constraint names are raw upstream identifiers whose case must be preserved), and `ALL` (followed by `CONSTRAINTS`) yields `TableFromSourceOptionName::ExcludeAllConstraints` with no value.

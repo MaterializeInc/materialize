@@ -238,7 +238,13 @@ where
             let (upsert, health_update) = scope.scoped(
                 &format!("upsert_rehydration_backpressure({})", export_id),
                 |scope| {
-                    let (previous, previous_token, feedback_handle, backpressure_metrics) = {
+                    let (
+                        previous_ok,
+                        previous_err,
+                        previous_token,
+                        feedback_handle,
+                        backpressure_metrics,
+                    ) = {
                         let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
                         let backpressure_max_inflight_bytes = get_backpressure_max_inflight_bytes(
@@ -302,25 +308,28 @@ where
                         let error_handler =
                             storage_state.error_handler("upsert_rehydration", export_id);
 
-                        let (mut stream, tok) = persist_source::persist_source_core(
-                            outer_mz_scope,
-                            scope,
-                            export_id,
-                            persist_clients,
-                            storage_metadata,
-                            None,
-                            Some(as_of),
-                            SnapshotMode::Include,
-                            Antichain::new(),
-                            None,
-                            flow_control,
-                            false.then_some(|| unreachable!()),
-                            async {},
-                            error_handler,
-                        );
+                        let (mut ok_stream, mut err_stream, tok) =
+                            persist_source::persist_source_core(
+                                outer_mz_scope,
+                                scope,
+                                export_id,
+                                persist_clients,
+                                storage_metadata,
+                                None,
+                                Some(as_of),
+                                SnapshotMode::Include,
+                                Antichain::new(),
+                                None,
+                                flow_control,
+                                false.then_some(|| unreachable!()),
+                                async {},
+                                error_handler,
+                            );
                         if let Some(executions) = &storage_state.executions {
                             let probe = timely::dataflow::operators::probe::Handle::new();
-                            stream = stream.probe_with(&probe);
+                            // Protect the input until both successful and error updates advance.
+                            ok_stream = ok_stream.probe_with(&probe);
+                            err_stream = err_stream.probe_with(&probe);
                             executions.observe(
                                 base_source_config.id,
                                 export_id,
@@ -332,7 +341,8 @@ where
                             );
                         }
                         (
-                            stream.as_collection(),
+                            ok_stream.as_collection(),
+                            err_stream.as_collection(),
                             Some(tok),
                             feedback_handle,
                             backpressure_metrics,
@@ -365,7 +375,8 @@ where
                                 upsert_input.enter(scope),
                                 upsert_envelope.clone(),
                                 refine_antichain(&resume_upper),
-                                previous,
+                                previous_ok,
+                                previous_err,
                                 previous_token,
                                 export_config,
                                 backpressure_metrics,
@@ -376,7 +387,8 @@ where
                                 upsert_input.enter(scope),
                                 upsert_envelope.clone(),
                                 refine_antichain(&resume_upper),
-                                previous,
+                                previous_ok,
+                                previous_err,
                                 previous_token,
                                 export_config,
                                 &storage_state.instance_context,

@@ -472,6 +472,21 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_cluster_replica_metrics_history",
         ),
+        MigrationStep::evolution(
+            "26.43.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_replica_hydration_history",
+        ),
+        // Converting mz_object_global_ids from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.44.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_object_global_ids",
+        ),
     ]
 });
 
@@ -768,6 +783,7 @@ impl Migration {
             Some("replacement") => (true, self.plan_forced_migration(Mechanism::Replacement)),
             Some(other) => panic!("unknown force migration mechanism: {other}"),
         };
+        let plan = self.drop_shardless(plan);
 
         if self.source_version == self.target_version && !force {
             info!("skipping migration: already at target version");
@@ -925,10 +941,6 @@ impl Migration {
         let objects = self
             .system_objects
             .iter()
-            // Skip objects that don't yet have a shard registered. These are brand-new builtins
-            // added in this version; the leader will allocate their shards during bootstrap, and
-            // there is nothing to evolve or replace.
-            .filter(|(_, info)| info.shard_id.is_some())
             .filter(|(_, info)| participates_in_forced_migration(info.builtin, mechanism))
             .map(|(object, _)| object.clone())
             .collect();
@@ -939,6 +951,26 @@ impl Migration {
             Mechanism::Replacement => plan.replace = objects,
         }
 
+        plan
+    }
+
+    /// Drop objects that have no shard registered from the plan.
+    ///
+    /// A builtin without a shard does not exist in persist yet: either it was added in the target
+    /// version, or the source version predates it entirely (an upgrade from before the builtin
+    /// was introduced can reach an `Evolution` step registered for a later version). In both
+    /// cases the leader allocates the shard during bootstrap, at the target schema, and there is
+    /// nothing to evolve or replace. Applied to every plan, forced or versioned, so that both
+    /// paths agree; a read-only process that reached `migrate_evolve_one` with such an object
+    /// would otherwise bail out and crash-loop.
+    fn drop_shardless(&self, mut plan: Plan) -> Plan {
+        let has_shard = |object: &SystemObjectDescription| {
+            self.system_objects
+                .get(object)
+                .is_none_or(|info| info.shard_id.is_some())
+        };
+        plan.evolve.retain(has_shard);
+        plan.replace.retain(has_shard);
         plan
     }
 

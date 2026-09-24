@@ -18,7 +18,6 @@ use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use differential_dataflow::AsCollection;
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
@@ -320,6 +319,8 @@ type RefinedScope<'scope, T> = Scope<'scope, (T, Subtime)>;
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
 ///
+/// Returns the ok and error sides separately, both carrying the refined time.
+///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
@@ -340,7 +341,8 @@ pub fn persist_source_core<'g, 'outer, E>(
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<'g, RefinedTime, (Result<Row, E>, RefinedTime, Diff)>,
+    StreamVec<'g, RefinedTime, (Row, RefinedTime, Diff)>,
+    StreamVec<'g, RefinedTime, (E, RefinedTime, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
@@ -372,14 +374,7 @@ where
         map_filter_project,
         |time| time,
     );
-    // `upsert` reads one collection of `Result`s. Records keep the refined time, so putting
-    // the sides back together is a move per record with no re-timestamping.
-    let rows = oks
-        .as_collection()
-        .map(Ok)
-        .concat(errs.as_collection().map(Err))
-        .inner;
-    (rows, token)
+    (oks, errs, token)
 }
 
 /// Fetch the parts of a persist shard a dataflow needs, distributing the work of reading them

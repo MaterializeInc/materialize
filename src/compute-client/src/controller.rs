@@ -57,7 +57,7 @@ use mz_ore::soft_assert_or_log;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
-use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Row, Timestamp, frontier_within_lag};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
@@ -94,6 +94,53 @@ pub use instance_client::InstanceClient;
 
 pub(crate) type StorageCollections =
     Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
+
+/// A collection's hydration and catch-up status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionReadiness {
+    /// Hydrated and within the requested lag allowance.
+    Ready,
+    /// Hydrated, but behind the requested frontier.
+    Lagging {
+        /// The gap in timestamp ticks, or `None` when awaiting completion.
+        /// Ticks are milliseconds only on the epoch-milliseconds timeline.
+        lag: Option<u64>,
+    },
+    /// Not yet hydrated.
+    Unhydrated,
+}
+
+impl CollectionReadiness {
+    /// Classifies progress against an optional reference and lag allowance.
+    ///
+    /// The caller selects comparable frontiers: graceful replacement uses
+    /// per-replica output frontiers, whereas 0dt uses collection write frontiers.
+    /// No lag requirement means hydration alone. An empty reference requires
+    /// an empty frontier, since completion cannot be matched by finite progress.
+    pub fn classify(
+        hydrated: bool,
+        frontier: &Antichain<Timestamp>,
+        lag_requirement: Option<(&Antichain<Timestamp>, Timestamp)>,
+    ) -> Self {
+        if !hydrated {
+            Self::Unhydrated
+        } else if lag_requirement
+            .is_some_and(|(reference, lag)| !frontier_within_lag(frontier, reference, lag))
+        {
+            let reference = lag_requirement.expect("lag requirement was checked").0;
+            let lag =
+                frontier
+                    .as_option()
+                    .zip(reference.as_option())
+                    .map(|(frontier, reference)| {
+                        u64::from(*reference).saturating_sub(u64::from(*frontier))
+                    });
+            Self::Lagging { lag }
+        } else {
+            Self::Ready
+        }
+    }
+}
 
 /// Responses from the compute controller.
 #[derive(Debug)]
@@ -434,17 +481,24 @@ impl ComputeController {
         Ok(res)
     }
 
-    /// Returns `true` if all non-transient, non-excluded collections are hydrated on any of the
-    /// provided replicas.
+    /// Returns `true` if all non-transient, non-excluded collections are ready on any of the
+    /// provided replicas: hydrated, and, when `allowed_lag` is `Some`, no further than that
+    /// behind the furthest output frontier any of the `reference_replicas` reports for the
+    /// collection.
     ///
-    /// For this check, zero-replica clusters are always considered hydrated.
+    /// See `Instance::collections_ready_on_replicas` for why hydration alone is not a
+    /// readiness signal for a cut-over.
+    ///
+    /// For this check, zero-replica clusters are always considered ready.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    pub fn collections_hydrated_for_replicas(
+    pub fn collections_ready_for_replicas(
         &self,
         instance_id: ComputeInstanceId,
         replicas: Vec<ReplicaId>,
         exclude_collections: BTreeSet<GlobalId>,
+        allowed_lag: Option<Timestamp>,
+        reference_replicas: BTreeSet<ReplicaId>,
     ) -> Result<oneshot::Receiver<bool>, anyhow::Error> {
         let instance = self.instance(instance_id)?;
 
@@ -458,7 +512,12 @@ impl ComputeController {
         let (tx, rx) = oneshot::channel();
         instance.call(move |i| {
             let result = i
-                .collections_hydrated_on_replicas(Some(replicas), &exclude_collections)
+                .collections_ready_on_replicas(
+                    Some(replicas),
+                    &exclude_collections,
+                    allowed_lag,
+                    &reference_replicas,
+                )
                 .expect("validated");
             let _ = tx.send(result);
         });

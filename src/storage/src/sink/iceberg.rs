@@ -100,14 +100,12 @@ use futures::StreamExt;
 use iceberg::ErrorKind;
 use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
 use iceberg::spec::{
-    DataFile, FormatVersion, StructType, TableMetadata, read_data_files_from_avro,
-    write_data_files_to_avro,
+    DataFile, FormatVersion, NestedField, PrimitiveType, StructType, TableMetadata, Type,
+    read_data_files_from_avro, write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
-use iceberg::transaction::{
-    ActionCommit, ApplyTransactionAction, RowDeltaAction, Transaction, TransactionAction,
-};
+use iceberg::transaction::{RowDeltaAction, TransactionAction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::base_writer::equality_delete_writer::{
     EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
@@ -122,7 +120,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
+use iceberg::{Catalog, NamespaceIdent, TableCommit, TableCreation, TableIdent};
 use itertools::Itertools;
 use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
 use mz_interchange::avro::DiffPair;
@@ -157,7 +155,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::progress::{Antichain, Timestamp as _};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
@@ -745,7 +743,7 @@ async fn reload_table(
     catalog: &dyn Catalog,
     namespace: String,
     table_name: String,
-    current_table: Table,
+    current_table: &Table,
 ) -> anyhow::Result<Table> {
     let namespace_ident = NamespaceIdent::new(namespace.clone());
     let table_ident = TableIdent::new(namespace_ident, table_name.clone());
@@ -780,120 +778,245 @@ async fn reload_table(
     }
 }
 
-/// A prepared batch may only extend exactly the durable Materialize upper.
-/// A table without snapshot history permits an initial snapshot: its lower is the input
-/// as_of, which need not be the minimum timestamp.
-fn validate_commit_progress(
+/// A failed commit attempt, split by whether the commit request reached the catalog.
+enum CommitError {
+    /// Failed while building the commit locally. Nothing was sent to the catalog,
+    /// so the commit definitely didn't happen.
+    Local(iceberg::Error),
+    /// The update request failed. Depending on the error kind,
+    /// it's still possible the catalog applied the commit.
+    Request(iceberg::Error),
+}
+
+/// Build a row delta commit against the given table and send it to the catalog.
+///
+/// We can't use iceberg-rust's `Transaction::commit` (a retry wrapper for `Transaction::do_commit`)
+/// because it automatically rebases the transaction onto the latest state of the table.
+///
+/// That behavior leads to duplicate writes because there's no way to check:
+/// 1. Have we already committed this data?
+/// 2. Has another (newer) writer taken over?
+///
+/// So this implementation doesn't do that (details inline).
+async fn do_commit(
     table: &Table,
-    sink_version: u64,
-    batch_lower: &Antichain<Timestamp>,
-) -> anyhow::Result<()> {
-    if let Some((upper, version)) = retrieve_upper_from_snapshots(table.metadata())? {
-        if version > sink_version {
-            anyhow::bail!(
-                "Fenced off by newer sink version: resume_version {}, sink_version {}",
-                version,
-                sink_version
-            );
-        }
-        if upper != *batch_lower {
-            anyhow::bail!(
-                "Iceberg commit requires reconstruction from committed upper {}: prepared lower {}",
-                upper.pretty(),
-                batch_lower.pretty()
-            );
-        }
+    catalog: &dyn Catalog,
+    snapshot_properties: Vec<(String, String)>,
+    data_files: Vec<DataFile>,
+    delete_files: Vec<DataFile>,
+) -> Result<Table, CommitError> {
+    let mut action = RowDeltaAction::new()
+        .set_snapshot_properties(snapshot_properties.into_iter().collect())
+        .with_check_duplicate(false);
+
+    if !data_files.is_empty() || !delete_files.is_empty() {
+        action = action
+            .add_data_files(data_files)
+            .add_delete_files(delete_files);
     }
-    Ok(())
+
+    // Admission and row-delta requirements must use the same metadata. RowDelta
+    // supplies the main-snapshot CAS (including None) and table UUID requirement,
+    // so a concurrent publication cannot invalidate admission and still commit.
+    // Progress-bearing snapshots belong to main: Materialize writers and supported
+    // compaction publish there, not on independent Iceberg branches.
+
+    let mut action_commit = Arc::new(action)
+        .commit(table)
+        .await
+        .map_err(CommitError::Local)?;
+
+    // Divergence: `Transaction::do_commit` also checks each action's requirements
+    // against the local metadata and applies its updates to a local copy of the table,
+    // so the next action in the transaction can build on the result.
+    // We only commit a single action, so we skip that step.
+
+    let table_commit = TableCommit::builder()
+        .ident(table.identifier().clone())
+        .updates(action_commit.take_updates())
+        .requirements(action_commit.take_requirements())
+        .build();
+
+    catalog
+        .update_table(table_commit)
+        .await
+        .map_err(CommitError::Request)
 }
 
-/// The transaction invokes this action again after every refresh/rebase.
-/// Validation and row-delta requirements must use the same metadata. RowDelta
-/// supplies the main-snapshot CAS (including None) and table UUID requirement,
-/// so a concurrent publication cannot invalidate the check and still commit.
-/// Progress-bearing snapshots belong to main: Materialize writers and supported
-/// compaction publish there, not on independent Iceberg branches.
-struct GuardedRowDelta {
-    action: Arc<RowDeltaAction>,
-    sink_version: u64,
-    batch_lower: Antichain<Timestamp>,
-}
-
-#[async_trait::async_trait]
-impl TransactionAction for GuardedRowDelta {
-    async fn commit(self: Arc<Self>, table: &Table) -> iceberg::Result<ActionCommit> {
-        validate_commit_progress(table, self.sink_version, &self.batch_lower).map_err(|e| {
-            iceberg::Error::new(ErrorKind::DataInvalid, "Unsafe prepared Iceberg batch")
-                .with_source(e)
-        })?;
-        Arc::clone(&self.action).commit(table).await
-    }
-}
-
-/// Attempt to publish prepared files. Any uncertain outcome is reloaded before
-/// retrying. Overlap stops the operator, whose halting health status requests
-/// sink reconstruction. Do not commit a subset of these files, rewrite their
-/// bounds, or delete files whose commit outcome is unknown.
+/// Attempt to publish prepared files. Every attempt reloads before admission,
+/// including after an uncertain outcome. Overlap stops the operator, whose halting
+/// health status requests reconstruction. Do not rewrite batch bounds, publish a
+/// subset of these files, or delete files whose commit outcome is unknown.
 async fn try_commit_batch(
-    mut table: Table,
+    table: Table,
     snapshot_properties: Vec<(String, String)>,
     data_files: Vec<DataFile>,
     delete_files: Vec<DataFile>,
     catalog: &dyn Catalog,
     conn_namespace: &str,
     conn_table: &str,
+    sink_id: GlobalId,
     sink_version: u64,
     batch_lower: &Antichain<Timestamp>,
+    batch_upper: &Antichain<Timestamp>,
     metrics: &IcebergSinkMetrics,
 ) -> (Table, RetryResult<(), anyhow::Error>) {
-    let tx = Transaction::new(&table);
-    let action = tx
-        .row_delta()
-        .set_snapshot_properties(snapshot_properties.into_iter().collect())
-        .with_check_duplicate(false)
-        .add_data_files(data_files)
-        .add_delete_files(delete_files);
-    let tx = GuardedRowDelta {
-        action: Arc::new(action),
-        sink_version,
-        batch_lower: batch_lower.clone(),
-    }
-    .apply(tx)
-    .expect("applying a transaction action only queues it");
-
-    match tx.commit(catalog).await {
-        Ok(new_table) => (new_table, RetryResult::Ok(())),
+    // We begin the attempt by evaluating our current state.
+    // 1. Load the table from the catalog.
+    // 2. Check if the table metadata says it's safe to write to.
+    let table = match reload_table(
+        catalog,
+        conn_namespace.to_string(),
+        conn_table.to_string(),
+        &table,
+    )
+    .await
+    {
+        Ok(table) => table,
         Err(e) => {
-            if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) {
-                metrics.commit_conflicts.inc();
-            } else {
-                metrics.commit_failures.inc();
-            }
-            // This includes transport failures after a successful publication.
-            // If reload fails, the next transaction must itself successfully
-            // refresh and validate before it can attempt another publication.
-            match reload_table(
-                catalog,
-                conn_namespace.to_string(),
-                conn_table.to_string(),
-                table.clone(),
-            )
-            .await
-            {
-                Ok(reloaded) => table = reloaded,
-                Err(reload_err) => {
-                    return (table, RetryResult::RetryableErr(reload_err));
-                }
-            }
-            if let Err(err) = validate_commit_progress(&table, sink_version, batch_lower) {
-                return (table, RetryResult::FatalErr(err));
-            }
-            if matches!(e.kind(), ErrorKind::DataInvalid) {
-                return (table, RetryResult::FatalErr(anyhow!(e)));
-            }
-            (table, RetryResult::RetryableErr(anyhow!(e)))
+            // We can't proceed without a fresh view of the table, so we must retry.
+            return (table, RetryResult::RetryableErr(anyhow!(e)));
+        }
+    };
+
+    let last = match retrieve_upper_from_snapshots(table.metadata()) {
+        Ok(last) => last,
+        Err(e) => return (table, RetryResult::FatalErr(e)),
+    };
+    // Only a table without snapshot history permits initialization at an arbitrary
+    // input as_of. Missing progress in a table with history is an error above.
+    if let Some((last_frontier, last_id, last_version)) = last {
+        // Just in case the sink was recreated, check both sink ID and version to see if it was us.
+        if last_id == sink_id && last_version == sink_version && last_frontier == *batch_upper {
+            // Our own commit for this batch is already on the table.
+            // We must've missed the response.
+            info!(
+                namespace = %conn_namespace,
+                table = %conn_table,
+                lower = %batch_lower.pretty(),
+                upper = %batch_upper.pretty(),
+                "found iceberg commit from previous attempt, treating as success"
+            );
+            return (table, RetryResult::Ok(()));
+        }
+
+        if last_version > sink_version {
+            // We've been superseded by a new version of the sink.
+            return (
+                table,
+                RetryResult::FatalErr(anyhow!(
+                    "Iceberg table '{}' has been modified by another writer \
+                    with version {}. Current sink version: {}. \
+                    Frontiers may be out of sync, aborting to avoid data loss.",
+                    conn_table,
+                    last_version,
+                    sink_version,
+                )),
+            );
+        }
+
+        // Prepared files may only extend exactly the durable Materialize upper.
+        // A mismatch requires reconstruction, not rebasing or publishing a subset.
+        if last_frontier != *batch_lower {
+            return (
+                table,
+                RetryResult::FatalErr(anyhow!(
+                    "Iceberg table '{}' has been modified by another writer. \
+                    Iceberg commit requires reconstruction from committed upper {}: prepared lower {}",
+                    conn_table,
+                    last_frontier.pretty(),
+                    batch_lower.pretty(),
+                )),
+            );
         }
     }
+
+    match do_commit(
+        &table,
+        catalog,
+        snapshot_properties,
+        data_files,
+        delete_files,
+    )
+    .await
+    {
+        Ok(new_table) => (new_table, RetryResult::Ok(())),
+        Err(CommitError::Local(e)) => {
+            // Nothing was sent to the catalog, so this commit definitely didn't happen.
+            // Next attempt should reload the table and try again from scratch.
+            metrics.commit_failures.inc();
+            (
+                table,
+                RetryResult::RetryableErr(anyhow!("Failed to build iceberg table commit: {}", e)),
+            )
+        }
+        Err(CommitError::Request(e)) => match e.kind() {
+            ErrorKind::CatalogCommitConflicts => {
+                // Our view of the table was outdated.
+                // Next attempt should reload the table and try again from scratch.
+                metrics.commit_conflicts.inc();
+                (table, RetryResult::RetryableErr(anyhow!(e)))
+            }
+            ErrorKind::Unexpected => {
+                // The catalog may have applied this commit before the success response was lost.
+                // Next attempt should reload the table and see if the commit landed.
+                metrics.commit_failures.inc();
+                (table, RetryResult::RetryableErr(anyhow!(e)))
+            }
+            _ => {
+                // All other errors are definite: retrying will not change the outcome.
+                metrics.commit_failures.inc();
+                (table, RetryResult::FatalErr(anyhow!(e)))
+            }
+        },
+    }
+}
+
+/// Whether the sink can write into a table that already carries `current`,
+/// where `expected` is the schema the sink would create today.
+///
+/// Field ids, names and nullability have to match. Types have to match too,
+/// except that a column may be `fixed[16]` where `expected` has `string`. Uuid
+/// columns were written as fixed binary before, and a table holding one stays
+/// writable, because the writer builds its Arrow columns from the table's own
+/// schema rather than from `expected`. Rejecting it would strand the sink.
+///
+/// NOTE: the tolerance keys on the Iceberg types alone, so it also accepts a
+/// `fixed[16]` column where the relation has `text`. Such a table fails on the
+/// first row written instead of here. Only a table created outside Materialize
+/// can be in that state, since the sink never creates one.
+fn is_compatible(current: &Schema, expected: &Schema) -> bool {
+    current
+        .identifier_field_ids()
+        .eq(expected.identifier_field_ids())
+        && struct_is_compatible(current.as_struct(), expected.as_struct())
+}
+
+fn struct_is_compatible(current: &StructType, expected: &StructType) -> bool {
+    current.fields().len() == expected.fields().len()
+        && std::iter::zip(current.fields(), expected.fields())
+            .all(|(c, e)| field_is_compatible(c, e))
+}
+
+fn field_is_compatible(current: &NestedField, expected: &NestedField) -> bool {
+    current.id == expected.id
+        && current.name == expected.name
+        && current.required == expected.required
+        && match (&*current.field_type, &*expected.field_type) {
+            // A uuid column written before uuids became strings.
+            (Type::Primitive(PrimitiveType::Fixed(16)), Type::Primitive(PrimitiveType::String)) => {
+                true
+            }
+            (Type::Struct(c), Type::Struct(e)) => struct_is_compatible(c, e),
+            (Type::List(c), Type::List(e)) => {
+                field_is_compatible(&c.element_field, &e.element_field)
+            }
+            (Type::Map(c), Type::Map(e)) => {
+                field_is_compatible(&c.key_field, &e.key_field)
+                    && field_is_compatible(&c.value_field, &e.value_field)
+            }
+            (c, e) => c == e,
+        }
 }
 
 /// Load an existing Iceberg table or create it if it doesn't exist.
@@ -912,11 +1035,7 @@ async fn load_or_create_table(
             // Table exists, return it
             // TODO: Add proper schema evolution/validation to ensure compatibility
             let current_schema = table.metadata().current_schema();
-            if !(current_schema.as_struct().eq(schema.as_struct())
-                && current_schema
-                    .identifier_field_ids()
-                    .eq(schema.identifier_field_ids()))
-            {
+            if !is_compatible(current_schema, schema) {
                 anyhow::bail!(
                     "Iceberg table '{}' schema does not match expected schema. \
                      Current schema: {:?}, expected schema: {:?}",
@@ -962,30 +1081,38 @@ async fn load_or_create_table(
 }
 
 /// Find the most recent Materialize frontier from Iceberg snapshots.
+/// Returns: (frontier, sink id, sink version)
+///
 /// We store the frontier in snapshot metadata to track where we left off after restarts.
 /// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
 /// Returns None only when metadata contains no evidence of prior snapshots.
 /// Missing progress after snapshot expiration is an error, not an initial frontier.
 fn retrieve_upper_from_snapshots(
     metadata: &TableMetadata,
-) -> anyhow::Result<Option<(Antichain<Timestamp>, u64)>> {
+) -> anyhow::Result<Option<(Antichain<Timestamp>, GlobalId, u64)>> {
     let mut snapshots = metadata.snapshots().collect::<Vec<_>>();
     snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
     for snapshot in snapshots {
         let props = &snapshot.summary().additional_properties;
-        if let (Some(frontier_json), Some(sink_version_str)) =
-            (props.get("mz-frontier"), props.get("mz-sink-version"))
-        {
+        if let (Some(frontier_json), Some(sink_id_str), Some(sink_version_str)) = (
+            props.get("mz-frontier"),
+            props.get("mz-sink-id"),
+            props.get("mz-sink-version"),
+        ) {
             let frontier: Vec<Timestamp> = serde_json::from_str(frontier_json)
                 .context("Failed to deserialize frontier from snapshot properties")?;
             let frontier = Antichain::from_iter(frontier);
+
+            let sink_id = sink_id_str
+                .parse::<GlobalId>()
+                .context("Failed to parse mz-sink-id from snapshot properties")?;
 
             let sink_version = sink_version_str
                 .parse::<u64>()
                 .context("Failed to parse mz-sink-version from snapshot properties")?;
 
-            return Ok(Some((frontier, sink_version)));
+            return Ok(Some((frontier, sink_id, sink_version)));
         }
         if snapshot.summary().operation.as_str() != "replace" {
             // This is a bad heuristic, but we have no real other way to identify compactions
@@ -1180,7 +1307,7 @@ fn mint_batch_descriptions<'scope>(
 
             let resume = retrieve_upper_from_snapshots(table.metadata())?;
             let (resume_upper, resume_version) = match resume {
-                Some((f, v)) => (f, v),
+                Some((f, _, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),
             };
             debug!(
@@ -1967,7 +2094,7 @@ mod commit_tests;
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{PrimitiveType, Type};
+    use iceberg::spec::{ListType, PrimitiveType, Type};
     use iceberg::writer::file_writer::location_generator::LocationGenerator;
     use mz_repr::SqlScalarType;
     use mz_storage_types::sinks::ICEBERG_UINT64_DECIMAL_PRECISION;
@@ -2070,6 +2197,14 @@ mod tests {
             DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
         );
 
+        // Interval should override to LargeUtf8
+        let result = iceberg_type_overrides(&SqlScalarType::Interval);
+        assert_eq!(result.unwrap().0, DataType::LargeUtf8);
+
+        // Uuid should override to Utf8
+        let result = iceberg_type_overrides(&SqlScalarType::Uuid);
+        assert_eq!(result.unwrap().0, DataType::Utf8);
+
         // Other types should return None (use default)
         assert!(iceberg_type_overrides(&SqlScalarType::Int32).is_none());
         assert!(iceberg_type_overrides(&SqlScalarType::String).is_none());
@@ -2130,6 +2265,123 @@ mod tests {
             .field_by_name("dur")
             .expect("field should exist");
         assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+    }
+
+    /// A uuid column must reach the Iceberg table as `string`, not as the
+    /// `fixed[16]` that the default `FixedSizeBinary(16)` mapping would produce.
+    #[mz_ore::test]
+    fn test_iceberg_uuid_override() {
+        let result = iceberg_type_overrides(&SqlScalarType::Uuid);
+        assert_eq!(result.unwrap().0, DataType::Utf8);
+
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("u", SqlScalarType::Uuid.nullable(true))
+            .finish();
+
+        let (arrow_schema, iceberg_schema) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+
+        let field = iceberg_schema
+            .as_struct()
+            .field_by_name("u")
+            .expect("field should exist");
+        assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+        assert_ne!(
+            *field.field_type,
+            Type::Primitive(PrimitiveType::Fixed(16)),
+            "uuid must not fall back to the default FixedSizeBinary(16) mapping"
+        );
+    }
+
+    /// Rebuilds `schema` with the named field's type replaced, so a fixture can
+    /// differ from what the sink derives in exactly one type.
+    fn with_field_type(schema: &Schema, name: &str, ty: Type) -> Schema {
+        let fields = schema.as_struct().fields().iter().map(|f| {
+            let mut field = (**f).clone();
+            if field.name == name {
+                field.field_type = Box::new(ty.clone());
+            }
+            Arc::new(field)
+        });
+        Schema::builder()
+            .with_fields(fields)
+            .build()
+            .expect("valid schema")
+    }
+
+    /// A table created before uuid columns became strings holds `fixed[16]` and
+    /// must stay writable, while any other difference is still a mismatch.
+    #[mz_ore::test]
+    fn test_is_compatible_accepts_legacy_uuid() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("u", SqlScalarType::Uuid.nullable(true))
+            .finish();
+        let (_, expected) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        assert!(is_compatible(&expected, &expected));
+
+        // The halt this tolerance exists to prevent.
+        let legacy = with_field_type(&expected, "u", Type::Primitive(PrimitiveType::Fixed(16)));
+        assert!(is_compatible(&legacy, &expected));
+
+        // Only that direction: nothing produces a string column where the sink
+        // derives fixed binary.
+        assert!(!is_compatible(&expected, &legacy));
+
+        // An unrelated type difference is still a mismatch.
+        let wrong_type = with_field_type(&expected, "u", Type::Primitive(PrimitiveType::Long));
+        assert!(!is_compatible(&wrong_type, &expected));
+
+        // So is a missing column.
+        let truncated = Schema::builder()
+            .with_fields(expected.as_struct().fields().iter().take(1).cloned())
+            .build()
+            .expect("valid schema");
+        assert!(!is_compatible(&truncated, &expected));
+    }
+
+    /// The tolerance reaches a uuid nested inside a list, which the type
+    /// overrides remap just like a top-level column.
+    #[mz_ore::test]
+    fn test_is_compatible_accepts_legacy_uuid_in_list() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column(
+                "us",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Uuid),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .finish();
+        let (_, expected) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        let Type::List(list) = &*expected
+            .as_struct()
+            .field_by_name("us")
+            .expect("field should exist")
+            .field_type
+        else {
+            panic!("expected a list type");
+        };
+        let mut legacy_element = (*list.element_field).clone();
+        legacy_element.field_type = Box::new(Type::Primitive(PrimitiveType::Fixed(16)));
+        let legacy = with_field_type(
+            &expected,
+            "us",
+            Type::List(ListType {
+                element_field: Arc::new(legacy_element),
+            }),
+        );
+
+        assert!(is_compatible(&legacy, &expected));
     }
 
     #[mz_ore::test]
@@ -2681,6 +2933,7 @@ fn commit_to_iceberg<'scope>(
                             let conn_namespace = connection.namespace.clone();
                             let conn_table = connection.table.clone();
                             let batch_lower = batch.0.clone();
+                            let batch_upper = batch.1.clone();
                             async move {
                                 try_commit_batch(
                                     table,
@@ -2690,8 +2943,10 @@ fn commit_to_iceberg<'scope>(
                                     catalog.as_ref(),
                                     &conn_namespace,
                                     &conn_table,
+                                    sink_id,
                                     sink_version,
                                     &batch_lower,
+                                    &batch_upper,
                                     &metrics,
                                 )
                                 .await

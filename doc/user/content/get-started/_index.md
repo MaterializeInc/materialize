@@ -369,13 +369,14 @@ creates:
            w2.amount AS sold_amount,
            w1.amount AS purchased_amount,
            w2.amount - w1.amount AS diff_amount,
-           datediff('days', w2.bid_time, w1.bid_time) AS timeframe_days
+           datediff('days', w1.bid_time, w2.bid_time) AS timeframe_days
      FROM  winning_bids AS w1
        JOIN winning_bids AS w2
          ON w1.buyer = w2.seller   -- Buyer and seller are the same
             AND w1.item = w2.item  -- Item is the same
      WHERE w2.amount > w1.amount   -- But sold at a higher price
-       AND datediff('days', w2.bid_time, w1.bid_time) < 8;
+       AND w2.bid_time > w1.bid_time -- And sold after it was bought
+       AND datediff('days', w1.bid_time, w2.bid_time) < 8;
     ```
 
     To view a sample row in `flip_activities`, run the following
@@ -408,6 +409,17 @@ creates:
 
     Rerun the previous query on `flip_activities`. The query should return
     faster.
+
+    The indexes make each query cheaper to compute, but they do not change how
+    much the view returns. The number of matching pairs still grows as
+    `winning_bids` grows, and the 8-day bound in the `WHERE` clause is what
+    keeps that growth linear rather than quadratic. Because `flip_activities`
+    is a plain view, this work happens only when you query it. If you later
+    create an index on `flip_activities` or turn it into a materialized view,
+    Materialize retains that state continuously as the load generator keeps
+    producing auctions. Keep the time bound in place, or add a [temporal
+    filter](/transform-data/patterns/temporal-filters/) to `winning_bids`, so
+    that the retained state stays bounded.
 
 1. Use [`CREATE TABLE`](/sql/create-table) to create a `known_flippers` table
    that you can manually populate with known flippers. That is, assume that

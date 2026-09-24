@@ -20,6 +20,80 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.42.0
+*Released to Materialize Self-Managed: 2026-09-18* <br>
+
+### Safely drop upstream constraints in your Postgres sources {#v26.42-constraint-exclusion-for-postgres-sources}
+Materialize now allows you to `EXCLUDE CONSTRAINTS` when creating a table from a Postgres source. You can use this workflow to safely drop an upstream constraint, without causing your source to stall. Today, the Postgres source incorporates `PRIMARY KEY`, `UNIQUE` and `NOT NULL` constraints.
+
+```mzsql
+CREATE TABLE orders
+  FROM SOURCE pg_source (REFERENCE public.orders)
+  WITH (EXCLUDE CONSTRAINTS ('orders_customer_email_key'));
+```
+
+If you want to exclude all constraints, you can do that too:
+
+```mzsql
+CREATE TABLE orders
+  FROM SOURCE pg_source (REFERENCE public.orders)
+  WITH (EXCLUDE ALL CONSTRAINTS);
+```
+
+For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/postgres/) for PostgreSQL and the guide on [handling upstream schema changes](/ingest-data/postgres/source-versioning/).
+
+### Size clusters using hydration history {#v26.42-hydration-history}
+You can now track how long a cluster took to hydrate, and what resources it needed. Every completed hydration is now recorded in two new introspection tables:
+- [`mz_internal.mz_replica_hydration_history`](/sql/system-catalog/mz_internal/#mz_replica_hydration_history) to track hydration metrics per replica
+- [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history) to track hydration metrics per object
+
+Use these tables to determine your hydration requirements, and right-size your clusters accordingly.
+
+```mzsql
+SELECT
+    rh.replica_name AS replica,
+    rh.size,
+    h.started_at,
+    h.finished_at - h.started_at AS hydration_time,
+    h.object_count,
+    pg_size_pretty(h.peak_memory_bytes) AS peak_memory,
+    pg_size_pretty(h.peak_disk_bytes) AS peak_disk
+FROM mz_internal.mz_replica_hydration_history AS h
+JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
+WHERE rh.cluster_name = 'analytics'
+ORDER BY h.started_at DESC;
+```
+
+```none
+ replica | size  |          started_at           | hydration_time | object_count | peak_memory | peak_disk
+---------+-------+-------------------------------+----------------+--------------+-------------+-----------
+ r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 11 GB       | 2438 MB
+(1 row)
+```
+
+Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) to find the size that fits your workload. This lets you create a cluster at a generous size, hydrate once, and then size down with confidence. The new [cluster sizing guide](/clusters/sizing/) walks through that workflow, and [Optimize hydration requirements](/clusters/optimize-hydration-requirements/) covers what to do when a single object accounts for most of the peak.
+
+### Improvements {#v26.42-improvements}
+- **Vended credentials for Iceberg sink to GCP BigLake**: `CREATE CONNECTION ... TO ICEBERG CATALOG` now accepts a storage provider option, and `ACCESS DELEGATION` is allowed on GCP BigLake catalog connections, so an Iceberg catalog backed by Google Cloud Storage can authenticate with credentials the catalog vends. For more information, see [GCP BigLake](/export-data/iceberg-gcp/).
+- **IANA time zone data updated to 2026c**: Time zone rules now follow IANA tzdata 2026c, covering Morocco's move to permanent +00 on 2026-09-20, Alberta's permanent -06, British Columbia's permanent -07, and Moldova's EU transition instants since 2022.
+- **Pod priority classes in Self-Managed deployments**: Operators can set `environmentd.priorityClassName` and `clusterd.priorityClassName` in the Helm chart, so a higher-priority pod scheduled onto a full node no longer evicts Materialize ahead of other workloads.
+- **Composite types in `mz-deploy` projects**: `mz-deploy` records the full catalog type for composite types such as records in `types.lock`, so views that read a dependency's record-typed column type check offline instead of resolving to a pseudo type.
+
+### Guides {#v26.42-guides}
+- [Size clusters for hydration](/clusters/sizing/)
+- [Optimize hydration requirements](/clusters/optimize-hydration-requirements/)
+- [Autoscaling for hydration](/clusters/autoscaling/)
+- [Troubleshoot anomalies in memory usage](/clusters/troubleshoot-clusters/memory-spike/)
+- [Troubleshoot anomalies in CPU usage](/clusters/troubleshoot-clusters/cpu-troubleshooting/)
+
+### Bug Fixes {#v26.42-bug-fixes}
+- Fixed `CREATE TABLE ... FROM SOURCE` and `ALTER SOURCE` connecting to a source's upstream system before checking the caller's privileges on that source, which let a role holding no privilege on the source read upstream schema, table, and column names out of the resulting purification errors; `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source plus schema `USAGE`, and `ALTER SOURCE` requires ownership.
+- Fixed `ALTER CLUSTER` resource-limit enforcement during graceful reconfiguration, which predicted a reshape's peak replica overlap instead of checking the replica set actually being created; a target that does not fit now leaves the existing replicas serving and reports `INSUFFICIENT_RESOURCES` with a hint.
+- Fixed `ALTER CLUSTER ... WITH (WAIT UNTIL READY (..., ON TIMEOUT = 'COMMIT'))` needing room for the old and new replica sets at once when its deadline passed; the cut-over is now a single transaction that creates the target and retires the previous replicas together, so only the net change has to fit.
+- Fixed cluster- and replica-scoped configuration not reaching the replacement replicas the cluster controller creates during a reconfiguration, so those replicas now apply the overrides before their first render.
+- Fixed `mz_object_dependencies` omitting a sink's dependency on a user-defined type that the sink references through a `DOC ON TYPE` or `DOC ON COLUMN` option.
+- Fixed `mz-deploy compile` rejecting valid SQL with `precision for type numeric must be between 1 and 39` when a view aggregated a `bigint` or `uint8` column with `sum()` and another view in the project read it, and fixed declared `numeric(p, s)` columns being stubbed with the scale in the precision position.
+
 ## v26.41.0
 *Released to Materialize Cloud: 2026-09-10* <br>
 *Released to Materialize Self-Managed: 2026-09-11* <br>

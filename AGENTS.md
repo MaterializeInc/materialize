@@ -1,5 +1,8 @@
 # Materialize
 
+`console/` is the web Console. It was moved in from the standalone
+`MaterializeInc/console` repository, which is now archived and stale.
+
 ## Dependency management
 
 ### Workspace dependencies

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: 41e1741ca3
+revision: 05fa578c92
 ---
 
 # mz-sql::session::vars
@@ -17,6 +17,7 @@ All dyncfg-backed system variables are internal-only and not reachable via `ALTE
 The public `check_transaction_isolation_feature_flag(name, input, system_vars)` function enforces feature-flag gating for `transaction_isolation` levels that require a flag (`strong session serializable` requires `ENABLE_SESSION_TIMELINES`); it returns `Ok(())` for all other variables and for unparseable values. This function is shared across all assignment paths (`SET`, `SET TRANSACTION`, `ALTER ROLE ... SET`, connection options) so the gate cannot be bypassed by choosing a different syntax or letter case.
 Adding a new variant to `VarInput` or `OwnedVarInput` requires extending the `mz_catalog.mz_role_parameters` materialized view in `src/catalog/src/builtin/mz_catalog.rs`, which discriminates on the externally-tagged JSON shape of `OwnedVarInput` to format `parameter_value`.
 `SystemVars::enable_extended_protocol_implicit_transaction` returns the value of the `enable_extended_protocol_implicit_transaction` system variable.
+`SystemVars::disabled_metric_sinks` returns the list of curated metric sink names that are disabled, derived from the `disabled_metric_sinks` system variable.
 `is_timestamp_oracle_config_var` recognizes `mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT` in addition to the CRDB keepalive variables.
 `SessionVars::reset_all` durably resets all variables to their defaults immediately without staging a transaction; used by `DISCARD ALL`, which ends the transaction before resetting. System/role/startup defaults are preserved.
 `SystemVars` supports a callback mechanism via `register_callback` and `notify_all_callbacks`; callbacks are idempotent reads of the current `SystemVars` state and fire at catalog commit boundaries when a system var was touched. A callback on a `feature_flags!` var does not observe the transient flip that `CatalogState::with_enable_for_item_parsing` performs during item parsing.

@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use differential_dataflow::lattice::Lattice;
 use futures::future::{BoxFuture, FutureExt};
 use mz_catalog::memory::objects::{CatalogItem, TableDataSource};
 use mz_compute_client::protocol::command::Peek;
@@ -269,22 +270,73 @@ impl QueryClient {
         ComputeInstanceSnapshot::new_from_parts(cluster, ids)
     }
 
-    /// Whether the current query connection observed actual hydration of every
-    /// expected collection on this replica. Missing observations are not readiness.
-    pub(crate) fn collections_hydrated_on_replica(
+    /// Whether this replica has hydrated every expected collection and caught up
+    /// to the hosting reference replicas within the optional output-lag allowance.
+    /// Missing observations are not readiness.
+    pub(crate) fn collections_ready_on_replica(
         &self,
+        catalog: &Catalog,
         cluster: ComputeInstanceId,
         replica: ReplicaId,
         expected: &BTreeSet<GlobalId>,
+        allowed_lag: Option<Timestamp>,
+        reference: &BTreeSet<ReplicaId>,
     ) -> bool {
+        use mz_compute_client::controller::CollectionReadiness;
+
+        let references: Vec<_> = reference
+            .iter()
+            .map(|id| {
+                let frontiers = self
+                    .replica_clients(cluster, Some(*id))
+                    .into_iter()
+                    .next()
+                    .and_then(|client| client.frontiers().ok());
+                (*id, frontiers)
+            })
+            .collect();
         self.replica_clients(cluster, Some(replica))
             .iter()
             .any(|client| {
                 client.frontiers().is_ok_and(|frontiers| {
                     expected.iter().all(|id| {
-                        frontiers
-                            .get(id)
-                            .is_some_and(|frontiers| frontiers.hydrated == Some(true))
+                        let Some(target) = frontiers.get(id) else {
+                            return false;
+                        };
+                        let mut reference_upper = Antichain::from_elem(Timestamp::MIN);
+                        let mut has_reference = false;
+                        if allowed_lag.is_some() {
+                            for (replica_id, frontiers) in &references {
+                                if catalog.try_get_entry_by_global_id(id).is_some_and(|entry| {
+                                    match entry.item() {
+                                        CatalogItem::MaterializedView(mv) => mv
+                                            .target_replica
+                                            .is_some_and(|target| target != *replica_id),
+                                        _ => false,
+                                    }
+                                }) {
+                                    continue;
+                                }
+                                let Some(output) = frontiers
+                                    .as_ref()
+                                    .and_then(|frontiers| frontiers.get(id))
+                                    .and_then(|frontiers| frontiers.output_frontier.as_ref())
+                                else {
+                                    return false;
+                                };
+                                has_reference = true;
+                                reference_upper.join_assign(output);
+                            }
+                        }
+                        let lag = allowed_lag.filter(|_| has_reference);
+                        if lag.is_some() && target.output_frontier.is_none() {
+                            return false;
+                        }
+                        CollectionReadiness::classify(
+                            target.hydrated == Some(true),
+                            target.output_frontier.as_ref().unwrap_or(&reference_upper),
+                            lag.map(|lag| (&reference_upper, lag)),
+                        ) == CollectionReadiness::Ready
                     })
                 })
             })

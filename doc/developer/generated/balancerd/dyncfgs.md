@@ -1,10 +1,10 @@
 ---
 source: src/balancerd/src/dyncfgs.rs
-revision: 5a4a36c4fd
+revision: a8d6814f12
 ---
 
 # balancerd::dyncfgs
 
-Declares all dynamic configuration parameters (`Config` constants) for the balancer, prefixed `balancerd_`, including SIGTERM wait durations, proxy-protocol header injection, and logging/OpenTelemetry/Sentry filter strings.
+Declares all dynamic configuration parameters (`Config` constants) for the balancer, prefixed `balancerd_`, including SIGTERM wait durations, proxy-protocol header injection, maximum connection count (`MAX_CONNECTIONS`), and logging/OpenTelemetry/Sentry filter strings.
 
-`all_dyncfgs` registers every constant into a `ConfigSet`; `set_defaults` applies CLI-supplied overrides; `tracing_config` extracts a `TracingParameters` value from the live config set; and `has_tracing_config_update` detects tracing-related changes in a `ConfigUpdates` batch so the balancer can re-apply tracing settings on the fly.
+`all_dyncfgs` registers every constant into a `ConfigSet`; `set_defaults` applies CLI-supplied overrides for `INJECT_PROXY_PROTOCOL_HEADER_HTTP` and `MAX_CONNECTIONS`; `tracing_config` extracts a `TracingParameters` value from the live config set; and `has_tracing_config_update` detects tracing-related changes in a `ConfigUpdates` batch so the balancer can re-apply tracing settings on the fly.

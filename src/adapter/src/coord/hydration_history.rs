@@ -9,7 +9,7 @@
 
 //! Durable history collection for completed object and replica hydration episodes.
 //!
-//! One sweep visits a single user replica, installs a replica-targeted
+//! One sweep visits a single replica, installs a replica-targeted
 //! subscribe that diffs that replica's live hydration timestamps against the
 //! durable history tables, and appends what is missing through the timestamped
 //! OCC write path. Including each history table in its read expression is what
@@ -68,8 +68,8 @@ const SCHEDULE_RECHECK_CAP: Duration = Duration::from_secs(5);
 
 /// How often a disabled collector rechecks whether it was enabled.
 ///
-/// This is the cadence of every environment in the default configuration, so it
-/// is much coarser than the enabled one: nothing is waiting on it.
+/// A disabled collector has no pending collection work, so this can be much
+/// coarser than the enabled scheduler's recheck cadence.
 const DISABLED_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Bound on one replica-targeted mutation.
@@ -187,10 +187,8 @@ impl Coordinator {
         };
         // Builtin tables are not writable in read-only mode, and a disabled
         // collector must do no background work at all. Retention is part of the
-        // sweep, so disabling collection also suspends it. That is deliberate:
-        // the table can only be non-empty if collection ran at some point, and
-        // the alternative is an always-on subscribe in the default (disabled)
-        // production configuration.
+        // sweep, so disabling collection also suspends it once any in-flight
+        // sweep finishes. This makes zero a break-glass setting for the subsystem.
         if collection_interval.is_zero() || self.read_only_controllers {
             self.schedule_hydration_history_collection();
             return;
@@ -198,7 +196,8 @@ impl Coordinator {
 
         let replicas = self
             .catalog()
-            .user_cluster_replicas()
+            .clusters()
+            .flat_map(|cluster| cluster.replicas())
             .filter(|replica| replica.config.compute.logging.enabled())
             .filter(|replica| {
                 if let Some(client) = self.query_client.as_ref() {
@@ -305,7 +304,7 @@ impl Coordinator {
     }
 }
 
-/// A user replica eligible for one collection step.
+/// A replica eligible for one collection step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplicaTarget {
     cluster_id: ClusterId,
@@ -521,11 +520,10 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             ORDER BY e.started_at DESC
             LIMIT 1
         ),
-        -- Process-lifetime resource high-water marks, and how many processes
-        -- have reported them.
+        -- Process-lifetime resource high-water marks for each process.
         resources AS (
             SELECT
-                count(DISTINCT process_id) AS process_count,
+                process_id,
                 max(value) FILTER (
                     WHERE source = 'cgroup' AND metric = 'memory_peak'
                 ) AS peak_memory_bytes,
@@ -538,8 +536,9 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                     )
                 ) AS peak_disk_bytes
             FROM mz_introspection.mz_cluster_replica_resource_usage
+            GROUP BY process_id
         ),
-        -- The history row to write, held back until every configured process
+        -- The history rows to write, held back until every configured process
         -- has reported resource usage and dropped once the episode has aged
         -- past the retention cutoff.
         candidate AS (
@@ -551,10 +550,11 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                 e.object_count,
                 r.peak_memory_bytes,
                 r.peak_disk_bytes,
-                'hydrated'::text AS status
+                'hydrated'::text AS status,
+                r.process_id
             FROM episode AS e
             CROSS JOIN resources AS r
-            WHERE r.process_count = {process_count}::uint8
+            WHERE (SELECT count(*) FROM resources) = {process_count}::uint8
               AND e.finished_at >= TIMESTAMPTZ '{cutoff}'
         )
         -- Skip episodes the history already covers: a recorded row finishing
@@ -599,7 +599,7 @@ fn replica_retention_sql(cutoff: &str) -> String {
         "SELECT * FROM (
             SELECT
                 replica_id, cluster_id, started_at, finished_at, object_count,
-                peak_memory_bytes, peak_disk_bytes, status
+                peak_memory_bytes, peak_disk_bytes, status, process_id
             FROM mz_internal.mz_replica_hydration_history
             WHERE finished_at < TIMESTAMPTZ '{cutoff}'
             ORDER BY finished_at
@@ -1004,7 +1004,10 @@ mod tests {
             normalized_sql.contains("ORDER BY e.started_at DESC LIMIT 1"),
             "{sql}"
         );
-        assert!(sql.contains("r.process_count = 3::uint8"), "{sql}");
+        assert!(
+            sql.contains("(SELECT count(*) FROM resources) = 3::uint8"),
+            "{sql}"
+        );
         assert!(sql.contains("WHERE t.export_id NOT LIKE 't%'"), "{sql}");
         assert!(!sql.contains("WHERE t.export_id LIKE 'u%'"), "{sql}");
         assert!(!sql.contains("mz_object_global_ids"), "{sql}");

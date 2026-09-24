@@ -55,7 +55,6 @@ impl Harness {
             registry,
             1,
             Arc::new(PeekPermits::new(1)),
-            None,
         );
         let worker = TimelyWorker::new(
             WorkerConfig::default(),

@@ -368,12 +368,10 @@ fn test_cancel_long_running_query() {
 fn test_cancellation_cancels_dataflows(query: &str) {
     // Query that returns how many dataflows are currently installed.
     // Ignores introspection subscribe dataflows.
-    // Ignores storage operators, whose IDs are offset by STORAGE_ID_OFFSET (1 << 48).
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%' \
-        AND id < 281474976710656";
+        WHERE name NOT LIKE '%introspection-subscribe%'";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -450,12 +448,10 @@ fn test_cancel_insert_select() {
 fn test_closing_connection_cancels_dataflows(query: String) {
     // Query that returns how many dataflows are currently installed.
     // Ignores introspection subscribe dataflows.
-    // Ignores storage operators, whose IDs are offset by STORAGE_ID_OFFSET (1 << 48).
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%' \
-        AND id < 281474976710656";
+        WHERE name NOT LIKE '%introspection-subscribe%'";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
