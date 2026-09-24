@@ -1314,3 +1314,14 @@ The EXPLAIN matcher accepts both `ReadIndex` and fast-path `Indexed` rendering.
 Syntax, Black, Ruff and whitespace checks pass. Host memory pressure delayed
 startup, but the workflow's proof deadlines and assertions were unchanged.
 This closes the native runtime proof, not the remaining CI regressions.
+
+### 2026-09-14: Replacement tests follow asynchronous application semantics
+
+Replacement application is not linearizable at the dataflow level. Queries may
+return old data after ALTER returns, even under strict serializable isolation,
+as documented in `test/testdrive/replacement-materialized-views.td` and the test
+migration in a67e138b92 (#35091). The observed old value followed by convergence
+does not demonstrate a production correctness defect. The expression-cache tests
+use bounded eventual-output checks while retaining dependency-drop, cache-disabled
+application and restart coverage. No enacted-catalog observation or synchronous
+APPLY completion contract is added. Failure to converge or recover remains a bug.

@@ -4615,6 +4615,20 @@ fn create_replacement_fixture(client: &mut postgres::Client) {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
+fn wait_for_replacement_output(client: &mut postgres::Client) {
+    // Replacement application is asynchronous in the dataflow layer, even
+    // under strict serializable isolation.
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+            let value = row.get::<_, i32>(0);
+            if value == 2 { Ok(()) } else { Err(value) }
+        })
+        .expect("replacement must converge to 2");
+}
+
 // Applying a materialized view replacement changes the definition behind the
 // target's retained GlobalIds (see `mz_catalog::expr_cache::ExpressionCache::open`).
 // If the next bootstrap installs the expressions cached before the apply, and
@@ -4644,15 +4658,13 @@ fn test_replacement_materialized_view_invalidates_expression_cache() {
             .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
             .unwrap();
         client.batch_execute("DROP VIEW v1").unwrap();
-        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
-        assert_eq!(row.get::<_, i32>(0), 2, "pre-restart");
+        wait_for_replacement_output(&mut client);
     }
 
     {
         let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
-        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
-        assert_eq!(row.get::<_, i32>(0), 2);
+        wait_for_replacement_output(&mut client);
     }
 }
 
@@ -4696,15 +4708,13 @@ fn test_replacement_materialized_view_stale_expression_cache_entry_dropped_on_op
             .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
             .unwrap();
         client.batch_execute("DROP VIEW v1").unwrap();
-        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
-        assert_eq!(row.get::<_, i32>(0), 2, "pre-restart");
+        wait_for_replacement_output(&mut client);
     }
 
     {
         let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
-        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
-        assert_eq!(row.get::<_, i32>(0), 2);
+        wait_for_replacement_output(&mut client);
     }
 }
 
