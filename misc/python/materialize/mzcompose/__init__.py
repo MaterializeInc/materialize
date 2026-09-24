@@ -50,10 +50,12 @@ DEFAULT_MZ_VOLUMES = [
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
 ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
-    # Benchmarks measure the intended production configuration. For hedged
-    # blob gets that is the planned enablement state (on, at production
-    # tuning), not the CI-wide coverage tuning below, whose short delay
-    # would add duplicate fetches to any measured get slower than it.
+    # Benchmarks measure the production configuration. For hedged blob gets
+    # that is on at the production tuning, not the CI-wide coverage tuning
+    # below, whose short delay would add duplicate fetches to any measured
+    # get slower than it. `enabled` is set explicitly even though it is the
+    # default now, because benchmarks compare against older releases whose
+    # default is off.
     "persist_blob_hedged_get_enabled": "true",
     "persist_blob_hedged_get_delay": "2s",
     "persist_blob_hedged_get_budget_ratio": "0.01",
