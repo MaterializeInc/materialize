@@ -296,8 +296,13 @@ async fn run_inner(conflict: Conflict) {
             Err(error) => panic!("peer conflict commit: {error}"),
         }
     };
+    let commit_started = std::time::Instant::now();
     release_tx.send(()).expect("release prepared commit");
     let result = drop_index.await;
+    eprintln!(
+        "prepared rewrite DROP completed after {:?}",
+        commit_started.elapsed()
+    );
     drop(observer);
     assert!(
         !rendezvous_failed.load(Ordering::SeqCst),
@@ -372,12 +377,20 @@ async fn run_inner(conflict: Conflict) {
         }
         break;
     }
+    eprintln!(
+        "prepared rewrite durable outcome checked after {:?}",
+        commit_started.elapsed()
+    );
     if matches!(conflict, Conflict::Heartbeat) {
         let total: i64 = query_one(&client, sql!("SELECT total FROM rewrite_mv"), &[])
             .await
             .unwrap()
             .get(0);
         assert_eq!(total, 10);
+        eprintln!(
+            "prepared rewrite first read completed after {:?}",
+            commit_started.elapsed()
+        );
         batch_execute(&client, sql!("INSERT INTO rewrite_input VALUES (5)"))
             .await
             .unwrap();
