@@ -103,7 +103,8 @@ Monotone functions map ranges to ranges: given a range of possible inputs, the r
 
 ### `is_infinity_monotone`
 
-Whether `is_monotone`'s endpoint-sampling guarantee still holds when an operand may be infinite.
+Whether `is_monotone`'s endpoint-sampling guarantee still holds when an operand may be infinite, such as a floating-point `inf`.
+Multiplication and division set it to `false`, because `0 * inf` and `inf / inf` produce results that the range endpoints do not bound.
 
 * **Type:** boolean expression
 * **Default:** `true`

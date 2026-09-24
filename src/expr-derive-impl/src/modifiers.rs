@@ -97,15 +97,6 @@ impl Modifiers {
     }
 }
 
-#[cfg(test)]
-impl Modifiers {
-    /// Parses modifiers from attribute tokens. Test helper for `crate::generate`.
-    pub(crate) fn from_tokens(tokens: TokenStream) -> darling::Result<Self> {
-        let args = darling::ast::NestedMeta::parse_meta_list(tokens)?;
-        <Self as darling::FromMeta>::from_list(&args)
-    }
-}
-
 /// Errors if `mods` carries a method-producing modifier `shape` does not accept.
 pub(crate) fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
     for (modifier, _) in mods.iter() {

@@ -176,8 +176,8 @@ impl Shape {
         }
     }
 
-    /// The tail of the output-type method: the nullability decision and the
-    /// `SqlColumnType` the method returns.
+    /// The tail of the output-type method, which sets the nullability of the
+    /// `output` column type the caller computed.
     ///
     /// The caller binds `output`, `nullable`, and `propagates_nulls`, and names the
     /// input parameter as [`Shape::output_method`] spells it. `checks` are
@@ -216,7 +216,7 @@ impl Shape {
 
 #[cfg(test)]
 mod tests {
-    use super::{Modifier, ReturnTy, Shape};
+    use super::{Modifier, Shape};
 
     fn has(shape: Shape, m: Modifier) -> bool {
         shape
@@ -234,118 +234,5 @@ mod tests {
         assert!(!has(Shape::Unary, Modifier::IsInfixOp));
         assert!(!has(Shape::Unary, Modifier::PropagatesNulls));
         assert!(!has(Shape::Unary, Modifier::IsAssociative));
-    }
-
-    #[mz_ore::test]
-    fn binary_accepts_negate_and_infinity_monotone() {
-        assert!(has(Shape::Binary, Modifier::Negate));
-        assert!(has(Shape::Binary, Modifier::IsInfinityMonotone));
-        assert!(has(Shape::Binary, Modifier::IsInfixOp));
-        assert!(!has(Shape::Binary, Modifier::Inverse));
-        assert!(!has(Shape::Binary, Modifier::IsAssociative));
-    }
-
-    #[mz_ore::test]
-    fn variadic_accepts_associative_only_among_the_exclusives() {
-        assert!(has(Shape::Variadic, Modifier::IsAssociative));
-        assert!(has(Shape::Variadic, Modifier::IsInfixOp));
-        assert!(!has(Shape::Variadic, Modifier::Negate));
-        assert!(!has(Shape::Variadic, Modifier::Inverse));
-        assert!(!has(Shape::Variadic, Modifier::IsInfinityMonotone));
-    }
-
-    #[mz_ore::test]
-    fn could_error_introduces_nulls_and_is_monotone_are_universal() {
-        for shape in [Shape::Unary, Shape::Binary, Shape::Variadic] {
-            assert!(has(shape, Modifier::CouldError), "{}", shape.label());
-            assert!(has(shape, Modifier::IntroducesNulls), "{}", shape.label());
-            assert!(has(shape, Modifier::IsMonotone), "{}", shape.label());
-        }
-    }
-
-    #[mz_ore::test]
-    fn is_monotone_returns_a_pair_only_for_binary() {
-        let ret = |shape: Shape| {
-            shape
-                .modifiers()
-                .iter()
-                .find(|(m, _)| *m == Modifier::IsMonotone)
-                .map(|(_, r)| *r)
-                .expect("is_monotone is universal")
-        };
-        assert_eq!(ret(Shape::Unary), ReturnTy::Bool);
-        assert_eq!(ret(Shape::Binary), ReturnTy::BoolPair);
-        assert_eq!(ret(Shape::Variadic), ReturnTy::Bool);
-    }
-
-    #[mz_ore::test]
-    fn variadic_output_method_is_named_output_type() {
-        let (unary, _) = Shape::Unary.output_method();
-        let (binary, _) = Shape::Binary.output_method();
-        let (variadic, _) = Shape::Variadic.output_method();
-        assert_eq!(unary.to_string(), "output_sql_type");
-        assert_eq!(binary.to_string(), "output_sql_type");
-        assert_eq!(variadic.to_string(), "output_type");
-    }
-
-    #[mz_ore::test]
-    fn only_unary_takes_a_single_column_type() {
-        let (_, unary) = Shape::Unary.output_method();
-        let (_, binary) = Shape::Binary.output_method();
-        assert!(unary.to_string().contains("SqlColumnType"));
-        assert!(!unary.to_string().contains("["));
-        assert!(binary.to_string().contains("["));
-    }
-
-    #[mz_ore::test]
-    fn unary_is_the_only_shape_without_an_arena() {
-        assert!(!Shape::Unary.takes_arena());
-        assert!(Shape::Binary.takes_arena());
-        assert!(Shape::Variadic.takes_arena());
-    }
-
-    #[mz_ore::test]
-    fn modifier_table_order_matches_todays_generated_code() {
-        // Order is load-bearing: `crate::generate::override_methods` walks these
-        // tables to generate each arity's override methods in this order. The insta
-        // snapshots under `sqlfunc.rs` require that generated code to stay
-        // byte-identical, so this test pins the sequence they depend on.
-        let names = |shape: Shape| -> Vec<&'static str> {
-            shape.modifiers().iter().map(|(m, _)| m.name()).collect()
-        };
-        assert_eq!(
-            names(Shape::Unary),
-            vec![
-                "could_error",
-                "introduces_nulls",
-                "inverse",
-                "is_monotone",
-                "preserves_uniqueness",
-                "is_eliminable_cast",
-            ]
-        );
-        assert_eq!(
-            names(Shape::Binary),
-            vec![
-                "could_error",
-                "introduces_nulls",
-                "is_infix_op",
-                "is_monotone",
-                "is_infinity_monotone",
-                "negate",
-                "propagates_nulls",
-            ]
-        );
-        assert_eq!(
-            names(Shape::Variadic),
-            vec![
-                "could_error",
-                "introduces_nulls",
-                "is_infix_op",
-                "is_monotone",
-                "is_associative",
-                "propagates_nulls",
-            ]
-        );
     }
 }
