@@ -44,10 +44,12 @@ during planned maintenance.
 
 A smaller set of events breaks LSN continuity or destroys the replication slot.
 When this happens, Materialize cannot guarantee a correct, gap-free view of your
-data, so it puts the **entire source** into an error or permanently stalled
-state that requires **re-creating** the source. Upstream changes to an
-individual table's schema are handled separately, and do not error the entire
-source.
+data. Most of these put the **entire source** into an error or permanently
+stalled state. One, [restoring from a volume or disk
+snapshot](#restoring-from-a-volume-or-disk-snapshot), cannot be detected at all,
+so the source keeps running on diverged data. Every event in this section
+requires **re-creating** the source. Upstream changes to an individual table's
+schema are handled separately, and do not error the entire source.
 
 In each case below, the remediation is to drop and re-create the source:
 
@@ -62,8 +64,7 @@ CREATE TABLE table_1 FROM SOURCE mz_source (REFERENCE public.table_1);
 ```
 
 If you are using the legacy `CREATE SOURCE ... FOR TABLES` syntax, re-create the
-source with `FOR TABLES` or `FOR ALL TABLES` instead of adding tables
-separately.
+source with the same `FOR TABLES` list instead of adding tables separately.
 
 Because a re-created source snapshots from the current state of the upstream
 database, any changes it missed while it was in an error state are reflected in
@@ -98,6 +99,21 @@ JOIN mz_catalog.mz_sources s ON s.id = p.id;
 
 If your upstream fails over between replicas as part of routine maintenance, see
 [High-availability failovers](#high-availability-failovers).
+
+#### Restoring from a volume or disk snapshot
+
+Restoring the upstream data directory from a crash-consistent volume or disk
+snapshot rolls the database back, but preserves the timeline ID and the
+replication slot. Materialize cannot detect this kind of restore. The source
+keeps running without an error, but its contents diverge from upstream. This can
+surface later as incorrect results, or as negative-accumulation errors in
+queries such as `Non-positive multiplicity`.
+
+{{< warning >}}
+After any restore of this kind, drop and re-create the source even if it reports
+as `running`. Do not wait for the source to enter an error state, because it
+will not.
+{{< /warning >}}
 
 #### Promotion of a physical replica
 
@@ -145,6 +161,10 @@ For diagnosis steps, see [Slot
 overcompacted](/ingest-data/postgres/slot-overcompacted/). PostgreSQL refuses to
 drop a slot that is in use, so this generally happens only while the source is
 paused or disconnected.
+
+Not every rewind is caught this way. A rewind that leaves the slot able to serve
+the LSN the source asks for, such as [restoring from a volume or disk
+snapshot](#restoring-from-a-volume-or-disk-snapshot), raises no error at all.
 
 #### Dropping the publication
 

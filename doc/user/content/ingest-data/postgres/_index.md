@@ -99,6 +99,7 @@ text and any required configuration.
 | The upstream database running out of disk space | Supported automatically, once space is freed. |
 | [High-availability failover](#high-availability-failovers) | Requires re-creating the source. On self-managed Materialize, a configuration change can avoid this. |
 | [Point-in-time restore](#point-in-time-restore) | Requires re-creating the source. |
+| [Restoring from a volume or disk snapshot](#restoring-from-a-volume-or-disk-snapshot) | Not detected. Requires re-creating the source even though it keeps running. |
 | [Promoting a physical replica](#promotion-of-a-physical-replica) | Requires re-creating the source. |
 | [Replication slot invalidated](#replication-slot-invalidated) by WAL retention | Requires re-creating the source. |
 | [Replication slot dropped or rewound](#replication-slot-dropped-or-rewound) | Requires re-creating the source. |
