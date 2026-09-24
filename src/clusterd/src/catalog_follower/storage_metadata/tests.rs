@@ -420,13 +420,16 @@ async fn missing_wal_identity_remains_pending() {
     let (_, table) = create_table(&mut writer, "no_wal").await;
     let shard = writer.state().storage_metadata().collection_metadata[&table];
     register(&persist, shard, &RelationDesc::empty()).await;
-    let result = resolve(
+    // Catalog bootstrap supplies a WAL identity. Exercise missing bootstrap
+    // context at the resolver's explicit identity argument.
+    let result = super::resolve(
         &writer,
         &BTreeSet::from([table]),
         &store,
         BUILD,
         &persist,
         &PersistLocation::new_in_mem(),
+        None,
     )
     .await
     .expect("WAL pending");
