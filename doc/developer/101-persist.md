@@ -90,6 +90,25 @@ _On each replica:_
 
 _Fun fact x2:_ The source exports' Persist sink implementation is derived from the materialized view sink, with the self-correction step removed.
 ### Tables, `txn-wal`
+In each environment, the storage controller batches updates from all tables (user tables and system tables) into a group commit, timestamped by the timestamp oracle, and appends it to a `txn-wal` shard.
+
+For every table with data changes, the storage controller then copies from the group commit in `txn-wal` into the table's shard (and deletes that table's commit from `txn-wal` to mark it as "done").
+
+If we didn't group-commit all tables to `txn-wal`:
+- We couldn't support multi-table transactions.
+- We'd still tick each table separately. i.e. Even if a table didn't change, we'd still need to append to its shard every tick. Now, only `txn-wal` needs to tick.
+
+#### Migrating system tables during 0dt upgrades
+The new generation starts out read-only. The new storage controller follows `txn-wal` but cannot write to it.
+
+For any system tables with schema changes that cannot be migrated in place, the new coordinator creates new table shards and writes their IDs to the migration shard.
+The new storage controller writes the catalog state to the new table shards directly, without passing through `txn-wal` first.
+
+On promotion, the new generation restarts, no longer in read-only mode:
+- The new catalog performs its migration, with the new table shard IDs from the migration shard.
+- The new storage controller takes over `txn-wal` and registers the new table shards there.
+- The coordinator reads system tables from their shards and, via `txn-wal`, replaces their rows with the current state from the catalog.
+
 ### More Writers
 TODO
 These other components write to Persist but are not drivers of its design:
