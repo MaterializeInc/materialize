@@ -254,7 +254,7 @@ module "self_signed_cluster_issuer" {
 
 # 5. Setup dedicated database instance for Materialize
 module "database" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/database?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/database?ref=v13.10.0"
 
   name_prefix               = var.name_prefix
   postgres_version          = "15"
