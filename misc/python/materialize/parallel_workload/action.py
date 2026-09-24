@@ -5072,9 +5072,11 @@ class ZeroDowntimeDeployAction(Action):
             self.composition.await_mz_deployment_status(
                 DeploymentStatus.READY_TO_PROMOTE, mz_service, timeout=1800
             )
-            self.composition.promote_mz(mz_service)
-            self.composition.await_mz_deployment_status(
-                DeploymentStatus.IS_LEADER, mz_service
+            self.composition.promote_mz(
+                mz_service,
+                retire=(
+                    "materialized2" if mz_service == "materialized" else "materialized"
+                ),
             )
 
         time.sleep(self.rng.uniform(60, 120))
