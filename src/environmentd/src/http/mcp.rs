@@ -133,7 +133,7 @@ enum McpMethod {
     #[serde(rename = "tools/list")]
     ToolsList(#[allow(dead_code)] Option<serde_json::Value>),
     #[serde(rename = "tools/call")]
-    ToolsCall(ToolsCallParams),
+    ToolsCall(#[serde(deserialize_with = "deserialize_tools_call")] ToolsCallParams),
     /// Keepalive, and the post-initialize acknowledgement. Both are named so
     /// their `params` deserialize; `#[serde(other)]` must be a unit variant, so
     /// anything falling through to `Unknown` with `params` still fails the body.
@@ -197,6 +197,19 @@ enum ToolsCallParams {
     Query(QueryParams),
     // Developer endpoint tools
     QuerySystemCatalog(QuerySystemCatalogParams),
+}
+
+/// `arguments` is optional in the MCP spec, but adjacent tagging requires the
+/// content key, so a call that omits it is given an empty object.
+fn deserialize_tools_call<'de, D>(deserializer: D) -> Result<ToolsCallParams, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut params = serde_json::Value::deserialize(deserializer)?;
+    if let serde_json::Value::Object(fields) = &mut params {
+        fields.entry("arguments").or_insert_with(|| json!({}));
+    }
+    serde_json::from_value(params).map_err(serde::de::Error::custom)
 }
 
 impl std::fmt::Display for ToolsCallParams {
@@ -2351,6 +2364,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[mz_ore::test]
+    fn test_tools_call_arguments_optional() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_data_products"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_data_products","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_data_products","arguments":null}}"#,
+        ] {
+            let req: McpRequest = serde_json::from_str(body)
+                .unwrap_or_else(|e| panic!("must deserialize: {body}: {e}"));
+            assert!(
+                matches!(
+                    req.method,
+                    McpMethod::ToolsCall(ToolsCallParams::GetDataProducts(()))
+                ),
+                "for {body}"
+            );
+        }
+
+        // A tool that needs arguments still fails, now on the missing field itself.
+        let err = serde_json::from_str::<McpRequest>(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_system_catalog"}}"#,
+        )
+        .expect_err("query_system_catalog requires sql_query");
+        assert!(err.to_string().contains("sql_query"), "{err}");
     }
 
     // ── Response size cap tests ────────────────────────────────────────
