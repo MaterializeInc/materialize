@@ -20,7 +20,7 @@ The following tutorial uses a local [`kind`](https://kind.sigs.k8s.io/) cluster
 and deploys the following components:
 
 - Materialize Operator using Helm into your local `kind` cluster.
-- MinIO object storage as the blob storage for your Materialize.
+- RustFS object storage as the blob storage for your Materialize.
 - PostgreSQL database as the metadata database for your Materialize.
 - Materialize as a containerized application into your local `kind` cluster.
 
@@ -126,16 +126,16 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
    {{% self-managed/versions/curl-sample-files-local-install %}}
 
-1. Add your license key:
+1. Add your license key and point Materialize at RustFS:
 
    a. To get your license key:
 
       {{% yaml-table data="self_managed/license_key" %}}
 
-   b. Edit `sample-materialize.yaml` to add your license key to the
-   `license_key` field in the backend secret.
+   b. Edit the backend secret in `sample-materialize.yaml`: add your license
+   key to the `license_key` field, and set `persist_backend_url` to use RustFS.
 
-   ```yaml {hl_lines="10"}
+   ```yaml {hl_lines="9-10"}
    ---
    apiVersion: v1
    kind: Secret
@@ -144,7 +144,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    namespace: materialize-environment
    stringData:
      metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
-     persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+     persist_backend_url: "s3://rustfsadmin:rustfsadmin@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Frustfs.materialize.svc.cluster.local%3A9000&region=us-east-1"
      license_key: "<enter your license key here>"
    ---
    ```
@@ -176,19 +176,23 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
       ```none
       NAME                                           READY   STATUS    RESTARTS   AGE
-      pod/my-materialize-operator-6c4c7d6fc9-hbzvr   1/1     Running   0          16s
+      pod/my-materialize-operator-6c9d55567f-ldmd7   1/1     Running   0          4s
+      pod/my-materialize-operator-6c9d55567f-svwks   1/1     Running   0          4s
+
+      NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+      service/my-materialize-operator   ClusterIP   10.96.231.91   <none>        8001/TCP   4s
 
       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
-      deployment.apps/my-materialize-operator   1/1     1            1           16s
+      deployment.apps/my-materialize-operator   2/2     2            2           4s
 
-      NAME                                                 DESIRED   CURRENT         READY   AGE
-      replicaset.apps/my-materialize-operator-6c4c7d6fc9   1         1               1       16s
+      NAME                                                 DESIRED   CURRENT   READY   AGE
+      replicaset.apps/my-materialize-operator-6c9d55567f   2         2         2       4s
       ```
 
       If you run into an error during deployment, refer to the
       [Troubleshooting](/installation/troubleshooting) guide.
 
-1. Install PostgreSQL and MinIO.
+1. Install PostgreSQL and RustFS.
 
     1. Use the `sample-postgres.yaml` file to install PostgreSQL as the
        metadata database:
@@ -197,10 +201,10 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
         kubectl apply -f sample-postgres.yaml
         ```
 
-    1. Use the `sample-minio.yaml` file to install MinIO as the blob storage:
+    1. Use the `sample-rustfs.yaml` file to install RustFS as the blob storage:
 
         ```shell
-        kubectl apply -f sample-minio.yaml
+        kubectl apply -f sample-rustfs.yaml
         ```
 
     1. Verify the installation and check the status:
@@ -212,24 +216,30 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
        Wait for the components to be ready and in the `Running` state:
 
        ```none
-       NAME                                           READY   STATUS     RESTARTS   AGE
-       pod/minio-777db75dd4-zcl89                     1/1     Running    0          84s
-       pod/my-materialize-operator-6c4c7d6fc9-hbzvr   1/1     Running    0          107s
-       pod/postgres-55fbcd88bf-b4kdv                  1/1     Running    0          86s
+       NAME                                           READY   STATUS      RESTARTS   AGE
+       pod/my-materialize-operator-6c9d55567f-ldmd7   1/1     Running     0          28s
+       pod/my-materialize-operator-6c9d55567f-svwks   1/1     Running     0          28s
+       pod/postgres-979c9b755-fs4hs                   1/1     Running     0          24s
+       pod/rustfs-58c754866f-hlgwd                    1/1     Running     0          24s
+       pod/rustfs-setup-2x7cj                         0/1     Completed   0          24s
 
-       NAME               TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
-       service/minio      ClusterIP   10.96.51.9     <none>        9000/TCP   84s
-       service/postgres   ClusterIP   10.96.19.166   <none>        5432/TCP   86s
+       NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+       service/my-materialize-operator   ClusterIP   10.96.231.91   <none>        8001/TCP   28s
+       service/postgres                  ClusterIP   10.96.72.156   <none>        5432/TCP   24s
+       service/rustfs                    ClusterIP   10.96.26.19    <none>        9000/TCP   24s
 
-       NAME                                      READY   UP-TO-DATE    AVAILABLE   AGE
-       deployment.apps/minio                     1/1     1             1           84s
-       deployment.apps/my-materialize-operator   1/1     1             1           107s
-       deployment.apps/postgres                  1/1     1             1           86s
+       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+       deployment.apps/my-materialize-operator   2/2     2            2           28s
+       deployment.apps/postgres                  1/1     1            1           24s
+       deployment.apps/rustfs                    1/1     1            1           24s
 
-       NAME                                                 DESIRED    CURRENT         READY   AGE
-       replicaset.apps/minio-777db75dd4                     1          1               1       84s
-       replicaset.apps/my-materialize-operator-6c4c7d6fc9   1          1               1       107s
-       replicaset.apps/postgres-55fbcd88bf                  1          1               1       86s
+       NAME                                                 DESIRED   CURRENT   READY   AGE
+       replicaset.apps/my-materialize-operator-6c9d55567f   2         2         2       28s
+       replicaset.apps/postgres-979c9b755                   1         1         1       24s
+       replicaset.apps/rustfs-58c754866f                    1         1         1       24s
+
+       NAME                     STATUS     COMPLETIONS   DURATION   AGE
+       job.batch/rustfs-setup   Complete   1/1           24s        24s
        ```
 
 1. Install the metrics service to the `kube-system` namespace.
@@ -321,34 +331,35 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
        ```none
        NAME                                             READY   STATUS    RESTARTS   AGE
-       pod/mz32bsnzerqo-balancerd-756b65959c-6q9db      1/1     Running   0                 12s
-       pod/mz32bsnzerqo-cluster-s2-replica-s1-gen-1-0   1/1     Running   0                 14s
-       pod/mz32bsnzerqo-cluster-u1-replica-u1-gen-1-0   1/1     Running   0                 14s
-       pod/mz32bsnzerqo-console-6b7c975fb9-jkm8l        1/1     Running   0          5s
-       pod/mz32bsnzerqo-console-6b7c975fb9-z8g8f        1/1     Running   0          5s
-       pod/mz32bsnzerqo-environmentd-1-0                1/1     Running   0                 19s
+       pod/mzeemp0ion69-balancerd-7c74d9775-2qrp9       1/1     Running   0          17s
+       pod/mzeemp0ion69-balancerd-7c74d9775-z4n4z       1/1     Running   0          17s
+       pod/mzeemp0ion69-cluster-s2-replica-s1-gen-1-0   1/1     Running   0          17s
+       pod/mzeemp0ion69-cluster-u1-replica-u1-gen-1-0   1/1     Running   0          17s
+       pod/mzeemp0ion69-console-85748c74cd-tfpkd        1/1     Running   0          5s
+       pod/mzeemp0ion69-console-85748c74cd-wzssw        1/1     Running   0          5s
+       pod/mzeemp0ion69-environmentd-1-0                1/1     Running   0          25s
 
-       NAME                                               TYPE        CLUSTER-IP          EXTERNAL-IP   PORT(S)                                        AGE
-       service/mz32bsnzerqo-balancerd                     ClusterIP   None                <none>        6876/TCP,6875/TCP                              12s
-       service/mz32bsnzerqo-cluster-s2-replica-s1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   14s
-       service/mz32bsnzerqo-cluster-u1-replica-u1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   14s
-       service/mz32bsnzerqo-console                       ClusterIP   None                <none>        8080/TCP                                       5s
-       service/mz32bsnzerqo-environmentd                  ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            12s
-       service/mz32bsnzerqo-environmentd-1                ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            19s
-       service/mz32bsnzerqo-persist-pubsub-1              ClusterIP   None                <none>        6879/TCP                                       19s
+       NAME                                               TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)                                        AGE
+       service/mzeemp0ion69-balancerd                     ClusterIP   None           <none>        6876/TCP,6875/TCP                              17s
+       service/mzeemp0ion69-cluster-s2-replica-s1-gen-1   ClusterIP   None           <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   17s
+       service/mzeemp0ion69-cluster-u1-replica-u1-gen-1   ClusterIP   None           <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   17s
+       service/mzeemp0ion69-console                       ClusterIP   None           <none>        8080/TCP                                       5s
+       service/mzeemp0ion69-environmentd                  ClusterIP   None           <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            17s
+       service/mzeemp0ion69-environmentd-1                ClusterIP   10.96.207.11   <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            25s
+       service/mzeemp0ion69-persist-pubsub-1              ClusterIP   None           <none>        6879/TCP                                       25s
 
        NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-       deployment.apps/mz32bsnzerqo-balancerd   1/1     1            1           12s
-       deployment.apps/mz32bsnzerqo-console     2/2     2            2           5s
+       deployment.apps/mzeemp0ion69-balancerd   2/2     2            2           17s
+       deployment.apps/mzeemp0ion69-console     2/2     2            2           5s
 
-       NAME                                                DESIRED   CURRENT   READY          AGE
-       replicaset.apps/mz32bsnzerqo-balancerd-756b65959c   1         1         1              12s
-       replicaset.apps/mz32bsnzerqo-console-6b7c975fb9     2         2         2              5s
+       NAME                                               DESIRED   CURRENT   READY   AGE
+       replicaset.apps/mzeemp0ion69-balancerd-7c74d9775   2         2         2       17s
+       replicaset.apps/mzeemp0ion69-console-85748c74cd    2         2         2       5s
 
        NAME                                                        READY   AGE
-       statefulset.apps/mz32bsnzerqo-cluster-s2-replica-s1-gen-1   1/1     14s
-       statefulset.apps/mz32bsnzerqo-cluster-u1-replica-u1-gen-1   1/1     14s
-       statefulset.apps/mz32bsnzerqo-environmentd-1                1/1     19s
+       statefulset.apps/mzeemp0ion69-cluster-s2-replica-s1-gen-1   1/1     17s
+       statefulset.apps/mzeemp0ion69-cluster-u1-replica-u1-gen-1   1/1     17s
+       statefulset.apps/mzeemp0ion69-environmentd-1                1/1     25s
        ```
 
        If you run into an error during deployment, refer to the
