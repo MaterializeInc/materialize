@@ -787,8 +787,11 @@ MINIO_IMAGE = _minio_image()
 PRIORITY_CLASS_NAME = "mz-test-priority"
 PRIORITY_CLASS_VALUE = 1000000000
 # Release in which environmentd learned
-# --orchestrator-kubernetes-priority-class-name.
-PRIORITY_CLASS_VERSION = "v26.42.0"
+# --orchestrator-kubernetes-priority-class-name. Must match `V26_42_0` in
+# src/orchestratord/src/controller/materialize/generation.rs: the operator
+# forwards the flag from 26.42.0-dev.0 on, so the gate has to name the -dev.0
+# prerelease or every 26.42.0 release candidate sorts below it.
+PRIORITY_CLASS_VERSION = "v26.42.0-dev.0"
 
 
 def assert_priority_class(pod: dict[str, Any], expected: str | None) -> None:

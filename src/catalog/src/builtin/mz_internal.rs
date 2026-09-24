@@ -34,7 +34,8 @@ use crate::memory::objects::DataSourceDesc;
 use super::{
     ANALYTICS_SELECT, BuiltinConnection, BuiltinIndex, BuiltinMaterializedView, BuiltinSource,
     BuiltinTable, BuiltinView, Cardinality, LinkProperties, MONITOR_REDACTED_SELECT,
-    MONITOR_SELECT, Ontology, OntologyLink, PUBLIC_SELECT, SUPPORT_SELECT,
+    MONITOR_SELECT, Ontology, OntologyLink, PUBLIC_SELECT, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    SUPPORT_SELECT,
 };
 
 pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -4151,36 +4152,89 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     }),
 });
 
-pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_object_global_ids",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_OBJECT_GLOBAL_IDS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("global_id", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the object. Corresponds to `mz_objects.id`.",
+pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_object_global_ids",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_OBJECT_GLOBAL_IDS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("global_id", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the object. Corresponds to `mz_objects.id`.",
+            ),
+            ("global_id", "The global ID of the object."),
+        ]),
+        sql: Box::leak(
+            format!(
+                "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL global_id
+) AS
+WITH
+    -- `Item` rows carry user items, temporary items, and runtime-alterable builtins
+    items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_id(data->'value'->'global_id') AS global_id,
+            data->'value'->'extra_versions' AS extra_versions
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Item'
+    ),
+    -- Create a one to many mapping between an object and its global IDs. Tables and
+    -- materialized views are the only objects with multiple global IDs.
+    item_versions AS (
+        SELECT i.id, mz_internal.parse_catalog_id(v.version->'global_id') AS global_id
+        FROM items i
+        CROSS JOIN LATERAL jsonb_array_elements(i.extra_versions) AS v(version)
+    ),
+    builtin_mappings AS (
+        SELECT
+            's' || (data->'value'->>'catalog_id') AS id,
+            's' || (data->'value'->>'global_id') AS global_id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            -- Exclude runtime-alterable builtins since they're already included in `items`
+            data->'value'->>'fingerprint' != '{RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL}'
+    ),
+    introspection_source_indexes AS (
+        SELECT
+            'si' || (data->'value'->>'catalog_id') AS id,
+            'si' || (data->'value'->>'global_id') AS global_id
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'ClusterIntrospectionSourceIndex'
+    )
+SELECT id, global_id FROM items
+UNION ALL
+SELECT id, global_id FROM item_versions
+UNION ALL
+SELECT id, global_id FROM builtin_mappings
+UNION ALL
+SELECT id, global_id FROM introspection_source_indexes"
+            )
+            .into_boxed_str(),
         ),
-        ("global_id", "The global ID of the object."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "object_global_id",
-        description: "Mapping between CatalogItemId (SQL layer) and GlobalId (runtime layer)",
-        links: &const {
-            [OntologyLink {
-                name: "id_references",
-                target: "object",
-                properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
-});
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "object_global_id",
+            description: "Mapping between CatalogItemId (SQL layer) and GlobalId (runtime layer)",
+            links: &const {
+                [OntologyLink {
+                    name: "id_references",
+                    target: "object",
+                    properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    });
 
 // TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
 pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -7898,6 +7952,35 @@ JOIN root_times r USING (id)",
         },
     }),
 });
+/// Worst-process shares of one process's RAM allocation, shared by the console
+/// utilization view bodies. All three divide by the same denominator so they
+/// stack on one axis: `ram_percent` is the bar, `swap_of_ram_percent` sits on
+/// top, and `heap_limit_percent` marks where RAM plus swap runs out, above 1.0.
+/// Assumes the metrics relation is bound as `m` and the sizes relation as `s`.
+///
+/// NOTE: worst-process shares, not replica totals. `memory_percent` alongside
+/// them sums across processes instead; the two agree at `scale=1`, but above it
+/// these report "the worst process is at 98% of its own allocation" where
+/// `memory_percent` reports "the replica is at 32% overall". A replica dies on
+/// one process being OOM-killed, so the chart's limit line wants the former.
+///
+/// NOTE: peak RAM and peak swap are independent maxima, so under multi-process
+/// skew they can describe different processes and the stack is an upper bound.
+///
+/// NOTE: a size that cannot swap reads 0 here, not null. clusterd reports
+/// `VmSwap` whenever it can read `/proc/self/status`, and that is 0 for a
+/// process with no swap. Null means no sample at all: the process orchestrator,
+/// a failed usage fetch, or history predating the column. `heap_limit_percent`
+/// is what separates "cannot swap" from "did not swap", reading 1.0 exactly
+/// when the cgroup grants no swap beyond RAM.
+///
+/// NOTE: these recombine to `heap_percent` where the maxima agree, so prefer
+/// that column over a fourth spelling of the same quantity.
+const CONSOLE_MEMORY_SHARES_SQL: &str = "\
+    MAX(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) AS ram_percent,
+    MAX(m.swap_bytes::float8) / NULLIF(s.memory_bytes, 0) AS swap_of_ram_percent,
+    MAX(m.heap_limit::float8) / NULLIF(s.memory_bytes, 0) AS heap_limit_percent";
+
 /// The output relation shared by all `mz_console_cluster_utilization_overview*`
 /// views. Every (bucket size, retention) variant produces the same columns so
 /// the Console can swap between them based on the selected time range.
@@ -7939,6 +8022,9 @@ fn console_cluster_utilization_overview_desc() -> RelationDesc {
             "max_heap_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
+        .with_column("ram_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("swap_of_ram_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("heap_limit_percent", SqlScalarType::Float64.nullable(true))
         .with_column("max_cpu_percent", SqlScalarType::Float64.nullable(true))
         .with_column(
             "max_cpu_at",
@@ -8001,7 +8087,8 @@ replica_metrics_history AS (
     COALESCE(
       MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0)),
       SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)
-    ) AS heap_percent
+    ) AS heap_percent,
+{shares}
   FROM
     replica_history AS r
     INNER JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
@@ -8031,6 +8118,9 @@ replica_utilization_history_binned AS (
     m.total_memory_bytes,
     m.heap_bytes,
     m.heap_percent,
+    m.ram_percent,
+    m.swap_of_ram_percent,
+    m.heap_limit_percent,
     m.size,
     date_bin('{bin}', m.occurred_at, '1970-01-01'::timestamp) AS bucket_start
   FROM replica_metrics_history AS m
@@ -8076,9 +8166,11 @@ max_memory_and_disk AS (
   OPTIONS (DISTINCT ON INPUT GROUP SIZE = {group_size})
   ORDER BY bucket_start, replica_id, COALESCE(memory_and_disk_percent, 0) DESC
 ),
--- For each (replica, bucket), take the sample with the highest heap.
+-- For each (replica, bucket), take the sample with the highest heap. The RAM
+-- and swap shares ride along, so they describe that sample rather than the
+-- bucket's peak RAM, which is what max_memory reports.
 max_heap AS (
-  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, heap_percent, occurred_at
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, heap_percent, ram_percent, swap_of_ram_percent, heap_limit_percent, occurred_at
   FROM replica_utilization_history_binned
   OPTIONS (DISTINCT ON INPUT GROUP SIZE = {group_size})
   ORDER BY bucket_start, replica_id, COALESCE(heap_bytes, 0) DESC
@@ -8116,6 +8208,9 @@ SELECT
   max_memory_and_disk.occurred_at AS max_memory_and_disk_at,
   max_heap.heap_percent,
   max_heap.occurred_at AS max_heap_at,
+  max_heap.ram_percent,
+  max_heap.swap_of_ram_percent,
+  max_heap.heap_limit_percent,
   max_cpu.cpu_percent AS max_cpu_percent,
   max_cpu.occurred_at AS max_cpu_at,
   replica_offline_event_history.offline_events,
@@ -8146,6 +8241,7 @@ LEFT JOIN replica_offline_event_history USING (bucket_start, replica_id)"#,
         bin = bin,
         retention = retention,
         group_size = group_size,
+        shares = CONSOLE_MEMORY_SHARES_SQL,
     )
 }
 
@@ -8166,6 +8262,9 @@ fn console_cluster_utilization_unbinned_3h_desc() -> RelationDesc {
         .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
         .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
         .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("ram_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("swap_of_ram_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("heap_limit_percent", SqlScalarType::Float64.nullable(true))
         .with_column(
             "memory_and_disk_percent",
             SqlScalarType::Float64.nullable(true),
@@ -8211,6 +8310,7 @@ replica_metrics AS (
       MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0)),
       SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)
     ) AS heap_percent,
+{shares},
     CASE
       WHEN SUM(m.disk_bytes::float8) IS NULL AND SUM(m.memory_bytes::float8) IS NULL THEN NULL
       ELSE (COALESCE(SUM(m.memory_bytes::float8), 0) + COALESCE(SUM(m.disk_bytes::float8), 0))
@@ -8243,6 +8343,9 @@ SELECT
   m.memory_percent,
   m.disk_percent,
   m.heap_percent,
+  m.ram_percent,
+  m.swap_of_ram_percent,
+  m.heap_limit_percent,
   m.memory_and_disk_percent
 FROM replica_metrics AS m
 /* Most recent replica name as of the sample time. */
@@ -8256,6 +8359,7 @@ CROSS JOIN LATERAL (
   LIMIT 1
 ) AS replica_name_history"#,
         retention = retention,
+        shares = CONSOLE_MEMORY_SHARES_SQL,
     )
 }
 

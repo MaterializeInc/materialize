@@ -30,10 +30,9 @@
 //! because they form the storage codec for `SourceData` (`ProtoRow` on the
 //! Ok side, `ProtoEvalError` inside `ProtoDataflowError` on the Err side).
 //!
-//! While a given LIR version is unshipped, regenerating its snapshot in place
-//! is fine. Once pinned plans are durably stored, a schema change must instead
-//! bump [`LIR_VERSION`], which targets a fresh snapshot file and leaves the
-//! old schema in place for migration tooling.
+//! Whether the current version has shipped, and so whether a schema change
+//! regenerates the snapshot in place or bumps [`LIR_VERSION`] to target a
+//! fresh snapshot file, is recorded once in [`LIR_VERSION_POLICY`].
 //!
 //! There are some subtleties to tracing. [`serde_reflection::Registry`] reuses
 //! existing serde machinery, which means that we have to work carefully to ensure
@@ -50,7 +49,8 @@ use mz_compute_types::plan::scalar::{LirScalarExpr, LiteralValue};
 use mz_compute_types::plan::threshold::ThresholdPlan;
 use mz_compute_types::plan::top_k::TopKPlan;
 use mz_compute_types::plan::{
-    ArrangementStrategy, ConstantRows, GetPlan, LIR_VERSION, LirRelationExpr, LirRelationNode,
+    ArrangementStrategy, ConstantRows, GetPlan, LIR_VERSION, LIR_VERSION_POLICY, LirRelationExpr,
+    LirRelationNode,
 };
 use mz_expr::func::{TimezoneTime, ToCharTimestamp};
 use mz_expr::like_pattern::Matcher;
@@ -509,18 +509,16 @@ fn lir_schema_snapshot() {
     });
     if expected != actual {
         panic!(
-            "The serialized stable LIR schema changed!\n\n\
+            "The serialized stable LIR schema changed.\n\n\
              The serde type graph reachable from LirRelationExpr no longer matches\n\
-             '{path}'. This affects any durably stored LIR plan.\n\n\
+             '{path}'. This is expected whenever a type in that graph changes, and\n\
+             the snapshot exists so the change shows up as a reviewable diff.\n\n\
              What changed:\n{diff}\n\n\
              Full detail: diff '{path}' against the freshly traced schema at\n\
              '{CURRENT_PATH}'.\n\n\
-             If LIR version {LIR_VERSION} has already shipped, bump LIR_VERSION in\n\
-             src/compute-types/src/plan.rs so the change lands as a new version.\n\
-             If version {LIR_VERSION} is unshipped, regenerating in place is fine.\n\n\
-             Then regenerate the snapshot and review the diff:\n\n    \
-             REWRITE=1 cargo test -p mz-compute-types --test lir_schema\n\n\
-             See doc/developer/design/20260311_optimizer_customer_tradeoff.md.\n",
+             {LIR_VERSION_POLICY}\n\n\
+             To regenerate:\n\n    \
+             REWRITE=1 cargo test -p mz-compute-types --test lir_schema\n",
             diff = schema_diff(&expected, &actual),
         );
     }

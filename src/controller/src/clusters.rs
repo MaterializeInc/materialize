@@ -702,11 +702,6 @@ impl Controller {
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
 
-        // TODO(teskje): use the same values as for compute?
-        let storage_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality: 1337,
-            ..Default::default()
-        };
         // These configure the replica's process rather than environmentd's, so
         // they are `ParameterScope::Replica` and must be read through this
         // replica's scoped overrides. They are baked into the process
@@ -714,9 +709,16 @@ impl Controller {
         // environment-wide value or the override reaches the replica only when
         // it is next provisioned.
         let overrides = self.replica_dyncfg_overrides.get(&replica_id);
+        // Storage and compute arrangements share one maintenance policy, so a
+        // unified replica runs both kinds of arrangement under the same reach.
+        let arrangement_exert_proportionality =
+            ARRANGEMENT_EXERT_PROPORTIONALITY.get_with_overrides(&self.dyncfg, overrides);
+        let storage_proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality,
+            ..Default::default()
+        };
         let compute_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY
-                .get_with_overrides(&self.dyncfg, overrides),
+            arrangement_exert_proportionality,
             enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get_with_overrides(&self.dyncfg, overrides),
             enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC
                 .get_with_overrides(&self.dyncfg, overrides),
