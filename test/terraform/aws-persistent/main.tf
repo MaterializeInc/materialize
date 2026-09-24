@@ -305,7 +305,7 @@ module "storage" {
 
 # 7. Install Materialize Operator
 module "operator" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/operator?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/operator?ref=v13.10.0"
 
   name_prefix    = var.name_prefix
   aws_region     = var.aws_region
