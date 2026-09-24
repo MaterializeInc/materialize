@@ -269,10 +269,20 @@ class SetupIcebergTesting(MzcomposeAction):
 
 class KillMz(MzcomposeAction):
     def __init__(
-        self, mz_service: str = "materialized", capture_logs: bool = False
+        self,
+        mz_service: str = "materialized",
+        capture_logs: bool = False,
+        fenced: bool = False,
     ) -> None:
+        """Kill `mz_service`.
+
+        Set `fenced` for a deployment that another one has fenced out. Its
+        environmentd may exit on its own, with code 0, before or while the kill
+        lands, so any exit code is accepted.
+        """
         self.mz_service = mz_service
         self.capture_logs = capture_logs
+        self.fenced = fenced
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -280,7 +290,11 @@ class KillMz(MzcomposeAction):
         # Don't fail since we are careful to explicitly kill and collect logs
         # of the services thus started
         with c.override(Materialized(name=self.mz_service), fail_on_new_service=False):
-            c.kill(self.mz_service, wait=True)
+            if self.fenced:
+                c.kill(self.mz_service, wait=False)
+                c.wait(self.mz_service)
+            else:
+                c.kill(self.mz_service, wait=True)
 
             if self.capture_logs:
                 c.capture_logs(self.mz_service)
