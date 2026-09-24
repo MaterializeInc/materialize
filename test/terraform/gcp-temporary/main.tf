@@ -191,7 +191,7 @@ module "database" {
 
 # 4. Create Google Cloud Storage bucket for Materialize persistent data storage
 module "storage" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/storage?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/storage?ref=v13.10.0"
 
   project_id      = var.project_id
   region          = var.region
