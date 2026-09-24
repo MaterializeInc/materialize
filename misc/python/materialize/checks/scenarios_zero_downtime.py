@@ -46,14 +46,14 @@ def wait_ready_and_promote(
     return [
         WaitReadyMz(mz_service),
         PromoteMz(mz_service),
-        # The fenced environmentd exits with code 0. A container started in
-        # read-only mode then sleeps instead of exiting (see the materialized
-        # entrypoint), and the clusterd processes it spawned keep running.
-        # Remove the previous generation like the orchestrator does after a
-        # promotion, so that generations do not accumulate. The killed container
-        # keeps its logs until the next `up`, `down` or the CI hook collects
-        # them. Capturing only its logs here would skip every other service's
-        # lines since the last capture.
+        # The fenced environmentd exits with code 0. A container started with
+        # `restart="on-failure"`, as `start_mz_read_only` does, then sleeps
+        # instead of exiting (see the materialized entrypoint), and the clusterd
+        # processes it spawned keep running. Remove the previous generation like
+        # the orchestrator does after a promotion, so that generations do not
+        # accumulate. The killed container keeps its logs, and the next `down`
+        # or the CI hook collects them. Capturing only its logs here would skip
+        # every other service's lines since the last capture.
         KillMz(mz_service=previous_mz_service, fenced=True),
     ]
 

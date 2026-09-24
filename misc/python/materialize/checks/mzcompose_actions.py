@@ -26,6 +26,7 @@ from materialize.mzcompose.services.materialized import DeploymentStatus, Materi
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
+from materialize.ui import CommandFailureCausedUIError
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
@@ -279,7 +280,8 @@ class KillMz(MzcomposeAction):
 
         Set `fenced` for a deployment that another one has fenced out. Its
         environmentd may exit on its own, with code 0, before or while the kill
-        lands, so any exit code is accepted.
+        lands, so a container that is already gone and any exit code are
+        accepted.
         """
         self.mz_service = mz_service
         self.capture_logs = capture_logs
@@ -301,7 +303,13 @@ class KillMz(MzcomposeAction):
             )
         ):
             if self.fenced:
-                c.kill(self.mz_service, wait=False)
+                try:
+                    c.kill(self.mz_service, wait=False)
+                except CommandFailureCausedUIError:
+                    # The container can stop on its own between compose
+                    # listing it and killing it, which fails the kill.
+                    if c.is_running(self.mz_service):
+                        raise
                 c.wait(self.mz_service)
             else:
                 c.kill(self.mz_service, wait=True)
