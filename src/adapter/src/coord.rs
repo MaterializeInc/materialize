@@ -1841,7 +1841,7 @@ impl ExecuteContext {
 
     /// Delays sending this statement's response until `barrier` resolves.
     pub(crate) fn delay_response_until(&mut self, barrier: BuiltinTableAppendCompletion) {
-        self.response_barriers.push(barrier.into_notify());
+        self.response_barriers.extend(barrier.into_notify());
     }
 
     pub fn extra(&self) -> &ExecuteContextGuard {
@@ -5872,6 +5872,64 @@ mod execute_context_tests {
     use super::*;
     use crate::session::Session;
     use crate::util::ClientTransmitter;
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_retire_completed_barrier_answers_without_scheduling() {
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let mut ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            Session::dummy(),
+            ExecuteContextGuard::default(),
+        );
+
+        ctx.delay_response_until(BuiltinTableAppendCompletion::completed());
+        assert!(ctx.response_barriers.is_empty());
+        ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+
+        // No await: a task spawned on this current-thread runtime cannot run yet.
+        let response = client_rx.try_recv().expect("response must be synchronous");
+        assert!(matches!(
+            response.result,
+            Ok(ExecuteResponse::StartedTransaction)
+        ));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_retire_pending_barrier_waits_for_completion() {
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let (done_tx, done_rx) = oneshot::channel();
+        let mut ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            Session::dummy(),
+            ExecuteContextGuard::default(),
+        );
+
+        ctx.delay_response_until(BuiltinTableAppendCompletion::new(Box::pin(async move {
+            done_rx.await.expect("completion sender stays alive");
+        })));
+        ctx.delay_response_until(BuiltinTableAppendCompletion::completed());
+        assert_eq!(ctx.response_barriers.len(), 1);
+        ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            client_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        done_tx.send(()).expect("barrier must retain its receiver");
+        let response = tokio::time::timeout(Duration::from_secs(5), client_rx)
+            .await
+            .expect("response must follow completion")
+            .expect("client must be answered");
+        assert!(matches!(
+            response.result,
+            Ok(ExecuteResponse::StartedTransaction)
+        ));
+    }
 
     /// Runtime shutdown drops the barrier-waiting task that `retire` spawns. The context's `Drop`
     /// backstop must answer the client, rather than panicking on an unsent `ClientTransmitter`.
