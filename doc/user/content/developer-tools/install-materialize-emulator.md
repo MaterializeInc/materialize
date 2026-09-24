@@ -108,6 +108,26 @@ to Materialize documentation and reference material, so it can provide more
 accurate assistance when writing queries, setting up sources, creating
 materialized views, and more.
 
+{{< tabs >}}
+{{< tab "Claude Code" >}}
+In Claude Code, run the following commands to install the Materialize agent
+skills as a plugin:
+
+```
+/plugin marketplace add MaterializeInc/agent-skills
+/plugin install materialize@materialize
+```
+{{< /tab >}}
+{{< tab "Codex" >}}
+In a terminal, run the following commands to install the Materialize agent
+skills as a plugin:
+
+```bash
+codex plugin marketplace add MaterializeInc/agent-skills
+codex plugin add materialize@materialize
+```
+{{< /tab >}}
+{{< tab "Other agents" >}}
 1. If [Node.js](https://nodejs.org/) (v16 or later) is not installed, refer to
    its [official documentation](https://nodejs.org/en/download) to install.
 
@@ -117,6 +137,8 @@ materialized views, and more.
    ```bash
    npx skills add MaterializeInc/agent-skills
    ```
+{{< /tab >}}
+{{< /tabs >}}
 
 For more details on the available skills, see [Agent
 Skills](/developer-tools/mcp-server/coding-agent-skills/).

@@ -21,24 +21,81 @@ coding agent access to Materialize documentation and reference material so it
 can provide more accurate assistance when writing queries, setting up sources,
 creating materialized views, and more.
 
-## Skills
-
-{{% include-headless "/headless/agent-skills-table" %}}
-
-## Prerequisites
-
-[Node.js](https://nodejs.org/) (v16 or later) must be installed to use `npx
-skills`. Installing [as a plugin](#install-as-a-plugin) does not need it.
-
 ## Installation
 
-Install the Materialize agent skills with a single command:
+You can install the Materialize agent skills in one of two ways:
+
+- [As a plugin](#install-as-a-plugin), if you use Claude Code or Codex. The
+  plugin installs all the skills at once and can keep them updated
+  automatically.
+- [With `npx skills`](#install-with-npx), for any coding agent that supports
+  the Agent Skills standard.
+
+Choose one method. Installing the skills with both the plugin and `npx skills`
+results in duplicate copies of each skill.
+
+### Install as a plugin
+
+When you install the skills as a plugin, they are namespaced under the plugin
+name, for example `materialize:mz-dbt`.
+
+If you already installed the skills with `npx skills`, remove them before you
+install the plugin. Run this in each project where you installed them, or add
+`-g` if you installed them globally:
+
+```bash
+npx skills remove materialize-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed
+```
+
+#### Claude Code
+
+To install the plugin, run:
+
+```
+/plugin marketplace add MaterializeInc/agent-skills
+/plugin install materialize@materialize
+```
+
+Auto-update is off by default for this marketplace. To turn it on, run
+`/plugin`, select **Marketplaces**, choose `materialize`, and select **Enable
+auto-update**. Claude Code then checks for updates in the background and asks
+you to run `/reload-plugins` when there is one.
+
+To update by hand, run:
+
+```
+/plugin marketplace update materialize
+/plugin update materialize@materialize
+/reload-plugins
+```
+
+#### Codex
+
+To install the plugin, run:
+
+```bash
+codex plugin marketplace add MaterializeInc/agent-skills
+codex plugin add materialize@materialize
+```
+
+To update, run:
+
+```bash
+codex plugin marketplace upgrade materialize
+```
+
+### Install with npx
+
+[Node.js](https://nodejs.org/) (v16 or later) must be installed to use `npx
+skills`.
+
+To install the skills, run:
 
 ```bash
 npx skills add MaterializeInc/agent-skills
 ```
 
-## Upgrade skills
+#### Upgrade skills
 
 We publish upgrades to the Materialize agent skills weekly, so check back
 regularly to pick up the latest documentation and reference material. To upgrade
@@ -55,6 +112,8 @@ repository:
 npx skills update
 ```
 
+#### Migrate from the previous skill names
+
 Most skills now use the `mz-` prefix, and `mcp-developer-analysis` is now
 `mz-health-check`. `materialize-docs` keeps its name. If you installed the
 skills before the rename, remove the old copies and install the skills again,
@@ -67,43 +126,9 @@ npx skills remove materialize-dbt materialize-debug-freshness materialize-terraf
 npx skills add MaterializeInc/agent-skills
 ```
 
-## Install as a plugin
-If you use Claude Code or Codex, you can also install all the skills using a single
-plugin. This allows you to keep skills updated automatically.
+## Skills
 
-When the skills are installed using the plugin, they are namespaced, for example `materialize:mz-dbt`.
-
-Don't install skills using both the plugin and `npx skills`, as this would result in duplicate installations.
-
-If you already installed the skills with `npx skills`, remove them before you
-install the plugin. Run this in each project where you installed them, or add
-`-g` if you installed them globally:
-
-```bash
-npx skills remove materialize-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed
-```
-
-### Claude Code:
-
-```
-/plugin marketplace add MaterializeInc/agent-skills
-/plugin install materialize@materialize
-```
-
-Auto-update is off by default for this marketplace. To turn it on, run
-`/plugin`, select **Marketplaces**, choose `materialize`, and select **Enable
-auto-update**. Claude Code then checks for updates in the background and asks
-you to run `/reload-plugins` when there is one. To update by hand, run `/plugin marketplace update materialize`, then `/plugin update
-materialize@materialize`, then `/reload-plugins`.
-
-### Codex:
-
-```bash
-codex plugin marketplace add MaterializeInc/agent-skills
-codex plugin add materialize@materialize
-```
-
-To update, run `codex plugin marketplace upgrade materialize`.
+{{% include-headless "/headless/agent-skills-table" %}}
 
 ## SQL language server plugin
 
@@ -117,13 +142,26 @@ installation and configuration.
 
 ## Reduce permission prompts (Claude Code)
 
-Claude Code prompts before reading files outside your project. Since globally
-installed skills live under `~/.claude/skills/`, if you installed the
-`materialize-docs` skill globally, Claude Code may ask to approve reads each
-time the skill opens a new documentation subdirectory.
+Claude Code prompts before reading files outside your project, so it may ask
+to approve reads each time the `materialize-docs` skill opens a new
+documentation subdirectory. To stop these prompts, grant read access to the
+directory where the skill is installed in `~/.claude/settings.json`.
 
-To stop these prompts, grant read access to the `materialize-docs` skill in
-`~/.claude/settings.json`:
+If you installed the skills [as a plugin](#install-as-a-plugin), grant the
+plugin's cache directory. The directory below it changes with every plugin
+update, so grant the parent:
+
+```json
+{
+  "permissions": {
+    "additionalDirectories": ["~/.claude/plugins/cache/materialize"]
+  }
+}
+```
+
+If you installed the skills globally [with `npx skills`](#install-with-npx),
+they live under `~/.claude/skills/`. Grant the `materialize-docs` skill's
+directory:
 
 ```json
 {
@@ -136,18 +174,6 @@ To stop these prompts, grant read access to the `materialize-docs` skill in
 This grants access to just that one skill's directory. If you have multiple skills installed
 and want to cover them all at once, you can broaden the path to
 `~/.claude/skills`, though scoping to a single skill is the safer default.
-
-If you installed the skills [as a plugin](#install-as-a-plugin), grant the
-plugin's cache directory instead. The directory below it changes with every
-plugin update, so grant the parent:
-
-```json
-{
-  "permissions": {
-    "additionalDirectories": ["~/.claude/plugins/cache/materialize"]
-  }
-}
-```
 
 Claude Code's `auto` permission mode also removes the prompts, but applies to
 all tools rather than just this directory.
