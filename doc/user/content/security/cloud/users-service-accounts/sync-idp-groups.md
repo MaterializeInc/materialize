@@ -196,7 +196,7 @@ data "materialize_scim_groups" "all" {}
 locals {
   analytics_groups = [
     for group in data.materialize_scim_groups.all.groups : group
-    if group.name == "analytics-team" && group.managed_by == "scim"
+    if group.name == "analytics-team" && startswith(group.managed_by, "scim")
   ]
 }
 
@@ -217,7 +217,8 @@ The example uses the organization role's exported JWT `key` as the database
 role name and copies **Organization Member** permissions as a starting point.
 Later changes to the base role are not copied automatically. The schema grant
 assumes `analytics.reporting` already exists; add grants for the specific
-objects the group needs to access.
+objects the group needs to access. The group filter also matches SCIM groups
+that Frontegg reports with a `managed_by` value of `scim2`.
 
 `materialize_scim_group_roles` manages the group's complete set of organization
 role assignments. Include every role the group should retain. Do not use
