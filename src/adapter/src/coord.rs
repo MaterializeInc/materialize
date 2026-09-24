@@ -4393,7 +4393,6 @@ impl Coordinator {
                         "coord::handle_message",
                         kind = msg_kind
                     );
-                    let otel_context = span.context().span().span_context().clone();
 
                     // Record the last kind of message in case we get stuck. For
                     // execute commands, we additionally stash the user's SQL,
@@ -4416,7 +4415,7 @@ impl Coordinator {
                     };
 
                     let start = Instant::now();
-                    self.handle_message(msg).instrument(span).await;
+                    self.handle_message(msg).instrument(span.clone()).await;
                     let duration = start.elapsed();
 
                     self.metrics
@@ -4426,6 +4425,7 @@ impl Coordinator {
 
                     // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
                     if duration > warn_threshold {
+                        let otel_context = span.context().span().span_context().clone();
                         let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
                         tracing::error!(
                             ?msg_kind,
