@@ -20,7 +20,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "-",
     preserves_uniqueness = false,
-    inverse = to_unary!(NegFloat32),
+    inverse = NegFloat32,
     is_monotone = true
 )]
 fn neg_float32(a: f32) -> f32 {
@@ -55,7 +55,7 @@ fn floor_float32(a: f32) -> f32 {
 #[sqlfunc(
     sqlname = "real_to_smallint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt16ToFloat32),
+    inverse = super::CastInt16ToFloat32,
     is_monotone = true
 )]
 fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
@@ -72,7 +72,7 @@ fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
 #[sqlfunc(
     sqlname = "real_to_integer",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt32ToFloat32),
+    inverse = super::CastInt32ToFloat32,
     is_monotone = true
 )]
 fn cast_float32_to_int32(a: f32) -> Result<i32, EvalError> {
@@ -93,7 +93,7 @@ fn cast_float32_to_int32(a: f32) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "real_to_bigint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt64ToFloat32),
+    inverse = super::CastInt64ToFloat32,
     is_monotone = true
 )]
 fn cast_float32_to_int64(a: f32) -> Result<i64, EvalError> {
@@ -114,7 +114,7 @@ fn cast_float32_to_int64(a: f32) -> Result<i64, EvalError> {
 #[sqlfunc(
     sqlname = "real_to_double",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat64ToFloat32),
+    inverse = super::CastFloat64ToFloat32,
     is_monotone = true
 )]
 fn cast_float32_to_float64(a: f32) -> f64 {
@@ -124,7 +124,7 @@ fn cast_float32_to_float64(a: f32) -> f64 {
 #[sqlfunc(
     sqlname = "real_to_text",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastStringToFloat32)
+    inverse = super::CastStringToFloat32
 )]
 fn cast_float32_to_string(a: f32) -> String {
     let mut s = String::new();
@@ -135,7 +135,7 @@ fn cast_float32_to_string(a: f32) -> String {
 #[sqlfunc(
     sqlname = "real_to_uint2",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint16ToFloat32),
+    inverse = super::CastUint16ToFloat32,
     is_monotone = true
 )]
 fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
@@ -152,7 +152,7 @@ fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
 #[sqlfunc(
     sqlname = "real_to_uint4",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint32ToFloat32),
+    inverse = super::CastUint32ToFloat32,
     is_monotone = true
 )]
 fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
@@ -172,7 +172,7 @@ fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
 #[sqlfunc(
     sqlname = "real_to_uint8",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint64ToFloat32),
+    inverse = super::CastUint64ToFloat32,
     is_monotone = true
 )]
 fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {

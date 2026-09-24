@@ -20,7 +20,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "~",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::BitNotUint64)
+    inverse = super::BitNotUint64
 )]
 fn bit_not_uint64(a: u64) -> u64 {
     !a
@@ -29,7 +29,7 @@ fn bit_not_uint64(a: u64) -> u64 {
 #[sqlfunc(
     sqlname = "uint8_to_real",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat32ToUint64),
+    inverse = super::CastFloat32ToUint64,
     is_monotone = true
 )]
 fn cast_uint64_to_float32(a: u64) -> f32 {
@@ -43,7 +43,7 @@ fn cast_uint64_to_float32(a: u64) -> f32 {
 #[sqlfunc(
     sqlname = "uint8_to_double",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat64ToUint64),
+    inverse = super::CastFloat64ToUint64,
     is_monotone = true
 )]
 fn cast_uint64_to_float64(a: u64) -> f64 {
@@ -57,7 +57,7 @@ fn cast_uint64_to_float64(a: u64) -> f64 {
 #[sqlfunc(
     sqlname = "uint8_to_uint2",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint16ToUint64),
+    inverse = super::CastUint16ToUint64,
     is_monotone = true
 )]
 fn cast_uint64_to_uint16(a: u64) -> Result<u16, EvalError> {
@@ -67,7 +67,7 @@ fn cast_uint64_to_uint16(a: u64) -> Result<u16, EvalError> {
 #[sqlfunc(
     sqlname = "uint8_to_uint4",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastUint32ToUint64),
+    inverse = super::CastUint32ToUint64,
     is_monotone = true
 )]
 fn cast_uint64_to_uint32(a: u64) -> Result<u32, EvalError> {
@@ -77,7 +77,7 @@ fn cast_uint64_to_uint32(a: u64) -> Result<u32, EvalError> {
 #[sqlfunc(
     sqlname = "uint8_to_smallint",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt16ToUint64),
+    inverse = super::CastInt16ToUint64,
     is_monotone = true
 )]
 fn cast_uint64_to_int16(a: u64) -> Result<i16, EvalError> {
@@ -87,7 +87,7 @@ fn cast_uint64_to_int16(a: u64) -> Result<i16, EvalError> {
 #[sqlfunc(
     sqlname = "uint8_to_integer",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt32ToUint64),
+    inverse = super::CastInt32ToUint64,
     is_monotone = true
 )]
 fn cast_uint64_to_int32(a: u64) -> Result<i32, EvalError> {
@@ -97,7 +97,7 @@ fn cast_uint64_to_int32(a: u64) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "uint8_to_bigint",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastInt64ToUint64),
+    inverse = super::CastInt64ToUint64,
     is_monotone = true
 )]
 fn cast_uint64_to_int64(a: u64) -> Result<i64, EvalError> {
@@ -107,7 +107,7 @@ fn cast_uint64_to_int64(a: u64) -> Result<i64, EvalError> {
 #[sqlfunc(
     sqlname = "uint8_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToUint64)
+    inverse = super::CastStringToUint64
 )]
 fn cast_uint64_to_string(a: u64) -> String {
     let mut buf = String::new();

@@ -83,7 +83,7 @@ The optimizer uses this to reason about column nullability.
   A function returning `Option<T>` or `Datum` introduces nulls.
   A function returning `String` or `i32` does not.
 * **Applies to:** all arities
-* **Note:** required when using `output_type_expr` (because the output type is not statically known).
+* **Note:** set it where the return type overstates it. A function returning `Datum` or `Option<T>` that yields NULL only for NULL inputs declares `introduces_nulls = false`.
 
 ### `could_error`
 
@@ -126,7 +126,7 @@ Whether the function is injective: if `f(x) = f(y)` then `x = y`.
 
 The inverse function, if it exists.
 
-* **Type:** expression evaluating to `Option<crate::UnaryFunc>`
+* **Type:** expression convertible into `crate::UnaryFunc`, for example `inverse = NegFloat64`
 * **Default:** `None`
 * **Applies to:** unary only
 
@@ -135,7 +135,7 @@ The inverse function, if it exists.
 The logical negation of a comparison function.
 For example, `<` negates to `>=`.
 
-* **Type:** expression evaluating to `Option<crate::BinaryFunc>`
+* **Type:** expression convertible into `crate::BinaryFunc`, for example `negate = NotEq`
 * **Default:** `None`
 * **Applies to:** binary only
 
@@ -174,7 +174,6 @@ Use this for functions whose output type depends on input types or struct fields
 * **Type:** expression evaluating to `SqlColumnType`
 * **Default:** none
 * **Applies to:** all arities
-* **Requires:** `introduces_nulls` (must be specified explicitly)
 * **Cannot be combined with:** `output_type`
 
 ### `test`
@@ -320,7 +319,7 @@ If the input type does not accept NULL (is non-nullable), the evaluation layer r
 #[sqlfunc(
     sqlname = "uint2_to_real",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastFloat32ToUint16),
+    inverse = super::CastFloat32ToUint16,
     is_monotone = true
 )]
 fn cast_uint16_to_float32(a: u16) -> f32 {
@@ -370,8 +369,7 @@ fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
 #[sqlfunc(
     ArrayCreate,
     sqlname = "array_create",
-    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
-    introduces_nulls = false
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)"
 )]
 fn array_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Array<'a> {
     // &self: struct defined externally with an elem_type field
@@ -396,5 +394,4 @@ The ten remaining hand-written `LazyUnaryFunc` implementations under
 `src/expr/src/scalar/func/impls/` are in neither category, and all ten are convertible.
 Nine allocate their output into a `RowArena`, which `EagerUnaryFunc::call` now supplies.
 `RecordGet` returns a field borrowed from its input, so it needs no arena, only an
-`output_type_expr` reading `input_type` and the `introduces_nulls` that expression
-requires.
+`output_type_expr` reading `input_type`.

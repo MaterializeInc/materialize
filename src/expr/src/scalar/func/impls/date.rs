@@ -25,7 +25,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "date_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToDate)
+    inverse = super::CastStringToDate
 )]
 fn cast_date_to_string(a: Date) -> String {
     let mut buf = String::new();

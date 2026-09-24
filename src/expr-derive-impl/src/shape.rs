@@ -81,6 +81,16 @@ impl ReturnTy {
             ReturnTy::OptBinaryFunc => quote! { Option<crate::BinaryFunc> },
         }
     }
+
+    /// The method body for a modifier whose value is `expr`. A function-valued
+    /// modifier names the function, and the body converts it into the enum.
+    pub(crate) fn body(&self, expr: &syn::Expr) -> TokenStream {
+        match self {
+            ReturnTy::Bool | ReturnTy::BoolPair => quote! { #expr },
+            ReturnTy::OptUnaryFunc => quote! { Some(crate::UnaryFunc::from(#expr)) },
+            ReturnTy::OptBinaryFunc => quote! { Some(crate::BinaryFunc::from(#expr)) },
+        }
+    }
 }
 
 // `crate::generate::override_methods` walks these tables in order to generate each

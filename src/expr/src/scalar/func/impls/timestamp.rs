@@ -32,7 +32,7 @@ use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 #[sqlfunc(
     sqlname = "timestamp_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToTimestamp(None))
+    inverse = super::CastStringToTimestamp(None)
 )]
 fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
     let mut buf = String::new();
@@ -43,7 +43,7 @@ fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToTimestampTz(None))
+    inverse = super::CastStringToTimestampTz(None)
 )]
 fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
     let mut buf = String::new();
@@ -54,7 +54,7 @@ fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
 #[sqlfunc(
     sqlname = "timestamp_to_date",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastDateToTimestamp(None)),
+    inverse = super::CastDateToTimestamp(None),
     is_monotone = true
 )]
 fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
@@ -64,7 +64,7 @@ fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, Ev
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_date",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastDateToTimestampTz(None)),
+    inverse = super::CastDateToTimestampTz(None),
     is_monotone = true
 )]
 fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {

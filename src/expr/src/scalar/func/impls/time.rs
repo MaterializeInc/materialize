@@ -25,7 +25,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "time_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToTime)
+    inverse = super::CastStringToTime
 )]
 fn cast_time_to_string(a: NaiveTime) -> String {
     let mut buf = String::new();
@@ -36,7 +36,7 @@ fn cast_time_to_string(a: NaiveTime) -> String {
 #[sqlfunc(
     sqlname = "time_to_interval",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastIntervalToTime)
+    inverse = super::CastIntervalToTime
 )]
 fn cast_time_to_interval(t: NaiveTime) -> Interval {
     // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us

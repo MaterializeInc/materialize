@@ -38,7 +38,7 @@ use crate::scalar::func::impls::numeric::*;
 #[sqlfunc(
     sqlname = "jsonb_to_text",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastStringToJsonb)
+    inverse = super::CastStringToJsonb
 )]
 pub fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
     let mut buf = String::new();

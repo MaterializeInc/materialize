@@ -41,10 +41,11 @@ fn override_methods(
                 .find(|(candidate, _)| candidate == modifier)
                 .map(|(_, expr)| *expr)?;
             let name = Ident::new(modifier.name(), proc_macro2::Span::call_site());
+            let body = ret.body(expr);
             let ret = ret.to_tokens();
             Some(quote! {
                 fn #name(&self) -> #ret {
-                    #expr
+                    #body
                 }
             })
         })
@@ -244,11 +245,6 @@ pub(crate) fn generate(
     if mods.skip_display() && mods.sqlname.is_some() {
         return Err(darling::Error::unknown_field(
             "sqlname has no effect with skip_display, which suppresses the only impl that reads it",
-        ));
-    }
-    if output_type_expr.is_some() && introduces_nulls.is_none() {
-        return Err(darling::Error::unknown_field(
-            "output_type_expr requires introduces_nulls",
         ));
     }
 
