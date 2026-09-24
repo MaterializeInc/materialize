@@ -27,7 +27,8 @@ creating materialized views, and more.
 
 ## Prerequisites
 
-[Node.js](https://nodejs.org/) (v16 or later) must be installed.
+[Node.js](https://nodejs.org/) (v16 or later) must be installed to use `npx
+skills`. Installing [as a plugin](#install-as-a-plugin) does not need it.
 
 ## Installation
 
@@ -54,8 +55,10 @@ repository:
 npx skills update
 ```
 
-The skills were renamed to the `mz-` prefix. If you installed them before the
-rename, remove the old copies so each skill appears only once. Add `-g` if you
+Most skills now use the `mz-` prefix, and `mcp-developer-analysis` is now
+`mz-health-check`. `materialize-docs` keeps its name. If you installed the
+skills before the rename, remove the old copies so each skill appears only
+once. Run this in each project where you installed them, or add `-g` if you
 installed them globally:
 
 ```bash
@@ -64,9 +67,10 @@ npx skills remove materialize-dbt materialize-debug-freshness materialize-terraf
 
 ## Install as a plugin
 
-Claude Code and Codex can also install the skills as one plugin, named
-`materialize`. Updating the plugin picks up new and updated skills. Plugin
-skills are namespaced, for example `materialize:mz-dbt`.
+Claude Code and Codex can install all skills as one plugin, named
+`materialize`, instead of using `npx skills`. Use one method or the other, or
+each skill loads twice. Plugin skills are namespaced, for example
+`materialize:mz-dbt`.
 
 For Claude Code:
 
@@ -77,7 +81,9 @@ For Claude Code:
 
 Auto-update is off by default for this marketplace. To turn it on, run
 `/plugin`, select **Marketplaces**, choose `materialize`, and select **Enable
-auto-update**. To update by hand, run `/plugin marketplace update materialize`.
+auto-update**. Claude Code then checks for updates in the background and asks
+you to run `/reload-plugins` when there is one. To update by hand, run `/plugin marketplace update materialize`, then `/plugin update
+materialize@materialize`, then `/reload-plugins`.
 
 For Codex:
 
@@ -88,11 +94,11 @@ codex plugin add materialize@materialize
 
 To update, run `codex plugin marketplace upgrade materialize`.
 
-## Claude Code plugins
+## SQL language server plugin
 
-The same repository also serves as a [Claude Code plugin
-marketplace](https://code.claude.com/docs/en/plugin-marketplaces) named
-`materialize`. Besides the skills plugin, its `mz-sql-lsp` plugin registers the
+The `materialize` [Claude Code plugin
+marketplace](https://code.claude.com/docs/en/plugin-marketplaces) also provides
+the `mz-sql-lsp` plugin, which registers the
 [`mz-deploy`](/developer-tools/mz-deploy/) language server for `.sql` files, so Claude
 Code navigates your project instead of grepping it. See [AI agent
 setup](/developer-tools/mz-deploy/agent-setup/#configuring-for-claude-code) for
