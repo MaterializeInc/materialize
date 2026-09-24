@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use mz_dyncfg::ConfigSet;
+use mz_ore::error::ErrorExt;
 use mz_ore::url::SensitiveUrl;
 use tracing::warn;
 
@@ -69,7 +70,7 @@ pub async fn open_hedge_sibling(
         Err(err) => {
             warn!(
                 "hedged blob gets unavailable, sibling config failed: {}",
-                err
+                err.display_with_causes()
             );
             return HedgeSibling::Unavailable;
         }
@@ -80,7 +81,10 @@ pub async fn open_hedge_sibling(
         config @ (BlobConfig::S3(_) | BlobConfig::Azure(_)) => match config.open().await {
             Ok(blob) => HedgeSibling::Isolated(blob),
             Err(err) => {
-                warn!("hedged blob gets unavailable, sibling open failed: {}", err);
+                warn!(
+                    "hedged blob gets unavailable, sibling open failed: {}",
+                    err.display_with_causes()
+                );
                 HedgeSibling::Unavailable
             }
         },
