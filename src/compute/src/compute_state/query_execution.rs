@@ -374,6 +374,11 @@ impl ComputeState {
 
     fn report_query_catalog_frontiers(&mut self, nonce: Uuid, sender: &ResponseSender) {
         let mut frontiers = BTreeMap::new();
+        for &id in &self.completed_exports {
+            if id.is_user() || id.is_system() {
+                frontiers.insert(id, completed_export_frontiers());
+            }
+        }
         for (&id, collection) in &mut self.collections {
             if !(id.is_user() || id.is_system()) || collection.is_subscribe_or_copy {
                 continue;

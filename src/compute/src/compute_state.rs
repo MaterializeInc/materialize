@@ -184,6 +184,9 @@ pub struct ComputeState {
     retiring_dataflows: BTreeMap<usize, RetiringDataflow>,
     /// Source-event observer installed only while rendering a query dataflow.
     pub(crate) query_admission: Option<Rc<RefCell<query_execution::Admission>>>,
+    /// Maintained exports whose committed sealed selection requires no execution.
+    /// Retained until AllowCompaction(empty), independently of query connections.
+    completed_exports: BTreeSet<GlobalId>,
     /// State kept for each installed compute collection.
     ///
     /// Each collection has exactly one frontier.
@@ -335,6 +338,7 @@ impl ComputeState {
             last_query_served: None,
             retiring_dataflows: Default::default(),
             query_admission: None,
+            completed_exports: BTreeSet::new(),
             collections: Default::default(),
             traces,
             subscribe_response_buffer: Default::default(),
@@ -655,6 +659,17 @@ impl ComputeState {
     }
 }
 
+/// A sealed selection certifies completion without requiring snapshot computation.
+fn completed_export_frontiers() -> FrontiersResponse {
+    FrontiersResponse {
+        write_frontier: Some(Antichain::new()),
+        input_frontier: Some(Antichain::new()),
+        output_frontier: Some(Antichain::new()),
+        read_frontier: Some(Antichain::new()),
+        hydrated: Some(true),
+    }
+}
+
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
 pub(crate) struct ActiveComputeState<'a> {
     /// The underlying Timely worker.
@@ -784,8 +799,30 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
-        let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
+        if self.compute_state.active_query.is_none() && as_of.is_empty() {
+            // The legacy controller skips empty-as_of creation. On the maintained
+            // replica lane it certifies a committed sealed selection, not merely
+            // an absence of observed progress. No Timely index or state is needed.
+            assert!(dataflow.subscribe_ids().next().is_none());
+            assert!(dataflow.copy_to_ids().next().is_none());
+            for id in dataflow.export_ids() {
+                assert!(!self.compute_state.collections.contains_key(&id));
+                self.compute_state.completed_exports.insert(id);
+                self.send_compute_response(ComputeResponse::Frontiers(
+                    id,
+                    completed_export_frontiers(),
+                ));
+            }
+            return;
+        }
+        assert!(
+            self.compute_state.active_query.is_some()
+                || dataflow
+                    .export_ids()
+                    .all(|id| !self.compute_state.completed_exports.contains(&id))
+        );
+        let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
 
         let dataflow_expiration = dataflow
             .time_dependence
@@ -917,6 +954,11 @@ impl<'a> ActiveComputeState<'a> {
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
         if frontier.is_empty() {
+            if self.compute_state.active_query.is_none()
+                && self.compute_state.completed_exports.remove(&id)
+            {
+                return;
+            }
             // Indicates that we may drop `id`, as there are no more valid times to read.
             self.drop_collection(id);
         } else {
