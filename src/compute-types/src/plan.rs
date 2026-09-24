@@ -209,14 +209,34 @@ impl std::fmt::Display for LirId {
 
 /// Version of the stable LIR serialization format.
 ///
-/// Bump this when the serialized representation of [`LirRelationExpr`] or
-/// anything it transitively contains changes, or when a scalar function's
-/// declared properties change. Two snapshot tests key off it: the schema
-/// snapshot in `tests/lir_schema.rs` against
+/// Once a version has shipped, meaning a released Materialize durably stores
+/// pinned plans in it, bump this when the serialized representation of
+/// [`LirRelationExpr`] or anything it transitively contains changes, or when
+/// a scalar function's declared properties change. Whether the current
+/// version has shipped is recorded in [`LIR_VERSION_POLICY`]. Two snapshot
+/// tests key off it: the schema snapshot in `tests/lir_schema.rs` against
 /// `tests/snapshots/lir_v{LIR_VERSION}.json`, and the function property
 /// registry in `tests/func_registry.rs` against
-/// `tests/snapshots/func_registry_v{LIR_VERSION}.json`.
+/// `tests/snapshots/func_registry.json` with a per-version digest in
+/// `tests/snapshots/func_registry_digests.json`.
 pub const LIR_VERSION: u64 = 1;
+
+/// What a change to the stable LIR format must do at the current
+/// [`LIR_VERSION`]. The snapshot tests print it when a snapshot goes stale.
+///
+/// This is the one place that records whether the current version has
+/// shipped. Once a released Materialize durably stores pinned plans, replace
+/// the text with the shipped policy: bump `LIR_VERSION` rather than rewriting
+/// the shipped version's snapshots, so the old schema stays available to
+/// migration tooling.
+pub const LIR_VERSION_POLICY: &str = "\
+The current LIR version has NOT shipped: no released Materialize stores pinned
+LIR plans yet, so nothing depends on the checked-in snapshots. Regenerate them
+in place and include the diff in your PR.
+
+Once pinned plans are durably stored, a change like this must instead bump
+LIR_VERSION in src/compute-types/src/plan.rs so it lands as a new version.
+See doc/developer/design/20260826_pinned_lir.md.";
 
 pub use constant_rows_serde::ConstantRows;
 
