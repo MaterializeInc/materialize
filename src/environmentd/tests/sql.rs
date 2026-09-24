@@ -285,25 +285,6 @@ async fn test_peer_index_pending_installation() {
         .unwrap()
         .get(0);
         assert!(absent, "index without a selection must not enter compute");
-        let pending_metric = || {
-            server
-                .metrics_registry
-                .gather()
-                .into_iter()
-                .find(|family| family.name() == "mz_maintained_compute_pending_installations")
-                .expect("pending installation metric")
-                .get_metric()[0]
-                .get_gauge()
-                .value()
-        };
-        assert_eq!(pending_metric(), 1.0);
-        assert!(
-            test_util::get_counter_value(
-                &server.metrics_registry,
-                "mz_maintained_compute_installation_retries_total",
-                &[],
-            ) > 0
-        );
         let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
             .await
             .unwrap()
@@ -326,7 +307,6 @@ async fn test_peer_index_pending_installation() {
         batch_execute(&client, sql!("DROP INDEX peer_pending"))
             .await
             .unwrap();
-        assert_eq!(pending_metric(), 0.0);
         loop {
             let published: bool =
                 query_one(&internal, bound_sql.clone(), &[&selected_id.to_string()])

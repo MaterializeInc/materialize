@@ -417,10 +417,12 @@ async fn missing_wal_identity_remains_pending() {
     let persist = PersistClient::new_for_tests().await;
     let store = store(&persist).await;
     let mut writer = debug_catalog(&persist, None).await;
-    let (_, no_schema) = create_table(&mut writer, "no_schema").await;
+    let (_, table) = create_table(&mut writer, "no_wal").await;
+    let shard = writer.state().storage_metadata().collection_metadata[&table];
+    register(&persist, shard, &RelationDesc::empty()).await;
     let result = resolve(
         &writer,
-        &BTreeSet::from([no_schema]),
+        &BTreeSet::from([table]),
         &store,
         BUILD,
         &persist,
@@ -430,7 +432,7 @@ async fn missing_wal_identity_remains_pending() {
     .expect("WAL pending");
     assert_eq!(
         result.pending,
-        BTreeMap::from([(no_schema, Pending::TxnWalShard)])
+        BTreeMap::from([(table, Pending::TxnWalShard)])
     );
     assert!(result.metadata.is_empty());
     assert!(result.uppers.is_empty());
