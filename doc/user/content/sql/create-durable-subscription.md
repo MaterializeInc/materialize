@@ -16,7 +16,7 @@ history you still need.
 
 A plain [`SUBSCRIBE`](/sql/subscribe/) has no memory. If the connection drops,
 the next `SUBSCRIBE` starts over, and unless you configured a [history retention
-period](/transform-data/patterns/durable-subscriptions/) and recorded your own
+period](/serve-results/durable-subscriptions/) and recorded your own
 timestamps, it starts over with a full snapshot.
 
 A durable subscription moves both of those responsibilities into Materialize:
@@ -76,7 +76,7 @@ everything strictly before it counts as processed, so you pass the timestamp you
 recorded, with no `- 1`. Creation fails if that history is no longer retained.
 
 This is how you move from [recording your own
-timestamps](/transform-data/patterns/durable-subscriptions/) to a durable
+timestamps](/serve-results/durable-subscriptions/) to a durable
 subscription without a gap or a snapshot:
 
 1.  Create the subscription with `START AT` set to your last committed progress
@@ -317,7 +317,7 @@ genuine second change. For the same reason, do not treat the stream as an event
 log.
 
 Materialize does not enforce uniqueness, since tables support neither [primary
-keys nor unique constraints](/sql/create-table/#known-limitations). If you apply
+keys nor unique constraints](/sql/create-table/user-populated/#known-limitations). If you apply
 updates into a keyed store, you are responsible for the key being unique in the
 subscribed data. Note that a projection in the `AS SELECT` form can make
 distinct rows identical, which combines their changes.
@@ -327,7 +327,7 @@ distinct rows identical, which combines their changes.
 If you need **exactly-once** processing, keep recording your own progress
 timestamp and writing it in the same transaction as the data it covers, as
 described in [Resuming
-subscriptions](/transform-data/patterns/durable-subscriptions/#note-about-idempotency).
+subscriptions](/serve-results/durable-subscriptions/#note-about-idempotency).
 
 You can still use a durable subscription for this. Acknowledge as normal to
 control how much history is retained, and on reconnection skip what you already
@@ -398,7 +398,7 @@ column that predicts an expiry. `lag` is the distance to the object's current
 time, which is what predicts how much data a reconnection will replay.
 
 This relation is distinct from
-[`mz_internal.mz_subscriptions`](/reference/system-catalog/mz_internal/#mz_subscriptions),
+[`mz_internal.mz_subscriptions`](/sql/system-catalog/mz_internal/#mz_subscriptions),
 which lists `SUBSCRIBE` statements that are running right now. A durable
 subscription appears in `mz_durable_subscriptions` whether or not anything is
 currently reading from it.
@@ -506,4 +506,4 @@ The privileges required to execute this statement are:
 *   [`DROP DURABLE SUBSCRIPTION`](/sql/drop-durable-subscription/)
 *   [`SUBSCRIBE`](/sql/subscribe/)
 *   [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/)
-*   [Resuming subscriptions](/transform-data/patterns/durable-subscriptions/)
+*   [Resuming subscriptions](/serve-results/durable-subscriptions/)

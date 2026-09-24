@@ -57,4 +57,4 @@ The privileges required to execute this statement are:
 *   [`ALTER DURABLE SUBSCRIPTION`](/sql/alter-durable-subscription/)
 *   [`ACKNOWLEDGE`](/sql/acknowledge/)
 *   [`SUBSCRIBE`](/sql/subscribe/)
-*   [Resuming subscriptions](/transform-data/patterns/durable-subscriptions/)
+*   [Resuming subscriptions](/serve-results/durable-subscriptions/)

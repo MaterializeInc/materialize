@@ -67,7 +67,7 @@ are gone and cannot be re-delivered.
 Acknowledging a timestamp beyond the object's write frontier is an error. The
 frontier is the largest timestamp for which the subscription could have sent you
 a progress message, and it is reported for every object in
-[`mz_internal.mz_frontiers`](/reference/system-catalog/mz_internal/#mz_frontiers).
+[`mz_internal.mz_frontiers`](/sql/system-catalog/mz_internal/#mz_frontiers).
 
 ### Where you can run it
 
@@ -128,4 +128,4 @@ The privileges required to execute this statement are:
 *   [`ALTER DURABLE SUBSCRIPTION`](/sql/alter-durable-subscription/)
 *   [`DROP DURABLE SUBSCRIPTION`](/sql/drop-durable-subscription/)
 *   [`SUBSCRIBE`](/sql/subscribe/)
-*   [Resuming subscriptions](/transform-data/patterns/durable-subscriptions/)
+*   [Resuming subscriptions](/serve-results/durable-subscriptions/)

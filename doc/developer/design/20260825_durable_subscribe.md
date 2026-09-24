@@ -24,7 +24,7 @@ Our own console demonstrates the workaround and its cost.
 per subscribe, and on reconnect it re-runs the subscribe from scratch, holding
 the stale snapshot behind a `resubscribing` flag until a new snapshot completes.
 The manual escape is documented in
-`doc/user/content/transform-data/patterns/durable-subscriptions.md`, a shipped
+`doc/user/content/serve-results/durable-subscriptions.md`, a shipped
 private-preview page that instructs users to set a `RETAIN HISTORY` duration,
 record progress timestamps themselves, and resume with `AS OF
 <last_progress_mz_timestamp - 1>`. Every part of that is a responsibility we are

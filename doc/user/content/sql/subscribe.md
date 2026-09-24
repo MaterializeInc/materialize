@@ -611,7 +611,7 @@ subscription at a time, and subscribing again takes over from the previous
 reader.
 
 Alternatively, you can adjust the [history retention
-period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
+period](/serve-results/durable-subscriptions/#history-retention-period)
 for the objects a subscription depends on, record the progress timestamp in your
 own application, and then use [`AS OF`](#as-of) to pick up where you left off.
 This requires more from your application, but recording the position yourself is
@@ -620,7 +620,7 @@ transaction as the data. A durable subscription supplies retention; your own
 recorded position supplies exactly-once.
 
 For more information on both, see [resuming
-subscriptions](/transform-data/patterns/durable-subscriptions/).
+subscriptions](/serve-results/durable-subscriptions/).
 
 ## Privileges
 

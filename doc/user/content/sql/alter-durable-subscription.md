@@ -82,4 +82,4 @@ The privileges required to execute this statement are:
 *   [`ACKNOWLEDGE`](/sql/acknowledge/)
 *   [`DROP DURABLE SUBSCRIPTION`](/sql/drop-durable-subscription/)
 *   [`SUBSCRIBE`](/sql/subscribe/)
-*   [Resuming subscriptions](/transform-data/patterns/durable-subscriptions/)
+*   [Resuming subscriptions](/serve-results/durable-subscriptions/)
