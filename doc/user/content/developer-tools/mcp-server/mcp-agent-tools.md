@@ -167,7 +167,10 @@ ALTER ROLE my_agent SET restrict_to_user_objects = true;
 This setting takes effect on the next connection. Once active:
 
 - Queries referencing system catalog objects are rejected with a permission
-  error.
+  error. This includes `pg_has_role`, whose implementation depends on blocked
+  system objects. Views that filter rows by the session's roles should use
+  `mz_session_role_memberships()` instead. See [Fine-grained access
+  control](/security/fine-grained-access-control/#resolve-the-sessions-roles).
 - Data product discovery (`get_data_products`, `get_data_product_details`,
   `read_data_product`) continues to work normally.
 - The restriction cannot be bypassed by the role itself; only a superuser can

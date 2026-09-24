@@ -1,11 +1,13 @@
 ---
 source: src/row-spine/src/lib.rs
-revision: 32dcad4ade
+revision: feff142553
 ---
 
 # mz-row-spine
 
 Packed-bytes differential dataflow spine layouts for `Row`-valued arrangements. Keys and values are stored as concatenated bytes in a contiguous backing region (via `mz_ore::region::Region`, which uses lgalloc when available) rather than as separately-allocated heap objects, giving cursor lookups block locality and allowing the OS to evict cold pages cleanly under memory pressure.
+
+The `DICTIONARY_COMPRESSION` atomic bool controls whether per-column dictionary compression is enabled in row containers at runtime.
 
 ## Public types
 
@@ -14,12 +16,13 @@ Packed-bytes differential dataflow spine layouts for `Row`-valued arrangements. 
 * `DatumContainer` — packed-bytes container for `Row` keys or values; implements `columnar::Container` and serves as the storage type for `Row`-valued spine layouts. Also implements `PushInto<&RowRef>`, pushing the raw bytes of a `RowRef` directly into the backing byte container.
 * `DatumSeq<'a>` — borrowing view of a packed byte sequence, decoded datum-by-datum as `Datum`s; implements `ExtendDatums` and `PartialEq<&RowRef>` (comparing the underlying byte slices).
 * `OffsetOptimized` — offset list implementation wrapping `differential_dataflow`'s `OffsetList`, used in `OrdValBatch` and `OrdKeyBatch` layouts.
+* `RowRowColPagedState` — re-exported builder state type used by the dictionary-compression path in `RowRowColPagedBuilder`.
 
 ## Spine type aliases
 
 * `RowRowSpine<T, R>` — spine with `Row` keys and `Row` values.
 * `RowValSpine<V, T, R>` — spine with `Row` keys and arbitrary `V` values.
-* `RowSpine<T, R>` — spine with `Row` keys and `()` values.
+* `RowSpine<T, R, DC>` — spine with `Row` keys and `()` values; `DC` is the diff `BatchContainer`, defaulting to `ColumnationStack<R>`.
 * `ValRowSpine<K, T, R>` — spine with arbitrary `K` keys and `Row` values.
 * `ArcOrdValSpine<K, V, T, R>` — generic `ArcBatch`-backed key/value spine for callers outside `mz_compute` that need an arrangement over non-`Row`-specialized types.
 * `ArcOrdKeySpine<K, T, R>` — generic `ArcBatch`-backed key-only spine.
@@ -36,7 +39,7 @@ All batchers use `MergeBatcher` from `differential_dataflow` with `ColumnationCh
 
 All builders use `ArcBuilder` wrapping the appropriate `OrdValBuilder` or `OrdKeyBuilder` with a `ColumnationStack` input:
 
-* `RowRowBuilder<T, R>`, `RowValBuilder<V, T, R>`, `RowBuilder<T, R>`, `ValRowBuilder<K, T, R>`
+* `RowRowBuilder<T, R>`, `RowValBuilder<V, T, R>`, `RowBuilder<T, R, DC>`, `ValRowBuilder<K, T, R>`
 * `ArcOrdValBuilder<K, V, T, R>` — builder pairing with `ArcOrdValSpine`.
 * `ArcOrdKeyBuilder<K, T, R>` — builder pairing with `ArcOrdKeySpine`.
 

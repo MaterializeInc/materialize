@@ -39,6 +39,24 @@ impl std::fmt::Display for UnaryFn {
 }
 impl crate::func::FuncName for UnaryFn {
     const NAME: &'static str = stringify!(unary_fn);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(test = true)] fn unary_fn<'a>(a: Datum<'a>) -> bool",
+        signature: "fn(Datum<'a>) -> bool",
+        body_fingerprint: 4726381389472009124u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn unary_fn<'a>(a: Datum<'a>) -> bool {
     unimplemented!()

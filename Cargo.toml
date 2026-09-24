@@ -266,7 +266,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.97.1"
+rust-version = "1.98.1"
 
 [workspace.dependencies]
 ahash = { version = "0.8.12", default-features = false }
@@ -439,7 +439,7 @@ phf_codegen = "0.13.1"
 pin-project = "1.1.13"
 postgres = "0.19.12"
 postgres-openssl = "0.5.2"
-postgres-protocol = "0.6.9"
+postgres-protocol = "0.6.12"
 postgres-replication = "0.6.7"
 postgres-types = { version = "0.2.11", features = ["with-chrono-0_4", "with-uuid-1"] }
 postgres_array = "0.11.0"

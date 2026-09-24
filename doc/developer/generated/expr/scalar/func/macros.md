@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/macros.rs
-revision: b28da7d561
+revision: ad1150f222
 ---
 
 # mz-expr::scalar::func::macros

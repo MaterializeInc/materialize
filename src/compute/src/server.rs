@@ -37,9 +37,7 @@ use mz_storage::metrics::StorageMetrics;
 use mz_storage::storage_state::{StorageInstanceContext, StorageState, Worker as StorageWorker};
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
-use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
-use timely::logging::TimelyEvent;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
@@ -129,10 +127,6 @@ impl ComputeRuntimeRole {
     }
 }
 
-/// Type alias for the storage timely log reader.
-pub(crate) type StorageTimelyLogReader =
-    Arc<EventLink<mz_repr::Timestamp, Vec<(Duration, TimelyEvent)>>>;
-
 /// Configures the server with compute-specific metrics.
 #[derive(Clone)]
 struct Config {
@@ -155,8 +149,6 @@ struct Config {
     /// NOTE: per compute runtime, not global. A process running a maintenance and an interactive
     /// runtime calls `serve` twice and admits the bound once per call.
     pub peek_permits: Arc<PeekPermits>,
-    /// A reader for each storage worker in this process.
-    pub storage_log_readers: Arc<Mutex<Vec<Option<StorageTimelyLogReader>>>>,
     /// Configuration for hosting storage objects on this cluster, if enabled.
     pub storage_guest: Option<Arc<StorageGuestConfig>>,
 }
@@ -193,18 +185,8 @@ pub async fn serve(
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
-    storage_log_readers: Vec<StorageTimelyLogReader>,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
     let workers_per_process = timely_config.workers;
-    // Normalize the log-reader vec to exactly one slot per local worker. Empty
-    // input means logging is disabled; pad with `None` so index-based access is
-    // always in bounds.
-    let storage_log_readers = if storage_log_readers.is_empty() {
-        (0..workers_per_process).map(|_| None).collect()
-    } else {
-        assert_eq!(storage_log_readers.len(), workers_per_process);
-        storage_log_readers.into_iter().map(Some).collect()
-    };
     let config = Config {
         persist_clients,
         txns_ctx,
@@ -214,7 +196,6 @@ pub async fn serve(
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
         peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
-        storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
         storage_guest: None,
     };
 
@@ -273,7 +254,6 @@ pub async fn serve_unified(
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
         peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
-        storage_log_readers: Arc::new(Mutex::new((0..workers_per_process).map(|_| None).collect())),
         storage_guest: Some(Arc::new(storage_guest)),
     };
 
@@ -462,8 +442,6 @@ struct Worker<'w> {
     /// Bounds how many offloaded peek walks run at once, shared by the workers of one `serve`
     /// call rather than by the process.
     peek_permits: Arc<PeekPermits>,
-    /// Reader for storage timely logging events.
-    storage_log_reader: Option<StorageTimelyLogReader>,
     /// The hosted storage guest, if any.
     storage: Option<StorageGuest>,
 }
@@ -551,10 +529,7 @@ impl ClusterSpec for Config {
         let worker_id = timely_worker.index();
         let metrics = self.metrics.for_worker(worker_id);
 
-        // Take this worker's storage log reader, indexed by local worker index
-        // so compute worker x matches storage worker x.
         let local_index = worker_id % self.workers_per_process;
-        let storage_log_reader = self.storage_log_readers.lock().unwrap()[local_index].take();
 
         // Prepare the storage guest's inputs to the command channel, so
         // storage-internal commands are sequenced through the same lane as compute commands.
@@ -623,7 +598,6 @@ impl ClusterSpec for Config {
             metrics_registry: self.metrics_registry.clone(),
             workers_per_process: self.workers_per_process,
             peek_permits: Arc::clone(&self.peek_permits),
-            storage_log_reader,
             storage,
         }
         .run()
@@ -938,7 +912,6 @@ impl<'w> Worker<'w> {
                 self.metrics_registry.clone(),
                 self.workers_per_process,
                 Arc::clone(&self.peek_permits),
-                self.storage_log_reader.take(),
             ));
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);

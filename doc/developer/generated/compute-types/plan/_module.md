@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan.rs
-revision: c6be08fe4f
+revision: ad1150f222
 ---
 
 # compute-types::plan

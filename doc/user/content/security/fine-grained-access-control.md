@@ -147,14 +147,23 @@ List only the columns you guard. Everything else is projected for every reader.
 
 `current_role()` returns only the role the session connected as. Entitlements
 usually name a shared tenant role, so the filter has to follow role membership.
-`pg_has_role` expands it:
+[`mz_session_role_memberships()`](/sql/functions/#mz_session_role_memberships)
+returns the name of every role the session's role belongs to, directly or
+through other roles, itself included:
 
 ```mzsql
 CREATE VIEW security.session_roles AS
-    SELECT name
-    FROM mz_catalog.mz_roles
-    WHERE pg_has_role(current_role(), oid, 'USAGE');
+    SELECT unnest(mz_session_role_memberships()) AS name;
 ```
+
+{{< note >}}
+`pg_has_role(current_role(), oid, 'USAGE')` over `mz_catalog.mz_roles` yields
+the same set, but `pg_has_role` is implemented on a function that exposes the
+full role graph and is blocked for roles with
+[`restrict_to_user_objects`](/developer-tools/mcp-server/mcp-agent-tools/#restrict-to-user-objects)
+set, such as MCP agent roles. Views built on it cannot be read by those roles.
+`mz_session_role_memberships()` has no such limitation.
+{{</ note >}}
 
 For a session connected as `alice@acme.example`, which is a member of
 `acme_tenant`, which is a member of `orders_reader`:

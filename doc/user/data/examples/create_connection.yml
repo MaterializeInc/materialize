@@ -756,7 +756,8 @@
         CATALOG TYPE = 'rest',
         URL = '<catalog_url>',
         WAREHOUSE = '<warehouse>',
-        GCP CONNECTION = <gcp_connection>
+        GCP CONNECTION = <gcp_connection>,
+        ACCESS DELEGATION = 'vended-credentials'
     );
   syntax_elements:
     - name: "`<connection_name>`"
@@ -777,6 +778,17 @@
         *Value:* object name. Required.
 
         The name of a [GCP connection](#gcp) to use for authentication.
+    - name: "`ACCESS DELEGATION`"
+      description: |
+        *Value:* `'vended-credentials'`. Optional.
+
+        Requests temporary, table-scoped storage credentials from the catalog.
+        Requires [credential vending enabled on the
+        catalog](https://docs.cloud.google.com/lakehouse/docs/enable-credential-vending).
+        Omit it to reach the warehouse bucket with the GCP connection's service
+        account instead.
+
+        See [Storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation).
 
 - name: "syntax-iceberg-catalog-rest"
   code: |
@@ -857,7 +869,7 @@
 
 - name: "example-iceberg-catalog-gcp-connection"
   description: |
-    The following example creates a [GCP connection](/sql/create-connection/#gcp) and an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for Google Cloud BigLake:
+    The following example creates a [GCP connection](/sql/create-connection/#gcp) and an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for Google Cloud BigLake. The service account reaches both the catalog and the warehouse bucket, so no credential vending is involved:
   code: |
     -- Using the base64-encoded service account key (e.g. base64 < sa_key.json)
     CREATE SECRET gcp_service_account_key
@@ -874,6 +886,29 @@
         URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
         WAREHOUSE = 'gs://<bucket>',
         GCP CONNECTION = gcp_connection
+    );
+  testable: false
+
+- name: "example-iceberg-catalog-gcp-connection-vended-credentials"
+  description: |
+    The following example creates a [GCP connection](/sql/create-connection/#gcp) and an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for Google Cloud BigLake that takes its storage credentials from the catalog. The service account authenticates to the catalog, and the catalog vends temporary, table-scoped credentials for the warehouse bucket:
+  code: |
+    -- Using the base64-encoded service account key (e.g. base64 < sa_key.json)
+    CREATE SECRET gcp_service_account_key
+      AS decode('<base64-encoded service account key JSON>', 'base64');
+
+    -- Create a GCP connection that uses the service-account key.
+    CREATE CONNECTION gcp_connection TO GCP (
+        SERVICE ACCOUNT KEY = SECRET gcp_service_account_key
+    );
+
+    -- Create the Iceberg catalog connection pointing to BigLake.
+    CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
+        WAREHOUSE = 'gs://<bucket>',
+        GCP CONNECTION = gcp_connection,
+        ACCESS DELEGATION = 'vended-credentials'
     );
   testable: false
 

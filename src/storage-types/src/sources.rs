@@ -918,6 +918,9 @@ pub enum SourceExportStatementDetails {
         /// replication re-casts old tuples on delete and the persisted rows
         /// were ingested under the legacy semantics.
         cast_oid_full_range: bool,
+        /// An upper bound on the upstream WAL position whose schema `table`
+        /// describes. `None` for exports created before this was recorded.
+        initial_lsn: Option<MzOffset>,
     },
     MySql {
         table: mz_mysql_util::MySqlTableDesc,
@@ -941,11 +944,13 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
             SourceExportStatementDetails::Postgres {
                 table,
                 cast_oid_full_range,
+                initial_lsn,
             } => ProtoSourceExportStatementDetails {
                 kind: Some(proto_source_export_statement_details::Kind::Postgres(
                     postgres::ProtoPostgresSourceExportStatementDetails {
                         table: Some(table.into_proto()),
                         cast_oid_full_range: *cast_oid_full_range,
+                        initial_lsn: initial_lsn.map(|lsn| lsn.offset),
                     },
                 )),
             },
@@ -1000,6 +1005,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     .table
                     .into_rust_if_some("ProtoPostgresSourceExportStatementDetails::table")?,
                 cast_oid_full_range: details.cast_oid_full_range,
+                initial_lsn: details.initial_lsn.map(MzOffset::from),
             },
             Some(Kind::Mysql(details)) => SourceExportStatementDetails::MySql {
                 table: details

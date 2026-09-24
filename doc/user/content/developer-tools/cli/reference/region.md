@@ -1,4 +1,5 @@
 ---
+draft: true
 title: mz region
 description: The `mz region` command manages regions in your organization.
 menu:

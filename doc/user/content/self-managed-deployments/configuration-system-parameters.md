@@ -32,6 +32,9 @@ There are two ways to configure system parameters:
 
 This guide focuses on the ConfigMap approach for self-managed deployments.
 
+For balancerd settings, such as its connection limit, see
+[Configure balancerd dynamic configuration](#configure-balancerd-dynamic-configuration).
+
 {{< public-preview />}}
 
 ## Configure System Parameters via ConfigMap
@@ -133,68 +136,29 @@ your ConfigMap does **not** require a rollout.
 
 ### ConfigMap sync behavior
 
-Kubernetes uses the kubelet to periodically sync ConfigMap updates to mounted
-volumes. By default, this sync occurs approximately every 60 seconds. This
-means changes to your ConfigMap may take up to a minute to be reflected in
-the running Materialize instance.
+Kubernetes periodically refreshes mounted ConfigMaps. The delay depends on
+the kubelet sync period and its ConfigMap cache. With a one-minute sync period
+and a one-minute cache lifetime, propagation can take up to two minutes.
+See [Kubernetes ConfigMap update behavior](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/#mounted-configmaps-are-updated-automatically).
 
 Once the ConfigMap is synced to the volume, Materialize checks for configuration
 changes every second and applies them automatically.
 
-To force an immediate sync of the ConfigMap from Kubernetes, you can update an
-annotation on the Materialize resource, which triggers a pod re-reconciliation:
+To request an earlier refresh, update an annotation on each affected pod,
+replacing `<pod-name>` with the pod's name:
 
 ```shell
-kubectl annotate materialize <instance-name> \
+kubectl annotate pod <pod-name> \
   -n materialize-environment \
   configmap-reload-trigger="$(date +%s)" \
   --overwrite
 ```
 
-Alternatively, you can add the `configmap-reload-trigger` annotation to your
-Materialize custom resource YAML and update it whenever you need to force a
-ConfigMap reload:
-
-{{< tabs >}}
-{{< tab "v1alpha1" >}}
-
-{{< self-managed/crd-version-note "v1alpha1" >}}
-
-```yaml
-apiVersion: materialize.cloud/v1alpha1
-kind: Materialize
-metadata:
-  name: 12345678-1234-1234-1234-123456789012
-  namespace: materialize-environment
-  annotations:
-    configmap-reload-trigger: "1234567890"  # Update this value to force reload
-spec:
-  # ... rest of spec
-```
-
-{{< /tab >}}
-{{< tab "v1" >}}
-
-{{< self-managed/crd-version-note "v1" >}}
-
-```yaml
-apiVersion: materialize.cloud/v1
-kind: Materialize
-metadata:
-  name: 12345678-1234-1234-1234-123456789012
-  namespace: materialize-environment
-  annotations:
-    configmap-reload-trigger: "1234567890"  # Update this value to force reload
-spec:
-  # ... rest of spec
-```
-
-{{< /tab >}}
-{{< /tabs >}}
-
 {{< note >}}
+
 Even after the ConfigMap is synced, some system parameters may require a restart to
 take effect.
+
 {{< /note >}}
 
 ## Available System Parameters
@@ -275,6 +239,123 @@ data:
       "allowed_cluster_replica_sizes": "'25cc', '50cc', '100cc', '200cc'"
     }
 ```
+
+## Configure balancerd dynamic configuration
+
+{{< warn-if-unreleased "v26.44" >}}
+
+To configure balancerd, use a separate ConfigMap referenced by
+`spec.balancerdConfigmapName`. This example requires Materialize Operator and a
+Materialize instance running v26.44 or later, with balancerd enabled. The field is
+supported in both the `v1` and `v1alpha1` Materialize custom resources.
+
+Balancerd configuration is separate from environmentd system parameters.
+For example, `balancerd_max_connections` limits connections per balancerd process,
+while `max_connections` controls connections in environmentd. Do not put
+`balancerd_*` settings in `system-params.json` or set them with `ALTER SYSTEM SET`.
+
+### Create the balancerd ConfigMap
+
+Save the following as `balancerd-configmap.yaml`, using the same namespace as your
+Materialize instance:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mz-balancerd-config
+  namespace: materialize-environment
+data:
+  config.json: |
+    {
+      "balancerd_max_connections": 10000
+    }
+```
+
+The `config.json` key must contain a valid JSON object. Use `{}` if you do not
+need any overrides yet. Apply the ConfigMap before referencing it:
+
+```shell
+kubectl apply -f balancerd-configmap.yaml
+```
+
+You manage this ConfigMap, either directly or through your deployment tooling.
+The operator mounts it without creating, overwriting, or deleting it.
+
+### Reference the ConfigMap
+
+Set `spec.balancerdConfigmapName` in your Materialize manifest and apply it.
+For an existing instance, you can also patch the resource. Replace
+`<instance-name>` with the name of your Materialize resource:
+
+```shell
+kubectl patch materialize <instance-name> -n materialize-environment \
+  --type merge \
+  -p '{"spec":{"balancerdConfigmapName":"mz-balancerd-config"}}'
+```
+
+Adding, changing, or removing this reference rolls the balancerd pods but does
+not require an environmentd rollout or a change to `requestRollout`. If the
+ConfigMap or its `config.json` key is missing, the new pods cannot start.
+
+For a standalone `Balancer` custom resource, set `spec.configmapName` instead.
+
+### Verify the configured connection limit
+
+Find the balancerd pods for your instance, replacing `<instance-name>` with your
+Materialize resource's name:
+
+```shell
+kubectl get pods -n materialize-environment \
+  -l 'app=balancerd,materialize.cloud/organization-name=<instance-name>'
+```
+
+Forward a pod's internal HTTP port. Replace `<balancerd-pod-name>` with one of
+those pod names. The default internal HTTP port is `8080`:
+
+```shell
+kubectl port-forward -n materialize-environment pod/<balancerd-pod-name> 8080:8080
+```
+
+In another terminal, check the configured limit:
+
+```shell
+curl -s http://localhost:8080/metrics | grep '^mz_balancer_connection_limit '
+```
+
+For this example, the result is:
+
+```nofmt
+mz_balancer_connection_limit 10000
+```
+
+Repeat for each balancerd pod. This metric reports the configured limit, not the
+number of active connections.
+
+### Update balancerd configuration
+
+Edit `config.json` in `balancerd-configmap.yaml` and reapply the file:
+
+```shell
+kubectl apply -f balancerd-configmap.yaml
+```
+
+Changing the ConfigMap contents does not restart balancerd. After Kubernetes
+projects the update into the pod, balancerd reads it on its next one-second sync
+tick. Allow for the additional [ConfigMap propagation delay](#configmap-sync-behavior)
+before verifying the updated metric.
+
+Keep these behaviors in mind:
+
+- Removing a setting from the JSON object does not reset its running value. To
+  reset a setting at runtime, explicitly set its default value.
+- Invalid JSON at startup prevents the file sync loop from starting. Correct the
+  ConfigMap and restart the affected balancerd pods. Invalid JSON introduced
+  after a successful startup leaves the previous values in use, and syncing
+  resumes after the JSON is corrected.
+- `balancerd_max_connections` defaults to `5000` per process and covers pgwire
+  and HTTPS connections together. Setting it to `0` disables this limit. The
+  separate environmentd `max_connections` limit still applies.
 
 ## Troubleshooting
 

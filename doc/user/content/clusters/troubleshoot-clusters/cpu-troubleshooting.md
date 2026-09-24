@@ -3,10 +3,12 @@ title: "Troubleshoot anomalies in CPU usage"
 description: "How to diagnose and resolve anomalies in cluster CPU utilization."
 menu:
   main:
-    name: "Troubleshoot anomalies in CPU usage"
-    identifier: cpu-troubleshooting
-    parent: clusters
-    weight: 90
+    name: "CPU spikes"
+    identifier: cluster-cpu-troubleshooting
+    parent: "troubleshoot-clusters"
+    weight: 20
+aliases:
+  - /clusters/cpu-troubleshooting/
 ---
 
 A cluster replica's CPU goes to the dataflows that maintain the cluster's

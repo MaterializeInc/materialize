@@ -1227,7 +1227,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_OBJECTS_ID_NAMESPACE_TYPES),
         Builtin::View(&MZ_OBJECT_HISTORY),
         Builtin::View(&MZ_OBJECT_LIFETIMES),
-        Builtin::Table(&MZ_OBJECT_GLOBAL_IDS),
+        Builtin::MaterializedView(&MZ_OBJECT_GLOBAL_IDS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),

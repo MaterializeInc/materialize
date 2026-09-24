@@ -15,10 +15,6 @@
 # Keep operator checks on the fast path so they do not create transient
 # dataflows that the checks themselves can observe.
 
-# Storage operator IDs are offset by STORAGE_ID_OFFSET (1 << 48).
-# Filter them out so test assertions only see compute operators.
-$ set storage-id-offset=281474976710656
-
 # Introspection subscribes and curated metric sinks both install dataflows on
 # every replica, adding noise to the introspection sources, so disable them
 # before creating the cluster below.
@@ -32,16 +28,16 @@ ALTER SYSTEM SET enable_metric_sink = false
 
 > CREATE CLUSTER test REPLICAS (r1 (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL '10ms'))
 > SET cluster = test
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators
 
 # Verify that an index dataflow is cleaned up when the index is dropped.
 
 > CREATE TABLE t (a int)
 > CREATE INDEX test_index ON t (a)
-> SELECT true FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset} LIMIT 1
+> SELECT true FROM mz_introspection.mz_dataflow_operators LIMIT 1
 true
 > DROP INDEX test_index
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators
 
 # Verify that an index dataflow is cleaned up when its input advances to the
 # empty frontier.
@@ -54,17 +50,17 @@ true
 1000
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators
 > DROP INDEX test_index
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators
 
 # Verify that an MV dataflow is cleaned up when the MV is dropped.
 
 > CREATE MATERIALIZED VIEW test_mv AS SELECT a FROM t
-> SELECT true FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset} LIMIT 1
+> SELECT true FROM mz_introspection.mz_dataflow_operators LIMIT 1
 true
 > DROP MATERIALIZED VIEW test_mv
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators
 
 # Verify that an MV dataflow is cleaned up when its input advances to the
 # empty frontier.
@@ -76,9 +72,9 @@ true
 1000
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators
 > DROP MATERIALIZED VIEW test_mv
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators
 
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/4712
 
@@ -115,6 +111,6 @@ true
 true
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators
 > DROP MATERIALIZED VIEW q14
-> SELECT id, name FROM mz_introspection.mz_dataflow_operators WHERE id < ${storage-id-offset}
+> SELECT id, name FROM mz_introspection.mz_dataflow_operators

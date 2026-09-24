@@ -100,8 +100,8 @@ use futures::StreamExt;
 use iceberg::ErrorKind;
 use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
 use iceberg::spec::{
-    DataFile, FormatVersion, Snapshot, StructType, read_data_files_from_avro,
-    write_data_files_to_avro,
+    DataFile, FormatVersion, NestedField, PrimitiveType, Snapshot, StructType, Type,
+    read_data_files_from_avro, write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
@@ -968,6 +968,53 @@ async fn try_commit_batch(
     }
 }
 
+/// Whether the sink can write into a table that already carries `current`,
+/// where `expected` is the schema the sink would create today.
+///
+/// Field ids, names and nullability have to match. Types have to match too,
+/// except that a column may be `fixed[16]` where `expected` has `string`. Uuid
+/// columns were written as fixed binary before, and a table holding one stays
+/// writable, because the writer builds its Arrow columns from the table's own
+/// schema rather than from `expected`. Rejecting it would strand the sink.
+///
+/// NOTE: the tolerance keys on the Iceberg types alone, so it also accepts a
+/// `fixed[16]` column where the relation has `text`. Such a table fails on the
+/// first row written instead of here. Only a table created outside Materialize
+/// can be in that state, since the sink never creates one.
+fn is_compatible(current: &Schema, expected: &Schema) -> bool {
+    current
+        .identifier_field_ids()
+        .eq(expected.identifier_field_ids())
+        && struct_is_compatible(current.as_struct(), expected.as_struct())
+}
+
+fn struct_is_compatible(current: &StructType, expected: &StructType) -> bool {
+    current.fields().len() == expected.fields().len()
+        && std::iter::zip(current.fields(), expected.fields())
+            .all(|(c, e)| field_is_compatible(c, e))
+}
+
+fn field_is_compatible(current: &NestedField, expected: &NestedField) -> bool {
+    current.id == expected.id
+        && current.name == expected.name
+        && current.required == expected.required
+        && match (&*current.field_type, &*expected.field_type) {
+            // A uuid column written before uuids became strings.
+            (Type::Primitive(PrimitiveType::Fixed(16)), Type::Primitive(PrimitiveType::String)) => {
+                true
+            }
+            (Type::Struct(c), Type::Struct(e)) => struct_is_compatible(c, e),
+            (Type::List(c), Type::List(e)) => {
+                field_is_compatible(&c.element_field, &e.element_field)
+            }
+            (Type::Map(c), Type::Map(e)) => {
+                field_is_compatible(&c.key_field, &e.key_field)
+                    && field_is_compatible(&c.value_field, &e.value_field)
+            }
+            (c, e) => c == e,
+        }
+}
+
 /// Load an existing Iceberg table or create it if it doesn't exist.
 async fn load_or_create_table(
     catalog: &dyn Catalog,
@@ -984,11 +1031,7 @@ async fn load_or_create_table(
             // Table exists, return it
             // TODO: Add proper schema evolution/validation to ensure compatibility
             let current_schema = table.metadata().current_schema();
-            if !(current_schema.as_struct().eq(schema.as_struct())
-                && current_schema
-                    .identifier_field_ids()
-                    .eq(schema.identifier_field_ids()))
-            {
+            if !is_compatible(current_schema, schema) {
                 anyhow::bail!(
                     "Iceberg table '{}' schema does not match expected schema. \
                      Current schema: {:?}, expected schema: {:?}",
@@ -2032,7 +2075,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{PrimitiveType, Type};
+    use iceberg::spec::{ListType, PrimitiveType, Type};
     use iceberg::writer::file_writer::location_generator::LocationGenerator;
     use mz_repr::SqlScalarType;
     use mz_storage_types::sinks::ICEBERG_UINT64_DECIMAL_PRECISION;
@@ -2135,6 +2178,14 @@ mod tests {
             DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
         );
 
+        // Interval should override to LargeUtf8
+        let result = iceberg_type_overrides(&SqlScalarType::Interval);
+        assert_eq!(result.unwrap().0, DataType::LargeUtf8);
+
+        // Uuid should override to Utf8
+        let result = iceberg_type_overrides(&SqlScalarType::Uuid);
+        assert_eq!(result.unwrap().0, DataType::Utf8);
+
         // Other types should return None (use default)
         assert!(iceberg_type_overrides(&SqlScalarType::Int32).is_none());
         assert!(iceberg_type_overrides(&SqlScalarType::String).is_none());
@@ -2195,6 +2246,123 @@ mod tests {
             .field_by_name("dur")
             .expect("field should exist");
         assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+    }
+
+    /// A uuid column must reach the Iceberg table as `string`, not as the
+    /// `fixed[16]` that the default `FixedSizeBinary(16)` mapping would produce.
+    #[mz_ore::test]
+    fn test_iceberg_uuid_override() {
+        let result = iceberg_type_overrides(&SqlScalarType::Uuid);
+        assert_eq!(result.unwrap().0, DataType::Utf8);
+
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("u", SqlScalarType::Uuid.nullable(true))
+            .finish();
+
+        let (arrow_schema, iceberg_schema) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::Utf8);
+
+        let field = iceberg_schema
+            .as_struct()
+            .field_by_name("u")
+            .expect("field should exist");
+        assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+        assert_ne!(
+            *field.field_type,
+            Type::Primitive(PrimitiveType::Fixed(16)),
+            "uuid must not fall back to the default FixedSizeBinary(16) mapping"
+        );
+    }
+
+    /// Rebuilds `schema` with the named field's type replaced, so a fixture can
+    /// differ from what the sink derives in exactly one type.
+    fn with_field_type(schema: &Schema, name: &str, ty: Type) -> Schema {
+        let fields = schema.as_struct().fields().iter().map(|f| {
+            let mut field = (**f).clone();
+            if field.name == name {
+                field.field_type = Box::new(ty.clone());
+            }
+            Arc::new(field)
+        });
+        Schema::builder()
+            .with_fields(fields)
+            .build()
+            .expect("valid schema")
+    }
+
+    /// A table created before uuid columns became strings holds `fixed[16]` and
+    /// must stay writable, while any other difference is still a mismatch.
+    #[mz_ore::test]
+    fn test_is_compatible_accepts_legacy_uuid() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("u", SqlScalarType::Uuid.nullable(true))
+            .finish();
+        let (_, expected) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        assert!(is_compatible(&expected, &expected));
+
+        // The halt this tolerance exists to prevent.
+        let legacy = with_field_type(&expected, "u", Type::Primitive(PrimitiveType::Fixed(16)));
+        assert!(is_compatible(&legacy, &expected));
+
+        // Only that direction: nothing produces a string column where the sink
+        // derives fixed binary.
+        assert!(!is_compatible(&expected, &legacy));
+
+        // An unrelated type difference is still a mismatch.
+        let wrong_type = with_field_type(&expected, "u", Type::Primitive(PrimitiveType::Long));
+        assert!(!is_compatible(&wrong_type, &expected));
+
+        // So is a missing column.
+        let truncated = Schema::builder()
+            .with_fields(expected.as_struct().fields().iter().take(1).cloned())
+            .build()
+            .expect("valid schema");
+        assert!(!is_compatible(&truncated, &expected));
+    }
+
+    /// The tolerance reaches a uuid nested inside a list, which the type
+    /// overrides remap just like a top-level column.
+    #[mz_ore::test]
+    fn test_is_compatible_accepts_legacy_uuid_in_list() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column(
+                "us",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Uuid),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .finish();
+        let (_, expected) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        let Type::List(list) = &*expected
+            .as_struct()
+            .field_by_name("us")
+            .expect("field should exist")
+            .field_type
+        else {
+            panic!("expected a list type");
+        };
+        let mut legacy_element = (*list.element_field).clone();
+        legacy_element.field_type = Box::new(Type::Primitive(PrimitiveType::Fixed(16)));
+        let legacy = with_field_type(
+            &expected,
+            "us",
+            Type::List(ListType {
+                element_field: Arc::new(legacy_element),
+            }),
+        );
+
+        assert!(is_compatible(&legacy, &expected));
     }
 
     #[mz_ore::test]

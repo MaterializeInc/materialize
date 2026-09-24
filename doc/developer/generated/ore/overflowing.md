@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/overflowing.rs
-revision: 225aeaa79f
+revision: 73fc5ef43f
 ---
 
 # mz-ore::overflowing

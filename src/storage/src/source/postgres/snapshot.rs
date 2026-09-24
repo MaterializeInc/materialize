@@ -610,6 +610,43 @@ pub(crate) fn render<'scope>(
                 upstream_info,
             } = snapshot_info;
 
+            // The snapshot transaction starts after every output's schema was captured during
+            // purification, so no output's initial LSN can exceed the snapshot LSN. A violation
+            // means the upstream went back in time, which would leave the rewind range the
+            // replication operator subtracts unable to reach the snapshot.
+            if let Some(err) = tables_to_snapshot.values().flatten().find_map(|(_, info)| {
+                (info.initial_lsn > snapshot_lsn).then_some(DefiniteError::InvalidSnapshotLsn {
+                    initial_lsn: info.initial_lsn,
+                    snapshot_lsn,
+                })
+            }) {
+                for (&oid, outputs) in tables_to_snapshot.iter() {
+                    for &output_index in outputs.keys() {
+                        if !config.responsible_for((oid, output_index)) {
+                            continue;
+                        }
+                        // We pick `u64::MAX` as the LSN which will (in practice) never conflict
+                        // any previously revealed portions of the TVC.
+                        let update = (
+                            (oid, output_index, Err(err.clone().into())),
+                            MzOffset::from(u64::MAX),
+                            Diff::ONE,
+                        );
+                        let size = update.fuel_size();
+                        raw_handle
+                            .give_fueled(&data_cap_set[0], update, size)
+                            .await;
+                    }
+                }
+                if is_snapshot_leader {
+                    definite_error_handle.give(
+                        &definite_error_cap_set[0],
+                        ReplicationError::Definite(Rc::new(err)),
+                    );
+                }
+                return Ok(());
+            }
+
             // Snapshot leader is already in identified transaction but all other workers need to enter it.
             if !is_snapshot_leader {
                 trace!(%id, "timely-{worker_id} using snapshot id {snapshot_id:?}");

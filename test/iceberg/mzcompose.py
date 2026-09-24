@@ -126,6 +126,7 @@ def workflow_smoke(c: Composition) -> None:
         "--var=aws-endpoint=minio:9000",
         "catalog.td",
         "nested-records.td",
+        "uuid-column.td",
         "key-validation.td",
     )
 
@@ -862,4 +863,57 @@ def workflow_range_noncanonical(c: Composition) -> None:
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "range-noncanonical.td",
+    )
+
+
+def workflow_legacy_uuid_column(c: Composition) -> None:
+    """A table whose uuid column predates the uuid-as-string mapping must keep
+    working.
+
+    Such a table holds `fixed[16]` where the sink would now create `string`, so
+    a strict schema comparison halts the sink forever. The table is created here
+    through the catalog's REST API, because nothing in this composition can
+    produce one otherwise: the sink only ever creates tables with the current
+    mapping."""
+    key = _setup(c)
+
+    polaris_port = c.port("polaris", 8181)
+    base_url = f"http://localhost:{polaris_port}"
+    access_token = get_polaris_access_token(c)
+
+    # Field ids and nullability have to match what the sink derives from
+    # `CREATE TABLE legacy_uuid_rows (id int, u uuid)`, so that the only
+    # difference left is the uuid column's type.
+    create_table = {
+        "name": "legacy_uuid_table",
+        "schema": {
+            "type": "struct",
+            "schema-id": 0,
+            "fields": [
+                {"id": 1, "name": "id", "required": False, "type": "int"},
+                {"id": 2, "name": "u", "required": False, "type": "fixed[16]"},
+            ],
+        },
+    }
+    req = urllib.request.Request(
+        f"{base_url}/api/catalog/v1/default_catalog"
+        f"/namespaces/default_namespace/tables",
+        data=json.dumps(create_table).encode(),
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    resp = urllib.request.urlopen(req)
+    created = json.loads(resp.read())
+    fields = created["metadata"]["schemas"][0]["fields"]
+    assert (
+        fields[1]["type"] == "fixed[16]"
+    ), f"table was not created with a legacy uuid column: {fields}"
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "legacy-uuid-column.td",
     )
