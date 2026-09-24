@@ -35,7 +35,8 @@ use crate::expr_cache::{
 };
 use crate::memory::error::{Error, ErrorKind};
 use crate::memory::objects::{
-    CatalogItem, CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate, StateUpdateKind,
+    CatalogItem, CommentsMap, DataSourceDesc, DefaultPrivileges, RoleAuth, StateUpdate,
+    StateUpdateKind, TableDataSource,
 };
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
@@ -934,7 +935,32 @@ impl Catalog {
                 .filter(|id| !existing_collections.contains_key(id))
                 .collect();
             for id in &born {
-                txn.set_collection_compaction_bound(*id, Some(birth))?;
+                // These writers use wall-clock timestamps, which may precede
+                // the catalog upper. As at DDL birth, only observed write
+                // progress can authorize advancing their initial permission.
+                let bound = match state.get_entry_by_global_id(id).item() {
+                    CatalogItem::Source(source)
+                        if matches!(
+                            source.data_source,
+                            DataSourceDesc::Introspection(_) | DataSourceDesc::Webhook { .. }
+                        ) =>
+                    {
+                        Timestamp::MIN
+                    }
+                    CatalogItem::Table(table)
+                        if matches!(
+                            table.data_source,
+                            TableDataSource::DataSource {
+                                desc: DataSourceDesc::Webhook { .. },
+                                ..
+                            }
+                        ) =>
+                    {
+                        Timestamp::MIN
+                    }
+                    _ => birth,
+                };
+                txn.set_collection_compaction_bound(*id, Some(bound))?;
             }
             for (_, entry) in state.get_entries() {
                 if let CatalogItem::MaterializedView(mv) = entry.item()
