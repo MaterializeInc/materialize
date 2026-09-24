@@ -291,10 +291,13 @@ async fn test_peer_index_pending_installation() {
             .get(0);
         assert_eq!(sum, 6);
 
+        // Other catalog keys have different ID shapes. CASE guards the fallible
+        // decoder without relying on the evaluation order of WHERE conjuncts.
         let bound_sql = sql!(
             "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_catalog_raw \
-                         WHERE data->>'kind' = 'CollectionCompactionBound' \
-                         AND mz_internal.parse_catalog_id(data->'key'->'id') = $1)"
+                         WHERE CASE WHEN data->>'kind' = 'CollectionCompactionBound' \
+                         THEN mz_internal.parse_catalog_id(data->'key'->'id') = $1 \
+                         ELSE false END)"
         );
         let published: bool = query_one(&internal, bound_sql.clone(), &[&selected_id.to_string()])
             .await
