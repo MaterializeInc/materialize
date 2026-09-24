@@ -175,7 +175,7 @@ module "nodepool_generic" {
 
 # Create a dedicated nodeclass and nodepool for Materialize pods
 module "ec2nodeclass_materialize" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-ec2nodeclass?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/karpenter-ec2nodeclass?ref=v13.10.0"
 
   name               = local.nodeclass_name_materialize
   ami_selector_terms = local.ami_selector_terms
