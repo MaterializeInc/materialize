@@ -54,11 +54,37 @@ repository:
 npx skills update
 ```
 
+## Install as a plugin
+
+Claude Code and Codex can also install the skills as one plugin, named
+`materialize`. Updating the plugin picks up new and updated skills. Plugin
+skills are namespaced, for example `materialize:mz-dbt`.
+
+For Claude Code:
+
+```
+/plugin marketplace add MaterializeInc/agent-skills
+/plugin install materialize@materialize
+```
+
+Auto-update is off by default for this marketplace. To turn it on, run
+`/plugin`, select **Marketplaces**, choose `materialize`, and select **Enable
+auto-update**. To update by hand, run `/plugin marketplace update materialize`.
+
+For Codex:
+
+```bash
+codex plugin marketplace add MaterializeInc/agent-skills
+codex plugin add materialize@materialize
+```
+
+To update, run `codex plugin marketplace upgrade materialize`.
+
 ## Claude Code plugins
 
 The same repository also serves as a [Claude Code plugin
 marketplace](https://code.claude.com/docs/en/plugin-marketplaces) named
-`materialize`. Its `mz-sql-lsp` plugin registers the
+`materialize`. Besides the skills plugin, its `mz-sql-lsp` plugin registers the
 [`mz-deploy`](/developer-tools/mz-deploy/) language server for `.sql` files, so Claude
 Code navigates your project instead of grepping it. See [AI agent
 setup](/developer-tools/mz-deploy/agent-setup/#configuring-for-claude-code) for
