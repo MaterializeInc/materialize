@@ -40,11 +40,12 @@ When you install the skills as a plugin, they are namespaced under the plugin
 name, for example `materialize:mz-dbt`.
 
 If you already installed the skills with `npx skills`, remove them before you
-install the plugin. Run this in each project where you installed them, or add
-`-g` if you installed them globally:
+install the plugin. The command lists both the current and the previous skill
+names, and skips any you don't have. Run it in each project where you installed
+them, or add `-g` if you installed them globally:
 
 ```bash
-npx skills remove mz-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed
+npx skills remove mz-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed materialize-docs materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
 ```
 
 #### Claude Code
