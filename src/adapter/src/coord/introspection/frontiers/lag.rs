@@ -57,7 +57,7 @@ impl NativeWallclockLag {
             let stash = self.histograms.entry(id).or_default();
             *stash.entry((period, bucket, labels)).or_default() += Diff::ONE;
         }
-        // Replica state retires on disconnection, but collection histograms
+        // Replica state follows the supplied identities. Collection histograms
         // retain measured samples until the writer itself retires.
         self.maxima.retain(|key, _| current_replicas.contains(key));
         self.histograms

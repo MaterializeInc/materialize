@@ -183,7 +183,7 @@ impl Coordinator {
                     .join_assign(write);
             }
         }
-        let collections = global
+        let mut collections = global
             .into_iter()
             .filter_map(|(id, (storage_sink, since, upper))| {
                 let mut upper = upper?;
@@ -220,19 +220,39 @@ impl Coordinator {
         let now = (self.catalog().config().now)();
         let dyncfg = self.catalog().system_config().dyncfgs().clone();
         let read_only = self.controller.read_only();
-        let retained_collections = self
-            .catalog()
-            .entries()
-            .filter(|entry| {
-                matches!(
-                    entry.item(),
-                    CatalogItem::Index(_)
-                        | CatalogItem::MaterializedView(_)
-                        | CatalogItem::MetricSink(_)
-                )
-            })
-            .map(|entry| entry.latest_global_id())
-            .collect();
+        let observed_replicas: BTreeSet<_> = replicas.iter().map(|(key, _)| *key).collect();
+        let observed_collections: BTreeSet<_> = collections.iter().map(|(id, _, _)| *id).collect();
+        let mut retained_collections = BTreeSet::new();
+        for entry in self.catalog().entries() {
+            let (cluster_id, target) = match entry.item() {
+                CatalogItem::Index(index) => (index.cluster_id, None),
+                CatalogItem::MaterializedView(mv) => (mv.cluster_id, mv.target_replica),
+                CatalogItem::MetricSink(sink) => (sink.cluster_id, None),
+                _ => continue,
+            };
+            let id = entry.latest_global_id();
+            retained_collections.insert(id);
+            let cluster = self.catalog().get_cluster(cluster_id);
+            // A pending export has undefined lag, not an absent lag row. This
+            // does not synthesize frontiers, hydration, or execution readiness.
+            for replica in cluster.replicas() {
+                if target.is_none_or(|target| target == replica.replica_id)
+                    && !observed_replicas.contains(&(id, replica.replica_id))
+                {
+                    replicas.push(((id, replica.replica_id), WallclockLag::Undefined));
+                }
+            }
+            if !observed_collections.contains(&id) {
+                let labels = cluster
+                    .config
+                    .workload_class
+                    .as_ref()
+                    .map(|value| ("workload_class", value.clone()))
+                    .into_iter()
+                    .collect();
+                collections.push((id, WallclockLag::Undefined, labels));
+            }
+        }
         self.native_frontiers.wallclock_lag.update(
             now,
             &dyncfg,
