@@ -23,7 +23,6 @@ from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.checks.features import Features
 from materialize.checks.mzcompose_actions import (
-    KillMz,
     MzcomposeAction,
     PromoteMz,
     StartMz,
@@ -45,16 +44,7 @@ def wait_ready_and_promote(
 ) -> list[MzcomposeAction]:
     return [
         WaitReadyMz(mz_service),
-        PromoteMz(mz_service),
-        # The fenced environmentd exits with code 0. A container started with
-        # `restart="on-failure"`, as `start_mz_read_only` does, then sleeps
-        # instead of exiting (see the materialized entrypoint), and the clusterd
-        # processes it spawned keep running. Remove the previous generation like
-        # the orchestrator does after a promotion, so that generations do not
-        # accumulate. The killed container keeps its logs, and the next `down`
-        # or the CI hook collects them. Capturing only its logs here would skip
-        # every other service's lines since the last capture.
-        KillMz(mz_service=previous_mz_service, fenced=True),
+        PromoteMz(mz_service, retire=previous_mz_service),
     ]
 
 
@@ -170,7 +160,7 @@ class ZeroDowntimeUpgradeEntireMzOnce(Scenario):
             # below the 1200s default so that a genuinely stuck cutover still
             # fails the pipeline quickly.
             WaitReadyMz(mz_service="mz_2", timeout=180),
-            PromoteMz(mz_service="mz_2"),
+            PromoteMz(mz_service="mz_2", retire="mz_1"),
             Manipulate(self, phase=2, mz_service="mz_2"),
             Validate(self, mz_service="mz_2"),
         ]
