@@ -247,11 +247,11 @@ interface UtilizationColumn {
  * labelled differently from the column it filters.
  */
 const UTILIZATION_COLUMNS: UtilizationColumn[] = [
-  { id: "cpuPercent", header: "CPU", urlKey: "cpu", read: (u) => u.cpuPercent },
+  { id: "cpuPercent", header: "CPU (peak/hr)", urlKey: "cpu", read: (u) => u.cpuPercent },
   // NOTE: this is `memory_percent`, RAM against the size's RAM allocation.
   {
     id: "memoryPercent",
-    header: "Memory",
+    header: "Memory (peak/hr)",
     urlKey: "memory",
     read: (u) => u.memoryPercent,
   },
@@ -259,7 +259,7 @@ const UTILIZATION_COLUMNS: UtilizationColumn[] = [
   // null, and renders a dash, for any replica on a size that allocates no disk.
   {
     id: "diskPercent",
-    header: "Disk",
+    header: "Disk (peak/hr)",
     urlKey: "disk",
     read: (u) => u.diskPercent,
   },
@@ -268,7 +268,7 @@ const UTILIZATION_COLUMNS: UtilizationColumn[] = [
   // environment that does not report one.
   {
     id: "heapPercent",
-    header: "Heap",
+    header: "Heap (peak/hr)",
     urlKey: "heap",
     read: (u) => u.heapPercent,
   },

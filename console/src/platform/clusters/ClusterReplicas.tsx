@@ -176,9 +176,9 @@ const ReplicaTable = (props: ReplicaTableProps) => {
         <Tr>
           <Th>Name</Th>
           <Th>Size</Th>
-          <Th>CPU</Th>
-          <Th>Heap Utilization</Th>
-          {showDiskColumn && <Th>Disk</Th>}
+          <Th>CPU (current)</Th>
+          <Th>Heap Utilization (current)</Th>
+          {showDiskColumn && <Th>Disk (current)</Th>}
           <Th width={OVERFLOW_BUTTON_WIDTH}></Th>
         </Tr>
       </Thead>

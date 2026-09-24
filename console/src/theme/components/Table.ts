@@ -86,6 +86,8 @@ export const Table = defineMultiStyleConfig({
         borderWidth: "1px",
         borderColor: "border.secondary",
         borderX: "none",
+        paddingTop: "6px",
+        paddingBottom: "6px",
         "&:first-of-type": {
           borderRadius: "8px 0 0 8px",
           borderLeftWidth: "1px",

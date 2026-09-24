@@ -131,7 +131,6 @@ const ColumnHeader = <TData,>({
         display="flex"
         alignItems="center"
         flexWrap="nowrap"
-        whiteSpace="nowrap"
         justifyContent={isNumeric ? "flex-end" : undefined}
       >
         {header.isPlaceholder
