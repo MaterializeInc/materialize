@@ -682,7 +682,7 @@ pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
 /// peek runs where it used to, not that none leaves the worker.
 pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
     "enable_compute_index_peek_offload",
-    false,
+    true,
     "Whether a fast-path index peek may move its walk off the timely worker.",
     ParameterScope::Replica,
 );
@@ -743,9 +743,12 @@ pub const INDEX_PEEK_YIELD_GRANULARITY: Config<usize> = Config::new(
 /// compute runtime runs.
 ///
 /// A fraction so the bound scales with the replica instead of being retuned per size. `1.0` admits
-/// one scan per worker, `0.5` one per two workers, and the bound is never below one scan. One per
-/// worker is the default because a peek walking on its worker occupies one core, so peek CPU is
-/// already capped at one core per worker today.
+/// one scan per worker, `0.5` one per two workers, and the bound is never below one scan.
+///
+/// The default admits four per worker because a scan holds its permit while it waits on its
+/// peek-stash upload, which is I/O rather than CPU. At one per worker, stash-heavy replicas queued
+/// scans behind uploads. At four per worker the wait disappeared with no increase in timely step
+/// duration.
 ///
 /// Per compute runtime, not global: a process running a maintenance and an interactive runtime
 /// admits it once per runtime.
@@ -755,7 +758,7 @@ pub const INDEX_PEEK_YIELD_GRANULARITY: Config<usize> = Config::new(
 /// since capping it would mean failing peeks.
 pub const INDEX_PEEK_PERMIT_FRACTION: Config<f64> = Config::new(
     "compute_index_peek_permit_fraction",
-    1.0,
+    4.0,
     "How many offloaded index peek scans may run at once in one compute runtime, as a fraction of \
      the timely workers it runs. Never below one scan.",
     ParameterScope::Replica,

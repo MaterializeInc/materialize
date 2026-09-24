@@ -517,8 +517,10 @@ async fn a_point_lookup_at_the_production_budget_stays_inline() {
 async fn the_kill_switch_answers_the_same_scan_inline() {
     let keys = wide_ok_rows(WIDE_INDEX_KEYS);
 
-    // No configuration at all, which is the kill switch in the position production ships it.
-    let mut harness = Harness::new(|_updates| ());
+    // The kill switch thrown, every budget at its production default.
+    let mut harness = Harness::new(|updates| {
+        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, false);
+    });
     harness.add_pending(
         index_peek_with_uuid(PEEK_A, None),
         trace_bundle(&keys, cancelling_errors(0)),
@@ -563,8 +565,9 @@ async fn the_kill_switch_still_takes_a_stash_bound_peek_off_the_worker() {
         .map(peek_scan::entry_byte_len)
         .sum();
 
-    // The offload is left where production ships it, and only the stash is turned on.
+    // The kill switch thrown, and only the stash turned on.
     let mut harness = Harness::new(move |updates| {
+        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, false);
         updates.add(&ENABLE_PEEK_RESPONSE_STASH, true);
         updates.add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES, threshold);
     });

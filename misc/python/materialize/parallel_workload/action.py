@@ -3100,11 +3100,11 @@ class FlipFlagsAction(Action):
             "1",
             "100000",
         ]
-        # One permit per worker (the default), a bound that serializes every
+        # Four permits per worker (the default), a bound that serializes every
         # offloaded walk, and one that never queues. A fraction of the process's
         # worker count, floored at one permit, so any tiny fraction serializes.
         self.flags_with_values["compute_index_peek_permit_fraction"] = [
-            "1.0",
+            "4.0",
             "0.0001",
             "1000.0",
         ]
