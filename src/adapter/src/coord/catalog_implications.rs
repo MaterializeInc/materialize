@@ -125,7 +125,7 @@ impl Coordinator {
         {
             self.pending_compute_installation_retry = None;
         }
-        let notice_updates = self.refresh_written_plan_notices(written_plans).await?;
+        let notice_updates = self.refresh_written_plan_metadata(written_plans).await?;
         self.apply_catalog_implications_inner(
             ctx,
             catalog_implications.into_iter().collect_vec(),
@@ -186,9 +186,9 @@ impl Coordinator {
         Ok(())
     }
 
-    /// The writer publishes notices from committed selections, independently of
-    /// installation. Catalog drop application already retracts affected notices.
-    async fn refresh_written_plan_notices(
+    /// Restore plan metadata and notices from committed selections, independently
+    /// of installation. Catalog drop application retracts affected notices.
+    async fn refresh_written_plan_metadata(
         &mut self,
         mut ids: BTreeSet<GlobalId>,
     ) -> Result<Option<BuiltinTableAppendNotify>, AdapterError> {
@@ -235,10 +235,14 @@ impl Coordinator {
                 .into_iter()
                 .flat_map(|meta| meta.optimizer_notices.iter().cloned())
                 .collect();
-            let metainfo = selected
-                .remove(&id)
-                .map(|plan| plan.dataflow_metainfos)
-                .unwrap_or_default();
+            let metainfo = match selected.remove(&id) {
+                Some(plan) => {
+                    self.catalog_mut().set_optimized_plan(id, plan.global_mir);
+                    self.catalog_mut().set_physical_plan(id, plan.physical_plan);
+                    plan.dataflow_metainfos
+                }
+                None => Default::default(),
+            };
             let current: BTreeSet<_> = metainfo.optimizer_notices.iter().cloned().collect();
             if self.catalog().system_config().enable_mz_notices() {
                 self.catalog().state().pack_optimizer_notices(
