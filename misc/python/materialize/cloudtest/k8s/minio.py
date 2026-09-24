@@ -75,6 +75,10 @@ class Minio(K8sResource):
         with open(MINIO_YAML_DIRECTORY / "minio-standalone-deployment.yaml") as f:
             deployment = yaml.safe_load(f)
 
+        deployment["spec"]["template"]["spec"]["containers"][0]["image"] = self.image(
+            "minio", tag=None, release_mode=True
+        )
+
         if self.apply_node_selectors:
             deployment["spec"]["template"]["spec"]["nodeSelector"] = {
                 "supporting-services": "true"
@@ -84,7 +88,7 @@ class Minio(K8sResource):
 
     def create_buckets(self, buckets: list[str]) -> None:
         cmds = [
-            f"mc config host add myminio http://minio-service.{self.namespace()}:9000 minio minio123"
+            f"mc alias set myminio http://minio-service.{self.namespace()}:9000 minio minio123"
         ]
         for bucket in buckets:
             cmds.extend(
@@ -96,7 +100,7 @@ class Minio(K8sResource):
         self.kubectl(
             "run",
             "minio",
-            "--image=quay.io/minio/mc:RELEASE.2023-07-07T05-25-51Z",
+            f"--image={self.image('mc', tag=None, release_mode=True)}",
             "--restart=Never",
             "--command",
             "/bin/sh",

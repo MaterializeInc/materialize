@@ -23,19 +23,18 @@ spec:
           claimName: minio-pv-claim
       containers:
       - name: minio
-        # Pulled from quay.io because MinIO deleted the Docker Hub repository,
-        # which 404s. Pinned to the last AGPL community release rather than
-        # tracking a tag: the same repository also carries MinIO's commercial
-        # `.hotfix.<sha>` builds, which carry different licence terms.
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+        # `image` is the `minio` mzbuild image, set by
+        # `Minio.deployment_manifest`. That image has no entrypoint, so
+        # `command` names the binary.
+        command:
+        - minio
         args:
         - server
         - /storage
         env:
-        # Minio access key and secret key
-        - name: MINIO_ACCESS_KEY
+        - name: MINIO_ROOT_USER
           value: "minio"
-        - name: MINIO_SECRET_KEY
+        - name: MINIO_ROOT_PASSWORD
           value: "minio123"
         ports:
         - containerPort: 9000
