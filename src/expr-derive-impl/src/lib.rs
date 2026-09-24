@@ -453,4 +453,19 @@ mod test {
             "expected the conflict error, got:\n{output}"
         );
     }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn skip_display_rejects_a_unit_struct() {
+        let (output, _input) = super::test_sqlfunc(
+            quote! { skip_display = true },
+            quote! {
+                fn extract_thing(a: i64) -> i64 { a }
+            },
+        );
+        assert!(
+            output.contains("skip_display requires a &self receiver"),
+            "expected the receiver error, got:\n{output}"
+        );
+    }
 }

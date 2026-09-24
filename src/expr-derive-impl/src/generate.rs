@@ -234,17 +234,21 @@ pub(crate) fn generate(
         }
     }
 
-    // TODO: the conflict checks below construct their error with `unknown_field`,
-    // which renders as "Unknown field: <message>", while every other modifier
-    // legality error in the crate uses `Error::custom`.
     if output_type.is_some() && output_type_expr.is_some() {
-        return Err(darling::Error::unknown_field(
+        return Err(darling::Error::custom(
             "output_type and output_type_expr cannot be used together",
         ));
     }
     if mods.skip_display() && mods.sqlname.is_some() {
-        return Err(darling::Error::unknown_field(
+        return Err(darling::Error::custom(
             "sqlname has no effect with skip_display, which suppresses the only impl that reads it",
+        ));
+    }
+    // A hand-written `Display` is only needed when the name depends on struct state,
+    // and without `&self` the macro defines a unit struct that has none.
+    if mods.skip_display() && !has_self {
+        return Err(darling::Error::custom(
+            "skip_display requires a &self receiver, since a unit struct has no state for a hand-written Display to read",
         ));
     }
 
