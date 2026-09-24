@@ -853,6 +853,10 @@ impl Coordinator {
             })
             .collect();
 
+        if to_retire.is_empty() {
+            return BuiltinTableAppendCompletion::completed();
+        }
+
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
         // before telling the subscribing client that the sink is gone. The returned notify
         // lets statements that caused the retirement also wait before sending their response.
