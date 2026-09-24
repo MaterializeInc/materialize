@@ -73,8 +73,8 @@ enum ActivationBudget {
 /// hand that peek whatever the last one left. The constructor cannot arm it either: `ConfigSet`
 /// handles read the live value, but a value read there is read before `handle_create_instance`
 /// applies the controller's snapshot, and an empty snapshot leaves the defaults in place until the
-/// first `UpdateConfiguration`. Since the offload's own flag defaults off, an eagerly armed budget
-/// is an unbounded one, and it would go to every peek in a reconnecting controller's backlog.
+/// first `UpdateConfiguration`. An eagerly armed budget would carry the code defaults rather than
+/// the controller's values, and it would go to every peek in a reconnecting controller's backlog.
 pub(super) struct InlineBudget {
     config: InlineBudgetConfig,
     /// The fuel of the activation under way, or `None` while no peek has asked for a slice since

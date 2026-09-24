@@ -156,9 +156,10 @@ def get_minimal_system_parameters(
         config["compute_peek_row_iteration_limit"] = "1000000000"
         config["enable_compute_peek_row_iteration_limit"] = "true"
 
-        # Exercise the peek offload path in tests while it defaults off in
-        # production. The budgets stay at their code defaults so tests make the
-        # same placement decisions production makes.
+        # Exercise the peek offload path in tests. Binaries before v26.44
+        # default it off, so this keeps mixed-version runs on the path current
+        # versions take. The budgets stay at their code defaults so tests make
+        # the same placement decisions production makes.
         config["enable_compute_index_peek_offload"] = "true"
 
     if version < MzVersion.parse_mz("v0.163.0-dev"):

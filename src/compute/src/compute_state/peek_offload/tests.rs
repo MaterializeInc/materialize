@@ -146,6 +146,9 @@ fn offload_config_with(
     let config = mz_dyncfgs::all_dyncfgs();
     let mut updates = ConfigUpdates::default();
     updates.add(&INDEX_PEEK_YIELD_GRANULARITY, yield_granularity);
+    // One permit per worker, so the worker count a test builds its `PeekPermits` with is the
+    // number of walks it admits. A walk resizes the bound from this fraction as it starts.
+    updates.add(&INDEX_PEEK_PERMIT_FRACTION, 1.0);
     configure(&mut updates);
     updates.apply(&config);
     OffloadConfig::new(&config)
