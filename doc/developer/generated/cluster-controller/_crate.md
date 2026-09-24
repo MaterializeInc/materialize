@@ -1,6 +1,6 @@
 ---
 source: src/cluster-controller/src/lib.rs
-revision: 0129eb73e6
+revision: 60a8dd3a8f
 ---
 
 # mz-cluster-controller
