@@ -2054,13 +2054,12 @@ fn jsonb_concat<'a>(
     Some(JsonbRef::from_datum(res))
 }
 
-#[sqlfunc(
-    output_type_expr = "SqlScalarType::Jsonb.nullable(true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
-fn jsonb_delete_int64<'a>(a: Datum<'a>, i: i64, temp_storage: &'a RowArena) -> Datum<'a> {
+#[sqlfunc(is_infix_op = true, sqlname = "-", propagates_nulls = true)]
+fn jsonb_delete_int64<'a>(
+    a: Datum<'a>,
+    i: i64,
+    temp_storage: &'a RowArena,
+) -> Option<JsonbRef<'a>> {
     match a {
         Datum::List(list) => {
             let i = if i >= 0 {
@@ -2075,20 +2074,20 @@ fn jsonb_delete_int64<'a>(a: Datum<'a>, i: i64, temp_storage: &'a RowArena) -> D
                 .enumerate()
                 .filter(|(i2, _e)| i != *i2)
                 .map(|(_, e)| e);
-            temp_storage.make_datum(|packer| packer.push_list(elems))
+            let datum = temp_storage.make_datum(|packer| packer.push_list(elems));
+            Some(JsonbRef::from_datum(datum))
         }
-        _ => Datum::Null,
+        _ => None,
     }
 }
 
-#[sqlfunc(
-    output_type_expr = "SqlScalarType::Jsonb.nullable(true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
-fn jsonb_delete_string<'a>(a: Datum<'a>, k: &str, temp_storage: &'a RowArena) -> Datum<'a> {
-    match a {
+#[sqlfunc(is_infix_op = true, sqlname = "-", propagates_nulls = true)]
+fn jsonb_delete_string<'a>(
+    a: Datum<'a>,
+    k: &str,
+    temp_storage: &'a RowArena,
+) -> Option<JsonbRef<'a>> {
+    let datum = match a {
         Datum::List(list) => {
             let elems = list.iter().filter(|e| Datum::from(k) != *e);
             temp_storage.make_datum(|packer| packer.push_list(elems))
@@ -2097,8 +2096,9 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, k: &str, temp_storage: &'a RowArena) ->
             let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
             temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }
-        _ => Datum::Null,
-    }
+        _ => return None,
+    };
+    Some(JsonbRef::from_datum(datum))
 }
 
 #[sqlfunc(sqlname = "extractiv", propagates_nulls = true)]
@@ -2370,14 +2370,13 @@ fn timezone_interval_timestamp_tz_binary(
                 ].into(),
                 custom_id: None,
             }.nullable(true)"#,
-    propagates_nulls = true,
-    introduces_nulls = false
+    propagates_nulls = true
 )]
 fn timezone_offset<'a>(
     tz_str: &str,
     b: CheckedTimestamp<chrono::DateTime<Utc>>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<DatumList<'a>, EvalError> {
     let tz = match Tz::from_str_insensitive(tz_str) {
         Ok(tz) => tz,
         Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),
@@ -2415,13 +2414,15 @@ fn timezone_offset<'a>(
             }
         }
     };
-    Ok(temp_storage.make_datum(|packer| {
-        packer.push_list_with(|packer| {
-            packer.push(Datum::from(abbrev.as_str()));
-            packer.push(Datum::from(offset.base_utc_offset()));
-            packer.push(Datum::from(offset.dst_offset()));
-        });
-    }))
+    Ok(temp_storage
+        .make_datum(|packer| {
+            packer.push_list_with(|packer| {
+                packer.push(Datum::from(abbrev.as_str()));
+                packer.push(Datum::from(offset.base_utc_offset()));
+                packer.push(Datum::from(offset.dst_offset()));
+            });
+        })
+        .unwrap_list())
 }
 
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
@@ -2526,7 +2527,7 @@ fn regexp_split_to_array_re<'a>(
     text: &str,
     regexp: &Regex,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     // Bound the transient `Vec<&str>` before the split builds it. The count follows the split's own
     // zero-length-match rule, so it refuses exactly the calls the split would build.
     check_build_fits_budget(
@@ -2547,7 +2548,7 @@ fn regexp_split_to_array_re<'a>(
         }],
         found.into_iter().map(Datum::String),
     )?;
-    Ok(temp_storage.push_unary_row(row))
+    Ok(temp_storage.push_unary_row(row).unwrap_array())
 }
 
 // NOTE: no budget pre-check, see the exception on `check_build_fits_budget`.
@@ -2641,10 +2642,10 @@ fn is_regexp_match_case_insensitive(haystack: &str, needle: &str) -> Result<bool
 }
 
 fn regexp_match_static<'a>(
-    haystack: Datum<'a>,
+    haystack: &'a str,
     temp_storage: &'a RowArena,
     needle: &regex::Regex,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Option<Array<'a>>, EvalError> {
     let mut row = Row::default();
     let mut packer = row.packer();
     if needle.captures_len() > 1 {
@@ -2652,7 +2653,7 @@ fn regexp_match_static<'a>(
         // matched text in each capture group, unless the entire match fails.
         // Individual capture groups may also be null if that group did not
         // participate in the match.
-        match needle.captures(haystack.unwrap_str()) {
+        match needle.captures(haystack) {
             None => packer.push(Datum::Null),
             Some(captures) => packer.try_push_array(
                 &[ArrayDimension {
@@ -2669,7 +2670,7 @@ fn regexp_match_static<'a>(
     } else {
         // The regex contains no capture groups, so return a one-element array
         // containing the match, or null if there is no match.
-        match needle.find(haystack.unwrap_str()) {
+        match needle.find(haystack) {
             None => packer.push(Datum::Null),
             Some(mtch) => packer.try_push_array(
                 &[ArrayDimension {
@@ -2680,7 +2681,8 @@ fn regexp_match_static<'a>(
             )?,
         };
     };
-    Ok(temp_storage.push_unary_row(row))
+    let datum = temp_storage.push_unary_row(row);
+    Ok((!datum.is_null()).then(|| datum.unwrap_array()))
 }
 
 /// Sets `limit` based on the presence of 'g' in `flags` for use in `Regex::replacen`,
@@ -2732,7 +2734,7 @@ fn repeat_string(string: &str, count: i32, temp_storage: &RowArena) -> Result<St
 fn array_create_scalar<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     let mut dims = &[ArrayDimension {
         lower_bound: 1,
         length: datums.len(),
@@ -2745,7 +2747,7 @@ fn array_create_scalar<'a>(
     }
     check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
     let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(dims, datums))?;
-    Ok(datum)
+    Ok(datum.unwrap_array())
 }
 
 fn stringify_datum<'a, B>(
@@ -2970,17 +2972,16 @@ fn array_lower<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
 #[sqlfunc(
     output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     sqlname = "array_remove",
-    propagates_nulls = false,
-    introduces_nulls = false
+    propagates_nulls = false
 )]
 fn array_remove<'a>(
     arr: Array<'a>,
     b: Datum<'a>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     // Zero-dimensional arrays are empty by definition
     if arr.dims().len() == 0 {
-        return Ok(Datum::Array(arr));
+        return Ok(arr);
     }
 
     // array_remove only supports one-dimensional arrays
@@ -3004,7 +3005,8 @@ fn array_remove<'a>(
         length: elems.len(),
     };
 
-    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
+    let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?;
+    Ok(datum.unwrap_array())
 }
 
 #[sqlfunc(is_infix_op = true)]
