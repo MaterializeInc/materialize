@@ -74,7 +74,7 @@ module "vpc_cni" {
 }
 
 module "base_node_group" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks-node-group?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks-node-group?ref=v13.10.0"
 
   cluster_name                      = module.eks.cluster_name
   aws_region                        = var.aws_region
