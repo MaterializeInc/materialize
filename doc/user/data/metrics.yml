@@ -1218,6 +1218,10 @@ metrics:
   - type
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_linearize_read_fast_path_total
+  help: The number of ordinary strict serializable reads already linearized at transaction end
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_mcp_requests_total
   help: Total number of MCP requests received.
   labels:
