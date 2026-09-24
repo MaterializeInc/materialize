@@ -9,10 +9,15 @@
 
 use super::*;
 
-fn observation(replica: u64, since: u64, upper: u64) -> (GlobalId, ReplicaId, FrontiersResponse) {
+fn observation(
+    replica: u64,
+    since: u64,
+    upper: u64,
+) -> (GlobalId, ReplicaId, bool, FrontiersResponse) {
     (
         GlobalId::User(1),
         ReplicaId::User(replica),
+        false,
         FrontiersResponse {
             read_frontier: Some(Antichain::from_elem(Timestamp::from(since))),
             write_frontier: Some(Antichain::from_elem(Timestamp::from(upper))),
@@ -32,9 +37,9 @@ fn row(since: Option<u64>, upper: Option<u64>) -> Row {
 #[mz_ore::test]
 fn native_frontiers_distinguish_unknown_from_completed() {
     let mut reporter = NativeFrontiers::default();
-    let (id, replica, mut partial) = observation(1, 10, 20);
+    let (id, replica, storage_sink, mut partial) = observation(1, 10, 20);
     partial.read_frontier = None;
-    let updates = reporter.update([(id, replica, partial)]);
+    let updates = reporter.update([(id, replica, storage_sink, partial)]);
     assert!(
         updates[0].1.is_empty(),
         "no global row without a read observation"
@@ -47,9 +52,12 @@ fn native_frontiers_distinguish_unknown_from_completed() {
 
     let updates = reporter.update([observation(1, 10, 20), observation(2, 15, 30)]);
     assert_eq!(updates[0].1, vec![(row(Some(10), Some(30)), Diff::ONE)]);
-    let (id, replica, mut completed) = observation(2, 15, 30);
+    let (id, replica, storage_sink, mut completed) = observation(2, 15, 30);
     completed.write_frontier = Some(Antichain::new());
-    let updates = reporter.update([observation(1, 10, 20), (id, replica, completed)]);
+    let updates = reporter.update([
+        observation(1, 10, 20),
+        (id, replica, storage_sink, completed),
+    ]);
     assert_eq!(
         updates[0].1,
         vec![
@@ -57,6 +65,23 @@ fn native_frontiers_distinguish_unknown_from_completed() {
             (row(Some(10), None), Diff::ONE),
         ]
     );
+}
+
+#[mz_ore::test]
+fn native_storage_sinks_report_replica_but_not_global_frontiers() {
+    let mut reporter = NativeFrontiers::default();
+    let (id, replica, _, frontiers) = observation(1, 10, 20);
+    let updates = reporter.update([(id, replica, true, frontiers)]);
+    assert!(updates[0].1.is_empty(), "storage owns the global row");
+    let replica_row = Row::pack_slice(&[
+        Datum::String("u1"),
+        Datum::String("u1"),
+        Timestamp::from(20).into(),
+    ]);
+    assert_eq!(updates[1].1, vec![(replica_row.clone(), Diff::ONE)]);
+    let updates = reporter.update([]);
+    assert!(updates[0].1.is_empty());
+    assert_eq!(updates[1].1, vec![(replica_row, Diff::MINUS_ONE)]);
 }
 
 #[mz_ore::test]

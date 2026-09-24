@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Passive SQL frontier reporting for replica-owned indexes.
+//! Passive SQL frontier reporting for replica-owned compute exports.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,15 +44,20 @@ impl Coordinator {
                     .map(move |(id, frontiers)| (cluster, replica, id, frontiers))
             })
             .filter_map(|(cluster, replica, id, frontiers)| {
-                // Storage already reports persisted collections. Query-local and
-                // dropped exports must not survive in these catalog relations.
+                // Query-local and dropped exports must not survive in these
+                // catalog relations.
                 let entry = self.catalog().try_get_entry_by_global_id(&id)?;
-                match entry.item() {
-                    CatalogItem::Index(index) if index.cluster_id == cluster => {
-                        Some((id, replica, frontiers))
+                let (owner, storage_sink) = match entry.item() {
+                    CatalogItem::Index(index) => (index.cluster_id, false),
+                    CatalogItem::MaterializedView(mv)
+                        if mv.target_replica.is_none_or(|target| target == replica) =>
+                    {
+                        (mv.cluster_id, true)
                     }
-                    _ => None,
-                }
+                    CatalogItem::MetricSink(sink) => (sink.cluster_id, true),
+                    _ => return None,
+                };
+                (owner == cluster).then_some((id, replica, storage_sink, frontiers))
             })
             .collect::<Vec<_>>();
         for (kind, updates) in self.native_frontiers.update(observations) {
@@ -71,25 +76,32 @@ impl NativeFrontiers {
     /// Report only observed fields. Across connected replicas the read frontier
     /// is the meet and the write frontier the join, matching query observations.
     /// An absent observation is not an empty (completed) frontier. Rebuilding the
-    /// snapshot also retracts disconnected replicas and catalog-dropped indexes.
+    /// snapshot also retracts disconnected replicas and catalog-dropped exports.
+    /// Storage sinks report replica uppers here, but storage owns their global
+    /// frontiers so compute must not emit duplicate global rows.
     fn update(
         &mut self,
-        observations: impl IntoIterator<Item = (GlobalId, ReplicaId, FrontiersResponse)>,
+        observations: impl IntoIterator<Item = (GlobalId, ReplicaId, bool, FrontiersResponse)>,
     ) -> [(IntrospectionType, Vec<(Row, Diff)>); 2] {
         type Frontiers = (Option<Antichain<Timestamp>>, Option<Antichain<Timestamp>>);
         let mut global = BTreeMap::<GlobalId, Frontiers>::new();
         let mut replicas = BTreeSet::new();
-        for (id, replica, observation) in observations {
+        for (id, replica, storage_sink, observation) in observations {
+            if let Some(write) = &observation.write_frontier {
+                replicas.insert(Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String(&replica.to_string()),
+                    frontier_datum(write),
+                ]));
+            }
+            if storage_sink {
+                continue;
+            }
             let (since, upper) = global.entry(id).or_default();
             if let Some(read) = observation.read_frontier {
                 since.get_or_insert_with(Antichain::new).extend(read);
             }
             if let Some(write) = observation.write_frontier {
-                replicas.insert(Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&replica.to_string()),
-                    frontier_datum(&write),
-                ]));
                 if upper
                     .as_ref()
                     .is_none_or(|old| PartialOrder::less_than(old, &write))
