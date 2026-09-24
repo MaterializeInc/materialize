@@ -28,7 +28,7 @@ module "networking" {
 
 # 2. Create EKS cluster
 module "eks" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks?ref=v13.2.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks?ref=v13.10.0"
 
   name_prefix                              = var.name_prefix
   cluster_version                          = "1.32"
