@@ -49,11 +49,9 @@ superuser, so do not use it as the starting point for a role intended to grant
 limited database access.
 
 {{< note >}}
-$TODO: Before publishing this setup, specify the first provider release with
-`materialize_organization_role` and custom-role mapping support, confirm
-organization role management is enabled, and verify the production JWT claim
-configuration used for database role sync. Confirm how to obtain the JWT key
-for a role created in the Console.
+$TODO: Before publishing this setup, confirm organization role management is
+enabled and verify the production JWT claim configuration used for database role
+sync. Confirm how to obtain the JWT key for a role created in the Console.
 {{< /note >}}
 
 ## Before you begin
@@ -183,7 +181,7 @@ organization role with no matching database role is skipped during sync.
 ## Step 6. Verify grants and revocations
 
 Have a dedicated test user in the synced group sign in and open a new database connection,
-for example with the [SQL Shell](/console/sql-shell/). On first sign-in,
+for example with the [SQL Shell](/developer-tools/console/sql-shell/). On first sign-in,
 Materialize creates the user's own database role. The shared database role
 `analytics_reader` must already exist.
 
@@ -207,7 +205,7 @@ still grants the same custom role. Restore the test user's membership after
 verifying revocation.
 
 Grants and revokes performed by sync are recorded in
-[`mz_audit_events`](/reference/system-catalog/mz_catalog/#mz_audit_events).
+[`mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events).
 
 ## How sync works
 
@@ -258,14 +256,15 @@ Grants and revokes performed by sync are recorded in
 
 ## Manage with Terraform
 
-The [Materialize Terraform provider](/manage/terraform/) manages SCIM
+The [Materialize Terraform provider](/developer-tools/terraform/) manages SCIM
 connections, custom organization roles, database roles, and group-to-role
 assignments. Provision IdP-owned groups and membership through your identity
 provider.
 
 {{< note >}}
-The `materialize_organization_role` resource and custom-role assignment support
-must be available in your installed provider version before using this example.
+Use version [v0.11.9](https://github.com/MaterializeInc/terraform-provider-materialize/releases/tag/v0.11.9)
+or later of the Materialize Terraform provider for custom organization roles and
+SCIM group-to-role assignments.
 {{< /note >}}
 
 Create the SCIM integration with `materialize_scim_config` first. Configure your
@@ -337,7 +336,7 @@ when users reconnect.
 
 ## See also
 
-- [Audit events](/reference/system-catalog/mz_catalog/#mz_audit_events)
+- [Audit events](/sql/system-catalog/mz_catalog/#mz_audit_events)
 - [Access control (RBAC)](/security/cloud/access-control/)
 - [Configure single sign-on (SSO)](/security/cloud/users-service-accounts/sso/)
 - [Invite users](/security/cloud/users-service-accounts/invite-users/)
