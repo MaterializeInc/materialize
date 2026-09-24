@@ -13,6 +13,7 @@ then making sure that cluster2 continues to operate properly
 """
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 
 from materialize.mzcompose.composition import (
@@ -20,7 +21,7 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -239,37 +240,17 @@ $ kafka-verify-data format=json key=false sink=materialize.public.sink1 partial-
 def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     print(f"+++ Running disruption scenario {disruption.name}")
 
-    with c.override(
-        Testdrive(
-            no_reset=True,
-            materialize_params={"cluster": "cluster2"},
-            seed=id,
+    with (
+        c.override(
+            Testdrive(
+                no_reset=True,
+                materialize_params={"cluster": "cluster2"},
+                seed=id,
+            ),
         ),
-        Clusterd(
-            name="clusterd_1_1",
-            process_names=["clusterd_1_1", "clusterd_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_1_2",
-            process_names=["clusterd_1_1", "clusterd_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_2_1",
-            process_names=["clusterd_2_1", "clusterd_2_2"],
-        ),
-        Clusterd(
-            name="clusterd_2_2",
-            process_names=["clusterd_2_1", "clusterd_2_2"],
-        ),
+        ExitStack() as replica_overrides,
     ):
-        c.up(
-            "materialized",
-            "clusterd_1_1",
-            "clusterd_1_2",
-            "clusterd_2_1",
-            "clusterd_2_2",
-            Service("testdrive", idle=True),
-        )
+        c.up("materialized", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -296,6 +277,34 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
                 COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
             ));
             """)
+
+        placements = {
+            ("cluster1", "replica1"): ["clusterd_1_1", "clusterd_1_2"],
+            ("cluster2", "replica1"): ["clusterd_2_1", "clusterd_2_2"],
+        }
+        identities = c.sql_query("""SELECT c.name, r.name, c.id, r.id
+               FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+               WHERE c.name IN ('cluster1', 'cluster2')""")
+        assert {(c, r) for c, r, _, _ in identities} == set(placements), identities
+        catalog_options = native_catalog_options(c)
+        replica_overrides.enter_context(
+            c.override(
+                *[
+                    Clusterd(
+                        name=name,
+                        process_names=placements[cluster_name, replica_name],
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                    for cluster_name, replica_name, cluster_id, replica_id in identities
+                    for name in placements[cluster_name, replica_name]
+                ]
+            )
+        )
+        c.up("clusterd_1_1", "clusterd_1_2", "clusterd_2_1", "clusterd_2_2")
 
         populate(c)
 

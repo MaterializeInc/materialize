@@ -46,7 +46,7 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
@@ -9054,29 +9054,7 @@ def workflow_adapter_loss(c: Composition) -> None:
         # Reuse the environment's actual reconstruction context from a managed
         # replica. This keeps unmanaged replicas on the same size map, defaults,
         # and deployment metadata without duplicating Rust configuration defaults.
-        replica_catalog_config = json.loads(
-            c.exec(
-                adapter.name,
-                "bash",
-                "-c",
-                r"""
-                for args in /proc/[0-9]*/cmdline; do
-                    [[ -r "$args" ]] || continue
-                    while IFS= read -r -d '' argument; do
-                        case "$argument" in
-                            --catalog-config=*)
-                                printf '%s\n' "${argument#--catalog-config=}"
-                                exit 0
-                                ;;
-                        esac
-                    done < "$args"
-                done
-                echo 'No managed replica catalog context found' >&2
-                exit 1
-                """,
-                capture=True,
-            ).stdout
-        )
+        catalog_options = native_catalog_options(c, adapter.name)
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
@@ -9129,10 +9107,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                         options=[
                             f"--catalog-cluster-id={cluster_id}",
                             f"--catalog-replica-id={replica_id}",
-                            f"--catalog-config={json.dumps(replica_catalog_config)}",
-                            "--catalog-deploy-generation=1",
-                            f"--catalog-persist-blob-url={blob_uri}",
-                            f"--catalog-persist-consensus-url={consensus_uri}",
+                            *catalog_options,
                         ],
                     )
                     for cluster_name, replica_name, cluster_id, replica_id in identities
