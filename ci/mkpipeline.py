@@ -679,9 +679,11 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                     )
                     stuck.add(queue)
         except Exception:
-            print("switch_jobs_to_aws failed, ignoring:")
+            # Still switch the queues that are known to be stuck, the aarch64
+            # ones above. Returning here leaves their jobs waiting on Hetzner
+            # for an agent that cannot be created.
+            print("switch_jobs_to_aws failed to fetch builds, ignoring:")
             traceback.print_exc()
-            return
 
     if not stuck:
         return
