@@ -16,12 +16,8 @@ The mapping has three layers:
 | Layer | Example | Managed in |
 |-------|---------|------------|
 | IdP group | `analytics-team` | Your identity provider |
-| Custom organization role | `analytics_reader` | Materialize Console (**Roles**) or Terraform |
+| Custom organization role | `analytics_reader` | Materialize Console (**Account Settings** > **Roles**) or Terraform |
 | Database role | `analytics_reader` | SQL or Terraform |
-
-Custom organization roles live in Materialize's identity provider and are scoped
-to your organization. You can manage them through the Materialize Console or
-Terraform.
 
 SCIM provisions the group and its members. You assign the group a custom
 organization role. When a member connects, Materialize reads their organization
@@ -34,19 +30,6 @@ Create both the custom organization role and the database role. Creating one
 does not create the other. Database privileges come from grants to the database
 role, not from the permissions selected when creating the organization role.
 {{< /important >}}
-
-Materialize creates two reserved organization roles:
-
-| Role | JWT key |
-|------|---------|
-| **Organization Admin** | `MaterializePlatformAdmin` |
-| **Organization Member** | `MaterializePlatform` |
-
-You cannot edit or delete these roles, but you can assign them to SCIM groups.
-Retain **Organization Member** alongside custom roles when users need its
-permissions. Assigning **Organization Admin** makes a user a Materialize
-superuser, so do not use it as the starting point for a role intended to grant
-limited database access.
 
 {{< note >}}
 $TODO: Before publishing this setup, verify that `oidc_group_role_sync_enabled`
@@ -68,9 +51,6 @@ the JWT key for a role created in the Console.
   (e.g., Okta or Microsoft Entra ID).
 * Only users assigned the **Organization Admin** role can manage provisioning,
   groups, and custom organization roles.
-* Group-to-role sync applies on **connection**, never mid-session. Materialize
-  makes a best effort to apply group changes on the user's next connection,
-  but it may take several minutes for changes to be reflected.
 
 ## Step 1. Create a SCIM connection
 
@@ -128,54 +108,124 @@ synced.
 {{< /tab >}}
 {{< /tabs >}}
 
-## Step 3. Create custom organization roles
-
-Create a custom organization role for each database access role in the
-Materialize Console's **Roles** page or using the
-[Terraform configuration below](#manage-with-terraform). For example, with
-Terraform, create `analytics_reader` with `base_role_name = "Member"`.
-
-If you apply the complete Terraform example, it also creates the group
-assignment and database role described in Steps 4 and 5. Continue with database
-grants and verification.
-
-The Terraform resource sets the JWT key to the role name on creation and copies
-the base role's organization permissions. Use its exported `key` as the database
-role name. Copying **Organization Member** permissions provides a starting point
-without organization administration permissions. These permissions do not
-replace SQL grants.
-
-Avoid reserved names listed under [Limitations](#limitations), including the
-built-in organization role names and keys.
-
-## Step 4. Assign organization roles to synced groups
+## Steps 3–5. Map groups to database roles {#map-groups-to-database-roles}
 
 Wait until the group appears under **Account** > **Account Settings** >
-**Groups**. Edit its role assignments and add the custom role created in
-[Step 3](#step-3-create-custom-organization-roles). Retain any built-in role
-assignments the group still needs, such as **Organization Member**.
-You can also assign either built-in role to a SCIM group without creating a
-custom role.
+**Groups**. Multiple groups can grant the same organization role, and one group
+can grant multiple roles.
 
-For example, assign `analytics_reader` to the SCIM group `analytics-team`.
-Members receive the custom organization role through their group membership.
-Multiple groups can grant the same role, and one group can grant multiple roles.
+You can assign a built-in role to a SCIM group without creating a custom role:
 
-## Step 5. Create matching database roles
+| Role | JWT key |
+|------|---------|
+| **Organization Admin** | `MaterializePlatformAdmin` |
+| **Organization Member** | `MaterializePlatform` |
 
-Create the database role in each Materialize region where the group should have
-access. Its name must exactly match the custom organization role's JWT key,
-including case. If Terraform has not already created the database role, create
-it with SQL. For a role whose key is `analytics_reader`:
+Retain **Organization Member** alongside custom roles when users need its
+permissions. Assigning **Organization Admin** makes a user a Materialize
+superuser, so do not use it to grant limited database access.
 
-```mzsql
-CREATE ROLE analytics_reader;
+Avoid creating database roles named after the built-in JWT keys unless you
+intend everyone with the corresponding built-in organization role to inherit
+their database privileges. See [Limitations](#limitations) for other reserved
+names.
+
+{{< tabs >}}
+{{< tab "Console" >}}
+
+1. Under **Account** > **Account Settings** > **Roles**, create a custom
+   organization role for database access, such as `analytics_reader`. Note its
+   JWT key. Choose its organization permissions separately from its database
+   privileges.
+
+2. Under **Account** > **Account Settings** > **Groups**, edit the synced group
+   `analytics-team` and assign it the new organization role. Retain any
+   built-in role assignments the group still needs, such as **Organization
+   Member**.
+
+3. In each Materialize region where the group needs access, create a database
+   role whose name exactly matches the custom organization role's JWT key,
+   including case. For a key of `analytics_reader`:
+
+   ```mzsql
+   CREATE ROLE analytics_reader;
+   ```
+
+   Grant this database role the privileges the group's members need. See
+   [Access control (RBAC)](/security/cloud/access-control/) for examples.
+   Organization role permissions do not replace database grants.
+
+{{< /tab >}}
+{{< tab "Terraform" >}}
+
+Use version [v0.11.9](https://github.com/MaterializeInc/terraform-provider-materialize/releases/tag/v0.11.9)
+or later of the [Materialize Terraform provider](/developer-tools/terraform/)
+for custom organization roles and SCIM group-to-role assignments. Provision
+IdP-owned groups and membership through your identity provider.
+
+If you manage the SCIM connection with Terraform, create it with
+`materialize_scim_config` before applying this configuration. Terraform cannot
+wait for an IdP push simply by depending on the SCIM connection resource, so
+wait for `analytics-team` to appear in Materialize first.
+
+To assign a built-in role, include `Admin` or `Member` in the `roles` set of
+`materialize_scim_group_roles`. These are Terraform's aliases for
+**Organization Admin** and **Organization Member**. Do not manage built-in
+organization roles with `materialize_organization_role`.
+
+```hcl
+resource "materialize_organization_role" "reader" {
+  name           = "analytics_reader"
+  base_role_name = "Member"
+}
+
+resource "materialize_role" "reader" {
+  name = materialize_organization_role.reader.key
+}
+
+# Grant access to an existing schema; add grants for the objects readers need.
+resource "materialize_schema_grant" "reader_usage" {
+  role_name     = materialize_role.reader.name
+  privilege     = "USAGE"
+  database_name = "analytics"
+  schema_name   = "reporting"
+}
+
+data "materialize_scim_groups" "all" {}
+
+locals {
+  analytics_groups = [
+    for group in data.materialize_scim_groups.all.groups : group
+    if group.name == "analytics-team" && group.managed_by == "scim"
+  ]
+}
+
+resource "materialize_scim_group_roles" "reader" {
+  group_id = try(one(local.analytics_groups).id, "")
+  roles    = ["Member", materialize_organization_role.reader.name]
+
+  lifecycle {
+    precondition {
+      condition     = length(local.analytics_groups) == 1
+      error_message = "Wait for exactly one SCIM group named analytics-team to be provisioned, then rerun Terraform."
+    }
+  }
+}
 ```
 
-Grant the database role the privileges the group's members need. See
-[Access control (RBAC)](/security/cloud/access-control/) for examples.
-Role sync does not create database roles or grant object privileges. An
-organization role with no matching database role is skipped during sync.
+The example uses the organization role's exported JWT `key` as the database
+role name and copies **Organization Member** permissions as a starting point.
+Later changes to the base role are not copied automatically. The schema grant
+assumes `analytics.reporting` already exists; add grants for the specific
+objects the group needs to access.
+
+`materialize_scim_group_roles` manages the group's complete set of organization
+role assignments. Include every role the group should retain. Do not use
+`materialize_scim_group` or `materialize_scim_group_users` to take ownership of
+IdP-provisioned groups or their membership.
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Step 6. Verify grants and revocations
 
@@ -197,11 +247,17 @@ WHERE r.name = 'analytics_reader'
 ```
 
 The result should include the user's database role as `member` and
-`mz_jwt_sync` as `grantor`. Remove the user from the IdP group, wait for
-provisioning and token refresh, and have them reconnect. The sync-managed grant
-should disappear unless another group or a direct organization role assignment
-still grants the same custom role. Restore the test user's membership after
-verifying revocation.
+`mz_jwt_sync` as `grantor`. To verify revocation:
+
+1. Remove the test user from the IdP group. Under **Account** > **Account
+   Settings** > **Groups**, wait until the SCIM group no longer lists the user.
+2. Have the user sign out of all active Materialize sessions, then sign back in
+   and open a new SQL Shell connection.
+3. Rerun the query. The sync-managed grant should disappear unless another
+   group or a direct organization role assignment still grants the same custom
+   role.
+
+Restore the test user's group membership after verifying revocation.
 
 Grants and revokes performed by sync are recorded in
 [`mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events).
@@ -246,76 +302,8 @@ Grants and revokes performed by sync are recorded in
 * **Database roles are never created or dropped by sync.** Group sync only
   assigns and unassigns database role membership. A custom organization role
   grants database access only after you
-  [create a matching database role](#step-5-create-matching-database-roles).
-* **Changes are not applied in real time.** Group membership changes are only
-  applied when a user connects, never to a session that is already connected.
-  Materialize makes a best effort to apply changes on the next connection, but
-  it may take several minutes for a change in your identity provider to be
-  reflected.
-
-## Manage with Terraform
-
-The [Materialize Terraform provider](/developer-tools/terraform/) manages SCIM
-connections, custom organization roles, database roles, and group-to-role
-assignments. Provision IdP-owned groups and membership through your identity
-provider.
-
-{{< note >}}
-Use version [v0.11.9](https://github.com/MaterializeInc/terraform-provider-materialize/releases/tag/v0.11.9)
-or later of the Materialize Terraform provider for custom organization roles and
-SCIM group-to-role assignments.
-{{< /note >}}
-
-Create the SCIM integration with `materialize_scim_config` first. Configure your
-IdP to push groups, and wait for them to appear in Materialize. Then apply the
-role mapping. Terraform cannot wait for an IdP push simply by depending on the
-SCIM connection resource.
-
-To map a SCIM group to a built-in role, include `Admin` or `Member` in the
-`roles` set of `materialize_scim_group_roles`. These are Terraform's aliases for
-**Organization Admin** and **Organization Member**. Do not manage the built-in
-roles with `materialize_organization_role`.
-
-```hcl
-resource "materialize_organization_role" "reader" {
-  name           = "analytics_reader"
-  base_role_name = "Member"
-}
-
-resource "materialize_role" "reader" {
-  name = materialize_organization_role.reader.key
-}
-
-data "materialize_scim_groups" "all" {}
-
-locals {
-  analytics_groups = [
-    for group in data.materialize_scim_groups.all.groups : group
-    if group.name == "analytics-team" && group.managed_by == "scim"
-  ]
-}
-
-resource "materialize_scim_group_roles" "reader" {
-  group_id = try(one(local.analytics_groups).id, "")
-  roles    = ["Member", materialize_organization_role.reader.name]
-
-  lifecycle {
-    precondition {
-      condition     = length(local.analytics_groups) == 1
-      error_message = "Wait for exactly one SCIM group named analytics-team to be provisioned, then rerun Terraform."
-    }
-  }
-}
-```
-
-The organization role copies **Organization Member** permissions when created.
-Later changes to the base role are not copied automatically. Add database grants
-separately to give `analytics_reader` access to the required objects.
-
-`materialize_scim_group_roles` manages the group's complete set of organization
-role assignments. Include every role the group should retain. Do not use
-`materialize_scim_group` or `materialize_scim_group_users` to take ownership of
-IdP-provisioned groups or their membership.
+  [create a matching database role](#map-groups-to-database-roles).
+* **Changes are not applied in real time.** See [How sync works](#how-sync-works).
 
 ## Migrate from direct group-name mapping
 
