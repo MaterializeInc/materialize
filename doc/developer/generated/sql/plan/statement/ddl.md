@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: e2bd66688e
+revision: 648a0e1461
 ---
 
 # mz-sql::plan::statement::ddl
@@ -16,7 +16,7 @@ Iceberg sinks support two modes: `MODE UPSERT` (requires a key) and `MODE APPEND
 The `iceberg_sink_builder` function accepts an optional `storage_connection: Option<ResolvedItemName>` for the AWS storage credentials; when present it must resolve to an `Connection::Aws` item; when absent the resulting `IcebergSinkConnection` carries `storage_connection_id: None`.
 `REFRESH EVERY` intervals are validated to be at least 1 ms; intervals smaller than 1 ms produce a `PlanError`. `REFRESH AT` and `REFRESH EVERY ... ALIGNED TO` timestamps are validated by `check_refresh_time` to be representable as a `timestamptz` (i.e. within the range of `CheckedTimestamp<DateTime<Utc>>`); timestamps too large to pack as a `timestamptz` produce a `PlanError` because `mz_materialized_view_refresh_strategies` cannot store them.
 `TOPIC METADATA REFRESH INTERVAL` for Kafka sources and sinks is validated to be between 1 second and 1 hour (inclusive); intervals outside this range produce a planning error (enforcing librdkafka runtime constraints at plan time for the upper bound, and preventing excessive refreshes or zero/negative durations for the lower bound).
-`SourceExportStatementDetails::Postgres` carries a `cast_oid_full_range: bool` field; `plan_create_subsource` passes it through to `generate_column_casts` to control whether OID-based casts cover the full range.
+`SourceExportStatementDetails::Postgres` carries a `cast_oid_full_range: bool` field and an `initial_lsn: Option<MzOffset>` field; `plan_create_subsource` passes `cast_oid_full_range` through to `generate_column_casts` to control whether OID-based casts cover the full range, and passes `initial_lsn` through to `PostgresSourceExportDetails` so the replication operator can skip CDC messages committed before the schema was captured.
 `plan_alter_cluster` rejects `ALTER CLUSTER ... WITH (...)` on unmanaged clusters: when the cluster is not managed, any non-empty `with_options` list produces the error `"ALTER... WITH not supported for unmanaged clusters"`.
 `plan_alter_network_policy` and the `resolve_network_policy` helper call `normalize::ident_ref(&name)` to extract the bare identifier string before passing it to `catalog.resolve_network_policy`, preventing quoted identifiers (e.g. `"hyphenated-name"`) from being looked up with surrounding quote characters. `fold_network_policy_name` in `NameResolver` applies the same pattern.
 `plan_alter_cluster` rejects a `WAIT` clause when no shape dimension (`SIZE`, `AVAILABILITY ZONES`, or `INTROSPECTION`) is being changed: there is no hydrate-overlap to wait on, so accepting it would silently be a no-op.

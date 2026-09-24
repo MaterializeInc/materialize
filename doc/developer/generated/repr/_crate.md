@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/lib.rs
-revision: c6be08fe4f
+revision: 60a8dd3a8f
 ---
 
 # mz-repr
@@ -15,7 +15,7 @@ The lingua franca of Materialize: defines the core data types that all layers of
 * `row` — `Row`, `RowPacker`, `RowRef`, `RowArena`, `RowArenaBuf`, `DatumList<'a, T>` (generic over `T`, defaulting to `Datum<'a>`), `DatumMap`, `SharedRow`, `StableRow` (protobuf-serialized row wrapper for durable formats); Arrow columnar encoding (`encode`); abstract iteration (`iter`)
 * `update` — `Rows` (a compact contiguous-byte sequence of encoded rows), `RowsBuilder`, `SharedSlice`, `UpdateCollection`, and `UpdateCollectionBuilder`; provides the low-level storage substrate used by sorted row collections
 * `adt` — PostgreSQL-compatible ADTs: arrays, char, date, datetime, interval, JSONB, ACL items, numeric, range, regex, system OIDs, timestamps, varchar
-* `timestamp` — `Timestamp` (system-wide `u64` millisecond type implementing Timely/differential traits)
+* `timestamp` — `Timestamp` (system-wide `u64` millisecond type implementing Timely/differential traits); `frontier_within_lag` (checks whether a frontier is within an allowed lag of a reference, re-exported from `mz_repr`)
 * `diff` — `Diff` type alias (`Overflowing<i64>`)
 * `strconv` — string-to-value conversion matching PostgreSQL text format
 * `explain` — `Explain` trait and text/JSON/DOT/tracing format implementations

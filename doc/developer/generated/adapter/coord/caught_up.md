@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/caught_up.rs
-revision: ed7294b842
+revision: 60a8dd3a8f
 ---
 
 # adapter::coord::caught_up
