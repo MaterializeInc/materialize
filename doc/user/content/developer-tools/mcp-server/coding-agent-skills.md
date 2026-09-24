@@ -44,7 +44,7 @@ install the plugin. Run this in each project where you installed them, or add
 `-g` if you installed them globally:
 
 ```bash
-npx skills remove materialize-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed
+npx skills remove mz-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed
 ```
 
 #### Claude Code
@@ -114,15 +114,15 @@ npx skills update
 
 #### Migrate from the previous skill names
 
-Most skills now use the `mz-` prefix, and `mcp-developer-analysis` is now
-`mz-health-check`. `materialize-docs` keeps its name. If you installed the
+All skills now use the `mz-` prefix: `materialize-docs` is now `mz-docs`, and
+`mcp-developer-analysis` is now `mz-health-check`. If you installed the
 skills before the rename, remove the old copies and install the skills again,
 so each skill appears once under its new name. Run these in each project where
 you installed them, or add `-g` to both commands if you installed them
 globally:
 
 ```bash
-npx skills remove materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
+npx skills remove materialize-docs materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
 npx skills add MaterializeInc/agent-skills
 ```
 
@@ -143,7 +143,7 @@ installation and configuration.
 ## Reduce permission prompts (Claude Code)
 
 Claude Code prompts before reading files outside your project, so it may ask
-to approve reads each time the `materialize-docs` skill opens a new
+to approve reads each time the `mz-docs` skill opens a new
 documentation subdirectory. To stop these prompts, grant read access to the
 directory where the skill is installed in `~/.claude/settings.json`.
 
@@ -160,13 +160,13 @@ update, so grant the parent:
 ```
 
 If you installed the skills globally [with `npx skills`](#install-with-npx),
-they live under `~/.claude/skills/`. Grant the `materialize-docs` skill's
+they live under `~/.claude/skills/`. Grant the `mz-docs` skill's
 directory:
 
 ```json
 {
   "permissions": {
-    "additionalDirectories": ["~/.claude/skills/materialize-docs"]
+    "additionalDirectories": ["~/.claude/skills/mz-docs"]
   }
 }
 ```
