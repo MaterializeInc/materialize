@@ -429,11 +429,19 @@ pub const HYDRATION_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
-/// How long to retain completed object and replica hydration episodes.
+/// How long to retain completed object hydration episodes.
 pub const HYDRATION_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::new(
     "hydration_history_retention_period",
     Duration::from_hours(30 * 24),
-    "How long to retain rows in mz_internal.mz_object_hydration_history and mz_internal.mz_replica_hydration_history.",
+    "How long to retain rows in mz_internal.mz_object_hydration_history.",
+    ParameterScope::Environment,
+);
+
+/// How long to retain completed replica hydration episodes for capacity planning.
+pub const REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::new(
+    "replica_hydration_history_retention_period",
+    Duration::from_hours(120 * 24),
+    "How long to retain rows in mz_internal.mz_replica_hydration_history.",
     ParameterScope::Environment,
 );
 
@@ -599,6 +607,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
         .add(&HYDRATION_HISTORY_COLLECTION_INTERVAL)
         .add(&HYDRATION_HISTORY_RETENTION_PERIOD)
+        .add(&REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD)
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
         .add(&FRONTEND_READ_THEN_WRITE)

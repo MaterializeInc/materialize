@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::{
     FRONTEND_READ_THEN_WRITE, HYDRATION_HISTORY_COLLECTION_INTERVAL,
-    HYDRATION_HISTORY_RETENTION_PERIOD,
+    HYDRATION_HISTORY_RETENTION_PERIOD, REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD,
 };
 use mz_catalog::builtin::{
     MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY,
@@ -178,12 +178,9 @@ impl Coordinator {
 
     /// Runs one sweep: collect from the next replica, then apply retention.
     pub(super) fn run_hydration_history_collection(&mut self) {
-        let (collection_interval, retention) = {
+        let collection_interval = {
             let dyncfgs = self.catalog().system_config().dyncfgs();
-            (
-                HYDRATION_HISTORY_COLLECTION_INTERVAL.get(dyncfgs),
-                HYDRATION_HISTORY_RETENTION_PERIOD.get(dyncfgs),
-            )
+            HYDRATION_HISTORY_COLLECTION_INTERVAL.get(dyncfgs)
         };
         // Builtin tables are not writable in read-only mode, and a disabled
         // collector must do no background work at all. Retention is part of the
@@ -231,7 +228,7 @@ impl Coordinator {
         if let Some(replica) = replica {
             self.hydration_history_replica_cursor = Some(replica.replica_id);
         }
-        let mut sweep = self.new_sweep(catalog, retention);
+        let mut sweep = self.new_sweep(catalog);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
         let handle = task::spawn(|| "hydration_history_sweep", async move {
@@ -260,8 +257,15 @@ impl Coordinator {
     }
 
     /// Assembles the sweep context, including the client it writes through.
-    fn new_sweep(&self, catalog: Arc<Catalog>, retention: Duration) -> Sweep {
-        let retention_ms = u64::try_from(retention.as_millis()).unwrap_or(u64::MAX);
+    fn new_sweep(&self, catalog: Arc<Catalog>) -> Sweep {
+        let now = self.now();
+        let cutoff = |retention: Duration| {
+            let retention_ms = u64::try_from(retention.as_millis()).unwrap_or(u64::MAX);
+            mz_ore::now::to_datetime(now.saturating_sub(retention_ms)).to_rfc3339()
+        };
+        let dyncfgs = catalog.system_config().dyncfgs();
+        let object_cutoff = cutoff(HYDRATION_HISTORY_RETENTION_PERIOD.get(dyncfgs));
+        let replica_cutoff = cutoff(REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD.get(dyncfgs));
         let build_version = catalog.state().config().build_info.human_version(None);
         // Background read-then-write always uses the frontend OCC path. This
         // shared constructor field only controls session fallback, so the flag
@@ -289,7 +293,8 @@ impl Coordinator {
             catalog,
             metrics: self.metrics.clone(),
             wall_time: self.now_datetime(),
-            cutoff: mz_ore::now::to_datetime(self.now().saturating_sub(retention_ms)).to_rfc3339(),
+            object_cutoff,
+            replica_cutoff,
         }
     }
 }
@@ -606,10 +611,12 @@ struct Sweep {
     replica_history_id: CatalogItemId,
     metrics: Metrics,
     wall_time: chrono::DateTime<chrono::Utc>,
-    /// Rows finishing before this have aged out. Both steps apply it, so this
-    /// sweep cannot resurrect an episode its own retention step retracts.
+    /// Rows finishing before their table's cutoff have aged out. Collection and
+    /// retention use the same cutoff for each table, so this sweep cannot
+    /// resurrect an episode its own retention step retracts.
     /// Concurrent sweeps can have different cutoffs, making retention eventual.
-    cutoff: String,
+    object_cutoff: String,
+    replica_cutoff: String,
 }
 
 impl Sweep {
@@ -620,7 +627,7 @@ impl Sweep {
             replica_id,
             ..
         } = target;
-        let sql = object_collection_sql(cluster_id, replica_id, &self.cutoff);
+        let sql = object_collection_sql(cluster_id, replica_id, &self.object_cutoff);
         let _ = self
             .run(
                 "collection",
@@ -632,7 +639,7 @@ impl Sweep {
             )
             .await;
 
-        let sql = replica_collection_sql(target, &self.cutoff);
+        let sql = replica_collection_sql(target, &self.replica_cutoff);
         let _ = self
             .run(
                 "replica_collection",
@@ -647,7 +654,7 @@ impl Sweep {
 
     /// Retracts one bounded batch of aged-out rows.
     async fn retain(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        let sql = object_retention_sql(&self.cutoff);
+        let sql = object_retention_sql(&self.object_cutoff);
         if let Some(deleted) = self
             .run(
                 "retention",
@@ -663,7 +670,7 @@ impl Sweep {
             self.metrics.hydration_history_retention_batch_full.inc();
         }
 
-        let sql = replica_retention_sql(&self.cutoff);
+        let sql = replica_retention_sql(&self.replica_cutoff);
         if let Some(deleted) = self
             .run(
                 "replica_retention",

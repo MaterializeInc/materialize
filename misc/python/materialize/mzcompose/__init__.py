@@ -569,6 +569,17 @@ def get_variable_system_parameters(
             if version >= MzVersion.parse_mz("v26.40.0-dev")
             else []
         ),
+        *(
+            [
+                VariableSystemParameter(
+                    "replica_hydration_history_retention_period",
+                    "120d",
+                    ["0s", "1min", "120d"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.44.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),

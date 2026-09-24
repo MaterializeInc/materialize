@@ -84,3 +84,10 @@ history there.
 Rows currently have a populated `finished_at` and the status `hydrated`.
 Resource columns are nullable because the available kernel and filesystem
 observations depend on the replica platform.
+
+## Addendum: separate replica retention
+
+[SQL-714](https://linear.app/materializeinc/issue/SQL-714) introduced
+`replica_hydration_history_retention_period` after this design, with a default of
+120 days (four months). Object history retains its separate 30-day
+`hydration_history_retention_period`.

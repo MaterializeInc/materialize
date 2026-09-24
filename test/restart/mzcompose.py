@@ -1496,6 +1496,7 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                 # Pin retention: CI randomizes it, and a short period would
                 # prune the episode this test restarts around.
                 "hydration_history_retention_period": "30d",
+                "replica_hydration_history_retention_period": "120d",
             },
             sanity_restart=False,
         )
