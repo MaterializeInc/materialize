@@ -3309,18 +3309,15 @@ fn plan_sink(
         (CreateSinkConnection::Iceberg { .. }, Some(_), _) => {
             sql_bail!("ENVELOPE is not supported for Iceberg sinks, use MODE instead")
         }
-        // Postgres sinks use ENVELOPE, like Kafka
-        (CreateSinkConnection::Postgres { .. }, Some(ast::SinkEnvelope::Upsert), None) => {
-            SinkEnvelope::Upsert
-        }
-        (CreateSinkConnection::Postgres { .. }, Some(ast::SinkEnvelope::Debezium), None) => {
-            sql_bail!("ENVELOPE DEBEZIUM is not supported for Postgres sinks")
-        }
-        (CreateSinkConnection::Postgres { .. }, None, None) => {
-            sql_bail!("ENVELOPE clause is required")
+        // Postgres sinks have no envelope. They mirror the collection into the
+        // target table, and the KEY clause alone decides whether that table is
+        // keyed. The value stored here is inert for them.
+        (CreateSinkConnection::Postgres { .. }, None, None) => SinkEnvelope::Upsert,
+        (CreateSinkConnection::Postgres { .. }, Some(_), _) => {
+            sql_bail!("ENVELOPE is not supported for Postgres sinks")
         }
         (CreateSinkConnection::Postgres { .. }, _, Some(_)) => {
-            sql_bail!("MODE is not supported for Postgres sinks, use ENVELOPE instead")
+            sql_bail!("MODE is not supported for Postgres sinks")
         }
     };
 
@@ -3552,7 +3549,12 @@ fn plan_sink(
         (RelationDesc::new(typ, names), key_indices)
     });
 
-    if key_desc_and_indices.is_none() && envelope == SinkEnvelope::Upsert {
+    // Postgres sinks are exempt: having no envelope, they have nothing that
+    // demands a key. Without one the target table holds a bag of rows whose
+    // multiplicities the sink maintains exactly.
+    let requires_key = envelope == SinkEnvelope::Upsert
+        && !matches!(connection, CreateSinkConnection::Postgres { .. });
+    if key_desc_and_indices.is_none() && requires_key {
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
