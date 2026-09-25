@@ -12,9 +12,12 @@
 > SELECT COUNT(*) FROM sink_table
 3
 
-
+# Allow sink takeover to outlast the 300s unchanged-incarnation grace after restart.
+$ set-sql-timeout duration=360s force=true
 
 $ kafka-verify-data format=avro sink=materialize.public.sink_sink sort-messages=true
 {"before":null, "after":{"row":{"f1":{"int":1}}}}
 {"before":null, "after":{"row":{"f1":{"int":2}}}}
 {"before":null, "after":{"row":{"f1":{"int":3}}}}
+
+$ set-sql-timeout duration=default
