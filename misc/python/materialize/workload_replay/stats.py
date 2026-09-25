@@ -26,7 +26,6 @@ import matplotlib.pyplot as plt
 import numpy
 
 from materialize import MZ_ROOT, buildkite
-from materialize.mzcompose.test_result import TestFailureDetails
 
 # Byte parsing utilities
 
@@ -391,9 +390,9 @@ def fmt_pct(delta: float) -> str:
 
 
 def compare_table(
-    filename: str, stats_old: dict[str, Any], stats_new: dict[str, Any]
-) -> list[TestFailureDetails]:
-    """Generate a comparison table and check for regressions."""
+    stats_old: dict[str, Any], stats_new: dict[str, Any]
+) -> tuple[str, set[str]]:
+    """Return a comparison table and the names of metrics exceeding their thresholds."""
     rows = []
     if "object_creation" in stats_old:
         rows.append(
@@ -480,21 +479,19 @@ def compare_table(
             ]
         )
 
-    failures: list[TestFailureDetails] = []
-
     output_lines = [
         f"{'METRIC':<24} | {'OLD':^12} | {'NEW':^12} | {'CHANGE':^9} | {'THRESHOLD':^9} | {'REGRESSION?':^12}",
         "-" * 92,
     ]
 
-    regressed = False
+    regressions = set()
     for name, old, new, threshold in rows:
         delta = pct_change(old, new)
 
         if threshold is None:
             flag = ""
         elif new > old * threshold:
-            regressed = True
+            regressions.add(name)
             flag = "!!YES!!"
         else:
             flag = "no"
@@ -509,14 +506,4 @@ def compare_table(
             f"{threshold_field:>9} | "
             f"{flag:^12}"
         )
-    if regressed:
-        failures.append(
-            TestFailureDetails(
-                message=f"Workload {filename} regressed",
-                details="\n".join(output_lines),
-                test_class_name_override=filename,
-            )
-        )
-
-    print("\n".join(output_lines))
-    return failures
+    return "\n".join(output_lines), regressions
