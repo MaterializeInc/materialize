@@ -50,6 +50,8 @@ Label naming is not consistent: the rate panels filter `parent_source_id` while 
 
 ### Upsert and envelope state
 
+On `storage-upsert-sources`, the three volume panels and the eleven `Node Disk` panels are empty for every environment: `kubelet_volume_stats_*` covers only the Loki volumes in each production region, not clusterd volumes. Checked over three weeks in September 2026.
+
 | Metric | Type | Notes |
 |---|---|---|
 | `mz_source_records_indexed`, `mz_source_bytes_indexed` | gauge | Envelope state size. Their ratio is the average record size panel. |
