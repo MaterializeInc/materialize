@@ -7189,12 +7189,8 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
     """
     Test that retraction diffs within the expiration time are generated after the replica expires and panics
     """
-    with c.override(
-        Testdrive(no_reset=True),
-        Clusterd(name="clusterd1", restart="on-failure"),
-    ):
-
-        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", Service("testdrive", idle=True))
         c.testdrive(dedent("""
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
@@ -7209,33 +7205,54 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
                     WORKERS 1
                 )
               );
-            > SET CLUSTER TO test;
-
-            > CREATE TABLE events (
-              content TEXT,
-              event_ts TIMESTAMP
-              );
-
-            > CREATE VIEW events_view AS
-              SELECT event_ts, content
-              FROM events
-              WHERE mz_now() <= event_ts + INTERVAL '80s';
-
-            > CREATE DEFAULT INDEX ON events_view;
-
-            > INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
-
-            # Retraction diffs are not generated
-            > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
-              WHERE name LIKE '%events_view_primary_idx';
-            1000
-            # Sleep until the replica expires
-            $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="60s"
-            # Retraction diffs are now within the expiration time and should be generated
-            > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
-              WHERE name LIKE '%events_view_primary_idx';
-            2000
             """))
+
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+               FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+               WHERE c.name = 'test' AND r.name = 'test'""")
+        catalog_options = native_catalog_options(c)
+        with c.override(
+            Clusterd(
+                name="clusterd1",
+                workers=1,
+                restart="on-failure",
+                options=[
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *catalog_options,
+                ],
+            ),
+        ):
+            c.up("clusterd1")
+
+            c.testdrive(dedent("""
+                > SET CLUSTER TO test;
+
+                > CREATE TABLE events (
+                  content TEXT,
+                  event_ts TIMESTAMP
+                  );
+
+                > CREATE VIEW events_view AS
+                  SELECT event_ts, content
+                  FROM events
+                  WHERE mz_now() <= event_ts + INTERVAL '80s';
+
+                > CREATE DEFAULT INDEX ON events_view;
+
+                > INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
+
+                # Retraction diffs are not generated
+                > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+                  WHERE name LIKE '%events_view_primary_idx';
+                1000
+                # Sleep until the replica expires
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="60s"
+                # Retraction diffs are now within the expiration time and should be generated
+                > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+                  WHERE name LIKE '%events_view_primary_idx';
+                2000
+                """))
 
 
 def workflow_test_constant_sink(c: Composition) -> None:

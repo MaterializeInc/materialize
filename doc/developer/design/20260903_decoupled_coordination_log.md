@@ -1325,3 +1325,12 @@ does not demonstrate a production correctness defect. The expression-cache tests
 use bounded eventual-output checks while retaining dependency-drop, cache-disabled
 application and restart coverage. No enacted-catalog observation or synchronous
 APPLY completion contract is added. Failure to converge or recover remains a bug.
+
+### 2026-09-14: Configuration ordering question during integration
+
+Native replicas apply committed system configuration asynchronously, independently
+of query delivery. A query immediately following `ALTER SYSTEM` can use the prior
+row-iteration limit. Whether ALTER completion must order subsequent queries against
+replica-global configuration is unresolved. Do not add a configuration barrier or
+change the fixture's completion assumption until that contract is decided.
+Continue independent read-admission, stack-usage and replica-startup fixes.
