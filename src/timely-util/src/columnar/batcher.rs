@@ -21,17 +21,17 @@ use std::marker::PhantomData;
 use crate::columnation::ColumnationStack;
 use columnar::Container as _;
 use columnar::Push as _;
-use columnar::{Clear, Columnar, Index, Len};
+use columnar::{BorrowedOf, Clear, Columnar, Index, Len};
 use columnation::Columnation;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::implementations::merge_batcher::Merger;
-use timely::Accountable;
 use timely::Container;
 use timely::PartialOrder;
-use timely::container::{ContainerBuilder, PushInto, SizableContainer};
+use timely::container::{ContainerBuilder, PushInto};
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::columnar::Column;
+use crate::columnar::body::ColumnBody;
 
 /// A chunker to transform input data into sorted columns.
 #[derive(Default)]
@@ -121,28 +121,28 @@ where
     }
 }
 
-/// A chunker that consolidates `Column<(D, T, R)>` updates into sorted `Column`
-/// chunks, without round-tripping through columnation.
+/// A chunker that consolidates `Column<(D, T, R)>` updates into sorted
+/// [`ColumnBody`] chunks, without round-tripping through columnation.
 ///
 /// Drop-in counterpart to [`Chunker`] for the merge-batcher path: same control
-/// flow (sort borrowed refs, fold equal `(data, time)` runs, drop zero diffs),
-/// but the consolidated output stays in [`Column`].
+/// flow (sort borrowed refs, fold equal `(data, time)` runs, drop zero diffs).
+/// This is where records leave the edge container: the input is whatever the
+/// edge delivered, the output is a body the batcher chains.
 pub struct ColumnChunker<U: Columnar> {
-    /// Container we consolidate into and present to extract/finish callers.
-    /// Always `Column::Typed` between calls so we can push into it.
-    target: Column<U>,
+    /// Body we consolidate into and present to extract/finish callers.
+    target: ColumnBody<U>,
     /// Sorted, consolidated chunks pending extraction.
-    ready: VecDeque<Column<U>>,
+    ready: VecDeque<ColumnBody<U>>,
 }
 
 // Manual impl rather than `#[derive(Default)]`: the derive would synthesize
-// `impl<U: Columnar + Default>`, but `Column<U>: Default` only requires
+// `impl<U: Columnar + Default>`, but `ColumnBody<U>: Default` only requires
 // `U: Columnar`, and adding a spurious `U: Default` bound would propagate
 // through every `ContainerBuilder for ColumnChunker<U>` impl.
 impl<U: Columnar> Default for ColumnChunker<U> {
     fn default() -> Self {
         Self {
-            target: Column::default(),
+            target: ColumnBody::default(),
             ready: VecDeque::new(),
         }
     }
@@ -152,7 +152,7 @@ impl<U: Columnar> ContainerBuilder for ColumnChunker<U>
 where
     U::Container: Clone + 'static,
 {
-    type Container = Column<U>;
+    type Container = ColumnBody<U>;
 
     fn extract(&mut self) -> Option<&mut Self::Container> {
         if let Some(ready) = self.ready.pop_front() {
@@ -181,16 +181,9 @@ where
     for<'b> <R as Columnar>::Container: columnar::Push<&'b R>,
 {
     fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
-        // Reset target to an empty owned container. If it's already `Typed`
-        // (steady state, possibly recycling a chunk just handed back via
-        // `extract`), clear in place to reuse buffer allocations. Otherwise
-        // start fresh — the bytes/align variants don't support push.
-        match &mut self.target {
-            Column::Typed(c) => c.clear(),
-            Column::Bytes(_) | Column::Align(_) => {
-                self.target = Column::Typed(Default::default());
-            }
-        }
+        // Clearing keeps the allocations of a typed target, which is the
+        // steady state: possibly a chunk just handed back via `extract`.
+        self.target.clear();
 
         // Sort input by columnar ref order.
         let borrowed = container.borrow();
@@ -204,10 +197,7 @@ where
         // are pushed directly via each leaf's `Push<Ref<_>>` impl. Only R
         // needs an owned scratch since it carries the consolidated sum.
         {
-            let Column::Typed(target_c) = &mut self.target else {
-                unreachable!("target reset to Typed above");
-            };
-            let (target_d, target_t, target_r) = target_c;
+            let (target_d, target_t, target_r) = self.target.typed_mut();
 
             let mut iter = permutation.drain(..);
             if let Some((data, time, diff)) = iter.next() {
@@ -239,8 +229,7 @@ where
         }
 
         if !self.target.is_empty() {
-            let chunk = std::mem::replace(&mut self.target, Column::Typed(Default::default()));
-            self.ready.push_back(chunk);
+            self.ready.push_back(std::mem::take(&mut self.target));
         }
     }
 }
@@ -282,9 +271,9 @@ pub(crate) fn gallop(upper: usize, lower: &mut usize, mut cmp: impl FnMut(usize)
 }
 
 /// Counterpart to `ColInternalMerger` (which merges `ColumnationStack` chunks).
-/// Drives the merge batcher with [`Column`]-shaped chunks, no columnation
+/// Drives the merge batcher with [`ColumnBody`] chunks, no columnation
 /// detour, by way of the inherent `merge_from` / `extract` methods on
-/// `Column<(D, T, R)>` below.
+/// `ColumnBody<(D, T, R)>` below.
 pub struct ColumnMerger<D, T, R> {
     _marker: PhantomData<(D, T, R)>,
 }
@@ -297,12 +286,61 @@ impl<D, T, R> Default for ColumnMerger<D, T, R> {
     }
 }
 
-/// Per-chunk merge and extract for [`Column`]-shaped sorted chunks.
+/// A chunk the merge and extract bodies below write to: the merger's
+/// [`ColumnBody`], and the column pager's [`Column`] until that pager is
+/// retired.
+pub trait MergeChunk<C: Columnar>: Default {
+    /// The typed containers, for writing to.
+    fn typed(&mut self) -> &mut C::Container;
+    /// The chunk as a columnar view.
+    fn view(&self) -> BorrowedOf<'_, C>;
+    /// True when the chunk holds no records.
+    fn is_empty(&self) -> bool;
+}
+
+impl<C: Columnar> MergeChunk<C> for ColumnBody<C> {
+    fn typed(&mut self) -> &mut C::Container {
+        self.typed_mut()
+    }
+    fn view(&self) -> BorrowedOf<'_, C> {
+        self.borrow()
+    }
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl<C: Columnar> MergeChunk<C> for Column<C> {
+    fn typed(&mut self) -> &mut C::Container {
+        // The pager merges into recycled typed chunks, so this is a move. A
+        // serialized chunk is copied, as `ColumnBody::typed_mut` does.
+        if !matches!(self, Column::Typed(_)) {
+            let view = self.borrow();
+            let mut fresh = C::Container::default();
+            fresh.extend_from_self(view, 0..view.len());
+            *self = Column::Typed(fresh);
+        }
+        let Column::Typed(typed) = self else {
+            unreachable!("a serialized chunk was materialized above");
+        };
+        typed
+    }
+    fn view(&self) -> BorrowedOf<'_, C> {
+        self.borrow()
+    }
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+/// Per-chunk merge and extract for sorted [`ColumnBody`] chunks.
 ///
 /// These are the building blocks that [`Merger for ColumnMerger`] orchestrates
 /// over chains of chunks. They're inherent methods rather than a trait impl
 /// so the merger can call them without going through any wrapper indirection.
-impl<D, T, R> Column<(D, T, R)>
+/// The output side of each is written to, so a serialized output body is
+/// materialized first (see [`ColumnBody::typed_mut`]).
+impl<D, T, R> ColumnBody<(D, T, R)>
 where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -310,227 +348,15 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
-    /// Merge items from sorted inputs into `self`, advancing positions.
-    ///
-    /// Mirrors the dispatch shape used by the merge-batcher framework:
-    /// - **0**: no-op
-    /// - **1**: bulk copy (or swap, if `self` is empty and `*pos == 0`)
-    /// - **2**: merge two sorted streams, with diff consolidation on equal
-    ///   `(data, time)` keys and gallop bulk-copy of long single-side runs.
-    ///
-    /// Returns `true` if the merge stopped because the amortized ship-threshold
-    /// check inside the inner loop fired (the caller should ship `self` before
-    /// the next call). Returns `false` if the merge stopped because at least
-    /// one input was exhausted at its position (the caller should refill that
-    /// side; `self` may still be at capacity from accumulation across short
-    /// calls and the caller should also check `at_capacity` in that case).
-    ///
-    /// The 0- and 1-input dispatches always return `false`: 0 does no work,
-    /// 1 is a bulk copy or swap that runs to completion.
+    /// Merge items from sorted inputs into `self`, advancing positions. See
+    /// [`merge_from`].
     #[must_use]
     pub fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) -> bool {
-        match others.len() {
-            0 => false,
-            1 => {
-                let other = &mut others[0];
-                let pos = &mut positions[0];
-                if self.is_empty() && *pos == 0 {
-                    std::mem::swap(self, other);
-                    return false;
-                }
-                let Column::Typed(self_c) = self else {
-                    unreachable!("merger chunks are always Column::Typed");
-                };
-                let src_c = other.borrow();
-                self_c.extend_from_self(src_c, *pos..other.borrow().len());
-                *pos = other.borrow().len();
-                false
-            }
-            2 => {
-                let (left, right) = others.split_at(1);
-                let (left_pos, right_pos) = positions.split_at_mut(1);
-                let left_borrow = left[0].borrow();
-                let right_borrow = right[0].borrow();
-
-                let Column::Typed(self_c) = self else {
-                    unreachable!("merger chunks are always Column::Typed");
-                };
-
-                // Split the input borrows into per-leaf views.
-                //
-                // A columnar tuple `Borrow::Ref` is recursive: indexing the
-                // tuple borrow walks every leaf (and reconstructs the nested
-                // ref tuple) regardless of which leaves the caller actually
-                // reads. Indexing each leaf view directly cuts probe-path
-                // work to the columns we consult — for the merge step
-                // that's the `(D, T)` key, with the diff column read only
-                // when we push.
-                let l_d = left_borrow.0;
-                let l_t = left_borrow.1;
-                let l_r = left_borrow.2;
-                let r_d = right_borrow.0;
-                let r_t = right_borrow.1;
-                let r_r = right_borrow.2;
-                let upper_l = l_d.len();
-                let upper_r = r_d.len();
-
-                // Mirror the split on the output container. Tuple
-                // containers split into per-leaf containers, which lets us
-                // address each leaf independently — both gallop bulk-copies
-                // and single-record pushes resolve to a primitive operation
-                // per leaf. The leaves stay length-synchronized as long as
-                // every record path pushes exactly one element to each.
-                let (sd, st, sr) = self_c;
-
-                // Pre-size each output leaf for the worst-case merge
-                // (no consolidation): `len(left) + len(right)` records.
-                // `reserve_for` walks each input's `as_bytes`, which is
-                // accurate for variable-length leaves (where reserving a
-                // record count wouldn't size the byte buffer correctly).
-                //
-                // Gated by record count: above a few hundred thousand
-                // records the input bound over-reserves any time
-                // consolidation is heavy, and the framework's outer
-                // ship-threshold check yields us before we'd use the
-                // headroom. For inputs past that point, geometric grow
-                // is bounded by 2× the actual output and avoids
-                // committing pages we'd never touch.
-                const RESERVE_RECORD_THRESHOLD: usize = 1_000_000;
-                if upper_l + upper_r <= RESERVE_RECORD_THRESHOLD {
-                    use columnar::Container as _;
-                    let inputs = [left_borrow, right_borrow];
-                    sd.reserve_for(inputs.iter().map(|b| b.0));
-                    st.reserve_for(inputs.iter().map(|b| b.1));
-                    sr.reserve_for(inputs.iter().map(|b| b.2));
-                }
-
-                let mut stash = R::default();
-
-                // Mid-merge ship-threshold check, matching the heuristic
-                // used by `Column::at_capacity` and `ColumnBuilder`. The
-                // tuple `(sd.borrow(), st.borrow(), sr.borrow())` chains
-                // its leaves' `as_bytes` iterators, so passing it to
-                // `at_serialized_capacity` reuses the canonical
-                // `indexed::length_in_words` formula without needing the
-                // parent borrow we destructured.
-                //
-                // The check walks every leaf slice once per call, which
-                // is non-trivial on variable-length leaves; the caller
-                // runs it every `THRESHOLD_PERIOD_MASK + 1` iterations
-                // rather than per-iter. The ship threshold is ~65 K
-                // records, so overshooting by ~1 K records before the
-                // check fires has no practical impact — the framework's
-                // outer `at_capacity` check sees the oversize chunk and
-                // ships it regardless.
-                let at_ship_threshold =
-                    |sd: &D::Container, st: &T::Container, sr: &R::Container| {
-                        use columnar::Borrow as _;
-                        crate::columnar::at_serialized_capacity(&(
-                            sd.borrow(),
-                            st.borrow(),
-                            sr.borrow(),
-                        ))
-                    };
-                const THRESHOLD_PERIOD_MASK: u32 = 1023;
-                let mut iter: u32 = 0;
-                let mut yielded = false;
-
-                while left_pos[0] < upper_l && right_pos[0] < upper_r {
-                    let d1 = l_d.get(left_pos[0]);
-                    let t1 = l_t.get(left_pos[0]);
-                    let d2 = r_d.get(right_pos[0]);
-                    let t2 = r_t.get(right_pos[0]);
-                    match (d1, t1).cmp(&(d2, t2)) {
-                        std::cmp::Ordering::Less => {
-                            // Common case (interleaved data): single-record
-                            // advance. Skip the gallop call entirely — its
-                            // setup plus the first cmp probe is more
-                            // expensive than just pushing this record and
-                            // re-entering the outer loop. Galloping is only
-                            // worthwhile when there's an actual run, which
-                            // we detect with the peek check below.
-                            sd.push(d1);
-                            st.push(t1);
-                            sr.push(l_r.get(left_pos[0]));
-                            left_pos[0] += 1;
-                            // Long-run case: peek at the next record; if
-                            // it's still strictly less than `(d2, t2)`,
-                            // we have a run worth galloping (and bulk-
-                            // copying).
-                            if left_pos[0] < upper_l
-                                && (l_d.get(left_pos[0]), l_t.get(left_pos[0])) < (d2, t2)
-                            {
-                                let start = left_pos[0];
-                                gallop(upper_l, &mut left_pos[0], |i| {
-                                    (l_d.get(i), l_t.get(i)) < (d2, t2)
-                                });
-                                // Per-leaf bulk copy of the run: each call
-                                // resolves to an `extend_from_slice` on its
-                                // leaf (recursively for nested leaves).
-                                sd.extend_from_self(l_d, start..left_pos[0]);
-                                st.extend_from_self(l_t, start..left_pos[0]);
-                                sr.extend_from_self(l_r, start..left_pos[0]);
-                            }
-                        }
-                        std::cmp::Ordering::Greater => {
-                            // Symmetric on the right side.
-                            sd.push(d2);
-                            st.push(t2);
-                            sr.push(r_r.get(right_pos[0]));
-                            right_pos[0] += 1;
-                            if right_pos[0] < upper_r
-                                && (r_d.get(right_pos[0]), r_t.get(right_pos[0])) < (d1, t1)
-                            {
-                                let start = right_pos[0];
-                                gallop(upper_r, &mut right_pos[0], |i| {
-                                    (r_d.get(i), r_t.get(i)) < (d1, t1)
-                                });
-                                sd.extend_from_self(r_d, start..right_pos[0]);
-                                st.extend_from_self(r_t, start..right_pos[0]);
-                                sr.extend_from_self(r_r, start..right_pos[0]);
-                            }
-                        }
-                        std::cmp::Ordering::Equal => {
-                            let r1 = l_r.get(left_pos[0]);
-                            let r2 = r_r.get(right_pos[0]);
-                            R::copy_from(&mut stash, r1);
-                            stash.plus_equals(&r2);
-                            if !stash.is_zero() {
-                                sd.push(d1);
-                                st.push(t1);
-                                sr.push(&stash);
-                            }
-                            left_pos[0] += 1;
-                            right_pos[0] += 1;
-                        }
-                    }
-
-                    // Amortized ship-threshold check; see comment above
-                    // `at_ship_threshold` for rationale.
-                    iter = iter.wrapping_add(1);
-                    if iter & THRESHOLD_PERIOD_MASK == 0 && at_ship_threshold(sd, st, sr) {
-                        yielded = true;
-                        break;
-                    }
-                }
-                yielded
-            }
-            // `Merger::merge` only ever calls `merge_from` with 0/1/2-input
-            // slices (k-way merge isn't part of the merge-batcher contract).
-            n => unreachable!("merge_from called with {n} inputs; expected 0, 1, or 2"),
-        }
+        merge_from(self, others, positions)
     }
 
-    /// Partition records starting at `*position` into `keep` (times beyond
-    /// `upper`, retained for the next round) and `ship` (times not beyond
-    /// `upper`, sealed into the output batch). Updates `frontier` with the
-    /// times of kept records.
-    ///
-    /// The caller invokes `extract` repeatedly until `*position >= self.len()`,
-    /// swapping out a full output buffer between calls. This shape exists
-    /// because the framework only checks `at_capacity()` between calls, so
-    /// without an inner-loop yield a single call could quietly produce
-    /// oversized output chunks.
+    /// Partition records starting at `*position` into `keep` and `ship`. See
+    /// [`extract`].
     pub fn extract(
         &mut self,
         position: &mut usize,
@@ -539,39 +365,304 @@ where
         keep: &mut Self,
         ship: &mut Self,
     ) {
-        let Column::Typed(keep_c) = keep else {
-            unreachable!("merger chunks are always Column::Typed");
-        };
-        let Column::Typed(ship_c) = ship else {
-            unreachable!("merger chunks are always Column::Typed");
-        };
-
-        let self_view = self.borrow();
-        let len = self_view.len();
-
-        use columnar::Borrow as _;
-        let mut owned_t = T::default();
-        while *position < len
-            && !crate::columnar::at_serialized_capacity(&keep_c.borrow())
-            && !crate::columnar::at_serialized_capacity(&ship_c.borrow())
-        {
-            let (_, time, _) = self_view.get(*position);
-            T::copy_from(&mut owned_t, time);
-            if upper.less_equal(&owned_t) {
-                // `insert_with` only clones when the time isn't already
-                // present in the antichain.
-                frontier.insert_with(&owned_t, |t| t.clone());
-                keep_c.extend_from_self(self_view, *position..*position + 1);
-            } else {
-                ship_c.extend_from_self(self_view, *position..*position + 1);
-            }
-            *position += 1;
-        }
+        extract(self, position, upper, frontier, keep, ship)
     }
 }
 
-/// `Merger` impl driving [`MergeBatcher`] over [`Column`]-shaped chunks,
-/// built on the inherent `Column::merge_from` and `Column::extract` methods.
+/// The same merge and extract for the column pager's [`Column`] chunks.
+impl<D, T, R> Column<(D, T, R)>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+{
+    /// Merge items from sorted inputs into `self`, advancing positions. See
+    /// [`merge_from`].
+    #[must_use]
+    pub fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) -> bool {
+        merge_from(self, others, positions)
+    }
+
+    /// Partition records starting at `*position` into `keep` and `ship`. See
+    /// [`extract`].
+    pub fn extract(
+        &mut self,
+        position: &mut usize,
+        upper: AntichainRef<T>,
+        frontier: &mut Antichain<T>,
+        keep: &mut Self,
+        ship: &mut Self,
+    ) {
+        extract(self, position, upper, frontier, keep, ship)
+    }
+}
+
+/// Merge items from sorted inputs into `target`, advancing positions.
+///
+/// Mirrors the dispatch shape used by the merge-batcher framework:
+/// - **0**: no-op
+/// - **1**: bulk copy (or swap, if `target` is empty and `*pos == 0`)
+/// - **2**: merge two sorted streams, with diff consolidation on equal
+///   `(data, time)` keys and gallop bulk-copy of long single-side runs.
+///
+/// Returns `true` if the merge stopped because the amortized ship-threshold
+/// check inside the inner loop fired (the caller should ship `target` before
+/// the next call). Returns `false` if the merge stopped because at least
+/// one input was exhausted at its position (the caller should refill that
+/// side; `target` may still be at capacity from accumulation across short
+/// calls and the caller should also check `at_capacity` in that case).
+///
+/// The 0- and 1-input dispatches always return `false`: 0 does no work,
+/// 1 is a bulk copy or swap that runs to completion.
+#[must_use]
+pub fn merge_from<D, T, R, Ch>(target: &mut Ch, others: &mut [Ch], positions: &mut [usize]) -> bool
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    Ch: MergeChunk<(D, T, R)>,
+{
+    match others.len() {
+        0 => false,
+        1 => {
+            let other = &mut others[0];
+            let pos = &mut positions[0];
+            if target.is_empty() && *pos == 0 {
+                std::mem::swap(target, other);
+                return false;
+            }
+            let self_c = target.typed();
+            let src_c = other.view();
+            self_c.extend_from_self(src_c, *pos..other.view().len());
+            *pos = other.view().len();
+            false
+        }
+        2 => {
+            let (left, right) = others.split_at(1);
+            let (left_pos, right_pos) = positions.split_at_mut(1);
+            let left_borrow = left[0].view();
+            let right_borrow = right[0].view();
+
+            let self_c = target.typed();
+
+            // Split the input borrows into per-leaf views.
+            //
+            // A columnar tuple `Borrow::Ref` is recursive: indexing the
+            // tuple borrow walks every leaf (and reconstructs the nested
+            // ref tuple) regardless of which leaves the caller actually
+            // reads. Indexing each leaf view directly cuts probe-path
+            // work to the columns we consult — for the merge step
+            // that's the `(D, T)` key, with the diff column read only
+            // when we push.
+            let l_d = left_borrow.0;
+            let l_t = left_borrow.1;
+            let l_r = left_borrow.2;
+            let r_d = right_borrow.0;
+            let r_t = right_borrow.1;
+            let r_r = right_borrow.2;
+            let upper_l = l_d.len();
+            let upper_r = r_d.len();
+
+            // Mirror the split on the output container. Tuple
+            // containers split into per-leaf containers, which lets us
+            // address each leaf independently — both gallop bulk-copies
+            // and single-record pushes resolve to a primitive operation
+            // per leaf. The leaves stay length-synchronized as long as
+            // every record path pushes exactly one element to each.
+            let (sd, st, sr) = self_c;
+
+            // Pre-size each output leaf for the worst-case merge
+            // (no consolidation): `len(left) + len(right)` records.
+            // `reserve_for` walks each input's `as_bytes`, which is
+            // accurate for variable-length leaves (where reserving a
+            // record count wouldn't size the byte buffer correctly).
+            //
+            // Gated by record count: above a few hundred thousand
+            // records the input bound over-reserves any time
+            // consolidation is heavy, and the framework's outer
+            // ship-threshold check yields us before we'd use the
+            // headroom. For inputs past that point, geometric grow
+            // is bounded by 2× the actual output and avoids
+            // committing pages we'd never touch.
+            const RESERVE_RECORD_THRESHOLD: usize = 1_000_000;
+            if upper_l + upper_r <= RESERVE_RECORD_THRESHOLD {
+                use columnar::Container as _;
+                let inputs = [left_borrow, right_borrow];
+                sd.reserve_for(inputs.iter().map(|b| b.0));
+                st.reserve_for(inputs.iter().map(|b| b.1));
+                sr.reserve_for(inputs.iter().map(|b| b.2));
+            }
+
+            let mut stash = R::default();
+
+            // Mid-merge ship-threshold check, matching the heuristic
+            // used by `ColumnBody::at_capacity` and `ColumnBuilder`. The
+            // tuple `(sd.borrow(), st.borrow(), sr.borrow())` chains
+            // its leaves' `as_bytes` iterators, so passing it to
+            // `at_serialized_capacity` reuses the canonical
+            // `indexed::length_in_words` formula without needing the
+            // parent borrow we destructured.
+            //
+            // The check walks every leaf slice once per call, which
+            // is non-trivial on variable-length leaves; the caller
+            // runs it every `THRESHOLD_PERIOD_MASK + 1` iterations
+            // rather than per-iter. The ship threshold is ~65 K
+            // records, so overshooting by ~1 K records before the
+            // check fires has no practical impact — the framework's
+            // outer `at_capacity` check sees the oversize chunk and
+            // ships it regardless.
+            let at_ship_threshold = |sd: &D::Container, st: &T::Container, sr: &R::Container| {
+                use columnar::Borrow as _;
+                crate::columnar::at_serialized_capacity(&(sd.borrow(), st.borrow(), sr.borrow()))
+            };
+            const THRESHOLD_PERIOD_MASK: u32 = 1023;
+            let mut iter: u32 = 0;
+            let mut yielded = false;
+
+            while left_pos[0] < upper_l && right_pos[0] < upper_r {
+                let d1 = l_d.get(left_pos[0]);
+                let t1 = l_t.get(left_pos[0]);
+                let d2 = r_d.get(right_pos[0]);
+                let t2 = r_t.get(right_pos[0]);
+                match (d1, t1).cmp(&(d2, t2)) {
+                    std::cmp::Ordering::Less => {
+                        // Common case (interleaved data): single-record
+                        // advance. Skip the gallop call entirely — its
+                        // setup plus the first cmp probe is more
+                        // expensive than just pushing this record and
+                        // re-entering the outer loop. Galloping is only
+                        // worthwhile when there's an actual run, which
+                        // we detect with the peek check below.
+                        sd.push(d1);
+                        st.push(t1);
+                        sr.push(l_r.get(left_pos[0]));
+                        left_pos[0] += 1;
+                        // Long-run case: peek at the next record; if
+                        // it's still strictly less than `(d2, t2)`,
+                        // we have a run worth galloping (and bulk-
+                        // copying).
+                        if left_pos[0] < upper_l
+                            && (l_d.get(left_pos[0]), l_t.get(left_pos[0])) < (d2, t2)
+                        {
+                            let start = left_pos[0];
+                            gallop(upper_l, &mut left_pos[0], |i| {
+                                (l_d.get(i), l_t.get(i)) < (d2, t2)
+                            });
+                            // Per-leaf bulk copy of the run: each call
+                            // resolves to an `extend_from_slice` on its
+                            // leaf (recursively for nested leaves).
+                            sd.extend_from_self(l_d, start..left_pos[0]);
+                            st.extend_from_self(l_t, start..left_pos[0]);
+                            sr.extend_from_self(l_r, start..left_pos[0]);
+                        }
+                    }
+                    std::cmp::Ordering::Greater => {
+                        // Symmetric on the right side.
+                        sd.push(d2);
+                        st.push(t2);
+                        sr.push(r_r.get(right_pos[0]));
+                        right_pos[0] += 1;
+                        if right_pos[0] < upper_r
+                            && (r_d.get(right_pos[0]), r_t.get(right_pos[0])) < (d1, t1)
+                        {
+                            let start = right_pos[0];
+                            gallop(upper_r, &mut right_pos[0], |i| {
+                                (r_d.get(i), r_t.get(i)) < (d1, t1)
+                            });
+                            sd.extend_from_self(r_d, start..right_pos[0]);
+                            st.extend_from_self(r_t, start..right_pos[0]);
+                            sr.extend_from_self(r_r, start..right_pos[0]);
+                        }
+                    }
+                    std::cmp::Ordering::Equal => {
+                        let r1 = l_r.get(left_pos[0]);
+                        let r2 = r_r.get(right_pos[0]);
+                        R::copy_from(&mut stash, r1);
+                        stash.plus_equals(&r2);
+                        if !stash.is_zero() {
+                            sd.push(d1);
+                            st.push(t1);
+                            sr.push(&stash);
+                        }
+                        left_pos[0] += 1;
+                        right_pos[0] += 1;
+                    }
+                }
+
+                // Amortized ship-threshold check; see comment above
+                // `at_ship_threshold` for rationale.
+                iter = iter.wrapping_add(1);
+                if iter & THRESHOLD_PERIOD_MASK == 0 && at_ship_threshold(sd, st, sr) {
+                    yielded = true;
+                    break;
+                }
+            }
+            yielded
+        }
+        // `Merger::merge` only ever calls `merge_from` with 0/1/2-input
+        // slices (k-way merge isn't part of the merge-batcher contract).
+        n => unreachable!("merge_from called with {n} inputs; expected 0, 1, or 2"),
+    }
+}
+
+/// Partition records of `source` starting at `*position` into `keep` (times
+/// beyond `upper`, retained for the next round) and `ship` (times not beyond
+/// `upper`, sealed into the output batch). Updates `frontier` with the
+/// times of kept records.
+///
+/// The caller invokes `extract` repeatedly until `*position >= source.len()`,
+/// swapping out a full output buffer between calls. This shape exists
+/// because the framework only checks `at_capacity()` between calls, so
+/// without an inner-loop yield a single call could quietly produce
+/// oversized output chunks.
+pub fn extract<D, T, R, Ch>(
+    source: &Ch,
+    position: &mut usize,
+    upper: AntichainRef<T>,
+    frontier: &mut Antichain<T>,
+    keep: &mut Ch,
+    ship: &mut Ch,
+) where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    Ch: MergeChunk<(D, T, R)>,
+{
+    let keep_c = keep.typed();
+    let ship_c = ship.typed();
+
+    let self_view = source.view();
+    let len = self_view.len();
+
+    use columnar::Borrow as _;
+    let mut owned_t = T::default();
+    while *position < len
+        && !crate::columnar::at_serialized_capacity(&keep_c.borrow())
+        && !crate::columnar::at_serialized_capacity(&ship_c.borrow())
+    {
+        let (_, time, _) = self_view.get(*position);
+        T::copy_from(&mut owned_t, time);
+        if upper.less_equal(&owned_t) {
+            // `insert_with` only clones when the time isn't already
+            // present in the antichain.
+            frontier.insert_with(&owned_t, |t| t.clone());
+            keep_c.extend_from_self(self_view, *position..*position + 1);
+        } else {
+            ship_c.extend_from_self(self_view, *position..*position + 1);
+        }
+        *position += 1;
+    }
+}
+
+/// `Merger` impl driving [`MergeBatcher`] over [`ColumnBody`] chunks,
+/// built on the inherent `ColumnBody::merge_from` and `ColumnBody::extract`
+/// methods.
 /// Exhausted input chunks are recycled through `stash`, and remaining full
 /// chunks on a drained side move to the output directly, with no per-element
 /// copy.
@@ -586,7 +677,7 @@ where
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
     type Time = T;
-    type Chunk = Column<(D, T, R)>;
+    type Chunk = ColumnBody<(D, T, R)>;
 
     fn merge(
         &mut self,
@@ -738,11 +829,10 @@ where
     }
 
     fn len(chunk: &Self::Chunk) -> usize {
-        usize::try_from(chunk.record_count()).expect("record_count is non-negative")
+        chunk.len()
     }
 
     fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
-        use timely::dataflow::channels::ContainerBytes;
         // Serialized footprint stands in for both `size` and `capacity`: the
         // chunk owns one logical allocation worth of leaf storage, and we
         // ship/recycle the whole thing rather than tracking per-leaf
@@ -756,7 +846,7 @@ where
 /// Pop a chunk from `stash` or allocate a fresh one. Stashed chunks are
 /// already cleared via `recycle_chunk`, so they're ready for push.
 #[inline]
-pub(crate) fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
+pub(crate) fn empty_chunk<C: Columnar>(stash: &mut Vec<ColumnBody<C>>) -> ColumnBody<C> {
     stash.pop().unwrap_or_default()
 }
 
@@ -764,13 +854,12 @@ pub(crate) fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> 
 ///
 /// Chunks recycled here come from the merger and chunker, both of which
 /// produce `Typed`; only the typed allocations are worth caching for reuse.
-/// `Bytes` / `Align` chunks have no typed-side allocation to preserve, so we
-/// simply drop them — `empty_chunk` will produce a fresh default just as
-/// cheaply, and pushing them onto `stash` would only displace useful
-/// recycled allocations.
+/// A serialized chunk has no typed-side allocation to preserve, so we simply
+/// drop it: `empty_chunk` will produce a fresh default just as cheaply, and
+/// pushing it onto `stash` would only displace useful recycled allocations.
 #[inline]
-pub(crate) fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<Column<C>>) {
-    if let Column::Typed(c) = &mut chunk {
+pub(crate) fn recycle_chunk<C: Columnar>(mut chunk: ColumnBody<C>, stash: &mut Vec<ColumnBody<C>>) {
+    if let ColumnBody::Typed(c) = &mut chunk {
         c.clear();
         stash.push(chunk);
     }
@@ -782,12 +871,12 @@ pub(crate) fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<C
 /// path, then appends remaining full chunks directly to `output` without
 /// per-element copy.
 fn drain_side<D, T, R>(
-    head: &mut Column<(D, T, R)>,
+    head: &mut ColumnBody<(D, T, R)>,
     pos: &mut usize,
-    list: &mut std::vec::IntoIter<Column<(D, T, R)>>,
-    result: &mut Column<(D, T, R)>,
-    output: &mut Vec<Column<(D, T, R)>>,
-    stash: &mut Vec<Column<(D, T, R)>>,
+    list: &mut std::vec::IntoIter<ColumnBody<(D, T, R)>>,
+    result: &mut ColumnBody<(D, T, R)>,
+    output: &mut Vec<ColumnBody<(D, T, R)>>,
+    stash: &mut Vec<ColumnBody<(D, T, R)>>,
 ) where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -979,16 +1068,18 @@ mod tests {
         assert_eq!(collected, vec![(1, 0, 1), (3, 0, 1)]);
     }
 
-    /// Build a `Column<((u64, u64), u64, i64)>` from a slice of tuples.
-    fn col(rows: &[((u64, u64), u64, i64)]) -> Column<((u64, u64), u64, i64)> {
-        let mut c: Column<((u64, u64), u64, i64)> = Default::default();
+    /// Build a `ColumnBody<((u64, u64), u64, i64)>` from a slice of tuples.
+    fn col(rows: &[((u64, u64), u64, i64)]) -> ColumnBody<((u64, u64), u64, i64)> {
+        let mut c: ColumnBody<((u64, u64), u64, i64)> = Default::default();
         for &t in rows {
             c.push_into(t);
         }
         c
     }
 
-    fn collect_chunks(chunks: &[Column<((u64, u64), u64, i64)>]) -> Vec<((u64, u64), u64, i64)> {
+    fn collect_chunks(
+        chunks: &[ColumnBody<((u64, u64), u64, i64)>],
+    ) -> Vec<((u64, u64), u64, i64)> {
         chunks
             .iter()
             .flat_map(|c| {
@@ -1085,7 +1176,7 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
-    //! Property tests for `Column::merge_from` and `Column::extract`.
+    //! Property tests for `ColumnBody::merge_from` and `ColumnBody::extract`.
     //!
     //! Strategy: generate sorted+consolidated inputs (the merger's input
     //! contract), drive `merge_from` / `extract` the same way the framework
@@ -1126,15 +1217,15 @@ mod proptests {
             .prop_map(consolidate)
     }
 
-    fn build_column(v: &[Tuple]) -> Column<Tuple> {
-        let mut col: Column<Tuple> = Default::default();
+    fn build_column(v: &[Tuple]) -> ColumnBody<Tuple> {
+        let mut col: ColumnBody<Tuple> = Default::default();
         for tup in v {
             col.push_into(*tup);
         }
         col
     }
 
-    fn collect_column(col: &Column<Tuple>) -> Vec<Tuple> {
+    fn collect_column(col: &ColumnBody<Tuple>) -> Vec<Tuple> {
         col.borrow()
             .into_index_iter()
             .map(|((k, v), t, r)| {
@@ -1150,8 +1241,8 @@ mod proptests {
     /// Drive a 2-way merge the same way `Merger::merge` would: a 2-input
     /// call until one side exhausts, then a 1-input drain for whichever
     /// side still has data.
-    fn drive_merge(left: Column<Tuple>, right: Column<Tuple>) -> Column<Tuple> {
-        let mut self_col: Column<Tuple> = Default::default();
+    fn drive_merge(left: ColumnBody<Tuple>, right: ColumnBody<Tuple>) -> ColumnBody<Tuple> {
+        let mut self_col: ColumnBody<Tuple> = Default::default();
         let mut others = [left, right];
         let mut positions = [0usize, 0];
         let _ = self_col.merge_from(&mut others, &mut positions);
@@ -1206,7 +1297,7 @@ mod proptests {
 
             // Self starts non-empty so we exercise the bulk-copy path, not the
             // empty-self swap shortcut.
-            let mut self_col: Column<Tuple> = Default::default();
+            let mut self_col: ColumnBody<Tuple> = Default::default();
             let sentinel: Tuple = ((u64::MAX, u64::MAX), 0, 1);
             self_col.push_into(sentinel);
 
@@ -1226,7 +1317,7 @@ mod proptests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn merge_from_empty_self_swap(data in arb_consolidated()) {
-            let mut self_col: Column<Tuple> = Default::default();
+            let mut self_col: ColumnBody<Tuple> = Default::default();
             let mut others = [build_column(&data)];
             let mut positions = [0usize];
             let _ = self_col.merge_from(&mut others, &mut positions);
@@ -1248,8 +1339,8 @@ mod proptests {
             let mut self_col = build_column(&data);
             let upper = Antichain::from_elem(upper_time);
             let mut frontier: Antichain<u64> = Antichain::new();
-            let mut keep: Column<Tuple> = Default::default();
-            let mut ship: Column<Tuple> = Default::default();
+            let mut keep: ColumnBody<Tuple> = Default::default();
+            let mut ship: ColumnBody<Tuple> = Default::default();
             let mut position = 0;
 
             self_col.extract(
@@ -1301,11 +1392,11 @@ mod proptests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn extract_empty_input(upper_time in 0u64..=4) {
-            let mut self_col: Column<Tuple> = Default::default();
+            let mut self_col: ColumnBody<Tuple> = Default::default();
             let upper = Antichain::from_elem(upper_time);
             let mut frontier: Antichain<u64> = Antichain::new();
-            let mut keep: Column<Tuple> = Default::default();
-            let mut ship: Column<Tuple> = Default::default();
+            let mut keep: ColumnBody<Tuple> = Default::default();
+            let mut ship: ColumnBody<Tuple> = Default::default();
             let mut position = 0;
 
             self_col.extract(

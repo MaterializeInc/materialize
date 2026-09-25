@@ -59,17 +59,18 @@ mod spines {
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
     pub type RowRowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
-    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with any
-    /// batcher whose chains are `Column`s, spillable
-    /// ([`Col2ValPagedBatcher`]) or resident ([`Col2ValColBatcher`]) alike, so
-    /// the `Paged` in the name records where it started rather than a
+    /// `RowRowBuilder` variant that consumes [`ColumnBody`] chunks. Pairs with
+    /// any batcher whose chains are bodies, spillable ([`AccountedChunkBatcher`]
+    /// behind an [`UnchunkBuilder`]) or resident ([`Col2ValColBatcher`]) alike,
+    /// so the `Paged` in the name records where it started rather than a
     /// restriction. Installs a dictionary codec at seal time, gathering
-    /// statistics from the sealed `Column` chain, so columnar arrangements
-    /// compress on the same footing as the columnation-fed [`RowRowBuilder`].
+    /// statistics from the sealed chain, so columnar arrangements compress on
+    /// the same footing as the columnation-fed [`RowRowBuilder`].
     ///
+    /// [`AccountedChunkBatcher`]: mz_timely_util::columnar::chunk::AccountedChunkBatcher
     /// [`Col2ValColBatcher`]: mz_timely_util::columnar::Col2ValColBatcher
-    /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
-    /// [`Column`]: mz_timely_util::columnar::Column
+    /// [`ColumnBody`]: mz_timely_util::columnar::body::ColumnBody
+    /// [`UnchunkBuilder`]: mz_timely_util::columnar::chunk::UnchunkBuilder
     pub type RowRowColPagedBuilder<T, R> =
         ArcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
 
@@ -221,7 +222,7 @@ mod tests {
 
         use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
         use differential_dataflow::trace::{Builder, Description};
-        use mz_timely_util::columnar::Column;
+        use mz_timely_util::columnar::body::ColumnBody;
         use mz_timely_util::columnar::chunk::{ColumnChunk, UnchunkBuilder};
         use timely::container::PushInto;
         use timely::progress::{Antichain, Timestamp as _};
@@ -249,11 +250,11 @@ mod tests {
             .collect();
 
         // Cut the sorted run the way a merge batcher's chain is cut.
-        let columns = || -> Vec<Column<((Row, Row), Timestamp, i64)>> {
+        let columns = || -> Vec<ColumnBody<((Row, Row), Timestamp, i64)>> {
             updates
                 .chunks(250)
                 .map(|part| {
-                    let mut column: Column<((Row, Row), Timestamp, i64)> = Default::default();
+                    let mut column: ColumnBody<((Row, Row), Timestamp, i64)> = Default::default();
                     for update in part {
                         column.push_into(update);
                     }
@@ -275,10 +276,8 @@ mod tests {
         let mut chain = columns();
         let from_columns = <Paged as Builder>::seal(&mut chain, description());
 
-        let mut chain: Vec<ColumnChunk<(Row, Row), Timestamp, i64>> = columns()
-            .into_iter()
-            .map(ColumnChunk::from_column)
-            .collect();
+        let mut chain: Vec<ColumnChunk<(Row, Row), Timestamp, i64>> =
+            columns().into_iter().map(ColumnChunk::from_body).collect();
         let from_chunks = <Chunked as Builder>::seal(&mut chain, description());
 
         assert!(
@@ -1013,6 +1012,7 @@ mod dictionary {
         use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
         use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
         use mz_timely_util::columnar::Column;
+        use mz_timely_util::columnar::body::ColumnBody;
         use mz_timely_util::columnar::chunk::ChainState;
         use mz_timely_util::columnation::ColumnationStack as TimelyStack;
         use timely::progress::Timestamp;
@@ -1321,16 +1321,16 @@ mod dictionary {
             }
         }
 
-        /// Counterpart of [`RowRowBuilder`] that consumes [`Column`] chunks
+        /// Counterpart of [`RowRowBuilder`] that consumes [`ColumnBody`] chunks
         /// instead of columnation stacks, whether or not the batcher that
-        /// produced them pages. Mirrors `RowRowBuilder::seal`:
+        /// produced them spills. Mirrors `RowRowBuilder::seal`:
         /// it gathers key and value statistics from the sealed chain and
         /// installs codecs directly, then drops the per-container stats gatherer.
         pub struct RowRowColPagedBuilder<
             T: Lattice + Timestamp + Columnation + Columnar,
             R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
         > {
-            inner: OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, Column<((Row, Row), T, R)>>,
+            inner: OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, ColumnBody<((Row, Row), T, R)>>,
         }
 
         impl<
@@ -1338,7 +1338,7 @@ mod dictionary {
             R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
         > Builder for RowRowColPagedBuilder<T, R>
         {
-            type Input = Column<((Row, Row), T, R)>;
+            type Input = ColumnBody<((Row, Row), T, R)>;
             type Time = T;
             type Output = OrdValBatch<RowRowLayout<((Row, Row), T, R)>>;
 

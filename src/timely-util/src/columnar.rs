@@ -18,6 +18,7 @@
 #![deny(missing_docs)]
 
 pub mod batcher;
+pub mod body;
 pub mod builder;
 pub mod builder_input;
 pub mod chunk;
@@ -69,20 +70,24 @@ pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 /// real one via [`merge_batcher::ColumnMergeBatcher::set_pager`].
 pub type Col2ValPagedBatcher<K, V, T, R> = merge_batcher::ColumnMergeBatcher<(K, V), T, R>;
 
-/// Columnar-native counterpart to [`Col2ValBatcher`], holding [`Column`]
-/// chunks rather than columnation stacks and merging them through
-/// [`batcher::ColumnMerger`].
+/// Columnar-native counterpart to [`Col2ValBatcher`], holding
+/// [`body::ColumnBody`] chunks rather than columnation stacks and merging
+/// them through [`batcher::ColumnMerger`].
 ///
 /// Pairs with [`batcher::ColumnChunker`] and any builder whose `Input` is
-/// `Column<((K, V), T, R)>`. Unlike [`Col2ValPagedBatcher`] the chains stay
-/// resident, so this arm carries no pager and no spill budget.
+/// `ColumnBody<((K, V), T, R)>`. Unlike [`Col2ValPagedBatcher`] the chains
+/// stay resident, so this arm carries no pager and no spill budget.
 pub type Col2ValColBatcher<K, V, T, R> = MergeBatcher<batcher::ColumnMerger<(K, V), T, R>>;
 
-/// A container based on a columnar store, encoded in aligned bytes.
+/// A container based on a columnar store, encoded in aligned bytes: the container on dataflow
+/// edges.
 ///
 /// The type can represent typed data, bytes from Timely, or an aligned allocation. The name
 /// is singular to express that the preferred format is [`Column::Align`]. The [`Column::Typed`]
 /// variant is used to construct the container, and it owns potentially multiple columns of data.
+///
+/// Data at rest behind an edge, in a merge batcher's chains, a spill-backed chunk, or a batch
+/// builder, is a [`body::ColumnBody`] instead, which has no channel-bytes form.
 pub enum Column<C: Columnar> {
     /// The typed variant of the container.
     Typed(C::Container),

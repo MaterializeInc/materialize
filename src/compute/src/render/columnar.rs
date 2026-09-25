@@ -303,7 +303,7 @@ where
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
 /// A [`ChunkChunker`] sorts and consolidates the input columns and an
-/// [`AccountedChunkBatcher`] merges them, both holding their data in [`Column`], so
+/// [`AccountedChunkBatcher`] merges them, both holding their data in columnar form, so
 /// nothing outside the exchange pact visits a record or materializes an owned [`Row`].
 /// The batcher's chains are chunks, so the process buffer pool spills them while the
 /// chunk spill gate is set, bounding what a consolidation holds resident.
@@ -346,7 +346,7 @@ where
                     input.for_each(|time, data| {
                         let mut session = output.session_with_builder(&time);
                         for chunk in data.drain(..).flatten() {
-                            let mut column = chunk.into_column();
+                            let mut column = Column::from(chunk.into_body());
                             session.give_container(&mut column);
                         }
                     });
