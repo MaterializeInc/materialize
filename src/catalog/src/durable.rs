@@ -322,6 +322,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// `RestartRequired` on an observed effective change to either value. The caller
     /// must halt and rebuild, not refresh and retry. Fencing takes precedence.
     /// Unmarked bootstrap and diagnostic readers may consume these changes freely.
+    /// Only a non-joined writable bootstrap may upgrade shared Persist metadata.
+    /// Joined writers preserve the active generation's metadata format.
     async fn mark_bootstrap_complete(&mut self);
 
     /// Creates a transaction only if no durable catalog content is pending.

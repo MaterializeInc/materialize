@@ -371,6 +371,8 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// The catalog's read and write mode.
     pub(crate) mode: Mode,
+    /// Joined writers may publish updates but cannot upgrade shared Persist metadata.
+    is_join: bool,
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff>,
     /// Write handle to persist.
@@ -1185,6 +1187,7 @@ impl UnopenedPersistCatalogState {
         let mut handle = UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
             mode: Mode::Writable,
+            is_join: false,
             since_handle,
             write_handle,
             listen,
@@ -1430,6 +1433,7 @@ impl UnopenedPersistCatalogState {
         );
         let mut catalog = PersistCatalogState {
             mode: self.mode,
+            is_join: join,
             since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
@@ -2163,7 +2167,7 @@ impl DurableCatalogState for PersistCatalogState {
                 Some(self.update_applier.runtime_identity.clone());
         }
         self.bootstrap_complete = true;
-        if matches!(self.mode, Mode::Writable) {
+        if matches!(self.mode, Mode::Writable) && !self.is_join {
             self.since_handle
                 .upgrade_version()
                 .await
