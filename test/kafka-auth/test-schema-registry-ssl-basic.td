@@ -135,8 +135,14 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema} timestamp=2
 1
 2
 
+# Producer initialization can spend 60s detecting the broken connection. Leave
+# time for the resulting health update to become visible in status history.
+$ set-sql-timeout duration=120s
+
 > SELECT count(status) > 0 FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON sink_id = id WHERE name = 'snk_backup' AND status = 'stalled';
 true
+
+$ set-sql-timeout duration=default
 
 > ALTER CONNECTION kafka_backup SET (BROKER 'kafka:9092');
 
