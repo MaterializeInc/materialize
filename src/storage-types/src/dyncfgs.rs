@@ -318,6 +318,38 @@ pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::ne
     ParameterScope::Environment,
 );
 
+// Reclocking
+
+/// Whether sources mint remap bindings when their data frontier advances, in
+/// addition to the periodic upstream probe.
+///
+/// Environment scoped because bindings are shared truth across the replicas of
+/// a cluster and all replicas must propose timestamps on the same grid.
+pub const STORAGE_EVENT_DRIVEN_BINDINGS: Config<bool> = Config::new(
+    "storage_event_driven_bindings",
+    false,
+    "Whether sources mint remap bindings when their data frontier advances, in addition to the periodic upstream probe.",
+    ParameterScope::Environment,
+);
+
+/// The grid to which event-driven binding timestamps are floored. Two bindings
+/// of one source are never closer than this.
+pub const STORAGE_MIN_BINDING_INTERVAL: Config<Duration> = Config::new(
+    "storage_min_binding_interval",
+    Duration::from_millis(250),
+    "The grid to which event-driven remap binding timestamps are floored. Two bindings of one source are never closer than this.",
+    ParameterScope::Environment,
+);
+
+/// Lead added to event-driven binding timestamps so that a binding's upper is
+/// visible to the coordinator by the time wall clock reaches it.
+pub const STORAGE_BINDING_LEAD: Config<Duration> = Config::new(
+    "storage_binding_lead",
+    Duration::ZERO,
+    "Lead added to event-driven remap binding timestamps.",
+    ParameterScope::Environment,
+);
+
 // AWS
 
 /// The AWS SDK's connect timeout on the AssumeRole prefetcher's STS calls.
@@ -554,7 +586,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SINK_ENSURE_TOPIC_CONFIG)
         .add(&SINK_PROGRESS_SEARCH)
         .add(&SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY)
+        .add(&STORAGE_BINDING_LEAD)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
+        .add(&STORAGE_EVENT_DRIVEN_BINDINGS)
+        .add(&STORAGE_MIN_BINDING_INTERVAL)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
