@@ -106,13 +106,11 @@ mv_const hydrated_test_1 true false
 # samples current state, so an object that disappears before its replica's turn is
 # not recorded at all.
 #
-# `mv_const` is deliberately not asserted on either way. It does hydrate and its
-# log row does briefly carry a complete episode, but the controller then drops the
-# collection and `ExportDropped` retracts the row for good. Whether a sweep lands
-# in that window is a race, so pinning either outcome makes this file flaky. It is
-# an instance of the general limit, that an episode retracted before its replica's
-# turn cannot be recorded, rather than a special case. `idx` and `mv` keep their
-# dataflows installed, so they are stable.
+# `mv_const` history is deliberately not asserted on either way. A completed MV
+# can retain runtime measurements, or have no measurements on a replica that
+# starts with its output already sealed. Sampling can also miss an episode that
+# is retracted before the replica's turn. `idx` and `mv` keep their dataflows
+# installed, so their episodes are stable.
 #
 # The recorded interval must be ordered. The stamps are aggregated over a
 # replica's workers, so the ends can come from different process clocks and the
@@ -272,9 +270,10 @@ idx      hydrated_test_1 true
 mv       hydrated_test_1 true
 mv_const hydrated_test_1 true
 
-# `mv_const` doesn't show up because the dataflow advanced to the empty
-# frontier and its replica state was cleaned up, including introspection
-# logging.
+# While `mv_const` exists, its completed dataflow may have raw operator rows or
+# none at all. In each live-replica check, omit its group only when every retained
+# row is hydrated. Unhydrated rows must fail, as must missing or unhydrated rows
+# for the other objects. Post-DROP checks do not apply this allowance.
 > SELECT o.name, r.name, bool_and(h.hydrated)
   FROM mz_internal.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -282,7 +281,8 @@ mv_const hydrated_test_1 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
+  GROUP BY o.name, r.name
+  HAVING o.name <> 'mv_const' OR bool_and(h.hydrated) IS NOT TRUE;
 idx      hydrated_test_1 true
 mv       hydrated_test_1 true
 
@@ -337,7 +337,8 @@ mv_const hydrated_test_2 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
+  GROUP BY o.name, r.name
+  HAVING o.name <> 'mv_const' OR bool_and(h.hydrated) IS NOT TRUE;
 idx      hydrated_test_1 true
 idx      hydrated_test_2 true
 mv       hydrated_test_1 true
@@ -385,7 +386,8 @@ mv_const hydrated_test_2 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
+  GROUP BY o.name, r.name
+  HAVING o.name <> 'mv_const' OR bool_and(h.hydrated) IS NOT TRUE;
 idx      hydrated_test_2 true
 mv       hydrated_test_2 true
 
@@ -449,7 +451,8 @@ mv_const hydrated_test_3 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
+  GROUP BY o.name, r.name
+  HAVING o.name <> 'mv_const' OR bool_and(h.hydrated) IS NOT TRUE;
 idx      hydrated_test_3 true
 mv       hydrated_test_3 true
 
