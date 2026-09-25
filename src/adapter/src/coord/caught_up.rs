@@ -26,8 +26,9 @@
 //! OOM-looping replica can momentarily look hydrated and caught-up, and cutting
 //! over right then drops us straight into a crashing replica. On top of the
 //! per-tick caught-up classification we therefore run a stability gate. A
-//! caught-up cluster is ready only once every replica is `Online` and has had
-//! everything it hosts hydrated for a configurable period.
+//! caught-up cluster is ready only once every replica is `Online` and every
+//! non-exempt replica has had its non-ignored collections hydrated for a
+//! configurable period.
 //!
 //! Each replica reports its hydration times in its
 //! `mz_compute_hydration_times_per_worker` introspection log. The log lives in
@@ -44,7 +45,8 @@
 //! hosts keeping their clocks in sync.
 //!
 //! A replica without introspection logging cannot report hydration times. It
-//! only has to be `Online`.
+//! only has to be `Online`. Leader-relative exemptions are defined by
+//! [`LeaderHydration::replica_has_unhydrated_collection`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -59,7 +61,9 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG, WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
     WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
-use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
+use mz_catalog::builtin::{
+    MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY, MZ_COMPUTE_HYDRATION_TIMES,
+};
 use mz_catalog::memory::objects::Cluster;
 use mz_compute_client::controller::CollectionReadiness;
 use mz_compute_client::logging::{ComputeLog, LogVariant};
@@ -190,8 +194,7 @@ enum ReplicaHealth {
     NotHydrated,
     /// The replica has been healthy since this wall-clock time.
     HealthySince(EpochMillis),
-    /// The replica is `Online` but cannot report hydration times, so there is
-    /// nothing to wait on.
+    /// The replica is `Online` and exempt from the hydration stability check.
     Exempt,
 }
 
@@ -489,9 +492,27 @@ impl Coordinator {
             })
             .collect_vec();
 
-        // The classification only requires each collection to be hydrated on
-        // _some_ replica. The stability gate separately requires every replica
-        // to have hydrated everything it hosts.
+        let leader_hydration = {
+            let item_id = self
+                .catalog()
+                .resolve_builtin_storage_collection(&MZ_COMPUTE_HYDRATION_TIMES);
+            let id = self.catalog().get_entry(&item_id).latest_global_id();
+            match self
+                .controller
+                .storage_collections
+                .snapshot_latest(id)
+                .await
+            {
+                Ok(rows) => LeaderHydration::from_rows(rows),
+                Err(error) => {
+                    tracing::warn!(%error, "cannot read leader hydration; requiring local hydration");
+                    LeaderHydration::default()
+                }
+            }
+        };
+        let leader_unhydrated_collections =
+            leader_hydration.collections_unhydrated_on_all_hosting_replicas(&live_frontiers);
+
         let live_collection_frontiers: BTreeMap<_, _> = live_frontiers
             .into_iter()
             .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
@@ -548,6 +569,7 @@ impl Coordinator {
                 cutoff.into(),
                 now.into(),
                 &live_collection_frontiers,
+                &leader_unhydrated_collections,
                 &exclude_collections,
                 &problematic_replicas,
             )
@@ -565,8 +587,12 @@ impl Coordinator {
                     } => Some((
                         cluster_id,
                         CaughtUpCluster {
+                            replicas: self.replica_targets(
+                                cluster_id,
+                                &leader_hydration,
+                                &ignored_compute_collections,
+                            ),
                             ignored_compute_collections,
-                            replicas: self.replica_targets(cluster_id),
                         },
                     )),
                     _ => None,
@@ -588,7 +614,12 @@ impl Coordinator {
     }
 
     /// Classifies the replicas of a cluster for the stability gate.
-    fn replica_targets(&self, cluster_id: ClusterId) -> BTreeMap<ReplicaId, ReplicaTarget> {
+    fn replica_targets(
+        &self,
+        cluster_id: ClusterId,
+        leader: &LeaderHydration,
+        ignored: &BTreeSet<GlobalId>,
+    ) -> BTreeMap<ReplicaId, ReplicaTarget> {
         let cluster = self.catalog().get_cluster(cluster_id);
         let has_hydration_log = cluster
             .log_indexes
@@ -607,7 +638,9 @@ impl Coordinator {
                 let logging = has_hydration_log && replica.config.compute.logging.enabled();
                 let target = if !online {
                     ReplicaTarget::NotOnline
-                } else if !logging {
+                } else if !logging
+                    || leader.replica_has_unhydrated_collection(replica.replica_id, ignored)
+                {
                     ReplicaTarget::Exempt
                 } else {
                     ReplicaTarget::Ask
@@ -624,7 +657,9 @@ impl Coordinator {
     ///
     ///  (1) A cluster is caught-up if all non-transient, non-excluded collections installed on it
     ///      are either caught-up or ignored.
-    ///  (2) A collection is caught-up when it is (a) hydrated and (b) its write frontier is within
+    ///  (2) A collection is caught-up when it is (a) hydrated (waived for compute collections
+    ///      returned by [`LeaderHydration::collections_unhydrated_on_all_hosting_replicas`]),
+    ///      and (b) its write frontier is within
     ///      `allowed_lag` of the "live" frontier, the collection's frontier reported by the leader
     ///      environment.
     ///  (3) A collection is ignored if its "live" frontier is behind `now` by more than `cutoff`.
@@ -643,6 +678,7 @@ impl Coordinator {
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        leader_unhydrated_collections: &BTreeSet<GlobalId>,
         exclude_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> BTreeMap<ClusterId, ClusterCaughtUpStatus> {
@@ -655,6 +691,7 @@ impl Coordinator {
                     cutoff.clone(),
                     now.clone(),
                     live_frontiers,
+                    leader_unhydrated_collections,
                     exclude_collections,
                     problematic_replicas,
                 )
@@ -688,6 +725,7 @@ impl Coordinator {
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        leader_unhydrated_collections: &BTreeSet<GlobalId>,
         exclude_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> Result<ClusterCaughtUpStatus, anyhow::Error> {
@@ -851,8 +889,10 @@ impl Coordinator {
                 CollectionType::Storage => self.controller.storage.collection_hydrated(id)?,
             };
 
+            let unhydrated_on_leader = matches!(collection_type, CollectionType::Compute)
+                && leader_unhydrated_collections.contains(&id);
             let readiness = CollectionReadiness::classify(
-                collection_hydrated,
+                collection_hydrated || unhydrated_on_leader,
                 &write_frontier,
                 Some((live_write_frontier, allowed_lag)),
             );
@@ -860,7 +900,8 @@ impl Coordinator {
             // We don't expect collections to get hydrated, ingestions to be
             // started, etc. when they are already at the empty write frontier.
             if live_write_frontier.is_empty() || readiness == CollectionReadiness::Ready {
-                if readiness != CollectionReadiness::Ready
+                // Carry hydration waivers into the per-replica stability check.
+                if (readiness != CollectionReadiness::Ready || !collection_hydrated)
                     && matches!(collection_type, CollectionType::Compute)
                 {
                     ignored_compute_collections.insert(id);
@@ -1048,6 +1089,83 @@ impl Coordinator {
     }
 }
 
+/// The leader's hydration reports, read from its `mz_compute_hydration_times`.
+#[derive(Debug, Default)]
+struct LeaderHydration {
+    hydrated_on_any_replica: BTreeSet<GlobalId>,
+    /// (Collection ID, replica ID) pairs explicitly reported as unhydrated.
+    unhydrated_replica_collections: BTreeSet<(GlobalId, String)>,
+}
+
+impl LeaderHydration {
+    fn from_rows(rows: Vec<Row>) -> Self {
+        let mut leader = Self::default();
+        for row in rows {
+            let mut values = row.iter();
+            let replica = values
+                .next()
+                .expect("missing replica_id")
+                .unwrap_str()
+                .to_owned();
+            let id: GlobalId = values
+                .next()
+                .expect("missing object_id")
+                .unwrap_str()
+                .parse()
+                .expect("valid object ID");
+            if values.next().expect("missing time_ns").is_null() {
+                leader.unhydrated_replica_collections.insert((id, replica));
+            } else {
+                leader.hydrated_on_any_replica.insert(id);
+            }
+        }
+        leader
+    }
+
+    /// Returns the collections that every frontier-hosting leader replica
+    /// explicitly reports unhydrated.
+    ///
+    /// Missing reports or frontiers grant no waiver. A hydrated report from any
+    /// replica vetoes the waiver, even if that replica has no frontier report.
+    fn collections_unhydrated_on_all_hosting_replicas(
+        &self,
+        frontiers: &[(GlobalId, String, Antichain<Timestamp>)],
+    ) -> BTreeSet<GlobalId> {
+        let mut collections = BTreeMap::new();
+        for (id, replica, _) in frontiers {
+            let all_unhydrated = collections.entry(*id).or_insert(true);
+            *all_unhydrated &= !self.hydrated_on_any_replica.contains(id)
+                && self
+                    .unhydrated_replica_collections
+                    .contains(&(*id, replica.clone()));
+        }
+        collections
+            .into_iter()
+            .filter_map(|(id, unhydrated)| unhydrated.then_some(id))
+            .collect()
+    }
+
+    /// Returns whether leader replica `replica_id` explicitly reports at least
+    /// one collection outside `ignored` as unhydrated.
+    ///
+    /// The leader snapshot has per-collection reports, not a separate replica
+    /// hydration signal. The gate uses these as a proxy: a replica is fully
+    /// hydrated only when all its non-ignored collections are hydrated. One
+    /// unhydrated collection therefore waives the incoming replica's stability
+    /// wait, since the leader lacks a fully hydrated counterpart. Missing
+    /// reports grant no exemption.
+    fn replica_has_unhydrated_collection(
+        &self,
+        replica_id: ReplicaId,
+        ignored: &BTreeSet<GlobalId>,
+    ) -> bool {
+        let replica_id = replica_id.to_string();
+        self.unhydrated_replica_collections
+            .iter()
+            .any(|(id, replica)| *replica == replica_id && !ignored.contains(id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_repr::Datum;
@@ -1056,6 +1174,83 @@ mod tests {
     use super::*;
 
     use ReplicaHealth::{Exempt, HealthySince, NotHydrated, NotOnline};
+
+    #[mz_ore::test]
+    fn collection_hydration_waiver_requires_complete_leader_reports() {
+        let frontier = |id, replica: &str| {
+            (
+                GlobalId::User(id),
+                replica.to_owned(),
+                Antichain::from_elem(Timestamp::from(100)),
+            )
+        };
+        let row = |id: &str, replica: &str, time| {
+            Row::pack_slice(&[Datum::String(replica), Datum::String(id), time])
+        };
+        let frontiers = vec![
+            frontier(1, "u10"),
+            frontier(1, "u11"),
+            frontier(2, "u10"),
+            frontier(2, "u11"),
+            frontier(3, "u10"),
+            frontier(3, "u11"),
+            frontier(4, "u10"),
+            frontier(5, "u10"),
+        ];
+        let rows = vec![
+            row("u1", "u10", Datum::Null),
+            row("u1", "u11", Datum::Null),
+            row("u2", "u10", Datum::Null),
+            row("u2", "u11", Datum::UInt64(7)),
+            row("u3", "u10", Datum::Null), // u11 has not reported.
+            row("u4", "u10", Datum::Null),
+            row("u4", "u12", Datum::UInt64(9)),
+            // u5 has no hydration reports. u6 has no frontier.
+            row("u6", "u10", Datum::Null),
+        ];
+        assert_eq!(
+            LeaderHydration::from_rows(rows)
+                .collections_unhydrated_on_all_hosting_replicas(&frontiers),
+            BTreeSet::from([GlobalId::User(1)])
+        );
+        assert!(
+            LeaderHydration::default()
+                .collections_unhydrated_on_all_hosting_replicas(&frontiers)
+                .is_empty()
+        );
+    }
+
+    #[mz_ore::test]
+    fn replica_hydration_exemption_requires_an_unhydrated_collection_report() {
+        let row = |id: &str, replica: &str, time| {
+            Row::pack_slice(&[Datum::String(replica), Datum::String(id), time])
+        };
+        let leader = LeaderHydration::from_rows(vec![
+            row("u1", "u10", Datum::UInt64(7)),
+            row("u2", "u10", Datum::UInt64(7)),
+            row("u1", "u11", Datum::UInt64(7)),
+            row("u2", "u11", Datum::Null),
+            row("u3", "u12", Datum::Null),
+        ]);
+        let none = BTreeSet::new();
+        let replica = ReplicaId::User;
+        assert!(
+            !leader.replica_has_unhydrated_collection(replica(10), &none),
+            "fully hydrated"
+        );
+        assert!(leader.replica_has_unhydrated_collection(replica(11), &none));
+        assert!(
+            !leader.replica_has_unhydrated_collection(
+                replica(12),
+                &BTreeSet::from([GlobalId::User(3)])
+            ),
+            "unhydrated only for an ignored collection"
+        );
+        assert!(
+            !leader.replica_has_unhydrated_collection(replica(13), &none),
+            "no reports"
+        );
+    }
 
     #[mz_ore::test]
     fn stable_since_latest_replica() {
