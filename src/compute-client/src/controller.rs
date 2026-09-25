@@ -191,7 +191,7 @@ pub enum PeekNotification {
 impl PeekNotification {
     /// Construct a new [`PeekNotification`] from a [`PeekResponse`]. The `offset` and `limit`
     /// parameters are used to calculate the number of rows in the peek result.
-    fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
+    pub fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
         match peek_response {
             PeekResponse::Rows(rows) => {
                 let num_rows = u64::cast_from(RowCollection::offset_limit(
@@ -1040,6 +1040,7 @@ impl ComputeController {
         read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        notify_coordinator: bool,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1073,6 +1074,7 @@ impl ComputeController {
                 read_hold,
                 target_replica,
                 peek_response_tx,
+                notify_coordinator,
             )
             .expect("validated")
         });

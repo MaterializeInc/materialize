@@ -235,6 +235,7 @@ impl InstanceClient {
         target_read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        notify_coordinator: bool,
     ) -> Result<(), PeekError> {
         self.call_sync(move |i| {
             i.peek(
@@ -248,6 +249,7 @@ impl InstanceClient {
                 target_read_hold,
                 target_replica,
                 peek_response_tx,
+                notify_coordinator,
             )
         })
         .await?
