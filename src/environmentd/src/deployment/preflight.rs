@@ -9,6 +9,7 @@
 
 //! Preflight checks for deployments.
 
+use std::collections::BTreeSet;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -93,7 +94,7 @@ pub async fn preflight_0dt(
 
         // Spawn a background task to handle promotion to leader.
         mz_ore::task::spawn(|| "preflight_0dt", async move {
-            let (initial_next_user_item_id, initial_next_replica_id) = get_next_ids(
+            let (initial_user_items, initial_user_replicas) = get_user_ids(
                 boot_ts,
                 persist_client.clone(),
                 environment_id.clone(),
@@ -104,9 +105,10 @@ pub async fn preflight_0dt(
             .await;
 
             info!(
-                %initial_next_user_item_id,
-                %initial_next_replica_id,
-                "waiting for deployment to be caught up");
+                user_items = initial_user_items.len(),
+                user_replicas = initial_user_replicas.len(),
+                "waiting for deployment to be caught up"
+            );
 
             let caught_up_max_wait_fut = async {
                 tokio::time::sleep(caught_up_max_wait).await;
@@ -156,8 +158,8 @@ pub async fn preflight_0dt(
                             deploy_generation,
                             Arc::clone(&catalog_metrics),
                             bootstrap_args.clone(),
-                            initial_next_user_item_id,
-                            initial_next_replica_id,
+                            &initial_user_items,
+                            &initial_user_replicas,
                         )
                         .await;
                     }
@@ -188,8 +190,8 @@ pub async fn preflight_0dt(
                     deploy_generation,
                     Arc::clone(&catalog_metrics),
                     bootstrap_args.clone(),
-                    initial_next_user_item_id,
-                    initial_next_replica_id,
+                    &initial_user_items,
+                    &initial_user_replicas,
                 )
                 .await;
             }
@@ -253,12 +255,8 @@ pub async fn preflight_0dt(
     }
 }
 
-/// Check if there have been any DDL that create new collections or replicas,
-/// restart in read-only mode if so, in order to pick up those new items and
-/// start hydrating them before cutting over.
-///
-/// We do this by checking if new IDs that were allocated after the preflight
-/// check began were committed to the catalog.
+/// Restart in read-only mode when user items or replicas have been created or
+/// dropped, so bootstrap hydrates new objects and releases dropped resources.
 async fn check_ddl_changes(
     boot_ts: Timestamp,
     persist_client: PersistClient,
@@ -266,8 +264,8 @@ async fn check_ddl_changes(
     deploy_generation: u64,
     catalog_metrics: Arc<Metrics>,
     bootstrap_args: BootstrapArgs,
-    initial_next_user_item_id: u64,
-    initial_next_replica_id: u64,
+    initial_user_items: &BTreeSet<CatalogItemId>,
+    initial_user_replicas: &BTreeSet<ReplicaId>,
 ) {
     let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
         persist_client,
@@ -302,7 +300,9 @@ async fn check_ddl_changes(
     let new_replicas = tx
         .get_cluster_replicas()
         .filter_map(|replica| match replica.replica_id {
-            ReplicaId::User(id) if id >= initial_next_replica_id => Some(replica),
+            ReplicaId::User(_) if !initial_user_replicas.contains(&replica.replica_id) => {
+                Some(replica)
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -310,16 +310,45 @@ async fn check_ddl_changes(
     let new_objects = tx
         .get_items()
         .filter_map(|item| match item.id {
-            CatalogItemId::User(id) if id >= initial_next_user_item_id => Some(item),
+            CatalogItemId::User(_) if !initial_user_items.contains(&item.id) => Some(item),
             _ => None,
         })
         .collect::<Vec<_>>();
 
-    if new_replicas.is_empty() && new_objects.is_empty() {
+    let current_items = tx.get_items().map(|item| item.id).collect();
+    let current_replicas = tx
+        .get_cluster_replicas()
+        .map(|replica| replica.replica_id)
+        .collect();
+    let dropped_items = initial_user_items
+        .difference(&current_items)
+        .collect::<Vec<_>>();
+    let dropped_replicas = initial_user_replicas
+        .difference(&current_replicas)
+        .collect::<Vec<_>>();
+
+    if new_replicas.is_empty()
+        && new_objects.is_empty()
+        && dropped_items.is_empty()
+        && dropped_replicas.is_empty()
+    {
         return;
     }
 
     let mut info_parts = Vec::new();
+
+    if !dropped_items.is_empty() {
+        info_parts.push(format!(
+            "Dropped objects: [{}]",
+            separated(", ", dropped_items)
+        ));
+    }
+    if !dropped_replicas.is_empty() {
+        info_parts.push(format!(
+            "Dropped replicas: [{}]",
+            separated(", ", dropped_replicas)
+        ));
+    }
 
     if !new_replicas.is_empty() {
         let replicas = new_replicas.iter().map(|r| {
@@ -346,22 +375,16 @@ async fn check_ddl_changes(
     )
 }
 
-/// Gets and returns the next user item ID and user replica ID based on the
-/// maximum existing IDs in the catalog.
-///
-/// We compute these from the actual catalog items rather than the allocator
-/// counter (e.g. `get_next_user_item_id()`), because batch ID allocation
-/// (`IdPool`) can advance the counter far ahead of actually-created items.
-/// Using the counter would cause `check_ddl_changes` to miss items created
-/// from the pool, since their IDs would be below the counter value.
-async fn get_next_ids(
+/// Snapshot committed user IDs, not allocator counters: IDs can be allocated in
+/// batches and committed out of order, or never committed at all.
+async fn get_user_ids(
     boot_ts: Timestamp,
     persist_client: PersistClient,
     environment_id: EnvironmentId,
     deploy_generation: u64,
     catalog_metrics: Arc<Metrics>,
     bootstrap_args: BootstrapArgs,
-) -> (u64, u64) {
+) -> (BTreeSet<CatalogItemId>, BTreeSet<ReplicaId>) {
     let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
         persist_client,
         environment_id.organization_id(),
@@ -388,26 +411,17 @@ async fn get_next_ids(
         .await
         .unwrap_or_terminate("unexpected error while getting transaction");
 
-    // Use the max existing user ID + 1 instead of the allocator counter.
-    // The allocator counter can be far ahead of actual items when batch ID
-    // allocation (IdPool) is in use.
-    fn next_user_id(iter: impl Iterator<Item = u64>) -> u64 {
-        iter.max().map(|id| id + 1).unwrap_or(0)
-    }
-
-    let next_user_item_id = next_user_id(tx.get_items().filter_map(|item| match item.id {
-        CatalogItemId::User(id) => Some(id),
-        _ => None,
-    }));
-
-    let next_replica_id = next_user_id(tx.get_cluster_replicas().filter_map(
-        |r| match r.replica_id {
-            ReplicaId::User(id) => Some(id),
-            ReplicaId::System(_) => None,
-        },
-    ));
-
-    (next_user_item_id, next_replica_id)
+    let items = tx
+        .get_items()
+        .map(|item| item.id)
+        .filter(|id| id.is_user())
+        .collect();
+    let replicas = tx
+        .get_cluster_replicas()
+        .map(|replica| replica.replica_id)
+        .filter(|id| matches!(id, ReplicaId::User(_)))
+        .collect();
+    (items, replicas)
 }
 
 #[cfg(test)]

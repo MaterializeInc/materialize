@@ -278,6 +278,7 @@ impl Coordinator {
     ///
     /// This method is a no-op when the trigger has already been fired.
     pub async fn maybe_check_caught_up(&mut self) {
+        fail::fail_point!("0dt_caught_up_check", |_| ());
         if self.caught_up_check.is_none() {
             return;
         }
