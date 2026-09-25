@@ -9,6 +9,7 @@
 
 //! Post-order rewrites for `CallVariadic` nodes.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::mem;
 
@@ -156,6 +157,7 @@ pub(super) fn reduce_call_variadic(
             // Note: It's important that we have called `flatten_associative` above.
             e.undistribute_and_or();
             e.reduce_and_canonicalize_and_or();
+            reduce_complement_and_or(e, column_types);
         }
         VariadicFunc::TimezoneTimeVariadic(_)
             if exprs[0].is_literal() && exprs[2].is_literal_ok() =>
@@ -178,6 +180,108 @@ pub(super) fn reduce_call_variadic(
             };
         }
         _ => {}
+    }
+}
+
+/// Collapses an `AND`/`OR` that contains a complementary pair of operands, i.e.
+/// some operand `p` together with the negation of `p`: `p OR NOT(p)` is `true`
+/// and `p AND NOT(p)` is `false`.
+///
+/// The rewrite fires only when `p` is guaranteed to evaluate to `true` or
+/// `false`. Under three-valued logic a `NULL` operand makes both `p` and its
+/// negation `NULL`, so the call evaluates to `NULL` rather than its zero, and an
+/// erroring operand makes both error, so the call errors. We therefore require
+/// `p` to be non-nullable and infallible, which its negation then is as well.
+/// When it is, the pair forces the call's zero (`true` for `OR`, `false` for
+/// `AND`), and `And`/`Or` evaluation returns that zero as soon as it sees it,
+/// discarding the nulls and errors of the remaining operands. The whole call
+/// therefore collapses to the zero.
+///
+/// NOTE: an operand that is a *literal* error never reaches this rule: the
+/// generic error fold in [`reduce_call_variadic`] turns the whole call into that
+/// error first, even though evaluation would have returned the zero.
+///
+/// The operands are already reduced, so the negation of `p` appears in the
+/// canonical form that `reduce` produces for `NOT(p)`, which is what
+/// [`negation_of`] reconstructs.
+fn reduce_complement_and_or(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
+    let MirScalarExpr::CallVariadic {
+        func: func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
+        exprs,
+    } = e
+    else {
+        return;
+    };
+    // `reduce_and_canonicalize_and_or` above sorted `exprs`, so a negation can
+    // be located with a binary search rather than a linear scan per operand,
+    // which would make this rule quadratic in the operand count. Should that
+    // ordering ever break, the search only fails to find an operand that is
+    // present, costing a missed simplification and never a wrong one.
+    debug_assert!(
+        exprs.is_sorted(),
+        "reduce_and_canonicalize_and_or leaves the operands sorted"
+    );
+    let contains = |target: &MirScalarExpr| exprs.binary_search(target).is_ok();
+    let has_complement = exprs.iter().any(|operand| {
+        // A negation has the same nullability and fallibility as what it
+        // negates, so testing one side of the pair covers both. For a nested
+        // `AND`/`OR` this also covers every child, since both properties are
+        // the disjunction over the children.
+        if operand.typ(column_types).nullable || operand.could_error() {
+            return false;
+        }
+        match operand {
+            // De Morgan's law distributes the negation of a nested `AND`/`OR`
+            // over its children, and `flatten_associative` then merges the
+            // result into this operand list. The negation is therefore present
+            // as one negated child per child of `operand`, not as a single
+            // operand.
+            MirScalarExpr::CallVariadic {
+                func: inner_func,
+                exprs: inner_exprs,
+            } if *inner_func == func.switch_and_or() => {
+                !inner_exprs.is_empty()
+                    && inner_exprs
+                        .iter()
+                        .all(|child| negation_of(child).is_some_and(|neg| contains(&neg)))
+            }
+            _ => negation_of(operand).is_some_and(|neg| contains(&neg)),
+        }
+    });
+    if has_complement {
+        *e = func.zero_of_and_or();
+    }
+}
+
+/// The negation of an already-reduced boolean expression, in the form `reduce`
+/// leaves `NOT(e)` in: a `NOT` cancels against `e`'s own `NOT`, and a
+/// comparison flips to its opposite comparison. Both rewrites happen in
+/// `reduce_pre` before this expression's parent is visited.
+///
+/// Returns `None` for a nested `AND`/`OR`, whose negation De Morgan's law
+/// spreads over several expressions rather than leaving a single one.
+///
+/// Flipping a comparison is only exact on non-`NULL` inputs, so callers must
+/// establish that `e` is non-nullable.
+fn negation_of(e: &MirScalarExpr) -> Option<Cow<'_, MirScalarExpr>> {
+    match e {
+        MirScalarExpr::CallUnary {
+            func: UnaryFunc::Not(_),
+            expr,
+        } => Some(Cow::Borrowed(expr)),
+        MirScalarExpr::CallBinary { func, expr1, expr2 } => Some(Cow::Owned(match func.negate() {
+            Some(negated) => MirScalarExpr::CallBinary {
+                func: negated,
+                expr1: expr1.clone(),
+                expr2: expr2.clone(),
+            },
+            None => e.clone().not(),
+        })),
+        MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(_) | VariadicFunc::Or(_),
+            ..
+        } => None,
+        _ => Some(Cow::Owned(e.clone().not())),
     }
 }
 
