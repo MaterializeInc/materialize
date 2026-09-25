@@ -48,7 +48,8 @@ pub struct PreflightInput {
 pub struct PreflightOutput {
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub read_only: bool,
-    pub caught_up_trigger: Option<trigger::Trigger>,
+    /// The actual leader generation and the trigger for readiness against it.
+    pub caught_up_trigger: Option<(u64, trigger::Trigger)>,
     /// Signal successful adapter bootstrap, including orphaned replica cleanup.
     pub bootstrap_complete: Option<tokio::sync::oneshot::Sender<()>>,
 }
@@ -239,7 +240,7 @@ pub async fn preflight_0dt(
         Ok(PreflightOutput {
             openable_adapter_storage,
             read_only: true,
-            caught_up_trigger: Some(caught_up_trigger),
+            caught_up_trigger: Some((catalog_generation, caught_up_trigger)),
             bootstrap_complete: Some(bootstrap_complete),
         })
     } else if catalog_generation == deploy_generation {
@@ -463,9 +464,9 @@ mod tests {
             boot_ts,
             environment_id,
             persist_client,
-            deploy_generation: 1,
+            deploy_generation: 7,
             deployment_state,
-            openable_adapter_storage: builder.with_deploy_generation(1).unwrap_build().await,
+            openable_adapter_storage: builder.with_deploy_generation(7).unwrap_build().await,
             catalog_metrics: Arc::clone(&metrics),
             caught_up_max_wait: Duration::from_secs(1),
             ddl_check_interval: Duration::from_millis(10),
@@ -474,6 +475,15 @@ mod tests {
         })
         .await
         .unwrap();
+
+        // Generation numbers can skip. Compare against the actual catalog leader.
+        assert_eq!(
+            output
+                .caught_up_trigger
+                .as_ref()
+                .map(|(generation, _)| *generation),
+            Some(0)
+        );
 
         // Even a timeout must not run the final DDL check before bootstrap.
         // Each read starts two transactions: opening the savepoint and reading

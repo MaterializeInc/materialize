@@ -396,6 +396,8 @@ pub type ProcessId = u64;
 /// An event describing a change in status of a cluster replica process.
 #[derive(Debug, Clone, Serialize)]
 pub struct ClusterEvent {
+    /// Deployment generation that owns this replica process.
+    pub deploy_generation: u64,
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
     pub process_id: ProcessId,
@@ -630,10 +632,19 @@ impl Controller {
         Ok(())
     }
 
-    pub fn events_stream(&self) -> BoxStream<'static, ClusterEvent> {
+    /// The deployment generation managed by this controller.
+    pub fn deploy_generation(&self) -> u64 {
+        self.deploy_generation
+    }
+
+    /// Watch this generation and, during catch-up, the specified leader generation.
+    pub fn events_stream(
+        &self,
+        leader_generation: Option<u64>,
+    ) -> BoxStream<'static, ClusterEvent> {
         let deploy_generation = self.deploy_generation;
 
-        fn translate_event(event: ServiceEvent) -> Result<(ClusterEvent, u64), anyhow::Error> {
+        fn translate_event(event: ServiceEvent) -> Result<ClusterEvent, anyhow::Error> {
             let ReplicaServiceName {
                 cluster_id,
                 replica_id,
@@ -642,6 +653,7 @@ impl Controller {
             } = event.service_id.parse()?;
 
             let event = ClusterEvent {
+                deploy_generation: replica_generation,
                 cluster_id,
                 replica_id,
                 process_id: event.process_id,
@@ -651,7 +663,7 @@ impl Controller {
                 time: event.time,
             };
 
-            Ok((event, replica_generation))
+            Ok(event)
         }
 
         let stream = self
@@ -660,8 +672,10 @@ impl Controller {
             .map(|event| event.and_then(translate_event))
             .filter_map(move |event| async move {
                 match event {
-                    Ok((event, replica_generation)) => {
-                        if replica_generation == deploy_generation {
+                    Ok(event) => {
+                        if event.deploy_generation == deploy_generation
+                            || Some(event.deploy_generation) == leader_generation
+                        {
                             Some(event)
                         } else {
                             None
