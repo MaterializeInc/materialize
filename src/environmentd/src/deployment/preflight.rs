@@ -9,6 +9,7 @@
 
 //! Preflight checks for deployments.
 
+use std::collections::BTreeSet;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -89,7 +90,7 @@ pub fn spawn_catchup(
         bootstrap_args,
     }: CatchupConfig,
     mut caught_up_receiver: trigger::Receiver,
-    bootstrapped: oneshot::Receiver<(u64, u64)>,
+    bootstrapped: oneshot::Receiver<(BTreeSet<CatalogItemId>, BTreeSet<ReplicaId>)>,
 ) {
     mz_ore::task::spawn(|| "deployment_catchup", async move {
         let mut skip_catchup = deployment_state.set_catching_up();
@@ -104,10 +105,10 @@ pub fn spawn_catchup(
             },
         };
 
-        if let Some((initial_next_user_item_id, initial_next_replica_id)) = initial_ids {
+        if let Some((initial_user_items, initial_user_replicas)) = initial_ids {
             info!(
-                %initial_next_user_item_id,
-                %initial_next_replica_id,
+                user_items = initial_user_items.len(),
+                user_replicas = initial_user_replicas.len(),
                 ?caught_up_max_wait,
                 "waiting for deployment to be caught up"
             );
@@ -147,8 +148,8 @@ pub fn spawn_catchup(
                             deploy_generation,
                             Arc::clone(&catalog_metrics),
                             bootstrap_args.clone(),
-                            initial_next_user_item_id,
-                            initial_next_replica_id,
+                            &initial_user_items,
+                            &initial_user_replicas,
                         )
                         .await;
                     }
@@ -165,8 +166,8 @@ pub fn spawn_catchup(
                     deploy_generation,
                     Arc::clone(&catalog_metrics),
                     bootstrap_args.clone(),
-                    initial_next_user_item_id,
-                    initial_next_replica_id,
+                    &initial_user_items,
+                    &initial_user_replicas,
                 )
                 .await;
             }
@@ -215,13 +216,8 @@ pub fn spawn_catchup(
     });
 }
 
-/// Check if there have been any DDL that create new collections or replicas,
-/// restart in read-only mode if so, in order to pick up those new items and
-/// start hydrating them before cutting over.
-///
-/// We do this by checking whether items or replicas with IDs above the highest
-/// ones in the catalog snapshot this deployment bootstrapped from were
-/// committed.
+/// Restart in read-only mode when user items or replicas have been created or
+/// dropped, so bootstrap hydrates new objects and releases dropped resources.
 async fn check_ddl_changes(
     boot_ts: Timestamp,
     persist_client: PersistClient,
@@ -229,8 +225,8 @@ async fn check_ddl_changes(
     deploy_generation: u64,
     catalog_metrics: Arc<Metrics>,
     bootstrap_args: BootstrapArgs,
-    initial_next_user_item_id: u64,
-    initial_next_replica_id: u64,
+    initial_user_items: &BTreeSet<CatalogItemId>,
+    initial_user_replicas: &BTreeSet<ReplicaId>,
 ) {
     let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
         persist_client,
@@ -265,7 +261,9 @@ async fn check_ddl_changes(
     let new_replicas = tx
         .get_cluster_replicas()
         .filter_map(|replica| match replica.replica_id {
-            ReplicaId::User(id) if id >= initial_next_replica_id => Some(replica),
+            ReplicaId::User(_) if !initial_user_replicas.contains(&replica.replica_id) => {
+                Some(replica)
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -273,16 +271,45 @@ async fn check_ddl_changes(
     let new_objects = tx
         .get_items()
         .filter_map(|item| match item.id {
-            CatalogItemId::User(id) if id >= initial_next_user_item_id => Some(item),
+            CatalogItemId::User(_) if !initial_user_items.contains(&item.id) => Some(item),
             _ => None,
         })
         .collect::<Vec<_>>();
 
-    if new_replicas.is_empty() && new_objects.is_empty() {
+    let current_items = tx.get_items().map(|item| item.id).collect();
+    let current_replicas = tx
+        .get_cluster_replicas()
+        .map(|replica| replica.replica_id)
+        .collect();
+    let dropped_items = initial_user_items
+        .difference(&current_items)
+        .collect::<Vec<_>>();
+    let dropped_replicas = initial_user_replicas
+        .difference(&current_replicas)
+        .collect::<Vec<_>>();
+
+    if new_replicas.is_empty()
+        && new_objects.is_empty()
+        && dropped_items.is_empty()
+        && dropped_replicas.is_empty()
+    {
         return;
     }
 
     let mut info_parts = Vec::new();
+
+    if !dropped_items.is_empty() {
+        info_parts.push(format!(
+            "Dropped objects: [{}]",
+            separated(", ", dropped_items)
+        ));
+    }
+    if !dropped_replicas.is_empty() {
+        info_parts.push(format!(
+            "Dropped replicas: [{}]",
+            separated(", ", dropped_replicas)
+        ));
+    }
 
     if !new_replicas.is_empty() {
         let replicas = new_replicas.iter().map(|r| {
@@ -309,33 +336,27 @@ async fn check_ddl_changes(
     )
 }
 
-/// Returns the next user item and replica IDs based on existing catalog objects.
-pub async fn get_next_ids(
+/// Snapshot committed user IDs, not allocator counters: IDs can be allocated in
+/// batches and committed out of order, or never committed at all.
+pub async fn get_user_ids(
     catalog: &mut dyn DurableCatalogState,
-) -> Result<(u64, u64), CatalogError> {
+) -> Result<(BTreeSet<CatalogItemId>, BTreeSet<ReplicaId>), CatalogError> {
     // Preserve the pending updates that adapter bootstrap must consume.
     let snapshot = catalog.snapshot().await?;
     let mut dry_run = catalog.transaction_from_snapshot(snapshot)?;
     let tx = dry_run.transaction_mut();
 
-    // Allocator counters can be ahead of committed objects due to ID pooling.
-    fn next_user_id(iter: impl Iterator<Item = u64>) -> u64 {
-        iter.max().map(|id| id + 1).unwrap_or(0)
-    }
-
-    let next_user_item_id = next_user_id(tx.get_items().filter_map(|item| match item.id {
-        CatalogItemId::User(id) => Some(id),
-        _ => None,
-    }));
-
-    let next_replica_id = next_user_id(tx.get_cluster_replicas().filter_map(
-        |r| match r.replica_id {
-            ReplicaId::User(id) => Some(id),
-            ReplicaId::System(_) => None,
-        },
-    ));
-
-    Ok((next_user_item_id, next_replica_id))
+    let items = tx
+        .get_items()
+        .map(|item| item.id)
+        .filter(|id| id.is_user())
+        .collect();
+    let replicas = tx
+        .get_cluster_replicas()
+        .map(|replica| replica.replica_id)
+        .filter(|id| matches!(id, ReplicaId::User(_)))
+        .collect();
+    Ok((items, replicas))
 }
 
 #[cfg(test)]
@@ -431,7 +452,7 @@ mod tests {
             .await
             .unwrap();
         bootstrapped
-            .send(get_next_ids(catalog.as_mut()).await.unwrap())
+            .send(get_user_ids(catalog.as_mut()).await.unwrap())
             .unwrap();
         wait_ready(&handle).await;
         catalog.expire().await;
@@ -465,7 +486,7 @@ mod tests {
             .unwrap();
         let (bootstrapped, bootstrapped_receiver) = oneshot::channel();
         bootstrapped
-            .send(get_next_ids(catalog.as_mut()).await.unwrap())
+            .send(get_user_ids(catalog.as_mut()).await.unwrap())
             .unwrap();
         let (trigger, receiver) = trigger::channel();
         drop(trigger);
@@ -493,13 +514,13 @@ mod tests {
             .open_savepoint(config.boot_ts, &config.bootstrap_args)
             .await
             .unwrap();
-        let initial_ids = get_next_ids(catalog.as_mut()).await.unwrap();
+        let initial_ids = get_user_ids(catalog.as_mut()).await.unwrap();
         assert!(!catalog.sync_to_current_updates().await.unwrap().is_empty());
 
         writer.sync_to_current_updates().await.unwrap();
         let mut tx = writer.transaction().await.unwrap();
-        let item_id = initial_ids.0 + 10;
-        let replica_id = initial_ids.1 + 10;
+        let item_id = 1000;
+        let replica_id = 1000;
         let schema_id = tx.get_schemas().find(|s| s.name == "public").unwrap().id;
         tx.insert_item(
             CatalogItemId::User(item_id),
@@ -527,11 +548,11 @@ mod tests {
         let _ = tx.get_and_commit_op_updates();
         tx.commit(commit_ts).await.unwrap();
 
-        assert_eq!(get_next_ids(catalog.as_mut()).await.unwrap(), initial_ids);
-        assert_eq!(
-            get_next_ids(writer.as_mut()).await.unwrap(),
-            (item_id + 1, replica_id + 1)
-        );
+        assert_eq!(get_user_ids(catalog.as_mut()).await.unwrap(), initial_ids);
+        let mut expected = initial_ids;
+        expected.0.insert(CatalogItemId::User(item_id));
+        expected.1.insert(ReplicaId::User(replica_id));
+        assert_eq!(get_user_ids(writer.as_mut()).await.unwrap(), expected);
         catalog.expire().await;
         writer.expire().await;
     }
