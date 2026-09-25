@@ -30,7 +30,7 @@ use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
     ColumnName, Datum, Diff, ReprColumnType, ReprRelationType, Row, RowArena, RowPacker, SharedRow,
-    SqlColumnType, SqlRelationType, SqlScalarType, datum_size,
+    SqlColumnType, SqlRelationType, SqlScalarType, StableRow, datum_size,
 };
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
@@ -652,12 +652,20 @@ fn lag_lead<'a, I>(
     order_by: &[ColumnOrder],
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
+    args: &Option<LagLeadArgs>,
 ) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let iter = lag_lead_no_list(datums, &temp_storage, order_by, lag_lead_type, ignore_nulls);
+    let iter = lag_lead_no_list(
+        datums,
+        &temp_storage,
+        order_by,
+        lag_lead_type,
+        ignore_nulls,
+        args,
+    );
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(iter);
     })
@@ -671,6 +679,7 @@ fn lag_lead_no_list<'a: 'b, 'b, I>(
     order_by: &[ColumnOrder],
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
+    args: &Option<LagLeadArgs>,
 ) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -678,17 +687,17 @@ where
     // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, EncodedArgs) record
     let datums = order_aggregate_datums(datums, order_by);
 
-    // Take the (OriginalRow, EncodedArgs) records and unwrap them into separate datums.
-    // EncodedArgs = (InputValue, Offset, DefaultValue) for Lag/Lead
-    // (`OriginalRow` is kept in a record form, as we don't need to look inside that.)
+    // Take the (OriginalRow, EncodedArgs) records and unwrap them into separate
+    // datums. The encoded arguments are absent when the plan describes all
+    // three; `OriginalRow` is otherwise kept in record form, as the lag/lead
+    // computation does not look inside it.
+    let unwrap_args = lag_lead_arg_unwrapper(callers_temp_storage, args);
     let (orig_rows, unwrapped_args): (Vec<_>, Vec<_>) = datums
         .into_iter()
         .map(|d| {
             let mut iter = d.unwrap_list().iter();
             let original_row = iter.next().unwrap();
-            let (input_value, offset, default_value) =
-                unwrap_lag_lead_encoded_args(iter.next().unwrap());
-            (original_row, (input_value, offset, default_value))
+            (original_row, unwrap_args(original_row, iter.next()))
         })
         .unzip();
 
@@ -708,15 +717,57 @@ where
         })
 }
 
-/// lag/lead's arguments are in a record. This function unwraps this record.
-fn unwrap_lag_lead_encoded_args(encoded_args: Datum) -> (Datum, Datum, Datum) {
-    let mut encoded_args_iter = encoded_args.unwrap_list().iter();
-    let (input_value, offset, default_value) = (
-        encoded_args_iter.next().unwrap(),
-        encoded_args_iter.next().unwrap(),
-        encoded_args_iter.next().unwrap(),
+/// Returns a closure turning one row's `OriginalRow` record and encoded
+/// arguments into the `(value, offset, default)` triple the computation works
+/// on.
+///
+/// `args` selects the encoding, and so also which of the closure's inputs
+/// carry anything: `None` means the row's encoded arguments are a
+/// `(value, offset, default)` record, `Some` with no described `value` that
+/// they are the bare `value`, and `Some` with one that the row has no encoded
+/// arguments at all. The constant `default` is copied into `temp_storage`
+/// once here, so every row of the partition shares the one copy.
+fn lag_lead_arg_unwrapper<'a>(
+    temp_storage: &'a RowArena,
+    args: &Option<LagLeadArgs>,
+) -> impl Fn(Datum<'a>, Option<Datum<'a>>) -> (Datum<'a>, Datum<'a>, Datum<'a>) {
+    let described = args.as_ref().map(
+        |LagLeadArgs {
+             offset,
+             default,
+             value,
+         }| {
+            (
+                offset.map_or(Datum::Null, Datum::Int32),
+                temp_storage.make_datum(|packer| packer.push(default.unpack_first())),
+                *value,
+            )
+        },
     );
-    (input_value, offset, default_value)
+    move |original_row, encoded_args| match described {
+        Some((offset, default, value)) => {
+            let value = match value {
+                Some(field) => original_row
+                    .unwrap_list()
+                    .iter()
+                    .nth(field)
+                    .expect("`value` field is within `OriginalRow`"),
+                None => encoded_args.expect("`value` is encoded per row"),
+            };
+            (value, offset, default)
+        }
+        None => {
+            let mut iter = encoded_args
+                .expect("all arguments are encoded per row")
+                .unwrap_list()
+                .iter();
+            (
+                iter.next().unwrap(),
+                iter.next().unwrap(),
+                iter.next().unwrap(),
+            )
+        }
+    }
 }
 
 /// Each element of `args` has the 3 arguments evaluated for a single input row.
@@ -1202,6 +1253,14 @@ where
 
     let input_datums_with_ranks = order_aggregate_datums_with_rank(input_datums, order_by);
 
+    // A constituent whose arguments the plan fully describes contributes no
+    // field to the fused argument record, and no field at all is encoded when
+    // that holds for all of them. See `AggregateFunc::encodes_window_args`.
+    let encodes_args = funcs
+        .iter()
+        .map(AggregateFunc::encodes_window_args)
+        .collect_vec();
+
     let size_hint = input_datums_with_ranks.size_hint().0;
     let mut encoded_argsss = vec![Vec::with_capacity(size_hint); funcs.len()];
     let mut original_rows = Vec::with_capacity(size_hint);
@@ -1210,10 +1269,15 @@ where
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
         original_rows.push(original_row);
-        let mut argss_iter = iter.next().unwrap().unwrap_list().iter();
-        for i in 0..funcs.len() {
-            let encoded_args = argss_iter.next().unwrap();
-            encoded_argsss[i].push(encoded_args);
+        let mut argss_iter = iter
+            .next()
+            .map(|argss| argss.unwrap_list().iter())
+            .into_iter()
+            .flatten();
+        for (i, encodes) in encodes_args.iter().enumerate() {
+            if *encodes {
+                encoded_argsss[i].push(argss_iter.next().unwrap());
+            }
         }
         if has_last_value {
             order_by_rows.push(order_by_row);
@@ -1227,11 +1291,21 @@ where
                 order_by: inner_order_by,
                 lag_lead,
                 ignore_nulls,
+                args,
             } => {
                 assert_eq!(order_by, inner_order_by);
-                let unwrapped_argss = encoded_argss
-                    .into_iter()
-                    .map(|encoded_args| unwrap_lag_lead_encoded_args(encoded_args))
+                let unwrap_args = lag_lead_arg_unwrapper(callers_temp_storage, args);
+                // `encoded_argss` is empty exactly when this constituent
+                // encodes nothing per row.
+                let encoded_argss = if encoded_argss.is_empty() {
+                    Either::Left(std::iter::repeat_n(None, original_rows.len()))
+                } else {
+                    Either::Right(encoded_argss.into_iter().map(Some))
+                };
+                let unwrapped_argss = original_rows
+                    .iter()
+                    .zip_eq(encoded_argss)
+                    .map(|(original_row, encoded_args)| unwrap_args(*original_row, encoded_args))
                     .collect();
                 lag_lead_inner(unwrapped_argss, lag_lead, ignore_nulls)
             }
@@ -1861,6 +1935,46 @@ pub enum LagLeadType {
     Lead,
 }
 
+/// Where a `lag`/`lead` call's arguments come from, for the arguments the plan
+/// can describe instead of packing them into the reduce's per-row value.
+///
+/// `lag`/`lead` take three arguments, and by default the reduce encodes all
+/// three into a `(value, offset, default)` record per input row. `offset` and
+/// `default` are usually plan-time constants, and `value` is usually one of
+/// the input columns, which the row's `OriginalRow` record already carries.
+/// Describing them here leaves the per-row encoded argument as the bare
+/// `value` datum, or as nothing at all when `value` too is described.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+pub struct LagLeadArgs {
+    /// The `offset` argument; `None` is SQL NULL, for which `lag`/`lead`
+    /// returns NULL for every row.
+    pub offset: Option<i32>,
+    /// The `default` argument, as a single-datum row.
+    ///
+    /// A [`StableRow`] because `AggregateFunc` is part of the stable LIR
+    /// serialization surface, where raw `Row` bytes must not appear.
+    pub default: StableRow,
+    /// The field of the per-row `OriginalRow` record holding the `value`
+    /// argument, when `value` is one of the window function's input columns.
+    ///
+    /// `Some` leaves nothing to encode per row: the
+    /// `(OriginalRow, EncodedArgs)` record keeps only `OriginalRow`, and a
+    /// fused call contributes no field to the fused argument record. Reading
+    /// the value back walks `OriginalRow` as far as this field, which trades
+    /// a bounded datum walk per row for not storing the column twice.
+    pub value: Option<usize>,
+}
+
 #[derive(
     Clone,
     Debug,
@@ -1970,6 +2084,11 @@ pub enum AggregateFunc {
         order_by: Vec<ColumnOrder>,
         lag_lead: LagLeadType,
         ignore_nulls: bool,
+        /// The arguments the plan describes rather than encoding per row,
+        /// which fixes the shape of the per-row encoded argument. `None` is
+        /// the full `(value, offset, default)` record; see [`LagLeadArgs`]
+        /// for the narrower shapes.
+        args: Option<LagLeadArgs>,
     },
     FirstValue {
         order_by: Vec<ColumnOrder>,
@@ -2183,7 +2302,15 @@ impl AggregateFunc {
                 order_by,
                 lag_lead: lag_lead_type,
                 ignore_nulls,
-            } => lag_lead(datums, temp_storage, order_by, lag_lead_type, ignore_nulls),
+                args,
+            } => lag_lead(
+                datums,
+                temp_storage,
+                order_by,
+                lag_lead_type,
+                ignore_nulls,
+                args,
+            ),
             AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
@@ -2287,8 +2414,16 @@ impl AggregateFunc {
                 order_by,
                 lag_lead: lag_lead_type,
                 ignore_nulls,
-            } => lag_lead_no_list(datums, temp_storage, order_by, lag_lead_type, ignore_nulls)
-                .collect_vec(),
+                args,
+            } => lag_lead_no_list(
+                datums,
+                temp_storage,
+                order_by,
+                lag_lead_type,
+                ignore_nulls,
+                args,
+            )
+            .collect_vec(),
             AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
@@ -2520,15 +2655,16 @@ impl AggregateFunc {
             AggregateFunc::DenseRank { .. } => {
                 AggregateFunc::output_type_ranking_window_funcs(&input_type, "?dense_rank?")
             }
-            AggregateFunc::LagLead { lag_lead: lag_lead_type, .. } => {
-                // The input type for Lag is ((OriginalRow, EncodedArgs), OrderByExprs...)
+            AggregateFunc::LagLead { lag_lead: lag_lead_type, args, .. } => {
+                // The input type for Lag is ((OriginalRow, EncodedArgs?), OrderByExprs...)
                 let fields = input_type.scalar_type.unwrap_record_element_type();
-                let original_row_type = fields[0].unwrap_record_element_type()[0]
-                    .clone()
-                    .nullable(false);
-                let encoded_args = fields[0].unwrap_record_element_type()[1];
-                let output_type_inner =
-                    Self::lag_lead_output_type_inner_from_encoded_args(encoded_args);
+                let fn_input = fields[0].unwrap_record_element_type();
+                let original_row_type = fn_input[0].clone().nullable(false);
+                let output_type_inner = Self::lag_lead_output_type_inner(
+                    fn_input[0],
+                    fn_input.get(1).copied(),
+                    args.as_ref(),
+                );
                 let column_name = Self::lag_lead_result_column_name(lag_lead_type);
 
                 SqlScalarType::List {
@@ -2647,12 +2783,16 @@ impl AggregateFunc {
                 // function calls that got fused. This is a record for lag/lead, and a simple type
                 // for first_value/last_value.
                 let fields = input_type.scalar_type.unwrap_record_element_type();
-                let original_row_type = fields[0].unwrap_record_element_type()[0]
-                    .clone()
-                    .nullable(false);
-                let encoded_args_type = fields[0]
-                    .unwrap_record_element_type()[1]
-                    .unwrap_record_element_type();
+                let fn_input = fields[0].unwrap_record_element_type();
+                let original_row_type = fn_input[0];
+                // The argument record holds a field only for the constituents
+                // that encode one, and is itself absent when none do, so walk
+                // it alongside `funcs` rather than zipping the two.
+                let mut encoded_args_type = fn_input
+                    .get(1)
+                    .map(|t| t.unwrap_record_element_type().into_iter())
+                    .into_iter()
+                    .flatten();
 
                 SqlScalarType::List {
                     element_type: Box::new(SqlScalarType::Record {
@@ -2660,31 +2800,34 @@ impl AggregateFunc {
                             (
                                 ColumnName::from("?fused_value_window_func?"),
                                 SqlScalarType::Record {
-                                fields: encoded_args_type.into_iter().zip_eq(funcs).map(
-                                    |(arg_type, func)| {
+                                fields: funcs.iter().map(|func| {
+                                    let arg_type = func
+                                        .encodes_window_args()
+                                        .then(|| encoded_args_type.next().unwrap());
                                     match func {
                                         AggregateFunc::LagLead {
-                                            lag_lead: lag_lead_type, ..
+                                            lag_lead: lag_lead_type, args, ..
                                         } => {
                                             let name = Self::lag_lead_result_column_name(
                                                 lag_lead_type,
                                             );
-                                            let ty = Self
-                                                ::lag_lead_output_type_inner_from_encoded_args(
-                                                    arg_type,
-                                                );
+                                            let ty = Self::lag_lead_output_type_inner(
+                                                original_row_type,
+                                                arg_type,
+                                                args.as_ref(),
+                                            );
                                             (name, ty)
                                         },
                                         AggregateFunc::FirstValue { .. } => {
                                             (
                                                 ColumnName::from("?first_value?"),
-                                                arg_type.clone().nullable(true),
+                                                arg_type.unwrap().clone().nullable(true),
                                             )
                                         }
                                         AggregateFunc::LastValue { .. } => {
                                             (
                                                 ColumnName::from("?last_value?"),
-                                                arg_type.clone().nullable(true),
+                                                arg_type.unwrap().clone().nullable(true),
                                             )
                                         }
                                         _ => panic!("FusedValueWindowFunc has an unknown function"),
@@ -2692,7 +2835,7 @@ impl AggregateFunc {
                                 }).collect(),
                                 custom_id: None,
                             }.nullable(false)),
-                            (ColumnName::from("?orig_row?"), original_row_type),
+                            (ColumnName::from("?orig_row?"), original_row_type.clone().nullable(false)),
                         ].into(),
                         custom_id: None,
                     }),
@@ -2797,18 +2940,50 @@ impl AggregateFunc {
         }
     }
 
-    /// Given the `EncodedArgs` part of `((OriginalRow, EncodedArgs), OrderByExprs...)`,
-    /// this computes the type of the first field of the output type. (The first field is the
-    /// real result, the rest is the original row.)
-    fn lag_lead_output_type_inner_from_encoded_args(
-        encoded_args_type: &SqlScalarType,
+    /// The type of a `lag`/`lead` result, given the `OriginalRow` and (where
+    /// the row has one) `EncodedArgs` parts of
+    /// `((OriginalRow, EncodedArgs?), OrderByExprs...)`.
+    ///
+    /// This is the first field of the aggregate's output type; the rest is the
+    /// original row.
+    ///
+    /// The result has the type of the `value` argument, but is always nullable:
+    /// it is null when the lag/lead computation reaches over the bounds of the
+    /// window partition. Where `value` lives depends on `args`; see
+    /// [`LagLeadArgs`].
+    fn lag_lead_output_type_inner(
+        original_row_type: &SqlScalarType,
+        encoded_args_type: Option<&SqlScalarType>,
+        args: Option<&LagLeadArgs>,
     ) -> SqlColumnType {
-        // lag/lead have 3 arguments, and the output type is
-        // the same as the first of these, but always nullable. (It's null when the
-        // lag/lead computation reaches over the bounds of the window partition.)
-        encoded_args_type.unwrap_record_element_type()[0]
-            .clone()
-            .nullable(true)
+        let value_type = match args {
+            Some(LagLeadArgs {
+                value: Some(field), ..
+            }) => original_row_type.unwrap_record_element_type()[*field].clone(),
+            Some(_) => encoded_args_type
+                .expect("`value` is encoded per row")
+                .clone(),
+            None => encoded_args_type
+                .expect("all arguments are encoded per row")
+                .unwrap_record_element_type()[0]
+                .clone(),
+        };
+        value_type.nullable(true)
+    }
+
+    /// Whether this window function, as a constituent of a fused call,
+    /// contributes a field to the per-row fused argument record.
+    ///
+    /// Only `lag`/`lead` can decline: the others always read their single
+    /// argument from the row. A fused call whose constituents all decline
+    /// encodes no argument record at all.
+    pub fn encodes_window_args(&self) -> bool {
+        match self {
+            AggregateFunc::LagLead { args, .. } => {
+                !matches!(args, Some(LagLeadArgs { value: Some(_), .. }))
+            }
+            _ => true,
+        }
     }
 
     fn lag_lead_result_column_name(lag_lead_type: &LagLeadType) -> ColumnName {
@@ -3277,10 +3452,33 @@ where
                 lag_lead: _,
                 ignore_nulls,
                 order_by,
+                args,
             } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
                 f.write_str(name)?;
                 f.write_str("[")?;
+                // The described arguments no longer appear in the argument
+                // expression this function is rendered next to, so print them
+                // here to keep the plan a complete description of the call.
+                // The two constants are literals, so they go through
+                // `humanize_datum` and are redacted along with every other
+                // literal in the plan.
+                if let Some(LagLeadArgs {
+                    offset,
+                    default,
+                    value,
+                }) = args
+                {
+                    if let Some(field) = value {
+                        write!(f, "value=orig_row[{field}], ")?;
+                    }
+                    f.write_str("offset=")?;
+                    self.mode
+                        .humanize_datum(offset.map_or(Datum::Null, Datum::Int32), f)?;
+                    f.write_str(", default=")?;
+                    self.mode.humanize_datum(default.unpack_first(), f)?;
+                    f.write_str(", ")?;
+                }
                 if *ignore_nulls {
                     f.write_str("ignore_nulls=true, ")?;
                 }
