@@ -51,9 +51,7 @@ ORDER BY c.name, o.name;
 (2 rows)
 ```
 
-An empty result means every object is hydrated, and the problem lies
-elsewhere: see [Freshness
-troubleshooting](/transform-data/freshness-troubleshooting/). Otherwise:
+An empty result means every object is hydrated. Otherwise:
 
 - A **`NULL` `replica_id`** means the object has no replica to hydrate on,
   because its cluster has a replication factor of `0`. Restore compute with
