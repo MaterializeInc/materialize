@@ -5335,6 +5335,7 @@ pub fn serve(
                     exclude_collections,
                     cluster_stability: BTreeMap::new(),
                     hydration_times: Default::default(),
+                    replica_created_at: None,
                 }
             });
 
