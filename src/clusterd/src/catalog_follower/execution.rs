@@ -483,16 +483,18 @@ impl ReplicaEnactment {
             .retain(|id, _| storage.contains(id) || indexes.contains(id));
         let mut requested = BTreeMap::new();
         for id in &storage {
+            let permission = catalog
+                .state()
+                .collection_compaction_bounds()
+                .get(id)
+                .and_then(|f| f.as_option().copied());
+            // A newer cached grant must not exclude older retained history that
+            // a pending MV needs to resume its output. Acquisition republishes
+            // protection when the existing grant cannot cover that history.
             let floor = self
                 .protection
-                .granted_frontier(*id)
-                .or_else(|| {
-                    catalog
-                        .state()
-                        .collection_compaction_bounds()
-                        .get(id)
-                        .and_then(|f| f.as_option().copied())
-                })
+                .reusable_frontier(*id, permission)
+                .or(permission)
                 .with_context(|| format!("source {id} has no readable permission"))?;
             requested.insert(*id, floor);
         }

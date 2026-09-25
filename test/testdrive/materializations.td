@@ -119,6 +119,16 @@ b  min
 1  1
 2  1
 
+# Wait until the producer index is readable so the dependent can import it.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+    WHERE i.name = 'data_view_primary_idx' AND f.read_frontier IS NOT NULL
+  )
+true
+
 > CREATE MATERIALIZED VIEW test4 AS
   SELECT b, max(a) FROM data_view GROUP BY b
 
@@ -127,6 +137,24 @@ b  max
 ------
 1  3
 2  1
+
+# Wait for the dependent's runtime import to advance beyond its initial frontier.
+# A catalog dependency alone does not establish that the import is running.
+# Inspect the same replica as the final arrangement assertion.
+> SET cluster_replica = r1
+
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_introspection.mz_compute_import_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS eg ON eg.global_id = f.export_id
+    JOIN mz_catalog.mz_objects AS e ON e.id = eg.id
+    JOIN mz_internal.mz_object_global_ids AS ig ON ig.global_id = f.import_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = ig.id
+    WHERE e.name = 'test4' AND i.name = 'data_view_primary_idx' AND f.time > 0
+  )
+true
+
+> RESET cluster_replica
 
 # Unmaterialize data view.
 > DROP INDEX data_view_primary_idx
@@ -286,6 +314,16 @@ b  c
 1  3
 2  1
 
+# Wait until the producer index is readable so the dependent can import it.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+    WHERE i.name = 'data_view_idx' AND f.read_frontier IS NOT NULL
+  )
+true
+
 # Create a suboptimal second index on the same column in data_view.
 > CREATE INDEX data_view_idx2 on data_view(a)
 
@@ -308,6 +346,24 @@ b  c
 ------
 1  3
 2  1
+
+# Wait for the dependent's runtime import to advance beyond its initial frontier.
+# A catalog dependency alone does not establish that the import is running.
+# Inspect the same replica as the final arrangement assertion.
+> SET cluster_replica = r1
+
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_introspection.mz_compute_import_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS eg ON eg.global_id = f.export_id
+    JOIN mz_catalog.mz_objects AS e ON e.id = eg.id
+    JOIN mz_internal.mz_object_global_ids AS ig ON ig.global_id = f.import_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = ig.id
+    WHERE e.name = 'data_view_idx2' AND i.name = 'data_view_idx' AND f.time > 0
+  )
+true
+
+> RESET cluster_replica
 
 # Delete the first copy of the same index and ensure everything selects as
 # normal.

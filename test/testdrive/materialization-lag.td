@@ -42,13 +42,14 @@ ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 > CREATE VIEW src_plus_tbl
   AS SELECT counter + a AS a FROM src_tbl, tbl
 
-> CREATE INDEX idx
-  IN CLUSTER compute
-  ON src_plus_tbl (a)
-
+# Plan the MV against storage inputs, independently of index installation timing.
 > CREATE MATERIALIZED VIEW mv
   IN CLUSTER compute
   AS SELECT * FROM src_plus_tbl
+
+> CREATE INDEX idx
+  IN CLUSTER compute
+  ON src_plus_tbl (a)
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
@@ -90,7 +91,9 @@ true
 
 > ALTER CLUSTER source SET (REPLICATION FACTOR 1)
 
-# Bring down the compute cluster and observe resulting lag.
+# Bring down the compute cluster and observe resulting lag. The MV's durable
+# frontier remains observable, while the index has no replica observations.
+# The sink inherits the MV's lag globally, but keeps up with it locally.
 
 > ALTER CLUSTER compute SET (REPLICATION FACTOR 0)
 
@@ -98,13 +101,12 @@ true
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects o ON (id = object_id)
   WHERE local_lag > INTERVAL '5s'
-idx
+mv
 
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE global_lag > INTERVAL '5s'
-idx
 mv
 snk
 

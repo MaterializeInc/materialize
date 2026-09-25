@@ -300,7 +300,32 @@ true true true true true
 > INSERT INTO t6 SELECT generate_series(1, 1000)
 > CREATE INDEX ii_t6 ON t6 (a)
 > CREATE VIEW t6_plus_1 AS SELECT a + 1 AS b FROM t6
+
+# Wait until the producer index is readable so the dependent can import it.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+    WHERE i.name = 'ii_t6' AND f.read_frontier IS NOT NULL
+  )
+true
+
 > CREATE INDEX ii_t6_plus_1 ON t6_plus_1 (b)
+
+# Wait for the dependent's runtime import to advance beyond its initial frontier.
+# A catalog dependency alone does not establish that the import is running.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_introspection.mz_compute_import_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS eg ON eg.global_id = f.export_id
+    JOIN mz_catalog.mz_objects AS e ON e.id = eg.id
+    JOIN mz_internal.mz_object_global_ids AS ig ON ig.global_id = f.import_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = ig.id
+    WHERE e.name = 'ii_t6_plus_1' AND i.name = 'ii_t6' AND f.time > 0
+  )
+true
+
 > DROP INDEX ii_t6
 
 > SELECT name, records > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t6%'

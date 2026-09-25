@@ -351,6 +351,27 @@ fn test_statement_logging_basic() {
         .unwrap();
     client.execute("SELECT * FROM v", &[]).unwrap();
     client.execute("CREATE DEFAULT INDEX i ON v", &[]).unwrap();
+    // Establish the indexed access path before measuring its execution strategy.
+    // The internal connection keeps setup queries out of the sampled statements.
+    {
+        let mut probe = server.connect_internal(postgres::NoTls).unwrap();
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let ready: bool = probe
+                    .query_one(
+                        "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
+                         JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id \
+                         JOIN mz_indexes i ON i.id = g.id \
+                         WHERE i.name = 'i' AND f.read_frontier IS NOT NULL)",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                ready.then_some(()).ok_or("Index not readable")
+            })
+            .unwrap();
+    }
     client.execute("SELECT * FROM v", &[]).unwrap();
     let _ = client.execute("SELECT 1/0", &[]);
     client.execute("CREATE TABLE t (x int)", &[]).unwrap();
@@ -1041,6 +1062,10 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     let mut ddl = server.connect_internal(postgres::NoTls).unwrap();
 
+    // Pgwire Sync commits implicit transactions through the coordinator, even
+    // for constant queries. Keep those round trips outside the measured window.
+    client.batch_execute("BEGIN").unwrap();
+
     // The session cache is weak. Keep its planning-equivalent allocation alive
     // when catalog_mut() uses Arc::make_mut before entering the failpoint.
     let catalog = server.server.runtime().block_on(
@@ -1074,6 +1099,7 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
     // waiting for completion so retries can catch up with peer publications.
     fail::remove("catalog_transact");
     stall.join().unwrap();
+    client.batch_execute("COMMIT").unwrap();
     drop(catalog);
 
     let mut internal = server.connect_internal(postgres::NoTls).unwrap();

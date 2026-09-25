@@ -330,15 +330,14 @@ r3 <null>
   FROM mz_internal.mz_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
-# Test that frontiers are correctly initialized for collections on clusters
-# with zero replicas.
+# An index on a cluster that has never had a replica has no observed frontiers.
+# Missing observations are not empty frontiers (which would be reported as NULL).
 
 > CREATE CLUSTER empty SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 > CREATE TABLE t2 (a int)
 > CREATE INDEX idx2 IN CLUSTER empty ON t2 (a)
 
-> SELECT read_frontier > 0, read_frontier = write_frontier
+> SELECT read_frontier, write_frontier
   FROM mz_internal.mz_frontiers
   JOIN mz_indexes ON (id = object_id)
   WHERE name = 'idx2'
-true true
