@@ -686,6 +686,7 @@ impl Listeners {
             openable_adapter_storage,
             read_only,
             caught_up_trigger,
+            bootstrap_complete,
         } = deployment::preflight::preflight_0dt(preflight_config).await?;
 
         info!(
@@ -818,6 +819,10 @@ impl Listeners {
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
+
+        if let Some(bootstrap_complete) = bootstrap_complete {
+            let _ = bootstrap_complete.send(());
+        }
 
         // Initialize the OIDC authenticator, shared between the HTTP and SQL servers.
         let oidc = GenericOidcAuthenticator::new(adapter_client.clone());
