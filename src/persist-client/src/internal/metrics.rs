@@ -1740,6 +1740,9 @@ pub struct UsageAuditMetrics {
     pub step_state: Counter,
     /// Time spent doing math
     pub step_math: Counter,
+    /// Count of shards skipped during a referenced-usage computation because
+    /// computing their usage panicked (e.g. an undecodable rollup).
+    pub referenced_shard_failures: IntCounter,
 }
 
 impl UsageAuditMetrics {
@@ -1777,6 +1780,10 @@ impl UsageAuditMetrics {
             step_blob_metadata: step_timings.with_label_values(&["blob_metadata"]),
             step_state: step_timings.with_label_values(&["state"]),
             step_math: step_timings.with_label_values(&["math"]),
+            referenced_shard_failures: registry.register(metric!(
+                name: "mz_persist_usage_referenced_shard_failures",
+                help: "count of shards skipped during referenced-usage computation due to a panic",
+            )),
         }
     }
 }
