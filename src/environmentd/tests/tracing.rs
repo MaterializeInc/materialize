@@ -82,6 +82,23 @@ async fn test_expected_spans() {
             assert!(stat.exited > 0, "{name}: {stat:?}");
             assert_eq!(stat.is_closed, true, "{name}: {stat:?}");
         }
+
+        // The capture layer records all levels, including spans that the INFO
+        // log and OpenTelemetry filters omit.
+        for (name, level) in [
+            ("coord::handle_message", tracing::Level::INFO),
+            ("message_command", tracing::Level::INFO),
+            ("sequence_end_transaction", tracing::Level::DEBUG),
+            ("sequence_end_transaction_inner", tracing::Level::DEBUG),
+        ] {
+            let spans = storage
+                .all_spans()
+                // `message_command` also names a separate DEBUG function span.
+                .filter(|span| span.metadata().name() == name && *span.metadata().level() == level)
+                .collect::<Vec<_>>();
+            assert!(!spans.is_empty(), "missing span: {name}");
+            assert!(spans.iter().any(|span| span.stats().entered > 0), "{name}");
+        }
     }
 }
 
