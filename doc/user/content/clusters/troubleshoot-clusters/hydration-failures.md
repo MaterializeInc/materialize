@@ -181,9 +181,8 @@ described in [Step 2](#step-2-check-for-a-rehydration-loop).
 
 #### Possible cause: a cluster has a replication factor of `0`
 
-A cluster with no replicas never advances the write frontiers of the objects on
-it, so those objects pin their inputs for as long as they exist. List what such
-a cluster still carries:
+If a cluster has `REPLICATION FACTOR` set to 0, the materialized views and sinks on the cluster will have their history 
+pinned. List which such objects a cluster still carries:
 
 ```mzsql
 SELECT
@@ -202,21 +201,11 @@ ORDER BY c.name, o.name;
 ```nofmt
  input  | object_name |       type        | cluster_name
 --------+-------------+-------------------+--------------
- orders | orders_idx  | index             | batch_jobs
  orders | orders_mv   | materialized-view | batch_jobs
-(2 rows)
+(1 row)
 ```
 
-Materialized views and sinks pin their inputs this way. An index may not,
-because Materialize can fast-forward an index that no replica can serve reads
-from. Cross-check each input against `retained_history` before acting.
-
 **Resolution**: drop the objects, or drop the cluster that carries them.
-Setting a cluster's replication factor to `0` does not release its read holds,
-because the objects remain. Capture the object definitions with [`SHOW CREATE
-MATERIALIZED VIEW`](/sql/show-create-materialized-view/) or [`SHOW CREATE
-INDEX`](/sql/show-create-index/) before dropping anything you intend to
-recreate.
 
 ## Related pages
 
