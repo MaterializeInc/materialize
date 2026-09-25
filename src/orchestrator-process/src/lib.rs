@@ -722,10 +722,10 @@ impl OrchestratorWorker {
         // Drop the supervisor for the service, if it exists. If this service
         // was under supervision, this will kill all processes associated with
         // it.
-        {
+        let supervised = {
             let mut supervisors = self.services.lock().expect("lock poisoned");
-            supervisors.remove(id);
-        }
+            supervisors.remove(id).is_some()
+        };
 
         // If the service was orphaned by a prior incarnation of the
         // orchestrator, it won't have been under supervision and therefore will
@@ -737,6 +737,19 @@ impl OrchestratorWorker {
                 if path.extension() == Some(OsStr::new("pid")) {
                     let mut system = System::new();
                     let Some(process) = find_process_from_pid_file(&mut system, &path).await else {
+                        // Dropping the supervisor may already have killed a
+                        // supervised process. An orphan that cannot be found
+                        // either exited or runs in a PID namespace this
+                        // orchestrator cannot see, e.g., another container
+                        // sharing the data directory. Its run directory is
+                        // deleted below, so warn while there is a trace.
+                        if !supervised {
+                            warn!(
+                                "not terminating orphaned process for {full_id}: no live process \
+                                 matches {}",
+                                path.display()
+                            );
+                        }
                         continue;
                     };
                     let pid = process.pid();
