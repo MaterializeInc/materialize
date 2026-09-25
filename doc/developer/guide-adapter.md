@@ -86,6 +86,15 @@ those drops before the creates. An orchestrator can retry a failed create
 indefinitely. Queuing the drop behind it would deadlock a replacement against
 the same physical quota that catalog accounting correctly considered available.
 
+### Frontend sequencing and worker stacks
+
+`SessionClient::execute` heap-allocates its large execution-attempt future so it
+does not inflate every caller's connection state machine. Inline async state can
+produce multiple stack copies at each level of a poll chain, including tracing
+wrappers. A stack overflow in a leaf planner function need not mean recursive
+planning. Keep large sequencing state behind this boundary rather than increasing
+worker stack sizes or moving the allocation burden into each frontend protocol.
+
 ## Correctness Invariants
 
 ### Timestamp selection must respect real-time bounds
