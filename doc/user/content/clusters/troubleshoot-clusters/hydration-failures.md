@@ -129,10 +129,10 @@ upstream inputs are readable.
 
 Materialize compacts historical data whenever possible, to reduce resource
 consumption. Under normal circumstances, this means that about 1 second of
-history is available, and so a new object will have to read just 1 second of
-upstream history to hydrate. However, if compaction did not succeed, the new
-object will need to replay more upstream history. This can take longer, and
-require more memory.
+history is available, and so a new object will have to replay only about 1
+second of upstream history on top of the current snapshot. However, if
+compaction has been held back, the new object will need to replay more
+upstream history. This can take longer, and require more memory.
 
 To determine if the input history is pinned, compare each object's "read
 frontier" against its "write frontier", using
