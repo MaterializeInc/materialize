@@ -10,7 +10,7 @@
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import react from "@vitejs/plugin-react";
 import browserslistToEsbuild from "browserslist-to-esbuild";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type PluginOption } from "vite";
 import { analyzer } from "vite-bundle-analyzer";
 import { createHtmlPlugin } from "vite-plugin-html";
 import svgr from "vite-plugin-svgr";
@@ -82,7 +82,75 @@ function buildDefinitions() {
   };
 }
 
+/**
+ * Dev-only middleware that proxies the in-console AI agent (`\ask`) to the
+ * Anthropic API. The browser POSTs an Anthropic Messages request body to
+ * `/api/ask`; this injects the server-side ANTHROPIC_API_KEY (read from
+ * .env.local via loadEnv, never exposed to the client) and forwards it.
+ *
+ * Registered inside `configureServer` (not the returned post-hook) so it runs
+ * BEFORE Vite's internal `/api/` proxy, which would otherwise forward `/api/ask`
+ * to environmentd. Dev-only: `configureServer` is not invoked in prod builds.
+ */
+const anthropicProxyPlugin: PluginOption = {
+  name: "mz-anthropic-proxy",
+  configureServer(server) {
+    const env = loadEnv(server.config.mode, server.config.root, "");
+    const apiKey = env.ANTHROPIC_API_KEY;
+
+    server.middlewares.use("/api/ask", async (req, res, next) => {
+      if (req.method !== "POST") {
+        next();
+        return;
+      }
+      const sendJson = (status: number, body: unknown) => {
+        res.statusCode = status;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(body));
+      };
+      try {
+        if (!apiKey || apiKey.includes("REPLACE_ME")) {
+          sendJson(500, {
+            error: "ANTHROPIC_API_KEY is not set in console/.env.local",
+          });
+          return;
+        }
+        let raw = "";
+        for await (const chunk of req) raw += chunk;
+        const payload = raw ? JSON.parse(raw) : {};
+        const anthropicRes = await fetch(
+          "https://api.anthropic.com/v1/messages",
+          {
+            method: "POST",
+            headers: {
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              model: payload.model ?? "claude-opus-5",
+              max_tokens: payload.max_tokens ?? 16000,
+              ...(payload.system ? { system: payload.system } : {}),
+              ...(payload.tools ? { tools: payload.tools } : {}),
+              messages: payload.messages ?? [],
+            }),
+          },
+        );
+        const text = await anthropicRes.text();
+        res.statusCode = anthropicRes.status;
+        res.setHeader("content-type", "application/json");
+        res.end(text);
+      } catch (err) {
+        sendJson(500, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+  },
+};
+
 const plugins = [
+  anthropicProxyPlugin,
   wasm(),
   createHtmlPlugin({
     minify: true,
