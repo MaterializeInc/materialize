@@ -23,6 +23,6 @@ if ! zizmor --version >/dev/null 2>/dev/null; then
   exit 1
 fi
 
-try zizmor --offline .github
+try zizmor --offline --persona=pedantic --config zizmor.yml .github
 
 try_status_report

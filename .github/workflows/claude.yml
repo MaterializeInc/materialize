@@ -26,6 +26,7 @@ concurrency:
 
 jobs:
   claude:
+    name: claude
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
@@ -46,9 +47,10 @@ jobs:
 
       - name: Checkout PR branch
         if: github.event.issue.pull_request
-        run: gh pr checkout ${{ github.event.issue.number }}
+        run: gh pr checkout "$PR_NUMBER"
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
 
       - name: Run Claude Code
         id: claude
