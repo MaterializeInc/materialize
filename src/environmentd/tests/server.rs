@@ -4195,6 +4195,29 @@ async fn test_connection_id() {
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
 async fn test_github_25388() {
+    async fn wait_for_index(client: &tokio_postgres::Client) {
+        // The DROP race needs an index in the planning snapshot, not merely a
+        // committed index definition. Storage fallback does not depend on idx.
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry_async(|_| async {
+                let ready: bool = client
+                    .query_one(
+                        "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
+                         JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id \
+                         JOIN mz_indexes i ON i.id = g.id \
+                         WHERE i.name = 'idx' AND f.read_frontier IS NOT NULL)",
+                        &[],
+                    )
+                    .await
+                    .unwrap()
+                    .get(0);
+                ready.then_some(()).ok_or("Index not readable")
+            })
+            .await
+            .unwrap();
+    }
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start()
@@ -4232,6 +4255,7 @@ async fn test_github_25388() {
                 .batch_execute("CREATE INDEX idx ON t(a)")
                 .await
                 .unwrap();
+            wait_for_index(&client1).await;
 
             let client2 = server.connect().await.unwrap();
             mz_ore::task::spawn(|| "test", async move {
@@ -4261,6 +4285,7 @@ async fn test_github_25388() {
                 .batch_execute("CREATE INDEX idx ON t(a)")
                 .await
                 .unwrap();
+            wait_for_index(&client1).await;
 
             let client2 = server.connect().await.unwrap();
             mz_ore::task::spawn(|| "test", async move {
