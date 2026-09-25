@@ -147,19 +147,18 @@ def check_fuzz_versions_mirror_root(workspace: Workspace) -> bool:
 
 
 def check_fuzz_patches_mirror_root(workspace: Workspace) -> bool:
-    """Checks that the `[patch.crates-io]` entries of the cargo-fuzz workspace
-    (test/cargo-fuzz) match the root workspace's.
+    """Checks that the cargo-fuzz workspace (test/cargo-fuzz) carries the root
+    workspace's `[patch.crates-io]` entries verbatim.
 
-    A patch that does not apply is not an error to cargo: it lands in
-    `[[patch.unused]]` and the crate resolves from crates.io instead, with only
-    a warning. So a fork revision that drifts from the root here silently builds
-    the fuzz targets against a different crate than production, and fails
-    whenever the fork carries API the published crate lacks.
+    Cargo never fails over a patch mismatch. An entry that does not apply lands
+    in `[[patch.unused]]` with only a warning, and a missing entry passes with no
+    warning at all. Either way the fuzz targets silently build against the
+    crates.io release instead of the fork production uses, and the build breaks
+    whenever the fork carries API the published crate lacks."""
 
-    The fuzz workspace may omit a root entry that nothing in its graph depends
-    on, since cargo warns about patches it cannot apply, but it may not carry an
-    entry the root does not have, and every entry it shares with the root must
-    be identical."""
+    # Root patches for crates outside the fuzz crates' dependency graph. Cargo
+    # would warn that they are unused, so the fuzz workspace leaves them out.
+    OMITTED = {"duckdb", "postgres_array"}
 
     with open(MZ_ROOT / "Cargo.toml") as f:
         root_patches = toml.load(f).get("patch", {}).get("crates-io", {})
@@ -182,10 +181,19 @@ def check_fuzz_patches_mirror_root(workspace: Workspace) -> bool:
                 file=sys.stderr,
             )
             success = False
+    for name in sorted(root_patches.keys() - fuzz_patches.keys() - OMITTED):
+        print(
+            f"test/cargo-fuzz/Cargo.toml: {name} is patched in the root "
+            f"Cargo.toml but not here",
+            file=sys.stderr,
+        )
+        success = False
     if not success:
         print(
             "\nhint: copy the entry from the root `[patch.crates-io]` verbatim, "
-            "or drop it here if the root no longer patches that crate.",
+            "or drop it here if the root no longer patches that crate. A root "
+            "entry that no fuzz crate depends on goes into `OMITTED` in "
+            "check_fuzz_patches_mirror_root instead.",
             file=sys.stderr,
         )
     return success
