@@ -3602,6 +3602,11 @@ where
 
         for collection_frontiers in self.storage_collections.active_collection_frontiers() {
             let id = collection_frontiers.id;
+            // Native read protection can retain physical history beyond the
+            // object's controller lifetime, but not its public frontier row.
+            if self.replica_owned && !self.collections.contains_key(&id) {
+                continue;
+            }
             let since = collection_frontiers.read_capabilities;
             let upper = collection_frontiers.write_frontier;
 
