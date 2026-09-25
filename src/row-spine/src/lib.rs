@@ -19,9 +19,10 @@ pub use self::dictionary::DatumSeq;
 pub use self::dictionary::builders::RowRowColPagedState;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBuilder, ArcOrdValSpine, RowBatcher, RowBuilder,
-    RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowColPagedBuilder, ValRowSpine,
+    ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBuilder, ArcOrdValSpine, FundedValRowSpine,
+    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine,
+    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
+    ValRowColPagedBuilder, ValRowSpine,
 };
 
 mod arc_batch;
@@ -86,6 +87,9 @@ mod spines {
         ArcBuilder<crate::dictionary::builders::RowBuilder<T, R, DC>>;
 
     pub type ValRowSpine<K, T, R> = Spine<ArcBatch<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
+    /// A `ValRowSpine` whose optional exertion is funded by its input.
+    pub type FundedValRowSpine<K, T, R> =
+        mz_timely_util::funded_spine::Spine<ArcBatch<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
     pub type ValRowBatcher<K, T, R> = KeyValBatcher<K, Row, T, R>;
     pub type ValRowBuilder<K, T, R> =
         ArcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;

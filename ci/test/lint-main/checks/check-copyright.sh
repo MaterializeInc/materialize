@@ -70,6 +70,7 @@ copyright_files=$(grep -vE \
     -e '^src/expr/src/scalar/snapshots/.*' \
     -e '^src/license-keys/src/license_keys/.*\.pub' \
     -e '^src/storage-types/src/snapshots/.*' \
+    -e '^src/timely-util/src/funded_spine/spine_fueled\.rs$' \
     -e '^src/repr/src/adt/snapshots/.*' \
     -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \
     -e '^src/fivetran-destination/proto/(common|destination_sdk)\.proto$' \
