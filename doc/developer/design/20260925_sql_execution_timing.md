@@ -55,8 +55,9 @@ This boundary also excludes real server work, not just client/network time.
 | --- | --- |
 | Read returning rows, including an empty result | All result rows have been encoded and handed to the response path |
 | Single-statement implicit write transaction | The implicit commit has completed successfully |
-| Write inside an explicit transaction | The statement has staged its changes. The later `COMMIT` reports its own duration |
-| DDL, session commands, transaction control | The command completes according to its SQL semantics |
+| Write inside an explicit transaction | The statement has finished executing and staging its changes, without waiting for a later commit |
+| Explicit `COMMIT` | The commit has completed successfully, measured from the start of executing `COMMIT` |
+| DDL, session commands, other transaction control | The command completes according to its SQL semantics |
 
 For DDL, completion does not mean that all ongoing work initiated by the command,
 such as maintaining a materialized view, has finished. For reads, it does not mean
@@ -72,8 +73,22 @@ not transport-independent measurements of query computation.
 
 Statement completion and transaction completion are distinct. A successful
 statement inside an open transaction is not a promise that the transaction will
-commit. A timing that includes an implicit commit must not claim success before
-that commit succeeds.
+commit.
+
+Inside an explicit transaction, each write reports how long executing and staging
+that write took. The final `COMMIT` reports how long applying the commit took,
+including waits required to complete it durably. Neither interval includes the
+client's pauses between statements. Do not measure from `BEGIN` to `COMMIT`, or
+from an individual write until the eventual commit: the client controls how long
+the transaction stays open. Commit cost belongs to `COMMIT`, not retroactively to
+the writes it commits.
+
+For a bare write in a single-statement implicit transaction, execution through
+successful implicit commit is a useful total: it covers completing the write,
+not just staging it. Keep commit-inclusive timing for implicit transactions,
+subject to the batch attribution and protocol-boundary constraints below. A
+timing that includes an implicit commit must not claim success before that
+commit succeeds.
 
 A batch with several statements and one implicit commit has no natural owner for
 the commit cost. The original proposal charges it to the last write. That is an
@@ -207,7 +222,11 @@ belonged to the same query. Compare with client timers such as `psql`'s `\timing
 as measures of user wait, not as ground truth for server execution.
 
 Exercise explicit and multi-statement implicit transactions, extended-protocol
-commit delays, errors at commit, and suspended portals. Check that timing never
+commit delays, errors at commit, and suspended portals. In an explicit
+transaction, inserting a client pause between a write and `COMMIT` must not
+inflate either duration. Delaying commit processing must affect the `COMMIT`
+duration, not the earlier write's staging duration. For a bare implicit write,
+that commit processing must be included in its total. Check that timing never
 lands on another statement or includes an unexplained client pause. Check both
 supported and older servers and notice filtering.
 
