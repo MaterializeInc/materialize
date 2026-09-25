@@ -338,7 +338,10 @@ materialized view `num_bids`.
 
 ## Why is Materialize using so much memory?
 
-[Arrangements](/overview/arrangements) take up most of Materialize's memory use.
+[Arrangements](/overview/arrangements) are typically the largest part of a
+busy cluster's memory use, and the part that the introspection views attribute
+to individual dataflows. The rest of a replica's memory, its process baseline,
+allocator overhead and buffers of data in flight, is not itemized per dataflow.
 Arrangements maintain indexes for data as it changes. These queries extract the
 numbers of records and the size of the arrangements. The reported records may
 exceed the number of logical records; the report reflects the uncompacted
