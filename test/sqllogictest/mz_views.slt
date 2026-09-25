@@ -193,6 +193,7 @@ mz_builtin_materialized_views
 mz_builtin_sources
 mz_builtin_tables
 mz_builtin_views
+mz_object_dependencies_raw
 
 query T multiline
 SELECT definition FROM mz_views WHERE name = 'mz_builtin_views'
