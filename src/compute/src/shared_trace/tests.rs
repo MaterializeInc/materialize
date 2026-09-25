@@ -101,11 +101,10 @@ impl<B: BatchReader + Clone> SharedReaderExt<B> for SharedReader<B> {
     /// timely worker thread: a worker blocked here cannot step, and on a single-worker test that
     /// includes the publisher it is waiting for.
     ///
-    /// Returns `None` when the snapshot cannot serve `time`, which is either the publisher closed
-    /// before `upper` passed `time`, or compaction has advanced `since` beyond `time` so the
-    /// accumulation at `time` is no longer accurate. The gate on `since` mirrors the single-runtime
-    /// peek path, which errors when the compaction frontier is beyond the read time rather than
-    /// returning coalesced results.
+    /// Returns `None` when compaction has advanced `since` beyond `time`, so the accumulation at
+    /// `time` is no longer accurate. The gate mirrors the single-runtime peek path, which errors
+    /// when the compaction frontier is beyond the read time rather than returning coalesced
+    /// results.
     ///
     /// Panics once the wait exceeds [`SNAPSHOT_TIMEOUT`], naming the frontiers it was waiting on.
     fn snapshot_at(&self, time: &B::Time) -> Option<TraceSnapshot<B>>
@@ -126,9 +125,6 @@ impl<B: BatchReader + Clone> SharedReaderExt<B> for SharedReader<B> {
                 return Some(TraceSnapshot {
                     chain: shared.chain(),
                 });
-            }
-            if shared.is_closed() {
-                return None;
             }
             assert!(
                 Instant::now() < deadline,
@@ -985,6 +981,7 @@ fn live_import_does_not_pin_merging() {
         // the reduce path do during construction, leaving the import's own hold as the only
         // registration.
         let handle = imported.handle();
+        let import_dataflow = worker.next_dataflow_index();
         worker.dataflow::<Timestamp, _, _>(|scope| {
             let arranged = handle.import_frontier_core(
                 scope.clone(),
@@ -1011,6 +1008,70 @@ fn live_import_does_not_pin_merging() {
              read hold is not following the stream on the physical axis, so the spine cannot merge \
              for as long as the import lives"
         );
+        // A live import never completes on its own, so drop it the way compute drops a dataflow.
+        worker.drop_dataflow(import_dataflow);
+    });
+}
+
+#[mz_ore::test]
+fn dropped_writer_leaves_imports_at_its_last_upper() {
+    use timely::dataflow::ProbeHandle;
+    use timely::dataflow::operators::Probe;
+
+    timely::execute_directly(move |worker| {
+        let writer_dataflow = worker.next_dataflow_index();
+        let (published, mut input, keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged = collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("writer oks");
+            (adopt_fresh(&arranged), input, arranged.trace.clone())
+        });
+        tick(
+            worker,
+            &mut input,
+            Timestamp::from(0_u64),
+            Timestamp::from(1_u64),
+        );
+
+        let handle = published.handle();
+        let probe = ProbeHandle::new();
+        let import_dataflow = worker.next_dataflow_index();
+        worker.dataflow::<Timestamp, _, _>(|scope| {
+            let arranged = handle.import_frontier_core(
+                scope.clone(),
+                "live import",
+                Antichain::from_elem(Timestamp::from(0_u64)),
+                Antichain::new(),
+            );
+            arranged.stream.probe_with(&probe);
+        });
+        drop(handle);
+        while probe.less_than(&Timestamp::from(1_u64)) {
+            worker.step();
+        }
+
+        // Drop the writer the way `drop_collection` does, the trace handle before the dataflow,
+        // while its input is still open at 1. Dropping the dataflow first would have the writer
+        // seal the still-live trace to the empty frontier, which is differential's own close.
+        drop(keep);
+        worker.drop_dataflow(writer_dataflow);
+        for _ in 0..100 {
+            worker.step();
+        }
+        probe.with_frontier(|frontier| {
+            assert_eq!(
+                frontier.to_vec(),
+                vec![Timestamp::from(1_u64)],
+                "the import must not claim the times past the writer's last upper"
+            )
+        });
+
+        worker.drop_dataflow(import_dataflow);
+        drop(input);
     });
 }
 

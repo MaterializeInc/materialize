@@ -96,8 +96,6 @@ struct State<B: BatchReader> {
     queues: Vec<Weak<ImportQueue<B>>>,
     /// Wakes the writer's arrange operator so a changed hold reaches the inner trace.
     writer_activator: Option<SyncActivator>,
-    /// Set when the writer drops. Readers then complete after draining what was published.
-    closed: bool,
 }
 
 impl<B: BatchReader> State<B> {
@@ -152,7 +150,6 @@ impl<B: BatchReader> Shared<B> {
                 remote_physical: MutableAntichain::new(),
                 queues: Vec::new(),
                 writer_activator: None,
-                closed: false,
             }),
         }
     }
@@ -175,11 +172,6 @@ impl<B: BatchReader> Shared<B> {
     pub fn frontiers(&self) -> (Antichain<B::Time>, Antichain<B::Time>) {
         let state = self.lock();
         (state.logical.clone(), state.upper.clone())
-    }
-
-    /// Whether the writer has dropped.
-    pub fn is_closed(&self) -> bool {
-        self.lock().closed
     }
 
     /// The meet of the readers' logical holds. Empty when no reader holds.
@@ -542,17 +534,12 @@ impl<Tr: Trace> Trace for SharedSpine<Tr> {
 
 impl<Tr: Trace> Drop for SharedSpine<Tr> {
     fn drop(&mut self) {
+        // NOTE: Readers keep the `upper` this trace last published rather than advancing to the
+        // empty frontier. A dropped writer says nothing about the times past its `upper`, and
+        // completing would present them as empty. An importing dataflow is dropped with
+        // `drop_dataflow`, which does not need its inputs to complete.
         for attachment in self.attachment.take() {
-            let live = {
-                let mut state = attachment.shared.lock();
-                state.closed = true;
-                state.writer_activator = None;
-                state.live_queues()
-            };
-            for queue in live {
-                queue.push([Replay::Frontier(Antichain::new())]);
-                queue.activate();
-            }
+            attachment.shared.lock().writer_activator = None;
         }
     }
 }
@@ -723,10 +710,6 @@ where
                 instructions.extend(state.chain.iter().cloned().map(Replay::Batch));
                 let seed = state.upper.clone();
                 instructions.push_back(Replay::Frontier(seed.clone()));
-                // A closed writer's terminal frontier has been and gone, so seed our own.
-                if state.closed {
-                    instructions.push_back(Replay::Frontier(Antichain::new()));
-                }
                 let queue = Arc::new(ImportQueue {
                     instructions: Mutex::new(instructions),
                     activator,
@@ -770,9 +753,9 @@ where
                                 hold.set_logical_compaction(acknowledged.borrow());
                                 hold.set_physical_compaction(acknowledged.borrow());
                             }
-                            // Bound the read at `until`, and complete on the writer's terminal empty
-                            // frontier. Otherwise track `upper`, keeping the stream frontier equal
-                            // to the trace's upper.
+                            // Bound the read at `until`, and complete on the empty frontier a closed
+                            // trace publishes. Otherwise track `upper`, keeping the stream frontier
+                            // equal to the trace's upper.
                             if frontier.is_empty() || PartialOrder::less_equal(&until, &frontier) {
                                 capabilities.downgrade(std::iter::empty::<B::Time>());
                                 hold = None;
