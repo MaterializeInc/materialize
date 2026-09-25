@@ -330,7 +330,10 @@ empty bucket would have made.
 
 ### Configuration
 
-Five dyncfgs, all readable per call so LaunchDarkly changes apply live:
+Five dyncfgs, all readable per call so LaunchDarkly changes apply live.
+One exception: an environmentd generation that has not been promoted yet,
+such as the new generation during a release rollout, applies LaunchDarkly
+changes only once promoted.
 
 | Name | Default | Purpose |
 | --- | --- | --- |
@@ -571,31 +574,6 @@ the warm pool, or a drained budget), which falls back to today's behavior
 and stays visible as `hedge_won_seconds` outliers and
 `hedges_skipped` increments.
 
-### Rollout results
-
-Cloud enabled hedging on staging and the canaries in late August 2026, on
-a first slice of customer environments on 2026-09-04, on most of them on
-2026-09-09, and everywhere on 2026-09-24. Nothing attributable to hedging
-showed up in correctness, memory, or restarts. Every hedge error
-coincided with a failure of the primary on the same process. Warm errors
-were transient connection resets (17 in about 7,300 process-days from
-2026-09-04), apart from a regional outage of the AWS credential service on
-2026-09-03 that failed the credential refresh of both clients.
-
-On the environments enabled on 2026-09-09, isolated gets slower than 4 s
-fell by about 70%, and those slower than 8 s from 29 to 1 in comparable
-two-week windows, while environments without the flag stayed flat. On the
-busy reference environment, all 21 gets slower than 2 s over 8.5 days were
-hedged, averaging 2.05 s end to end, and none caused a freshness blip,
-against 5 read-caused blips in 4.9 days before. About 90% of all wins
-landed in the 2 to 4 s bucket. The expected fire rate held on steady
-replicas, and the guards held the cost at about 1% extra gets where many
-gets were slow (see Bounding amplification).
-
-An environmentd generation that has not been promoted yet applies
-LaunchDarkly changes only at promotion, so a flag change made during a
-release rollout reaches the new generation at cutover.
-
 ## Open questions
 
 **Is the warmer worth its cost?** At the 20 second interval the sibling's
@@ -611,4 +589,4 @@ carry the sibling through a connect-path stall on sockets it established
 before the stall, since at 20 seconds every cycle reconnects and stalls
 along with the primary. The deciding evidence would be hedge wins in the 4
 to 8 s bucket or later that coincide with slow connects a warm pool would
-have avoided. So far there has been one such event (2026-09-04).
+have avoided.
