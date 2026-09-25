@@ -87,14 +87,19 @@ class Minio(K8sResource):
         return yaml.dump(deployment)
 
     def create_buckets(self, buckets: list[str]) -> None:
+        # NOTE: `mc` treats a path under an unknown alias as a local directory,
+        # so after a failed `mc alias set`, `mc mb myminio/<bucket>` reports
+        # success without creating a bucket. The service can refuse connections
+        # briefly even after the deployment is Available, so retry the alias,
+        # and fail the pod if `mc mb` fails.
         cmds = [
-            f"mc alias set myminio http://minio-service.{self.namespace()}:9000 minio minio123"
+            f"until mc alias set myminio http://minio-service.{self.namespace()}:9000 minio minio123; do sleep 1; done"
         ]
         for bucket in buckets:
             cmds.extend(
                 [
                     f"mc rm -r --force myminio/{bucket}",
-                    f"mc mb myminio/{bucket}",
+                    f"mc mb --ignore-existing myminio/{bucket} || exit 1",
                 ]
             )
         self.kubectl(

@@ -39,6 +39,13 @@ spec:
         ports:
         - containerPort: 9000
           hostPort: 9000
+        # Without a readiness probe the deployment reports Available as soon as
+        # the container starts, before MinIO accepts connections.
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          periodSeconds: 1
         # Mount the volume into the pod
         volumeMounts:
         - name: storage # must match the volume name, above
