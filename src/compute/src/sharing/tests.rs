@@ -189,6 +189,65 @@ fn alias_refused_once_a_reader_holds_its_own_point() {
 }
 
 #[mz_ore::test]
+fn publish_traces_backs_a_reader_point_without_operators() {
+    let target = GlobalId::User(1);
+    let reexport = GlobalId::User(2);
+    let registry = ArrangementSharingRegistry::new();
+    // A reader bound the re-export's id first, so the re-export cannot alias the target's point.
+    let _reader_slot = registry.get_or_create(reexport, 0, 1);
+    let registry_in = registry.clone();
+    timely::execute_directly(move |worker| {
+        let (oks, errs, mut oks_input, mut errs_input) =
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (oks_input, oks) = scope.new_collection::<(Row, Row), Diff>();
+                let oks = oks.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("test oks");
+                let (errs_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let errs = KeyCollection::from(errs).mz_arrange::<
+                    ColumnationChunker<_>,
+                    ErrBatcher<_, _>,
+                    ErrBuilder<_, _>,
+                    ErrSpine<_, _>,
+                >("test errs");
+                registry_in.publish(target, &oks, &errs);
+                (oks.trace, errs.trace, oks_input, errs_input)
+            });
+
+        // The re-export's dataflow must build the same graph on every worker whether or not a
+        // reader got there first, so publishing into the reader's point builds nothing.
+        let before = worker.peek_identifier();
+        worker.dataflow::<Timestamp, _, _>(|_| {});
+        let empty = worker.peek_identifier() - before;
+        let before = worker.peek_identifier();
+        worker.dataflow::<Timestamp, _, _>(|scope| {
+            registry_in.publish_traces(reexport, scope.worker(), &oks, &errs);
+        });
+        assert_eq!(worker.peek_identifier() - before, empty);
+
+        for (k, v) in test_rows() {
+            oks_input.update((k, v), Diff::ONE);
+        }
+        oks_input.advance_to(Timestamp::from(1_u64));
+        oks_input.flush();
+        errs_input.advance_to(Timestamp::from(1_u64));
+        errs_input.flush();
+        drop((oks_input, errs_input));
+        while worker.step() {}
+        drop((oks, errs));
+    });
+
+    let (oks, _) = registry.handles(&reexport, 0).expect("re-export published");
+    assert_eq!(
+        read_rows(&oks, Timestamp::from(0_u64)),
+        expected_rows(&test_rows())
+    );
+}
+
+#[mz_ore::test]
 fn alias_standing_holds_follow_the_target_then_the_aliases_meet() {
     let target = GlobalId::User(1);
     let alias_a = GlobalId::User(2);

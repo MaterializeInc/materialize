@@ -31,8 +31,11 @@ use differential_dataflow::operators::arrange::Arranged;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::PartialOrder;
 use timely::progress::Antichain;
+use timely::worker::Worker;
 
-use crate::shared_trace::{PublishArrangement, Published, SharedErrsHandle, SharedOksHandle};
+use crate::shared_trace::{
+    PublishArrangement, Published, SharedErrsHandle, SharedOksHandle, adopt_trace,
+};
 use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent, RowRowSpine};
 
 /// The published `oks`/`errs` arrangements of one maintained index on one worker.
@@ -220,6 +223,31 @@ impl ArrangementSharingRegistry {
         oks.adopt(&slot.oks, move || registry.notify(id, worker_index));
         let registry = self.clone();
         errs.adopt(&slot.errs, move || registry.notify(id, worker_index));
+        self.notify(id, worker_index);
+    }
+
+    /// Publishes the traces `oks` and `errs` under `id`, like [`Self::publish`], without an
+    /// arrangement rendered for them. `worker` must be the worker that maintains the traces.
+    ///
+    /// Builds no operators, so a caller may publish on some workers of a dataflow and not on
+    /// others without their dataflow graphs diverging.
+    pub(crate) fn publish_traces(
+        &self,
+        id: GlobalId,
+        worker: &Worker,
+        oks: &RowRowAgent<Timestamp, Diff>,
+        errs: &ErrAgent<Timestamp, Diff>,
+    ) {
+        let worker_index = worker.index();
+        let slot = self.get_or_create(id, worker_index, worker.peers());
+        let registry = self.clone();
+        adopt_trace(oks, worker, &slot.oks, move || {
+            registry.notify(id, worker_index)
+        });
+        let registry = self.clone();
+        adopt_trace(errs, worker, &slot.errs, move || {
+            registry.notify(id, worker_index)
+        });
         self.notify(id, worker_index);
     }
 
