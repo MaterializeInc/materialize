@@ -297,29 +297,26 @@ async fn check_ddl_changes(
     // allocated during sequencing/planning but not yet committed to the catalog.
     // Furthermore, these IDs might never be committed to the catalog because
     // their sequencing has been aborted.
-    let new_replicas = tx
-        .get_cluster_replicas()
-        .filter_map(|replica| match replica.replica_id {
-            ReplicaId::User(_) if !initial_user_replicas.contains(&replica.replica_id) => {
-                Some(replica)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let mut current_replicas = BTreeSet::new();
+    let mut new_replicas = Vec::new();
+    for replica in tx.get_cluster_replicas() {
+        current_replicas.insert(replica.replica_id);
+        if matches!(replica.replica_id, ReplicaId::User(_))
+            && !initial_user_replicas.contains(&replica.replica_id)
+        {
+            new_replicas.push(replica);
+        }
+    }
 
-    let new_objects = tx
-        .get_items()
-        .filter_map(|item| match item.id {
-            CatalogItemId::User(_) if !initial_user_items.contains(&item.id) => Some(item),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let mut current_items = BTreeSet::new();
+    let mut new_objects = Vec::new();
+    for item in tx.get_items() {
+        current_items.insert(item.id);
+        if item.id.is_user() && !initial_user_items.contains(&item.id) {
+            new_objects.push(item);
+        }
+    }
 
-    let current_items = tx.get_items().map(|item| item.id).collect();
-    let current_replicas = tx
-        .get_cluster_replicas()
-        .map(|replica| replica.replica_id)
-        .collect();
     let dropped_items = initial_user_items
         .difference(&current_items)
         .collect::<Vec<_>>();
