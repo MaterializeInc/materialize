@@ -663,11 +663,12 @@ impl Listeners {
         // Perform preflight checks.
         //
         // Preflight checks determine whether to boot in read-only mode or not.
-        let read_only = preflight::preflight_0dt(
+        let leader_generation = preflight::preflight_0dt(
             openable_adapter_storage.as_mut(),
             config.controller.deploy_generation,
         )
         .await?;
+        let read_only = leader_generation.is_some();
 
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
@@ -676,7 +677,7 @@ impl Listeners {
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
 
-        let (caught_up_trigger, bootstrapped) = if read_only {
+        let (caught_up_trigger, bootstrapped) = if let Some(leader_generation) = leader_generation {
             let (caught_up_trigger, caught_up_receiver) = mz_ore::channel::trigger::channel();
             let (bootstrapped, bootstrapped_receiver) = tokio::sync::oneshot::channel();
             let catchup_config = CatchupConfig {
@@ -692,7 +693,10 @@ impl Listeners {
                 ddl_check_interval: with_0dt_deployment_ddl_check_interval,
             };
             preflight::spawn_catchup(catchup_config, caught_up_receiver, bootstrapped_receiver);
-            (Some(caught_up_trigger), Some(bootstrapped))
+            (
+                Some((leader_generation, caught_up_trigger)),
+                Some(bootstrapped),
+            )
         } else {
             (None, None)
         };

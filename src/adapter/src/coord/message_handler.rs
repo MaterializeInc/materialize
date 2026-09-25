@@ -1006,6 +1006,33 @@ impl Coordinator {
     async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
+        // Leader observations are only evidence for 0dt catch-up. They must
+        // never change this generation's statuses, history, or notices, even
+        // after the catch-up context has been consumed.
+        if event.deploy_generation != self.controller.deploy_generation() {
+            if let Some(ctx) = &mut self.caught_up_check {
+                if event.deploy_generation == ctx.leader_generation
+                    && self
+                        .cluster_replica_statuses
+                        .try_get_cluster_replica_statuses(event.cluster_id, event.replica_id)
+                        .is_some()
+                {
+                    let since = if event.status == ClusterStatus::Online {
+                        event
+                            .healthy_since
+                            .and_then(|time| u64::try_from(time.timestamp_millis()).ok())
+                    } else {
+                        None
+                    };
+                    ctx.leader_health
+                        .entry(event.replica_id)
+                        .or_default()
+                        .insert(event.process_id, since);
+                }
+            }
+            return;
+        }
+
         if let Some(segment_client) = &self.segment_client {
             let env_id = &self.catalog().config().environment_id;
             let mut properties = json!({
