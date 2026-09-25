@@ -24,7 +24,9 @@ EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "--"
 LATEST_IMAGE_TAG = "latest"
 LEGACY_IMAGE_TAG_COMMIT_PREFIX = "devel-"
-MZ_GHCR_DEFAULT = "1" if ui.env_is_truthy("CI") else "0"
+# TODO: Default to "1" again once CI's GHCR token (i2 `github_ghcr_token`) is
+# rotated. GHCR rejects it, which fails every CI image build.
+MZ_GHCR_DEFAULT = "0"
 
 # Examples:
 # * v0.114.0
@@ -303,9 +305,14 @@ def _select_image_name_from_candidates(
     return image_name_candidates[0]
 
 
+def ghcr_enabled() -> bool:
+    """Whether to pull images from GHCR and mirror pushed images to it.
+
+    Set by `MZ_GHCR`. When disabled, images are pulled from and pushed to
+    Docker Hub only, and nothing logs in to GHCR.
+    """
+    return ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
+
+
 def image_registry() -> str:
-    return (
-        "ghcr.io/materializeinc/materialize"
-        if ui.env_is_truthy("MZ_GHCR", "1")
-        else "materialize"
-    )
+    return "ghcr.io/materializeinc/materialize" if ghcr_enabled() else "materialize"
