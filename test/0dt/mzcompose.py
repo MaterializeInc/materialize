@@ -3147,6 +3147,61 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
             """))
 
 
+def workflow_ddl_detection_drops(c: Composition) -> None:
+    """Drop-only DDL must restart the follower, for both items and replicas."""
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE TABLE dropped_table (a int);
+        CREATE CLUSTER dropped_replica REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+        """,
+        service="mz_old",
+    )
+    # Keep DDL polling active regardless of how quickly the follower catches up.
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            environment_extra=["FAILPOINTS=0dt_caught_up_check=return"],
+            default_replication_factor=2,
+        )
+    ):
+        c.up("mz_new")
+        for statement, reason in [
+            ("DROP TABLE dropped_table", "Dropped objects:"),
+            ("DROP CLUSTER REPLICA dropped_replica.r1", "Dropped replicas:"),
+        ]:
+            # Wait for the follower to finish its current boot before dropping.
+            c.sql("SELECT 1", service="mz_new")
+            logs = c.invoke("logs", "mz_new", capture=True).stdout
+            boots = logs.count("waiting for deployment to be caught up")
+            assert _leader_status(c, "mz_new") == DeploymentStatus.INITIALIZING.value
+            c.sql(statement, service="mz_old")
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                logs = c.invoke("logs", "mz_new", capture=True).stdout
+                if (
+                    reason in logs
+                    and logs.count("waiting for deployment to be caught up") > boots
+                ):
+                    break
+                time.sleep(0.5)
+            else:
+                raise AssertionError(f"follower did not restart after {statement}")
+            c.up("mz_new")
+
+
 def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
     """Verify that temporary items do not count as reactable DDL in preflight.
 

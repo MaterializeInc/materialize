@@ -731,7 +731,7 @@ impl Listeners {
         };
 
         let bootstrapped = match bootstrapped {
-            Some(tx) => Some((tx, preflight::get_next_ids(adapter_storage.as_mut()).await?)),
+            Some(tx) => Some((tx, preflight::get_user_ids(adapter_storage.as_mut()).await?)),
             None => None,
         };
 
