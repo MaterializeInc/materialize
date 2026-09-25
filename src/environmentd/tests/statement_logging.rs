@@ -1062,6 +1062,10 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     let mut ddl = server.connect_internal(postgres::NoTls).unwrap();
 
+    // Pgwire Sync commits implicit transactions through the coordinator, even
+    // for constant queries. Keep those round trips outside the measured window.
+    client.batch_execute("BEGIN").unwrap();
+
     // The session cache is weak. Keep its planning-equivalent allocation alive
     // when catalog_mut() uses Arc::make_mut before entering the failpoint.
     let catalog = server.server.runtime().block_on(
@@ -1095,6 +1099,7 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
     // waiting for completion so retries can catch up with peer publications.
     fail::remove("catalog_transact");
     stall.join().unwrap();
+    client.batch_execute("COMMIT").unwrap();
     drop(catalog);
 
     let mut internal = server.connect_internal(postgres::NoTls).unwrap();
