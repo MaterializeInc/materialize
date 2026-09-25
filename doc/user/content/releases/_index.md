@@ -20,6 +20,29 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.44.0
+*Released to Materialize Cloud: 2026-10-01* <br>
+*Released to Materialize Self-Managed: 2026-10-02* <br>
+
+### Improvements {#v26.44-improvements}
+- **Hedged reads from object storage**: A read from object storage that is still outstanding after 2 seconds is now retried on a second, independent connection with the first response winning, which reduced reads slower than 4 seconds by about 70% in Materialize Cloud, at a cost of roughly 1% extra reads; set `persist_blob_hedged_get_enabled` to `false` to turn it off.
+- **Dynamic balancerd configuration for Self-Managed**: Pointing `spec.balancerdConfigmapName` on a `Materialize` resource, or `spec.configmapName` on a standalone `Balancer`, at a ConfigMap you own containing `config.json` lets you change balancerd settings such as `balancerd_max_connections` without restarting balancer pods, with balancerd rereading the file about once a second after Kubernetes propagates an update.
+- **Connection limits in balancerd count connections from accept**: `balancerd_max_connections` now counts every connection from the moment it is accepted rather than only those that completed the startup sequence, so a connection over the limit is closed rather than answered with an error, and the new `balancerd_pre_resolved_timeout` (default 60 seconds, `0` disables) closes a connection that has not finished TLS negotiation, startup, and authentication within it.
+- **`uuid` columns in Iceberg sinks**: An Iceberg sink now creates `uuid` columns as Iceberg `string`, in the lowercase hyphenated form, rather than `fixed[16]`, so a sink can target a catalog with no fixed-width binary type such as Unity Catalog; a table already created with a `fixed[16]` column stays writable.
+- **Longer retention for replica hydration history**: `mz_internal.mz_replica_hydration_history` now keeps completed hydration episodes for 120 days on its own retention setting, while `mz_internal.mz_object_hydration_history` stays at 30 days, so a longer window of replica history is available for capacity planning.
+- **PostgreSQL sources are identifiable upstream**: Connections a PostgreSQL source opens to the upstream database, including its replication connection, now set `application_name` to `materialize`, so you can pick them out in `pg_stat_activity`.
+
+### Agent Skills {#v26.44-agent-skills}
+- **`materialize` plugin**: You can now install every Materialize agent skill at once with `/plugin install materialize@materialize` in Claude Code or `codex plugin add materialize@materialize` in Codex, and update them all in one step.
+- **`mz-` skill names**: The Materialize agent skills are renamed to the `mz-` prefix — `materialize-dbt` is now `mz-dbt` and `mcp-developer-analysis` is now `mz-health-check`, for example — so if you installed them with `npx skills`, remove the old copies so each skill appears only once.
+- **`mz-health-check`**: The health check now reports materialized views on clusters with no replicas, which stop advancing and hold back compaction of every input they read, so their storage keeps growing.
+
+### Bug Fixes {#v26.44-bug-fixes}
+- Fixed a panic in PostgreSQL sources when the replication stream carried messages committed before Materialize read a table's schema, which may have described an incompatible shape; each table now records the upstream LSN its schema was read at and ignores replication messages from before it.
+- Fixed a security vulnerability in the `postgres-protocol` dependency (GHSA-5x78-73v4-xg6w), where a malicious PostgreSQL server could exhaust client CPU by supplying an unbounded SCRAM iteration count during authentication; iteration counts above 2,000,000 are now rejected.
+- Fixed a security vulnerability in the `imbl` dependency (RUSTSEC-2026-0292), a double free or use-after-free in the chunk and inline-array removal paths when an element's `Drop` panics.
+- Fixed `dbt-materialize` running unit tests on the session's default cluster instead of the cluster configured in the dbt profile.
+
 ## v26.42.0
 *Released to Materialize Self-Managed: 2026-09-18* <br>
 
