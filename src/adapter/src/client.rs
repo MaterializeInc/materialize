@@ -825,9 +825,15 @@ impl SessionClient {
         // the obligation going with it. See `ExecutionLogging`.
         let mut logging = ExecutionLogging::adopt(outer_ctx_extra, &self.peek_client);
 
-        let result = self
-            .execute_attempts(portal_name, &mut logging, cancel_future, execute_started)
-            .await;
+        // Frontend sequencing carries a large future. Keep that state out of
+        // callers' connection futures and the stack frames used to poll them.
+        let result = Box::pin(self.execute_attempts(
+            portal_name,
+            &mut logging,
+            cancel_future,
+            execute_started,
+        ))
+        .await;
 
         logging.retire(&result);
 
