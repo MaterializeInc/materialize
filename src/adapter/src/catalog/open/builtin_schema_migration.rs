@@ -37,11 +37,11 @@ use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
-    MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION,
-    MZ_OBJECT_HYDRATION_HISTORY, MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION,
-    MZ_REPLICA_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION,
+    MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION, MZ_OBJECT_HYDRATION_HISTORY,
+    MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION, MZ_REPLICA_HYDRATION_HISTORY,
+    MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
@@ -888,6 +888,10 @@ impl Migration {
             assert_ne!(
                 &*MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, object,
                 "mz_cluster_replica_frontiers cannot be migrated or else the 0dt caught-up gate loses its live-frontier reference"
+            );
+            assert_ne!(
+                &*MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION, object,
+                "mz_compute_hydration_times cannot be migrated or else the 0dt caught-up gate loses its leader-hydration reference"
             );
 
             let Some(object_info) = self.system_objects.get(object) else {
