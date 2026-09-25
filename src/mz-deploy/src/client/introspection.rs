@@ -24,6 +24,7 @@ use crate::project::SchemaQualifier;
 use crate::project::ir::object_id::ObjectId;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
+use tokio_postgres::Row;
 use tokio_postgres::types::ToSql;
 
 /// A sink that depends on an object in a schema being dropped.
@@ -39,6 +40,64 @@ pub struct DependentSink {
     pub dependency_schema: String,
     pub dependency_name: String,
     pub dependency_type: String,
+}
+
+/// Encode `values` as a Postgres text array literal.
+///
+/// Materialize's pgwire cannot decode an array bind parameter, so a query that
+/// matches against a set passes one text parameter and casts it back with
+/// `$1::text::text[]`. Every element is quoted so that a value containing `,`,
+/// `{`, `}`, or the word `NULL` survives as itself rather than being read as
+/// array syntax.
+fn array_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    let mut literal = String::from("{");
+    for (i, value) in values.into_iter().enumerate() {
+        if i > 0 {
+            literal.push(',');
+        }
+        literal.push('"');
+        for ch in value.chars() {
+            if matches!(ch, '"' | '\\') {
+                literal.push('\\');
+            }
+            literal.push(ch);
+        }
+        literal.push('"');
+    }
+    literal.push('}');
+    literal
+}
+
+/// Group rows by their `name` column, preserving the query's row order within
+/// each group.
+fn group_by_name<T>(rows: &[Row], mut value: impl FnMut(&Row) -> T) -> BTreeMap<String, Vec<T>> {
+    let mut grouped: BTreeMap<String, Vec<T>> = BTreeMap::new();
+    for row in rows {
+        grouped.entry(row.get("name")).or_default().push(value(row));
+    }
+    grouped
+}
+
+/// The subset of `names` that exist in `catalog_table`.
+async fn existing_names(
+    client: &Client,
+    catalog_table: &str,
+    names: &[&str],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let query = format!(
+        "SELECT o.name FROM {} o WHERE o.name = ANY($1::text::text[])",
+        catalog_table
+    );
+
+    let rows = client
+        .query(&query, &[&array_literal(names.iter().copied())])
+        .await?;
+
+    Ok(rows.iter().map(|row| row.get("name")).collect())
 }
 
 /// Check if a schema exists in the specified database.
@@ -61,17 +120,43 @@ pub(super) async fn schema_exists(
     Ok(row.get("exists"))
 }
 
-/// Check if a cluster exists.
-pub(super) async fn cluster_exists(client: &Client, name: &str) -> Result<bool, ConnectionError> {
+/// Get the clusters among `names` that exist, keyed by name.
+pub(super) async fn get_clusters(
+    client: &Client,
+    names: &[&str],
+) -> Result<BTreeMap<String, Cluster>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = r#"
-        SELECT EXISTS(
-            SELECT 1 FROM mz_catalog.mz_clusters WHERE name = $1
-        ) AS exists
+        SELECT
+            c.id,
+            c.name,
+            c.managed,
+            c.size,
+            c.replication_factor::bigint AS replication_factor
+        FROM mz_catalog.mz_clusters c
+        WHERE c.name = ANY($1::text::text[])
     "#;
 
-    let row = client.query_one(query, &[&name]).await?;
+    let rows = client
+        .query(query, &[&array_literal(names.iter().copied())])
+        .await?;
 
-    Ok(row.get("exists"))
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let cluster = Cluster {
+                id: row.get("id"),
+                name: row.get("name"),
+                managed: row.get("managed"),
+                size: row.get("size"),
+                replication_factor: row.get("replication_factor"),
+            };
+            (cluster.name.clone(), cluster)
+        })
+        .collect())
 }
 
 /// Get a cluster by name.
@@ -117,6 +202,27 @@ pub(super) async fn get_cluster_create_sql(
     let query = format!("SHOW CREATE CLUSTER {}", quote_identifier(name));
     let rows = client.query(&query, &[]).await?;
     Ok(rows.first().map(|row| row.get("create_sql")))
+}
+
+/// Get the `CREATE CLUSTER` statement for each of `names` that exists.
+///
+/// `SHOW CREATE CLUSTER` names one cluster per statement, so this issues one
+/// query per cluster. Running them concurrently keeps the phase one round trip
+/// deep rather than one per cluster.
+pub(super) async fn get_cluster_create_sqls(
+    client: &Client,
+    names: &[&str],
+) -> Result<BTreeMap<String, String>, ConnectionError> {
+    let reads = names.iter().map(|name| async move {
+        let sql = get_cluster_create_sql(client, name).await?;
+        Ok::<_, ConnectionError>(sql.map(|sql| (name.to_string(), sql)))
+    });
+
+    Ok(futures::future::try_join_all(reads)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// List all clusters.
@@ -232,20 +338,12 @@ pub(super) async fn get_cluster_config(
     }
 }
 
-/// Check if a network policy exists.
-pub(super) async fn network_policy_exists(
+/// The subset of `names` that exist as network policies.
+pub(super) async fn existing_network_policies(
     client: &Client,
-    name: &str,
-) -> Result<bool, ConnectionError> {
-    let query = r#"
-        SELECT EXISTS(
-            SELECT 1 FROM mz_catalog.mz_network_policies WHERE name = $1
-        ) AS exists
-    "#;
-
-    let row = client.query_one(query, &[&name]).await?;
-
-    Ok(row.get("exists"))
+    names: &[&str],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    existing_names(client, "mz_catalog.mz_network_policies", names).await
 }
 
 /// Check if a role exists.
@@ -261,41 +359,62 @@ pub(super) async fn role_exists(client: &Client, name: &str) -> Result<bool, Con
     Ok(row.get("exists"))
 }
 
-/// Get the members granted to a role.
+/// The subset of `names` that exist as roles.
+pub(super) async fn existing_roles(
+    client: &Client,
+    names: &[&str],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    existing_names(client, "mz_catalog.mz_roles", names).await
+}
+
+/// Get the members granted to each of `names`, keyed by role name.
 pub(super) async fn get_role_members(
     client: &Client,
-    role_name: &str,
-) -> Result<Vec<String>, ConnectionError> {
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<String>>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = r#"
-        SELECT m.name AS member
+        SELECT r.name, m.name AS member
         FROM mz_catalog.mz_role_members rm
         JOIN mz_catalog.mz_roles r ON r.id = rm.role_id
         JOIN mz_catalog.mz_roles m ON m.id = rm.member
-        WHERE r.name = $1
-        ORDER BY m.name
+        WHERE r.name = ANY($1::text::text[])
+        ORDER BY r.name, m.name
     "#;
 
-    let rows = client.query(query, &[&role_name]).await?;
+    let rows = client
+        .query(query, &[&array_literal(names.iter().copied())])
+        .await?;
 
-    Ok(rows.iter().map(|row| row.get("member")).collect())
+    Ok(group_by_name(&rows, |row| row.get("member")))
 }
 
-/// Get session default parameter names for a role.
+/// Get the session default parameter names set on each of `names`, keyed by
+/// role name.
 pub(super) async fn get_role_parameters(
     client: &Client,
-    role_name: &str,
-) -> Result<Vec<String>, ConnectionError> {
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<String>>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = r#"
-        SELECT rp.parameter_name
+        SELECT r.name, rp.parameter_name
         FROM mz_catalog.mz_role_parameters rp
         JOIN mz_catalog.mz_roles r ON r.id = rp.role_id
-        WHERE r.name = $1
-        ORDER BY rp.parameter_name
+        WHERE r.name = ANY($1::text::text[])
+        ORDER BY r.name, rp.parameter_name
     "#;
 
-    let rows = client.query(query, &[&role_name]).await?;
+    let rows = client
+        .query(query, &[&array_literal(names.iter().copied())])
+        .await?;
 
-    Ok(rows.iter().map(|row| row.get("parameter_name")).collect())
+    Ok(group_by_name(&rows, |row| row.get("parameter_name")))
 }
 
 /// Get the current Materialize user/role.
@@ -1098,6 +1217,28 @@ pub(super) async fn get_connection_create_sql(
     Ok(rows.first().map(|row| row.get("create_sql")))
 }
 
+/// Get the `CREATE CONNECTION` statement for each of `connections` that exists.
+///
+/// `SHOW CREATE CONNECTION` names one connection per statement, so this issues
+/// one query per connection. Running them concurrently keeps the phase one
+/// round trip deep rather than one per connection.
+pub(super) async fn get_connection_create_sqls(
+    client: &Client,
+    connections: &BTreeSet<ObjectId>,
+) -> Result<BTreeMap<ObjectId, String>, ConnectionError> {
+    let reads = connections.iter().map(|id| async move {
+        let sql = get_connection_create_sql(client, id.expect_database(), id.schema(), id.object())
+            .await?;
+        Ok::<_, ConnectionError>(sql.map(|sql| (id.clone(), sql)))
+    });
+
+    Ok(futures::future::try_join_all(reads)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
 impl IntrospectionClient<'_> {
     /// Get the current Materialize user/role.
     pub async fn get_current_user(&self) -> Result<String, ConnectionError> {
@@ -1260,9 +1401,12 @@ impl IntrospectionClient<'_> {
         schema_exists(self.client, database, schema).await
     }
 
-    /// Check if a network policy exists.
-    pub async fn network_policy_exists(&self, name: &str) -> Result<bool, ConnectionError> {
-        network_policy_exists(self.client, name).await
+    /// The subset of `names` that exist as network policies.
+    pub async fn existing_network_policies(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeSet<String>, ConnectionError> {
+        existing_network_policies(self.client, names).await
     }
 
     /// Check if a role exists.
@@ -1270,19 +1414,37 @@ impl IntrospectionClient<'_> {
         role_exists(self.client, name).await
     }
 
-    /// Get the members granted to a role.
-    pub async fn get_role_members(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
-        get_role_members(self.client, name).await
+    /// The subset of `names` that exist as roles.
+    pub async fn existing_roles(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeSet<String>, ConnectionError> {
+        existing_roles(self.client, names).await
     }
 
-    /// Get session default parameter names for a role.
-    pub async fn get_role_parameters(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
-        get_role_parameters(self.client, name).await
+    /// Get the members granted to each of `names`, keyed by role name.
+    pub async fn get_role_members(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<String>>, ConnectionError> {
+        get_role_members(self.client, names).await
     }
 
-    /// Check if a cluster exists.
-    pub async fn cluster_exists(&self, name: &str) -> Result<bool, ConnectionError> {
-        cluster_exists(self.client, name).await
+    /// Get the session default parameter names set on each of `names`, keyed by
+    /// role name.
+    pub async fn get_role_parameters(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<String>>, ConnectionError> {
+        get_role_parameters(self.client, names).await
+    }
+
+    /// Get the clusters among `names` that exist, keyed by name.
+    pub async fn get_clusters(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Cluster>, ConnectionError> {
+        get_clusters(self.client, names).await
     }
 
     /// Get a cluster by name.
@@ -1290,12 +1452,12 @@ impl IntrospectionClient<'_> {
         get_cluster(self.client, name).await
     }
 
-    /// Get the canonical `CREATE CLUSTER` SQL for an existing managed cluster.
-    pub async fn get_cluster_create_sql(
+    /// Get the canonical `CREATE CLUSTER` SQL for each of `names` that exists.
+    pub async fn get_cluster_create_sqls(
         &self,
-        name: &str,
-    ) -> Result<Option<String>, ConnectionError> {
-        get_cluster_create_sql(self.client, name).await
+        names: &[&str],
+    ) -> Result<BTreeMap<String, String>, ConnectionError> {
+        get_cluster_create_sqls(self.client, names).await
     }
 
     /// List all clusters.
@@ -1338,14 +1500,12 @@ impl IntrospectionClient<'_> {
         get_database_object_grants(self.client, catalog_table, database, schema, name).await
     }
 
-    /// Get the `CREATE CONNECTION` SQL for an existing connection.
-    pub async fn get_connection_create_sql(
+    /// Get the `CREATE CONNECTION` SQL for each of `connections` that exists.
+    pub async fn get_connection_create_sqls(
         &self,
-        database: &str,
-        schema: &str,
-        name: &str,
-    ) -> Result<Option<String>, ConnectionError> {
-        get_connection_create_sql(self.client, database, schema, name).await
+        connections: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeMap<ObjectId, String>, ConnectionError> {
+        get_connection_create_sqls(self.client, connections).await
     }
 
     /// Get default privilege grants for a cluster by name.
@@ -1382,5 +1542,37 @@ impl IntrospectionClient<'_> {
             object_type,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::array_literal;
+
+    #[mz_ore::test]
+    fn test_array_literal_quotes_every_element() {
+        assert_eq!(array_literal(["a", "b"]), r#"{"a","b"}"#);
+        let empty: [&str; 0] = [];
+        assert_eq!(array_literal(empty), "{}");
+    }
+
+    /// A name that would otherwise be read as array syntax has to survive the
+    /// encoding: an unquoted `,` or `}` would split or truncate the array, and
+    /// `NULL` would decode as a null element rather than the literal name.
+    #[mz_ore::test]
+    fn test_array_literal_neutralizes_array_syntax() {
+        assert_eq!(
+            array_literal(["a,b", "{c}", "", "NULL", " d "]),
+            r#"{"a,b","{c}","","NULL"," d "}"#
+        );
+    }
+
+    /// `"` and `\` are the two characters an array literal escapes with `\`, so
+    /// each has to be escaped to survive as itself.
+    #[mz_ore::test]
+    fn test_array_literal_escapes_quote_and_backslash() {
+        assert_eq!(array_literal([r#"say "hi""#]), r#"{"say \"hi\""}"#);
+        assert_eq!(array_literal([r"back\slash"]), r#"{"back\\slash"}"#);
+        assert_eq!(array_literal([r#"\""#]), r#"{"\\\""}"#);
     }
 }
