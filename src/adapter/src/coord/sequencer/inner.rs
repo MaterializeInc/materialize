@@ -251,10 +251,9 @@ impl Coordinator {
             } else {
                 cancel_enabled = false
             };
-            let next = stage
-                .stage(self, &mut ctx)
-                .instrument(parent_span.clone())
-                .await;
+            // Stage implementations can contain large optimizer and DDL futures.
+            // Keep that state out of the generic plan dispatcher's allocation.
+            let next = Box::pin(stage.stage(self, &mut ctx).instrument(parent_span.clone())).await;
             let res = return_if_err!(next, ctx);
             stage = match res {
                 StageResult::Handle(handle) => {
