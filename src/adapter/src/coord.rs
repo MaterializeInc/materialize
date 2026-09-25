@@ -1351,10 +1351,9 @@ pub struct Config {
     /// and should go away once we have proper orchestration during upgrades.
     pub read_only_controllers: bool,
 
-    /// A trigger that signals that the current deployment has caught up with a
-    /// previous deployment. Only used during 0dt deployment, while in read-only
-    /// mode.
-    pub caught_up_trigger: Option<Trigger>,
+    /// The leader generation and a trigger signaling that this deployment has
+    /// caught up with it. Only used during 0dt deployment, while read-only.
+    pub caught_up_trigger: Option<(u64, Trigger)>,
 
     pub helm_chart_version: Option<String>,
     pub license_key: ValidatedLicenseKey,
@@ -4127,7 +4126,11 @@ impl Coordinator {
     ) -> LocalBoxFuture<'static, ()> {
         async move {
             // Watcher that listens for and reports cluster service status changes.
-            let mut cluster_events = self.controller.events_stream();
+            let leader_generation = self
+                .caught_up_check
+                .as_ref()
+                .map(|ctx| ctx.leader_generation);
+            let mut cluster_events = self.controller.events_stream(leader_generation);
             let last_message = Arc::new(Mutex::new(LastMessage {
                 kind: "none",
                 stmt: None,
@@ -5292,7 +5295,7 @@ pub fn serve(
         };
 
         let clusters_caught_up_check =
-            clusters_caught_up_trigger.map(|trigger| {
+            clusters_caught_up_trigger.map(|(leader_generation, trigger)| {
                 let mut exclude_collections: BTreeSet<GlobalId> =
                     new_builtin_collections.iter().copied().collect();
 
@@ -5333,7 +5336,8 @@ pub fn serve(
                     trigger,
                     exclude_collections,
                     cluster_stability: BTreeMap::new(),
-                    replica_created_at: None,
+                    leader_generation,
+                    leader_health: BTreeMap::new(),
                 }
             });
 

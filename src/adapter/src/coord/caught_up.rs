@@ -21,7 +21,8 @@
 //! over right then drops us straight into a crashing replica. On top of the
 //! per-tick caught-up classification we therefore run a stability gate. A
 //! cluster must be caught-up now and have all replicas healthy for a
-//! configurable period before we report it ready. Any disruption
+//! configurable period, capped by their leader counterparts' healthy-run ages
+//! at the incoming runs' starts. Any disruption
 //! (a replica not `Online`, a status flap between ticks, or a replica restart)
 //! resets the streak, so a crash-looping replica never accumulates the required
 //! stable time. [`ReplicaStabilityState`] holds the per-replica gate state
@@ -42,8 +43,7 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_CUTOFF, WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD,
 };
 use mz_catalog::builtin::{
-    Builtin, MZ_AUDIT_EVENTS, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY,
-    MZ_COMPUTE_HYDRATION_TIMES,
+    MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY, MZ_COMPUTE_HYDRATION_TIMES,
 };
 use mz_catalog::memory::objects::Cluster;
 use mz_compute_client::controller::CollectionReadiness;
@@ -52,8 +52,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_sql::catalog::IdReference;
+use mz_repr::{GlobalId, Row, Timestamp};
 use timely::progress::{Antichain, Timestamp as _};
 
 use crate::coord::{ClusterReplicaStatuses, Coordinator};
@@ -74,9 +73,11 @@ pub struct CaughtUpCheckContext {
     /// Only genuinely caught-up clusters have an entry. When recreating an
     /// entry, the orchestrator supplies the beginning of the healthy run.
     pub cluster_stability: BTreeMap<ClusterId, BTreeMap<ReplicaId, ReplicaStabilityState>>,
-    /// Authoritative creation events, read once per boot. Missing evidence means
-    /// the full stability period, never a guessed age from status history.
-    pub replica_created_at: Option<BTreeMap<ReplicaId, EpochMillis>>,
+    /// The catalog's leader generation. Generation numbers need not be consecutive.
+    pub leader_generation: u64,
+    /// Current leader process health anchors, reconstructed by the service watch.
+    /// Missing or offline processes cannot justify a shorter stability period.
+    pub leader_health: BTreeMap<ReplicaId, BTreeMap<ProcessId, Option<EpochMillis>>>,
 }
 
 /// How a cluster relates to the 0dt caught-up check on a given tick.
@@ -144,6 +145,23 @@ struct ReplicaHealthSnapshot {
     /// offsetting changes across processes and hide a restart. Comparing the
     /// whole map between ticks also catches replica/process churn.
     restart_counts: BTreeMap<ProcessId, u64>,
+}
+
+impl ReplicaHealthSnapshot {
+    /// A replica's healthy run starts when its last process becomes healthy.
+    /// Require evidence for the complete process set, not just the first report.
+    fn leader_healthy_since(
+        &self,
+        reports: Option<&BTreeMap<ProcessId, Option<EpochMillis>>>,
+    ) -> Option<EpochMillis> {
+        let reports = reports?;
+        if self.restart_counts.is_empty() || reports.len() != self.restart_counts.len() {
+            return None;
+        }
+        self.restart_counts.keys().try_fold(0u64, |since, process| {
+            Some(since.max((*reports.get(process)?)?))
+        })
+    }
 }
 
 /// Why a caught-up replica is being held back by the stability gate on a given
@@ -424,24 +442,6 @@ impl Coordinator {
         // and an operator can still force it via skip-catchup.
         let stability_period_ms = u64::try_from(stability_period.as_millis()).unwrap_or(u64::MAX);
 
-        if stability_check_enabled
-            && self
-                .caught_up_check
-                .as_ref()
-                .expect("known to exist")
-                .replica_created_at
-                .is_none()
-        {
-            let created_at = self.replica_creation_times().await.unwrap_or_else(|error| {
-                tracing::warn!(%error, "cannot read replica creation times; requiring full stability period");
-                BTreeMap::new()
-            });
-            self.caught_up_check
-                .as_mut()
-                .expect("known to exist")
-                .replica_created_at = Some(created_at);
-        }
-
         // We clone the exclude set so we don't hold a borrow of `caught_up_check`
         // across the classification, which lets us update the per-cluster
         // stability state on it (mutably) afterwards.
@@ -511,11 +511,9 @@ impl Coordinator {
                     for (&replica_id, snapshot) in replicas {
                         let required_period_ms = replica_stability_period(
                             stability_period_ms,
+                            now,
                             snapshot.healthy_since,
-                            ctx.replica_created_at
-                                .as_ref()
-                                .and_then(|times| times.get(&replica_id))
-                                .copied(),
+                            snapshot.leader_healthy_since(ctx.leader_health.get(&replica_id)),
                         );
                         let observation = states.entry(replica_id).or_default().observe(
                             snapshot,
@@ -598,62 +596,6 @@ impl Coordinator {
             );
         }
         health
-    }
-
-    /// Read creation events in bounded memory, keeping only replicas in this
-    /// catalog snapshot. Status history is not creation evidence: its oldest row
-    /// can be a recent restart of an old replica.
-    async fn replica_creation_times(
-        &self,
-    ) -> Result<BTreeMap<ReplicaId, EpochMillis>, anyhow::Error> {
-        let item_id = self
-            .catalog()
-            .state()
-            .resolve_builtin_object(&Builtin::<IdReference>::MaterializedView(&MZ_AUDIT_EVENTS));
-        let id = self.catalog().get_entry(&item_id).latest_global_id();
-        let holds = self
-            .controller
-            .storage_collections
-            .acquire_read_holds(vec![id])?;
-        let hold = holds.first().expect("requested one hold");
-        let upper = self
-            .controller
-            .storage_collections
-            .collection_frontiers(id)?
-            .write_frontier;
-        let Some(as_of) = upper.as_option().and_then(|upper| upper.step_back()) else {
-            return Ok(BTreeMap::new());
-        };
-        if !hold.since().less_equal(&as_of) {
-            return Ok(BTreeMap::new());
-        }
-        let replicas: BTreeSet<_> = self
-            .catalog()
-            .clusters()
-            .flat_map(|cluster| cluster.replicas().map(|replica| replica.replica_id))
-            .collect();
-        let mut cursor = self
-            .controller
-            .storage_collections
-            .snapshot_cursor(id, as_of)
-            .await?;
-        let mut times = BTreeMap::new();
-        while let Some(updates) = cursor.next().await {
-            for (data, _, diff) in updates {
-                let row = data.0?;
-                if diff > 0 {
-                    if let Some((replica, time)) = replica_creation(&row) {
-                        if replicas.contains(&replica) {
-                            times
-                                .entry(replica)
-                                .and_modify(|t: &mut u64| *t = (*t).min(time))
-                                .or_insert(time);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(times)
     }
 
     /// Classifies every cluster for the caught-up check.
@@ -1119,38 +1061,28 @@ fn leader_unhydrated_collections(
         .collect()
 }
 
-/// Freeze the age budget at the beginning of the incoming healthy run. Using
-/// the leader's current age would make the budget grow as fast as elapsed health.
+/// Match the leader's healthy-run age at the incoming run's start, capped by
+/// the configured period. The difference between run starts stays fixed as
+/// both runs age. If the leader's run is newer, the incoming run is already
+/// longer. Missing evidence or future timestamps require the full period.
 fn replica_stability_period(
     period: u64,
+    now: u64,
     healthy_since: Option<u64>,
-    created_at: Option<u64>,
+    leader_healthy_since: Option<u64>,
 ) -> u64 {
-    match healthy_since.zip(created_at) {
-        Some((healthy, created)) if created <= healthy => period.min(healthy - created),
+    match healthy_since.zip(leader_healthy_since) {
+        Some((incoming, leader)) if incoming <= now && leader <= now => {
+            period.min(incoming.saturating_sub(leader))
+        }
         _ => period,
     }
-}
-
-fn replica_creation(row: &Row) -> Option<(ReplicaId, EpochMillis)> {
-    let mut values = row.iter();
-    let _id = values.next()?;
-    if values.next()?.unwrap_str() != "create" || values.next()?.unwrap_str() != "cluster-replica" {
-        return None;
-    }
-    let details = values.next()?.unwrap_map();
-    let replica = details.iter().find_map(|(key, value)| match (key, value) {
-        ("replica_id", Datum::String(id)) => id.parse::<ReplicaId>().ok(),
-        _ => None,
-    })?;
-    let _user = values.next()?;
-    let time = u64::try_from(values.next()?.unwrap_timestamptz().timestamp_millis()).ok()?;
-    Some((replica, time))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_repr::Datum;
 
     /// Builds a health snapshot with all restarts attributed to a single
     /// replica process. `change_secs` is the max status-change time as a
@@ -1302,58 +1234,69 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn new_replica_has_a_fixed_age_budget() {
-        let period = replica_stability_period(90_000, Some(15_000), Some(10_000));
+    fn comparable_health_has_a_fixed_deadline() {
+        let period = replica_stability_period(90_000, 19_999, Some(15_000), Some(10_000));
         assert_eq!(period, 5_000);
         let mut health = snapshot(true, 15, 0);
         health.healthy_since = Some(15_000);
         let mut state = ReplicaStabilityState::default();
         assert!(!state.observe(&health, 19_999, period).ready);
         // Reconstructing after an envd restart still permits promotion at the
-        // same deadline, even though the leader replica is now ten seconds old.
+        // same deadline, even though the leader's run is now ten seconds old.
+        assert_eq!(
+            replica_stability_period(90_000, 20_000, Some(15_000), Some(10_000)),
+            period
+        );
         assert!(
             ReplicaStabilityState::default()
                 .observe(&health, 20_000, period)
                 .ready
         );
         assert_eq!(
-            replica_stability_period(90_000, Some(100_000), Some(1)),
+            replica_stability_period(90_000, 200_000, Some(100_000), Some(1)),
             90_000
         );
-        assert_eq!(replica_stability_period(90_000, Some(15_000), None), 90_000);
-        assert_eq!(replica_stability_period(90_000, None, Some(10_000)), 90_000);
         assert_eq!(
-            replica_stability_period(90_000, Some(15_000), Some(16_000)),
+            replica_stability_period(90_000, 20_000, Some(15_000), None),
+            90_000
+        );
+        assert_eq!(
+            replica_stability_period(90_000, 20_000, None, Some(10_000)),
+            90_000
+        );
+        // A leader restart makes its current run younger than the incoming run.
+        assert_eq!(
+            replica_stability_period(90_000, 20_000, Some(15_000), Some(16_000)),
+            0
+        );
+        // An incoming restart requires a new comparison, not the old budget.
+        assert_eq!(
+            replica_stability_period(90_000, 30_000, Some(25_000), Some(10_000)),
+            15_000
+        );
+        assert_eq!(
+            replica_stability_period(90_000, 20_000, Some(15_000), Some(20_001)),
+            90_000
+        );
+        assert_eq!(
+            replica_stability_period(90_000, 20_000, Some(20_001), Some(10_000)),
             90_000
         );
     }
 
     #[mz_ore::test]
-    fn creation_evidence_requires_a_replica_create_event() {
-        use mz_repr::adt::jsonb::Jsonb;
-        let details = Jsonb::from_serde_json(serde_json::json!({"replica_id": "u42"}))
-            .expect("valid audit details");
-        let row = |event, object| {
-            Row::pack_slice(&[
-                Datum::UInt64(1),
-                Datum::String(event),
-                Datum::String(object),
-                details.as_ref().into_datum(),
-                Datum::Null,
-                Datum::TimestampTz(
-                    mz_ore::now::to_datetime(12_345)
-                        .try_into()
-                        .expect("valid timestamp"),
-                ),
-            ])
-        };
-        assert_eq!(
-            replica_creation(&row("create", "cluster-replica")),
-            Some((ReplicaId::User(42), 12_345))
-        );
-        assert_eq!(replica_creation(&row("alter", "cluster-replica")), None);
-        assert_eq!(replica_creation(&row("drop", "cluster-replica")), None);
-        assert_eq!(replica_creation(&row("create", "cluster")), None);
+    fn leader_health_requires_all_processes() {
+        let mut health = snapshot(true, 15, 0);
+        health.restart_counts.insert(1, 0);
+        let mut reports = BTreeMap::from([(0, Some(10_000))]);
+        assert_eq!(health.leader_healthy_since(Some(&reports)), None);
+        reports.insert(1, None);
+        assert_eq!(health.leader_healthy_since(Some(&reports)), None);
+        reports.insert(1, Some(12_000));
+        assert_eq!(health.leader_healthy_since(Some(&reports)), Some(12_000));
+        reports.remove(&1);
+        reports.insert(2, Some(12_000));
+        assert_eq!(health.leader_healthy_since(Some(&reports)), None);
     }
 
     #[mz_ore::test]
