@@ -313,6 +313,7 @@ const percentColumn = ({ id, header, read }: UtilizationColumn) =>
       renderFilter: (column) => (
         <UtilizationFilterPanel column={column} label={header} />
       ),
+      tooltip: "Peak value sampled over the last hour",
     },
   });
 
