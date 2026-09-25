@@ -3849,6 +3849,23 @@ fn test_peek_on_dropped_indexed_view() {
         .unwrap();
     ddl_client.batch_execute("CREATE INDEX i ON v (a)").unwrap();
 
+    // DDL completion does not imply that a replica has a readable index yet.
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let ready: bool = ddl_client
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
+                     JOIN mz_indexes i ON i.id = f.object_id \
+                     WHERE i.name = 'i' AND f.read_frontier IS NOT NULL)",
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            ready.then_some(()).ok_or("Index not readable")
+        })
+        .unwrap();
+
     // Asynchronously query an indexed view.
     let handle = thread::spawn(move || {
         peek_client.query(

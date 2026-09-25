@@ -351,6 +351,26 @@ fn test_statement_logging_basic() {
         .unwrap();
     client.execute("SELECT * FROM v", &[]).unwrap();
     client.execute("CREATE DEFAULT INDEX i ON v", &[]).unwrap();
+    // Establish the indexed access path before measuring its execution strategy.
+    // The internal connection keeps setup queries out of the sampled statements.
+    {
+        let mut probe = server.connect_internal(postgres::NoTls).unwrap();
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let ready: bool = probe
+                    .query_one(
+                        "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
+                         JOIN mz_indexes i ON i.id = f.object_id \
+                         WHERE i.name = 'i' AND f.read_frontier IS NOT NULL)",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                ready.then_some(()).ok_or("Index not readable")
+            })
+            .unwrap();
+    }
     client.execute("SELECT * FROM v", &[]).unwrap();
     let _ = client.execute("SELECT 1/0", &[]);
     client.execute("CREATE TABLE t (x int)", &[]).unwrap();
