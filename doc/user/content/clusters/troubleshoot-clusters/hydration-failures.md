@@ -206,7 +206,21 @@ ORDER BY c.name, o.name;
 (1 row)
 ```
 
-**Resolution**: drop the objects, or drop the cluster that carries them.
+**Resolution**: drop the objects the query lists. The read holds belong to the
+objects rather than to the cluster, so dropping the cluster works only because
+it takes its objects with it. Setting a cluster's replication factor to `0` is
+usually what caused the problem, and never fixes it.
+
+Compaction is not scheduled, so `retained_history` does not shrink the instant
+the objects are gone. That does not hold up a retry: anything created
+afterwards starts from a current time, so you can redeploy within seconds of
+dropping them.
+
+Do not restore a replica to a cluster that has sat at `0` for days instead of
+dropping its objects. The replica rehydrates through the whole retained
+backlog, which is the out-of-memory case in [Step
+2](#step-2-check-for-a-rehydration-loop). Drop the objects and recreate them
+instead.
 
 ## Related pages
 
