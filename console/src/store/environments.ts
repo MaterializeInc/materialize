@@ -423,6 +423,14 @@ export const useEnvironmentsWithHealth = () => {
 
 const defaultTimeout = 10_000; // 10 seconds
 const maxBootDuration = { minutes: 15 };
+
+/** Whether an environment enabled at `enabledAt` is still within its boot grace window. */
+function withinBootWindow(
+  enabledAt: EnabledEnvironment["enabledAt"],
+  maxBoot: Duration,
+) {
+  return new Date() <= add(new Date(enabledAt), maxBoot);
+}
 // A made up enabled at time only used during impersonation and self-managed,
 // since we don't know when the environment was enabled.
 const fakeEnabledAt = sub(new Date(), {
@@ -508,6 +516,14 @@ export const fetchEnvironmentHealth = async (
           errors,
         };
       }
+      // A fresh environmentd can respond with errors before it has fully
+      // initialized, so a SQL-level error gets the same boot-window grace
+      // as an unreachable environment. Reporting "crashed" here would count
+      // as ready (isEnvironmentReady) and route users into a console that
+      // cannot serve queries yet.
+      if (withinBootWindow(environment.enabledAt, maxBoot)) {
+        return { health: "booting", errors: [] };
+      }
       errors.push({
         message: "Environmentd health check failed",
       });
@@ -521,9 +537,7 @@ export const fetchEnvironmentHealth = async (
       return { health: "healthy", version, errors: [] };
     }
   } catch (e) {
-    const enabledAt = new Date(environment.enabledAt);
-    const cutoff = add(enabledAt, maxBoot);
-    if (new Date() > cutoff) {
+    if (!withinBootWindow(environment.enabledAt, maxBoot)) {
       const errors: EnvironmentError[] = [];
       errors.push({
         message: `Environment not resolvable for more than ${formatDuration(
