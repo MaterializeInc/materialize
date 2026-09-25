@@ -19,13 +19,15 @@
 //! A point-in-time caught-up check is not enough on its own: a crash- or
 //! OOM-looping replica can momentarily look hydrated and caught-up, and cutting
 //! over right then drops us straight into a crashing replica. On top of the
-//! per-tick caught-up classification we therefore run a stability gate. Once a
-//! cluster is genuinely caught-up it must stay caught-up and have all replicas
-//! healthy for a configurable period before we report it ready. Any disruption
+//! per-tick caught-up classification we therefore run a stability gate. A
+//! cluster must be caught-up now and have all replicas healthy for a
+//! configurable period before we report it ready. Any disruption
 //! (a replica not `Online`, a status flap between ticks, or a replica restart)
 //! resets the streak, so a crash-looping replica never accumulates the required
 //! stable time. [`ClusterStabilityState`] holds the per-cluster gate state
-//! across ticks.
+//! across ticks. Orchestrator health timestamps reconstruct the initial streak
+//! after environmentd restarts, without requiring collection hydration reports
+//! to have arrived throughout that period.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -65,9 +67,8 @@ pub struct CaughtUpCheckContext {
     pub exclude_collections: BTreeSet<GlobalId>,
     /// Per-cluster state for the stability gate, retained across checks.
     ///
-    /// Only genuinely caught-up clusters have an entry. Entries are dropped as
-    /// soon as a cluster stops being caught-up, so the streak restarts from
-    /// scratch when it becomes caught-up again.
+    /// Only genuinely caught-up clusters have an entry. When recreating an
+    /// entry, the orchestrator supplies the beginning of the healthy run.
     pub cluster_stability: BTreeMap<ClusterId, ClusterStabilityState>,
 }
 
@@ -87,18 +88,15 @@ enum ClusterCaughtUpStatus {
 
 /// Per-cluster state for the stability gate, retained across caught-up checks.
 ///
-/// The gate requires a cluster to stay caught-up and fully healthy for a
+/// The gate requires a cluster to be caught-up now and fully healthy for a
 /// configurable period before we report it ready. A point-in-time check isn't
 /// enough: a crash-looping replica can momentarily look hydrated and healthy, so
 /// we'd cut over right into a crash. We therefore track health over time here.
 #[derive(Debug, Default, Clone)]
 pub struct ClusterStabilityState {
-    /// Wall-clock time (environmentd's `now()`) at which the current
-    /// uninterrupted caught-up-and-healthy streak began. `None` while the
-    /// cluster isn't currently in such a streak.
-    ///
-    /// We anchor the window with environmentd's clock so the configured period
-    /// means real wall-clock seconds, independent of orchestrator event times.
+    /// Beginning of the uninterrupted healthy streak. Seeded from orchestrator
+    /// timestamps when available, otherwise measured with environmentd's clock.
+    /// This assumes bounded clock skew between environmentd and the orchestrator.
     stable_since: Option<EpochMillis>,
     /// Max replica-process status-change time observed on the previous tick.
     ///
@@ -128,6 +126,9 @@ struct ClusterHealthSnapshot {
     /// `Online`. We deliberately require all replicas to be healthy, so we only
     /// cut over when the new environment is fully healthy.
     all_healthy: bool,
+    /// Latest healthy-run start across all processes. Unknown if any process
+    /// lacks a reconstructible anchor.
+    healthy_since: Option<EpochMillis>,
     /// Max status-change time across all of the cluster's replica processes.
     max_status_change: Option<DateTime<Utc>>,
     /// Restart count per replica process.
@@ -160,7 +161,7 @@ enum StabilityBlocker {
 /// Outcome of folding one health snapshot into a [`ClusterStabilityState`].
 #[derive(Debug, Clone, Copy)]
 struct StabilityObservation {
-    /// Whether the cluster has now been continuously caught-up and healthy for
+    /// Whether the cluster has now been continuously healthy for
     /// at least the required period.
     ready: bool,
     /// How long the current uninterrupted streak has lasted, in milliseconds.
@@ -172,7 +173,7 @@ struct StabilityObservation {
 
 impl ClusterStabilityState {
     /// Folds in the latest health snapshot and returns an observation: whether
-    /// the cluster has now been continuously caught-up and healthy for at least
+    /// the cluster has now been continuously healthy for at least
     /// `period_ms`, how long the current streak has lasted, and (when not ready)
     /// what is holding it back.
     ///
@@ -186,6 +187,16 @@ impl ClusterStabilityState {
         now: EpochMillis,
         period_ms: u64,
     ) -> StabilityObservation {
+        // Bootstrap installs placeholder Offline statuses before the watch has
+        // reported. Wait for a healthy snapshot before establishing the initial
+        // baseline, rather than mistaking controller reconstruction for a flap.
+        if self.last_restart_counts.is_none() && !snapshot.all_healthy {
+            return StabilityObservation {
+                ready: false,
+                stable_for_ms: None,
+                blocked_by: Some(StabilityBlocker::NotHealthy),
+            };
+        }
         // NOTE: We don't assume orchestrator status events arrive in order or
         // that every process of a cluster reports within the same tick. The
         // snapshot reflects whatever the in-memory mirror holds right now, and
@@ -206,8 +217,8 @@ impl ClusterStabilityState {
         //     an out-of-order event reports an older time, which is why the
         //     restart counts are the belt-and-suspenders.
         //
-        // We only compare the orchestrator-supplied times against each other, so
-        // clock skew between the orchestrator and environmentd doesn't matter.
+        // Status event times are only compared against each other. Health-run
+        // timestamps below are compared with environmentd's wall clock.
         let status_flapped = match (self.last_status_change, snapshot.max_status_change) {
             (Some(prev), Some(cur)) => cur > prev,
             _ => false,
@@ -220,7 +231,18 @@ impl ClusterStabilityState {
         let good = snapshot.all_healthy && !status_flapped && !restarted;
 
         self.stable_since = if good {
-            self.stable_since.or(Some(now))
+            let anchor = snapshot.healthy_since.map(|since| since.min(now));
+            let since = self.stable_since.unwrap_or_else(|| {
+                // Only seed from historical health on the first observation.
+                // A locally observed disruption must not be erased by a stale
+                // orchestrator anchor on a subsequent tick.
+                if self.last_restart_counts.is_none() {
+                    anchor.unwrap_or(now)
+                } else {
+                    now
+                }
+            });
+            Some(since.max(anchor.unwrap_or(since)))
         } else {
             None
         };
@@ -401,9 +423,8 @@ impl Coordinator {
 
         let ctx = self.caught_up_check.as_mut().expect("known to exist");
 
-        // Drop stability state for clusters that are no longer genuinely caught
-        // up, so the streak restarts from scratch when they become caught-up
-        // again.
+        // Reconstruct health from the orchestrator when a cluster becomes
+        // caught-up again. Loss of collection readiness is not a replica crash.
         ctx.cluster_stability.retain(|cluster_id, _| {
             classification.get(cluster_id) == Some(&ClusterCaughtUpStatus::CaughtUp)
         });
@@ -472,12 +493,14 @@ impl Coordinator {
             // A cluster with no replica statuses is treated as not healthy.
             return ClusterHealthSnapshot {
                 all_healthy: false,
+                healthy_since: None,
                 max_status_change: None,
                 restart_counts: BTreeMap::new(),
             };
         };
 
         let mut all_healthy = true;
+        let mut healthy_since = Some(0);
         let mut max_status_change = None;
         let mut restart_counts = BTreeMap::new();
         for (replica_id, processes) in replicas {
@@ -485,6 +508,14 @@ impl Coordinator {
                 all_healthy = false;
             }
             for (process_id, process) in processes {
+                healthy_since =
+                    healthy_since
+                        .zip(process.healthy_since)
+                        .and_then(|(since, time)| {
+                            u64::try_from(time.timestamp_millis())
+                                .ok()
+                                .map(|time| since.max(time))
+                        });
                 max_status_change = max_status_change.max(Some(process.time));
                 restart_counts.insert((*replica_id, *process_id), process.restart_count);
             }
@@ -492,6 +523,7 @@ impl Coordinator {
 
         ClusterHealthSnapshot {
             all_healthy,
+            healthy_since,
             max_status_change,
             restart_counts,
         }
@@ -922,6 +954,7 @@ mod tests {
     fn snapshot(all_healthy: bool, change_secs: i64, restarts: u64) -> ClusterHealthSnapshot {
         ClusterHealthSnapshot {
             all_healthy,
+            healthy_since: None,
             max_status_change: DateTime::from_timestamp(change_secs, 0),
             restart_counts: BTreeMap::from([((ReplicaId::User(1), 0), restarts)]),
         }
@@ -1033,6 +1066,7 @@ mod tests {
         let r = ReplicaId::User(1);
         let snapshot = |a: u64, b: u64| ClusterHealthSnapshot {
             all_healthy: true,
+            healthy_since: None,
             max_status_change: DateTime::from_timestamp(100, 0),
             restart_counts: BTreeMap::from([((r, 0u64), a), ((r, 1u64), b)]),
         };
@@ -1045,6 +1079,23 @@ mod tests {
         // A clean streak from here.
         assert!(!state.observe(&snapshot(2, 0), 1500, period_ms).ready);
         assert!(state.observe(&snapshot(2, 0), 2500, period_ms).ready);
+    }
+
+    #[mz_ore::test]
+    fn reconstruct_health_after_environmentd_restart() {
+        let mut health = snapshot(true, 100, 0);
+        health.healthy_since = Some(100_000);
+        let mut state = ClusterStabilityState::default();
+        assert!(!state.observe(&snapshot(false, 101, 0), 100_500, 1000).ready);
+        assert!(!state.observe(&health, 100_999, 1000).ready);
+        // Rebuilding coordinator state does not restart the period.
+        let mut state = ClusterStabilityState::default();
+        assert!(state.observe(&health, 101_000, 1000).ready);
+        // A restart must still reset it, even if its health anchor is stale.
+        health.restart_counts.insert((ReplicaId::User(1), 0), 1);
+        assert!(!state.observe(&health, 102_000, 1000).ready);
+        assert!(!state.observe(&health, 103_000, 1000).ready);
+        assert!(state.observe(&health, 104_000, 1000).ready);
     }
 
     #[mz_ore::test]

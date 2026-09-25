@@ -558,6 +558,8 @@ pub struct ClusterReplicaProcessStatus {
     /// Cumulative restart count of the process, mirrored from the orchestrator.
     /// See [`mz_orchestrator::ServiceEvent::restart_count`].
     pub restart_count: u64,
+    /// See [`mz_orchestrator::ServiceEvent::healthy_since`].
+    pub healthy_since: Option<DateTime<Utc>>,
     /// Time of the most recent change to `status` or `restart_count`.
     pub time: DateTime<Utc>,
 }
