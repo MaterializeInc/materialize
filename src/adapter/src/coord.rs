@@ -5333,6 +5333,7 @@ pub fn serve(
                     trigger,
                     exclude_collections,
                     cluster_stability: BTreeMap::new(),
+                    replica_created_at: None,
                 }
             });
 
