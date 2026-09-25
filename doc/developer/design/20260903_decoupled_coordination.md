@@ -244,6 +244,9 @@ Catalog commit, cluster application, and query readiness are different events.
 Queries must not fail spuriously or execute against the wrong object state
 because the fast protocol overtakes catalog application. Preserve existing
 behavior for concurrent DDL, transactions, cancellation, and object drops.
+The [catalog-ordering appendix](#appendix-catalog-freshness-and-execution-ordering)
+describes the corresponding requirement for independently following clients and
+replicas.
 
 Query-client connections must not replace one another's desired state or reset
 maintained dataflows. Lifecycle ownership and permission to perform external
@@ -461,6 +464,63 @@ client advancing or losing its protection while another retains an older
 timestamp, recovery of the components enforcing compaction, and an expired client
 returning. Together, these milestones complete the fresh-environment decoupling
 outcome, subject to the correctness and performance acceptance criteria above.
+
+## Appendix: catalog freshness and execution ordering
+
+Strict serializable queries must observe catalog changes completed before they
+start, across adapters, and execution must not overtake required replica-side
+application. This includes configuration, not just object definitions.
+
+### Catalog writes
+
+All catalog writers, including protection, heartbeat and compaction publishers,
+share the `EpochMilliseconds` oracle's allocation, completion and
+future-timestamp discipline. Retries and rebasing must preserve it before the
+write becomes durable. A commit at C is acknowledged only after oracle
+completion covers C, directly or through a barrier at least C.
+
+This coordination cost is accepted. Batching remains an implementation choice.
+Replicas write independently, not through the adapter or table-write worker.
+
+### Planning and catalog freshness
+
+A current-data strict serializable statement selecting its own timestamp T on
+`EpochMilliseconds` uses an immutable catalog snapshot validated for that query
+at T. Establish freshness within the operation's real-time interval, reusing
+the data-read oracle call where valid, and certify a complete catalog prefix
+through T. Local revisions or object existence alone do not prove this.
+
+Validate the definitions, permissions and configuration the query uses. Refresh
+and replan on relevant changes. If relevant snapshot state is newer than T,
+select a compatible timestamp through the oracle before execution.
+Catalog-derived errors also need freshness, even before the data timeline is
+known.
+
+For a data timestamp fixed by a transaction or `AS OF`, keep fresh catalog
+visibility per statement without moving that timestamp. Incompatibilities
+follow existing conflict/error behavior, not historical name resolution or
+permissions. Other isolation levels and data timelines retain their data
+timestamp rules, with catalog freshness established separately on
+`EpochMilliseconds`. No historical-catalog service is required.
+
+### Replica admission
+
+Requests carry a catalog position covering their validated definitions and
+configuration, scoped to the catalog history and deployment fence.
+Progress-only publications neither invalidate planning nor impose
+definition-application waits. Their protection constraints remain binding.
+
+The receiver waits for required state and configuration to be applied, not
+merely read, then checks readiness and read protection for the imports. A newer
+receiver does not rewind: stable object identities and existing
+concurrent-DDL/readability checks determine whether it can execute the plan or
+must report an error. Waiting is cancellable and may expedite the receiver's
+own catch-up, without blocking that work or giving clients lifecycle authority.
+
+No all-replica DDL barrier, unrelated hydration wait or per-query durable
+record is required. Existing asynchronous MV replacement and startup-only
+parameter semantics remain unchanged. Token and wakeup mechanics are
+implementation choices.
 
 Implementation history is in the [log](20260903_decoupled_coordination_log.md).
 Workflow and current steering are in the

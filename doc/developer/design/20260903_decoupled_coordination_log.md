@@ -1334,3 +1334,12 @@ row-iteration limit. Whether ALTER completion must order subsequent queries agai
 replica-global configuration is unresolved. Do not add a configuration barrier or
 change the fixture's completion assumption until that contract is decided.
 Continue independent read-admission, stack-usage and replica-startup fixes.
+
+### 2026-09-20: Catalog freshness and query ordering
+
+Configuration ordering follows the shared catalog/query contract, not an
+eventual-application exception. All catalog writers share the oracle's timestamp
+discipline. Queries validate immutable catalog snapshots and carry their required
+definitions/configuration to replica admission, without progress-only definition
+waits or catalog time travel. Fixed data timestamps retain fresh catalog per
+statement. The catalog-ordering appendix specifies the contract.
