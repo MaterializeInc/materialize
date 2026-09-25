@@ -286,7 +286,8 @@ mod support {
                     let keys = view
                         .value::<UniqueKeys>()
                         .expect("UniqueKeys required")
-                        .clone();
+                        .keys()
+                        .to_vec();
                     types.insert(*id, ReprRelationType::new(repr_cols).with_keys(keys));
                 }
             }

@@ -84,8 +84,8 @@ Explained Query:
         Reduce group_by=[#1{b}] aggregates=[sum(#0{a})] // { keys: "([0])" }
           Filter (#1{b}) IS NOT NULL // { keys: "()" }
             ReadStorage materialize.public.t // { keys: "()" }
-      ArrangeBy keys=[[#1{d}]] // { keys: "([0], [1])" }
-        Filter (#0{c} = #1{d}) // { keys: "([0], [1])" }
+      ArrangeBy keys=[[#1{d}]] // { keys: "([0])" }
+        Filter (#0{c} = #1{d}) // { keys: "([0])" }
           ReadIndex on=v v_primary_idx=[*** full scan ***] // { keys: "([0, 1])" }
 
 Source materialize.public.t
@@ -116,7 +116,7 @@ Explained Query:
   Threshold // { keys: "()" }
     Union // { keys: "()" }
       Project (#1{a}, #2) // { keys: "([1])" }
-        Map (integer_to_double(#0{c})) // { keys: "([0], [2])" }
+        Map (integer_to_double(#0{c})) // { keys: "([0])" }
           TopK group_by=[#0{c}] limit=1 // { keys: "([0])" }
             Project (#0{c}, #1{a}) // { keys: "()" }
               Join on=(#0{c} = #2{b}) type=differential // { keys: "()" }
@@ -130,8 +130,8 @@ Explained Query:
                     ReadStorage materialize.public.t // { keys: "()" }
       Negate // { keys: "()" }
         Project (#0{c}, #2) // { keys: "([1])" }
-          Filter (#0{c} = 1) // { keys: "([1], [2])" }
-            Map (integer_to_double(#1{d})) // { keys: "([0, 1], [0, 2])" }
+          Filter (#0{c} = 1) // { keys: "([1])" }
+            Map (integer_to_double(#1{d})) // { keys: "([0, 1])" }
               ReadIndex on=v v_primary_idx=[*** full scan ***] // { keys: "([0, 1])" }
 
 Source materialize.public.t
