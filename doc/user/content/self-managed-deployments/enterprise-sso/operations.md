@@ -35,8 +35,9 @@ spec:
     - "https://my-app.example.com/auth/callback"
   secretName: my-internal-app-credentials
   tokenEndpointAuthMethod: "client_secret_basic"
-  # Set skipConsent: true for first-party apps to bypass the consent screen.
-  skipConsent: true
+  # Keep skipConsent: false. The consent handler injects the identity's email
+  # and groups claims; skipping it issues tokens Materialize rejects.
+  skipConsent: false
 ```
 
 Hydra Maester watches for these resources and registers the client with

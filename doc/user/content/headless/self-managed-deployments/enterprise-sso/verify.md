@@ -1,7 +1,12 @@
 ---
 headless: true
 ---
-Smoke-test each browser-facing endpoint:
+Smoke-test each browser-facing endpoint. These commands assume a publicly trusted issuer (`cert_issuer_ref` set). With the default self-signed issuer, fetch its CA first and pass `--cacert ca.crt` to each `curl`:
+
+```bash
+kubectl -n cert-manager get secret <name_prefix>-root-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+```
+
 
 ```bash
 # Hydra OIDC discovery (issuer should match ory_hydra_fqdn)
@@ -20,4 +25,8 @@ curl -fsSL https://polis.example.com/api/health
 curl -fsSL -o /dev/null -w "%{http_code}\n" https://console.example.com
 ```
 
-Open `https://console.example.com` in a browser. You should land on the Kratos login screen. If you configured `upstream_oidc_providers`, a "Sign in with ..." button is rendered per provider. With Polis enabled and a SAML connection registered, a "Sign in via SAML" button is rendered as well.
+Then sign in end to end, which is what proves SSO works:
+
+1. Open `https://console.example.com`. You are redirected to the selfservice UI at `auth.example.com`, with one button per `upstream_identity_providers` entry and per `saml_providers` entry. Each button's text comes from that entry's `label`; see [Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/).
+2. Sign in through one of them. You should land back in the Console as that user.
+3. Run `SELECT current_user;`. It should return the user's email.
