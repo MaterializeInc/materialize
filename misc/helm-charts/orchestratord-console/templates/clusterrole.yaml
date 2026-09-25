@@ -1,0 +1,44 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+{{- if .Values.rbac.create }}
+# Deliberately narrower than the operator's own role. The console reads the
+# resources it displays, writes the small slice of the Materialize spec it
+# exposes, and annotates environmentd pods so a system parameter edit is picked
+# up promptly. It has no access to Secrets at all.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "orchestratord-console.fullname" . }}
+  labels:
+    {{- include "orchestratord-console.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["materialize.cloud"]
+  resources: ["materializes", "balancers", "consoles"]
+  verbs: ["get", "list", "watch"]
+# Rollouts, promotion, and the editable slice of the spec are all writes to the
+# Materialize resource itself.
+- apiGroups: ["materialize.cloud"]
+  resources: ["materializes"]
+  verbs: ["update", "patch"]
+- apiGroups: ["apps"]
+  resources: ["statefulsets", "deployments"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "services", "events"]
+  verbs: ["get", "list", "watch"]
+# Nudges the kubelet to re-project the system parameter ConfigMap. Patches the
+# live pods only, never the pod template, so it cannot trigger a rollout.
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["patch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update"]
+{{- end }}
