@@ -1150,7 +1150,9 @@ impl<'a> ActiveComputeState<'a> {
         // unconditionally rather than gated on the role's publish decision, so a slot published by
         // a publishing role is always reclaimed. The call is a no-op when nothing was published for
         // `id`.
-        self.compute_state.sharing_registry.remove(&id);
+        self.compute_state
+            .sharing_registry
+            .remove(&id, self.timely_worker.index());
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
