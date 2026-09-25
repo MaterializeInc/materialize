@@ -181,8 +181,9 @@ described in [Step 2](#step-2-check-for-a-rehydration-loop).
 
 #### Possible cause: a cluster has a replication factor of `0`
 
-If a cluster has `REPLICATION FACTOR` set to 0, the materialized views and sinks on the cluster will have their history 
-pinned. List which such objects a cluster still carries:
+If a cluster has `REPLICATION FACTOR` set to 0, the materialized views and
+sinks on the cluster will have their history pinned. List which such objects a
+cluster still carries:
 
 ```mzsql
 SELECT
