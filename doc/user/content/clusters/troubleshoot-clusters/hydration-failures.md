@@ -51,16 +51,17 @@ ORDER BY c.name, o.name;
 (2 rows)
 ```
 
-An empty result means every object is hydrated. Otherwise:
+An empty result means every object is hydrated. Otherwise, `replica_id` tells
+you which case you are in:
 
-- A **`NULL` `replica_id`** means the object has no replica to hydrate on,
-  because its cluster has a replication factor of `0`. Restore compute with
-  [`ALTER CLUSTER ... SET (REPLICATION FACTOR = <int>)`](/sql/alter-cluster/),
-  or, if the cluster is idle, read [Step
-  3](#step-3-check-whether-an-inputs-history-is-pinned) before leaving it that
-  way.
-- A **`replica_id` with `hydrated` set to `f`** means a replica is hydrating
-  the object, or failing to. Continue to Step 2.
+- **Empty**, as in the output above: the cluster has no replicas, so nothing
+  is hydrating the object. Give it one with [`ALTER CLUSTER ... SET
+  (REPLICATION FACTOR = <int>)`](/sql/alter-cluster/). A cluster left at `0`
+  also holds its inputs' history back, so read [Step
+  3](#step-3-check-whether-an-inputs-history-is-pinned) before leaving it
+  that way.
+- **Set**: a replica is hydrating the object, or failing to. Continue to
+  [Step 2](#step-2-check-for-a-rehydration-loop).
 
 ## Step 2: Check for a rehydration loop
 
