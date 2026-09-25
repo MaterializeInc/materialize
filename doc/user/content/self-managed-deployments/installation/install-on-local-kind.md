@@ -20,7 +20,7 @@ The following tutorial uses a local [`kind`](https://kind.sigs.k8s.io/) cluster
 and deploys the following components:
 
 - Materialize Operator using Helm into your local `kind` cluster.
-- RustFS object storage as the blob storage for your Materialize.
+- MinIO object storage as the blob storage for your Materialize.
 - PostgreSQL database as the metadata database for your Materialize.
 - Materialize as a containerized application into your local `kind` cluster.
 
@@ -126,16 +126,16 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
    {{% self-managed/versions/curl-sample-files-local-install %}}
 
-1. Add your license key and point Materialize at RustFS:
+1. Add your license key:
 
    a. To get your license key:
 
       {{% yaml-table data="self_managed/license_key" %}}
 
-   b. Edit the backend secret in `sample-materialize.yaml`: add your license
-   key to the `license_key` field, and set `persist_backend_url` to use RustFS.
+   b. Edit `sample-materialize.yaml` to add your license key to the
+   `license_key` field in the backend secret.
 
-   ```yaml {hl_lines="9-10"}
+   ```yaml {hl_lines="10"}
    ---
    apiVersion: v1
    kind: Secret
@@ -144,7 +144,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    namespace: materialize-environment
    stringData:
      metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
-     persist_backend_url: "s3://rustfsadmin:rustfsadmin@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Frustfs.materialize.svc.cluster.local%3A9000&region=us-east-1"
+     persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
      license_key: "<enter your license key here>"
    ---
    ```
@@ -192,7 +192,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
       If you run into an error during deployment, refer to the
       [Troubleshooting](/installation/troubleshooting) guide.
 
-1. Install PostgreSQL and RustFS.
+1. Install PostgreSQL and MinIO.
 
     1. Use the `sample-postgres.yaml` file to install PostgreSQL as the
        metadata database:
@@ -201,10 +201,10 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
         kubectl apply -f sample-postgres.yaml
         ```
 
-    1. Use the `sample-rustfs.yaml` file to install RustFS as the blob storage:
+    1. Use the `sample-minio.yaml` file to install MinIO as the blob storage:
 
         ```shell
-        kubectl apply -f sample-rustfs.yaml
+        kubectl apply -f sample-minio.yaml
         ```
 
     1. Verify the installation and check the status:
@@ -213,33 +213,34 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
        kubectl get all -n materialize
        ```
 
-       Wait for the components to be ready and in the `Running` state:
+       Wait for the components to be ready. The `minio-setup` job creates the
+       buckets and then shows `Completed`:
 
        ```none
        NAME                                           READY   STATUS      RESTARTS   AGE
-       pod/my-materialize-operator-6c9d55567f-ldmd7   1/1     Running     0          28s
-       pod/my-materialize-operator-6c9d55567f-svwks   1/1     Running     0          28s
-       pod/postgres-979c9b755-fs4hs                   1/1     Running     0          24s
-       pod/rustfs-58c754866f-hlgwd                    1/1     Running     0          24s
-       pod/rustfs-setup-2x7cj                         0/1     Completed   0          24s
+       pod/minio-bfdd6b7c-5n6sw                       1/1     Running     0          20s
+       pod/minio-setup-cmfk8                          0/1     Completed   0          20s
+       pod/my-materialize-operator-6c9d55567f-g59v2   1/1     Running     0          28s
+       pod/my-materialize-operator-6c9d55567f-nx9s6   1/1     Running     0          28s
+       pod/postgres-979c9b755-ddb4m                   1/1     Running     0          20s
 
-       NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
-       service/my-materialize-operator   ClusterIP   10.96.231.91   <none>        8001/TCP   28s
-       service/postgres                  ClusterIP   10.96.72.156   <none>        5432/TCP   24s
-       service/rustfs                    ClusterIP   10.96.26.19    <none>        9000/TCP   24s
+       NAME                              TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+       service/minio                     ClusterIP   10.96.27.17     <none>        9000/TCP   20s
+       service/my-materialize-operator   ClusterIP   10.96.175.204   <none>        8001/TCP   28s
+       service/postgres                  ClusterIP   10.96.5.180     <none>        5432/TCP   20s
 
        NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+       deployment.apps/minio                     1/1     1            1           20s
        deployment.apps/my-materialize-operator   2/2     2            2           28s
-       deployment.apps/postgres                  1/1     1            1           24s
-       deployment.apps/rustfs                    1/1     1            1           24s
+       deployment.apps/postgres                  1/1     1            1           20s
 
        NAME                                                 DESIRED   CURRENT   READY   AGE
+       replicaset.apps/minio-bfdd6b7c                       1         1         1       20s
        replicaset.apps/my-materialize-operator-6c9d55567f   2         2         2       28s
-       replicaset.apps/postgres-979c9b755                   1         1         1       24s
-       replicaset.apps/rustfs-58c754866f                    1         1         1       24s
+       replicaset.apps/postgres-979c9b755                   1         1         1       20s
 
-       NAME                     STATUS     COMPLETIONS   DURATION   AGE
-       job.batch/rustfs-setup   Complete   1/1           24s        24s
+       NAME                    STATUS     COMPLETIONS   DURATION   AGE
+       job.batch/minio-setup   Complete   1/1           20s        20s
        ```
 
 1. Install the metrics service to the `kube-system` namespace.
