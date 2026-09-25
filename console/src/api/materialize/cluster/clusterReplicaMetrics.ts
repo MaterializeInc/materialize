@@ -53,6 +53,10 @@ export function buildClusterReplicaMetricsQuery({
           "diskBytes",
         ),
         sql<bigint>`COALESCE(crhm.heap_bytes::bigint, 0)`.as("heapBytes"),
+        // Null when clusterd runs without --heap-limit, which is every
+        // emulator. heapPercent falls back to memory in that case, so this is
+        // what says whether the reading is heap or memory.
+        "crhm.heap_limit as heapLimit",
 
         "cru.cpu_percent as cpuPercent",
         "cru.memory_percent as memoryPercent",
