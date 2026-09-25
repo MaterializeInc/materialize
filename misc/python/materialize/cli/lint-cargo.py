@@ -146,6 +146,59 @@ def check_fuzz_versions_mirror_root(workspace: Workspace) -> bool:
     return success
 
 
+def check_fuzz_patches_mirror_root(workspace: Workspace) -> bool:
+    """Checks that the cargo-fuzz workspace (test/cargo-fuzz) carries the root
+    workspace's `[patch.crates-io]` entries verbatim.
+
+    Cargo never fails over a patch mismatch. An entry that does not apply lands
+    in `[[patch.unused]]` with only a warning, and a missing entry passes with no
+    warning at all. Either way the fuzz targets silently build against the
+    crates.io release instead of the fork production uses, and the build breaks
+    whenever the fork carries API the published crate lacks."""
+
+    # Root patches for crates outside the fuzz crates' dependency graph. Cargo
+    # would warn that they are unused, so the fuzz workspace leaves them out.
+    OMITTED = {"duckdb", "postgres_array"}
+
+    with open(MZ_ROOT / "Cargo.toml") as f:
+        root_patches = toml.load(f).get("patch", {}).get("crates-io", {})
+    with open(MZ_ROOT / "test" / "cargo-fuzz" / "Cargo.toml") as f:
+        fuzz_patches = toml.load(f).get("patch", {}).get("crates-io", {})
+
+    success = True
+    for name, spec in sorted(fuzz_patches.items()):
+        if name not in root_patches:
+            print(
+                f"test/cargo-fuzz/Cargo.toml: {name} is patched here but not in "
+                f"the root Cargo.toml",
+                file=sys.stderr,
+            )
+            success = False
+        elif spec != root_patches[name]:
+            print(
+                f"test/cargo-fuzz/Cargo.toml: {name} = {spec} must match the "
+                f"root Cargo.toml's {name} = {root_patches[name]}",
+                file=sys.stderr,
+            )
+            success = False
+    for name in sorted(root_patches.keys() - fuzz_patches.keys() - OMITTED):
+        print(
+            f"test/cargo-fuzz/Cargo.toml: {name} is patched in the root "
+            f"Cargo.toml but not here",
+            file=sys.stderr,
+        )
+        success = False
+    if not success:
+        print(
+            "\nhint: copy the entry from the root `[patch.crates-io]` verbatim, "
+            "or drop it here if the root no longer patches that crate. A root "
+            "entry that no fuzz crate depends on goes into `OMITTED` in "
+            "check_fuzz_patches_mirror_root instead.",
+            file=sys.stderr,
+        )
+    return success
+
+
 def main() -> None:
     workspace = Workspace(MZ_ROOT)
     lints = [
@@ -153,6 +206,7 @@ def main() -> None:
         check_default_members,
         check_workspace_dependencies,
         check_fuzz_versions_mirror_root,
+        check_fuzz_patches_mirror_root,
     ]
     # Run every lint, then combine. `success and lint(...)` would short-circuit
     # and skip the remaining lints after the first failure, under-reporting.

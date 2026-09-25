@@ -10,12 +10,12 @@
 # per-crate duplication. Each fuzz crate points here via
 # `package.workspace = "../../../test/cargo-fuzz"`.
 #
-# `[patch.crates-io]` below is the SUBSET of the root `Cargo.toml`'s patches that
-# the fuzz crates' dependency graph actually uses (root entries with no consumer
-# here, currently `duckdb` and `postgres_array`, are omitted to avoid cargo's
-# "patch was not used in the crate graph" warnings). Every entry that IS present
-# must match the root's rev/version verbatim. If a fuzz crate gains a dependency
-# that needs another patched crate, copy that entry from the root.
+# `[patch.crates-io]` below mirrors the root `Cargo.toml`'s, minus the root
+# entries that no fuzz crate depends on (they would only trigger cargo's "patch
+# was not used in the crate graph" warning). `bin/lint-cargo` lists those
+# omissions and enforces that every other root entry is present here verbatim.
+# If a fuzz crate gains a dependency on an omitted crate, copy its entry from the
+# root and remove it from that list.
 
 [workspace]
 resolver = "2"
@@ -48,11 +48,12 @@ postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres"
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 
+# Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
+# `mz_changes` branch carries current IANA data only, no code changes.
+chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "5999cdd1b971694f834ec3467d11ef9147fc297c" }
+
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
-
-# Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
@@ -69,7 +70,7 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `mz_v0.9.0` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+# All changes should go to the `mz_v0.10.x` branch.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
