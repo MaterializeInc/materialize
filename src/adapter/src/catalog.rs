@@ -2912,6 +2912,62 @@ mod tests {
         .await;
     }
 
+    /// Re-parsing a materialized view must resolve the same optimizer features
+    /// the sequencer resolved when the view was created, which includes the
+    /// cluster-scoped system parameters on top of the cluster's own feature
+    /// overrides. Dropping that layer both mis-keys the local expression cache
+    /// and re-derives the local plan under features the view was never
+    /// optimized with.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_parse_materialized_view_applies_cluster_scoped_overrides() {
+        Catalog::with_debug(|mut catalog| async move {
+            let cluster_id = catalog
+                .resolve_cluster("quickstart")
+                .expect("quickstart cluster exists")
+                .id;
+
+            // The scoped override below is only observable if it differs from
+            // the env-wide value.
+            assert!(!catalog.system_config().enable_eager_delta_joins());
+
+            let create_sql = r#"CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" AS SELECT 1 AS "a""#;
+            let parse_features = |catalog: &Catalog| {
+                let (_item, uncached_expr) = catalog
+                    .state()
+                    .parse_item_inner(
+                        GlobalId::User(1),
+                        create_sql,
+                        &BTreeMap::new(),
+                        None,
+                        false,
+                        None,
+                        None,
+                        None,
+                    )
+                    .unwrap_or_else(|(err, _)| panic!("unable to parse materialized view: {err}"));
+                uncached_expr
+                    .expect("nothing was cached, so the expression was optimized")
+                    .1
+            };
+
+            assert!(!parse_features(&catalog).enable_eager_delta_joins);
+
+            catalog.state.scoped_system_parameters.cluster.insert(
+                cluster_id,
+                BTreeMap::from([(
+                    "enable_eager_delta_joins".to_string(),
+                    "true".to_string(),
+                )]),
+            );
+
+            assert!(parse_features(&catalog).enable_eager_delta_joins);
+
+            catalog.expire().await;
+        })
+        .await;
+    }
+
     // Test that if a large catalog item is somehow committed, then we can still load the catalog.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // slow
