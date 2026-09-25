@@ -330,6 +330,13 @@
       characters.
     version-added: v0.97
 
+  - signature: 'jaro_winkler_similarity(a: str, b: str) -> float'
+    description: |
+      The [Jaro-Winkler similarity](https://en.wikipedia.org/wiki/Jaro%E2%80%93Winkler_distance)
+      of `a` and `b`, from `0` (no characters in common) to `1` (identical), comparing Unicode
+      code points. Matches Apache Commons Text's `JaroWinklerSimilarity`. Takes time proportional
+      to the product of the input lengths, so it is intended for short strings such as names.
+
   - signature: 'left(s: str, n: int) -> str'
     description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
 

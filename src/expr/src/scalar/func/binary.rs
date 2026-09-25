@@ -426,6 +426,7 @@ mod derive {
         PrettySql(PrettySql),
         RegexpReplace(RegexpReplace),
         StartsWith(StartsWith),
+        JaroWinklerSimilarity(JaroWinklerSimilarity),
     }
 }
 

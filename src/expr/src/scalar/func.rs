@@ -27,7 +27,7 @@ use dec::OrderedDecimal;
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_expr_derive::sqlfunc;
-use mz_ore::cast::{self, CastFrom};
+use mz_ore::cast::{self, CastFrom, CastLossy};
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
@@ -2657,6 +2657,61 @@ fn starts_with(a: &str, b: &str) -> bool {
     a.starts_with(b)
 }
 
+/// Jaro-Winkler similarity of `a` and `b` in `[0, 1]`, comparing Unicode code points.
+///
+/// Matches Apache Commons Text's `JaroWinklerSimilarity`: the shorter string is matched against
+/// the longer, half the transposition count is used without rounding, and the common-prefix boost
+/// (up to 4 characters, scaling factor 0.1) applies only when the Jaro similarity is at least 0.7.
+/// Takes O(|a| * |b|) time.
+#[sqlfunc(propagates_nulls = true)]
+fn jaro_winkler_similarity(a: &str, b: &str) -> f64 {
+    if a == b {
+        return 1.0;
+    }
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (short, long) = if a.len() > b.len() {
+        (&b, &a)
+    } else {
+        (&a, &b)
+    };
+    let window = (long.len() / 2).saturating_sub(1);
+    let mut short_matched = vec![false; short.len()];
+    let mut long_matched = vec![false; long.len()];
+    let mut matches = 0usize;
+    for (i, c) in short.iter().enumerate() {
+        for j in i.saturating_sub(window)..(i + window + 1).min(long.len()) {
+            if !long_matched[j] && long[j] == *c {
+                short_matched[i] = true;
+                long_matched[j] = true;
+                matches += 1;
+                break;
+            }
+        }
+    }
+    if matches == 0 {
+        return 0.0;
+    }
+    let short_seq = short.iter().zip_eq(&short_matched).filter(|(_, m)| **m);
+    let long_seq = long.iter().zip_eq(&long_matched).filter(|(_, m)| **m);
+    let transpositions = short_seq
+        .zip_eq(long_seq)
+        .filter(|((x, _), (y, _))| x != y)
+        .count();
+    let m = f64::cast_lossy(matches);
+    let jaro = (m / f64::cast_lossy(a.len())
+        + m / f64::cast_lossy(b.len())
+        + (m - f64::cast_lossy(transpositions) / 2.0) / m)
+        / 3.0;
+    if jaro < 0.7 {
+        return jaro;
+    }
+    let prefix = (0..a.len().min(b.len()).min(4))
+        .take_while(|i| a[*i] == b[*i])
+        .count();
+    jaro + 0.1 * f64::cast_lossy(prefix) * (1.0 - jaro)
+}
+
 #[sqlfunc(
     sqlname = "||",
     is_infix_op = true,
@@ -3334,6 +3389,27 @@ mod test {
 
     use super::*;
     use crate::{Eval, MirScalarExpr};
+
+    #[mz_ore::test]
+    fn jaro_winkler_similarity_cases() {
+        // Expected values are Apache Commons Text's `JaroWinklerSimilarity`.
+        for (a, b, expected) in [
+            ("martha", "marhta", 0.9611111111111111),
+            ("dixon", "dicksonx", 0.8133333333333332),
+            ("jonathan", "jon", 0.8541666666666666),
+            ("josé", "jose", 0.8833333333333334),
+            // Three out-of-order matches: half-transpositions are not rounded down.
+            ("xyzabc", "yzxabc", 0.9166666666666666),
+            // Jaro below 0.7: no prefix boost.
+            ("ab", "ac", 0.6666666666666666),
+            ("abc", "xyz", 0.0),
+            ("", "", 1.0),
+            ("a", "", 0.0),
+        ] {
+            assert_eq!(jaro_winkler_similarity(a, b), expected, "({a:?}, {b:?})");
+            assert_eq!(jaro_winkler_similarity(b, a), expected, "({b:?}, {a:?})");
+        }
+    }
 
     #[mz_ore::test]
     fn variant_names_unique() {
