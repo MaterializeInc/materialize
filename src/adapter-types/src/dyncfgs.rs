@@ -73,6 +73,13 @@ pub const ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+pub const ENABLE_0DT_CAUGHT_UP_LEADER_HYDRATION_CHECK: Config<bool> = Config::new(
+    "enable_0dt_caught_up_leader_hydration_check",
+    true,
+    "Allow unhydrated compute collections within the allowed lag to pass the 0dt caught-up check when every hosting leader replica explicitly reports them unhydrated. Disabling requires local hydration regardless of the leader's hydration status.",
+    ParameterScope::Environment,
+);
+
 // TODO(aljoscha): Remove this break-glass flag after a couple of releases, once
 // the sustained-health gate has proven itself in production. It only exists as a
 // fleet-wide automatic revert to the prior "caught-up implies ready" behavior.
@@ -570,6 +577,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
         .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)
+        .add(&ENABLE_0DT_CAUGHT_UP_LEADER_HYDRATION_CHECK)
         .add(&ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD)
         .add(&ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS)
