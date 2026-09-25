@@ -3856,7 +3856,8 @@ fn test_peek_on_dropped_indexed_view() {
             let ready: bool = ddl_client
                 .query_one(
                     "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
-                     JOIN mz_indexes i ON i.id = f.object_id \
+                     JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id \
+                     JOIN mz_indexes i ON i.id = g.id \
                      WHERE i.name = 'i' AND f.read_frontier IS NOT NULL)",
                     &[],
                 )
@@ -3875,7 +3876,11 @@ fn test_peek_on_dropped_indexed_view() {
     });
 
     let index_id: String = ddl_client
-        .query_one("SELECT id FROM mz_indexes WHERE name = 'i'", &[])
+        .query_one(
+            "SELECT g.global_id FROM mz_indexes i \
+             JOIN mz_internal.mz_object_global_ids g ON g.id = i.id WHERE i.name = 'i'",
+            &[],
+        )
         .unwrap()
         .get(0);
 

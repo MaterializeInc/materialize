@@ -361,7 +361,8 @@ fn test_statement_logging_basic() {
                 let ready: bool = probe
                     .query_one(
                         "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
-                         JOIN mz_indexes i ON i.id = f.object_id \
+                         JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id \
+                         JOIN mz_indexes i ON i.id = g.id \
                          WHERE i.name = 'i' AND f.read_frontier IS NOT NULL)",
                         &[],
                     )
