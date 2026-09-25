@@ -211,6 +211,8 @@ fn with_scratch<Out>(f: impl FnOnce(&mut Vec<u64>) -> Out) -> Out {
 /// of the columnar merge machinery.
 const COMMIT_BYTES: usize = 2 << 20;
 
+pub mod metrics;
+
 /// Bodies smaller than this stay resident: the pool's smallest size class is
 /// 64 KiB, so spilling below it trades no meaningful memory for slot waste.
 ///
@@ -431,6 +433,11 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     where
         T: Timestamp,
     {
+        metrics::record(
+            metrics::Stage::Commit,
+            column.borrow().len(),
+            column.length_in_bytes(),
+        );
         mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
         if let Some(pool) = spill_pool() {
             if column.length_in_bytes() >= SPILL_MIN_BYTES {
@@ -670,6 +677,11 @@ where
     /// Fronts whose data ranges are disjoint never load at all: the resident
     /// fence entries decide, and the lower front moves to the output whole.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
+        metrics::record(
+            metrics::Stage::Merge,
+            in1.front().map_or(0, Self::records) + in2.front().map_or(0, Self::records),
+            0,
+        );
         // Disjoint fast path: when one front lies strictly below the other's
         // first data item (equal boundary data could still interleave on
         // time), the merged prefix through the shared horizon is exactly that
@@ -823,6 +835,11 @@ where
         done: bool,
         out: &mut VecDeque<Self>,
     ) {
+        metrics::record(
+            metrics::Stage::Advance,
+            input.iter().map(Self::records).sum(),
+            0,
+        );
         let Some(front) = input.pop_front() else {
             return;
         };
