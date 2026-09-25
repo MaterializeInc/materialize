@@ -757,12 +757,26 @@ impl<'w> Worker<'w> {
     fn storage_guest_busy(&self) -> bool {
         self.storage.as_ref().is_some_and(|guest| {
             !guest.client_rx.is_empty()
-                || guest
-                    .conn
-                    .as_ref()
-                    .is_some_and(|conn| !conn.command_rx.is_empty())
+                || (!self.storage_commands_held()
+                    && guest
+                        .conn
+                        .as_ref()
+                        .is_some_and(|conn| !conn.command_rx.is_empty()))
                 || !guest.storage_state.async_worker.is_empty()
         })
+    }
+
+    /// Whether the storage guest must leave external storage commands unread.
+    ///
+    /// Commands are held until compute's `CreateInstance` has initialized logging. Held commands
+    /// do not keep the worker busy. Handling `CreateInstance` releases them.
+    fn storage_commands_held(&self) -> bool {
+        // Storage commands render storage dataflows, and the loggers only observe operators
+        // created after their initialization, so a storage dataflow rendered earlier never
+        // appears in introspection. Nothing orders the storage and compute controller
+        // connections, so the storage controller can connect first. Every storage dataflow
+        // stems from an external storage command, so holding those back suffices.
+        self.compute_state.is_none()
     }
 
     /// Dispatch a storage-internal command from the command channel to
@@ -815,6 +829,7 @@ impl<'w> Worker<'w> {
             }
         }
 
+        let commands_held = self.storage_commands_held();
         let mut worker = StorageWorker {
             timely_worker: &mut *self.timely_worker,
             client_rx: guest.client_rx,
@@ -830,7 +845,12 @@ impl<'w> Worker<'w> {
             worker.handle_async_worker_response(response);
         }
 
-        let Some(mut conn) = guest.conn.take() else {
+        let conn = if commands_held {
+            None
+        } else {
+            guest.conn.take()
+        };
+        let Some(mut conn) = conn else {
             let StorageWorker {
                 timely_worker: _,
                 client_rx,
