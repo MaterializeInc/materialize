@@ -19,7 +19,7 @@ cd "$(dirname "$0")/../../../.."
 
 if ! zizmor --version >/dev/null 2>/dev/null; then
   echo "lint: zizmor is not installed"
-  echo "hint: Install with \`cargo install --locked zizmor@1.18.0\`"
+  echo "hint: Install with \`cargo install --locked zizmor@1.30.1\`"
   exit 1
 fi
 
