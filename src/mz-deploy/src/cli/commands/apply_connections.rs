@@ -289,6 +289,9 @@ fn diff_connection_options(
 
     // Options in project but not in live, or with different values → SET
     for (name, project_opt) in &project_map {
+        if is_server_managed(*name) {
+            continue;
+        }
         match live_map.get(name) {
             None => to_set.push((*project_opt).clone()),
             Some(live_opt) => {
@@ -301,12 +304,72 @@ fn diff_connection_options(
 
     // Options in live but not in project → DROP
     for name in live_map.keys() {
+        if is_server_managed(*name) {
+            continue;
+        }
         if !project_map.contains_key(name) {
             to_drop.push(*name);
         }
     }
 
     (to_set, to_drop)
+}
+
+/// Whether a connection option is generated and owned by the server rather than
+/// written by the user.
+///
+/// An SSH tunnel connection's `PUBLIC KEY 1`/`PUBLIC KEY 2` are produced by the
+/// server and shown by `SHOW CREATE`, but cannot appear in project SQL.
+/// Reconciling them would emit an `ALTER CONNECTION` that rotates the keypair on
+/// every apply, so they are excluded from the diff entirely.
+fn is_server_managed(name: ConnectionOptionName) -> bool {
+    use ConnectionOptionName::*;
+    match name {
+        // Server-generated for SSH connections and overwritten by the planner on
+        // every `plan_create_connection`, never taken from the user.
+        PublicKey1 | PublicKey2 => true,
+        // Everything else is user-authored. Enumerated explicitly (no `_`) so a
+        // new ConnectionOptionName variant fails to compile here until it is
+        // classified. Defaulting a future server-generated option to
+        // user-authored would silently reintroduce the rotate-on-every-apply bug.
+        AccessKeyId
+        | AssumeRoleArn
+        | AssumeRoleSessionName
+        | AvailabilityZones
+        | AwsConnection
+        | AwsPrivatelink
+        | Broker
+        | Brokers
+        | Credential
+        | Database
+        | Endpoint
+        | GcpConnection
+        | Host
+        | Password
+        | Port
+        | ProgressTopic
+        | ProgressTopicReplicationFactor
+        | Region
+        | Registry
+        | SaslMechanisms
+        | SaslPassword
+        | SaslUsername
+        | Scope
+        | SecretAccessKey
+        | SecurityProtocol
+        | ServiceAccountKey
+        | ServiceName
+        | SshTunnel
+        | SslCertificate
+        | SslCertificateAuthority
+        | SslKey
+        | SslMode
+        | SessionToken
+        | CatalogType
+        | Url
+        | User
+        | Warehouse => false,
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +437,28 @@ mod tests {
         assert!(to_set.is_empty());
         assert_eq!(to_drop.len(), 1);
         assert_eq!(to_drop[0], ConnectionOptionName::Database);
+    }
+
+    #[mz_ore::test]
+    fn test_diff_ignores_server_managed_public_keys() {
+        // SHOW CREATE on an SSH tunnel connection reports server-generated
+        // public keys the user never wrote. Reconciling them would rotate the
+        // keypair, so the diff must ignore them.
+        let project = vec![make_option(
+            ConnectionOptionName::Host,
+            "bastion.example.com",
+        )];
+        let live = vec![
+            make_option(ConnectionOptionName::Host, "bastion.example.com"),
+            make_option(ConnectionOptionName::PublicKey1, "ssh-ed25519 AAAA1"),
+            make_option(ConnectionOptionName::PublicKey2, "ssh-ed25519 AAAA2"),
+        ];
+        let (to_set, to_drop) = diff_connection_options(&project, &live);
+        assert!(to_set.is_empty(), "no options should be set");
+        assert!(
+            to_drop.is_empty(),
+            "server-managed public keys must not be dropped, got: {to_drop:?}"
+        );
     }
 
     #[mz_ore::test]
