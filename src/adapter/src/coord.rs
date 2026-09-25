@@ -252,6 +252,23 @@ mod privatelink_status;
 mod sql;
 mod validity;
 
+/// Boxes a coordinator dispatcher while bounding its inline state.
+fn box_dispatcher<'a, F>(future: F) -> LocalBoxFuture<'a, ()>
+where
+    F: std::future::Future<Output = ()> + 'a,
+{
+    // Every command pays for the largest branch's future, even when that branch
+    // is not taken. Box large, infrequent callees separately to stay within this
+    // budget. Leave room for differences between build profiles and platforms.
+    const {
+        assert!(
+            size_of::<F>() <= 24 * 1024,
+            "coordinator dispatcher future exceeds 24 KiB: box large awaited callees"
+        );
+    }
+    future.boxed_local()
+}
+
 /// The oldest leader version against which a replacement-migrated builtin materialized view may
 /// write its new persist shard while this environment is still read-only.
 ///
