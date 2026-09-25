@@ -159,7 +159,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                     DeploymentStatus.READY_TO_PROMOTE, self.workload.mz_service
                 )
                 self.composition.promote_mz(
-                    self.workload.mz_service, retire=previous_mz_service
+                    self.workload.mz_service, retire_mz_service=previous_mz_service
                 )
 
         yield None

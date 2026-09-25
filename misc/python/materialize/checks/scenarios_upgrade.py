@@ -508,7 +508,7 @@ class PreflightCheckContinue(Scenario):
             start_mz_read_only(self, tag=None, deploy_generation=1),
             WaitReadyMz(),
             # KillMz above already removed the previous generation.
-            PromoteMz(retire=None),
+            PromoteMz(retire_mz_service=None),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the new version
@@ -653,7 +653,10 @@ def upgrade_service_actions(
             system_parameter_defaults=service_info.system_parameter_defaults,
         ),
         WaitReadyMz(service_info.service_name),
-        PromoteMz(service_info.service_name, retire=previous_service_info.service_name),
+        PromoteMz(
+            service_info.service_name,
+            retire_mz_service=previous_service_info.service_name,
+        ),
     ]
 
 
