@@ -1521,3 +1521,91 @@ def workflow_rotate_keys_race(c: Composition, parser: WorkflowArgumentParser) ->
         )
 
     print(f"OK: ROTATE aborted with OCC conflict, SET preserved: {err_str}")
+
+
+# Pauses CREATE SECRET in its off-thread ensure task, between the secret-store
+# write and the finishing catalog transaction. Defined in
+# src/adapter/src/coord/sequencer/inner/secret.rs.
+CREATE_SECRET_FAILPOINT = "create_secret_between_ensure_and_finish"
+
+# Substring of the Display impl of `AdapterError::ConcurrentDependencyDrop` in
+# src/adapter/src/error.rs; what we look for in the CREATE SECRET error to
+# confirm the concurrent drop was detected cleanly.
+CONCURRENT_DROP_MESSAGE = "was dropped"
+
+
+def workflow_create_secret_db_drop_race(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for SQL-518: the coordinator panics with
+    `OrdMap::index: invalid key` when a staged CREATE SECRET finishes after its
+    target database was dropped.
+
+    CREATE SECRET is staged: the ensure stage writes the secret to the secret
+    store in an off-thread task, then the finish stage transacts the catalog
+    back on the coordinator loop. A DROP DATABASE ... CASCADE that commits
+    inside that window removes the secret's target database and schema, and
+    the finishing `Op::CreateItem` used to panic resolving the new item's full
+    name against the missing database. With the fix, `transact_op` revalidates
+    the target database and schema and returns
+    `AdapterError::ConcurrentDependencyDrop` instead.
+
+    We force the interleaving deterministically with the
+    `create_secret_between_ensure_and_finish` failpoint.
+    """
+    parser.parse_args()
+
+    c.up("materialized")
+
+    c.sql("CREATE DATABASE secret_race_db")
+
+    # `SET failpoints` writes to the process-global registry, so the pause
+    # applies to any session that later hits the named failpoint.
+    c.sql(f"SET failpoints = '{CREATE_SECRET_FAILPOINT}=pause'")
+
+    create_err: Exception | None = None
+
+    def create_secret() -> None:
+        nonlocal create_err
+        try:
+            with c.sql_cursor(reuse_connection=False) as cur:
+                cur.execute(b"CREATE SECRET secret_race_db.public.sec1 AS 'val'")
+        except Exception as e:
+            create_err = e
+
+    t_create = PropagatingThread(target=create_secret, name="create_secret")
+    t_create.start()
+
+    # Give CREATE SECRET time to evaluate the secret, write it to the secret
+    # store, and park at the failpoint.
+    time.sleep(1)
+
+    # CREATE SECRET is now blocked between ensure and finish. Drop its target
+    # database. CASCADE is required because the database is not empty (it
+    # contains the public schema).
+    c.sql("DROP DATABASE secret_race_db CASCADE")
+
+    # Release CREATE SECRET. It will resume into the finishing catalog
+    # transaction, whose `Op::CreateItem` must now detect the missing
+    # database instead of panicking.
+    c.sql(f"SET failpoints = '{CREATE_SECRET_FAILPOINT}=off'")
+
+    t_create.join()
+
+    if create_err is None:
+        raise Exception(
+            "CREATE SECRET unexpectedly succeeded despite its target database "
+            "being dropped inside the staging window."
+        )
+
+    err_str = str(create_err)
+    if CONCURRENT_DROP_MESSAGE not in err_str:
+        raise Exception(
+            "CREATE SECRET failed but not with the expected concurrent-drop "
+            f"error (did the coordinator panic?): {create_err}"
+        )
+
+    # The coordinator must have survived.
+    c.sql_query("SELECT 1")
+
+    print(f"OK: CREATE SECRET aborted cleanly on the dropped database: {err_str}")
