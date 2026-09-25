@@ -156,6 +156,11 @@ where
         }
         self
     }
+
+    /// The wrapped trace, which does not report the padding.
+    pub fn unpadded(&self) -> &Tr {
+        &self.trace
+    }
 }
 
 impl<Tr> TraceReader for PaddedTrace<Tr>
@@ -228,20 +233,6 @@ where
     }
 }
 
-impl<Tr> PaddedTrace<TraceAgent<Tr>>
-where
-    Tr: TraceReader + 'static,
-{
-    /// Imports the trace into `scope` as a live arrangement named `name`.
-    pub fn import_named<'scope>(
-        &self,
-        scope: Scope<'scope, Tr::Time>,
-        name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>> {
-        self.trace.clone().import_named(scope, name)
-    }
-}
-
 /// Bundles together traces for the successful computations (`oks`), the
 /// failed computations (`errs`), additional tokens that should share
 /// the lifetime of the bundled traces (`to_drop`).
@@ -277,6 +268,16 @@ impl TraceBundle {
         }
     }
 
+    /// Returns a reference to the `oks` trace.
+    pub fn oks(&self) -> &PaddedTrace<RowRowAgent<Timestamp, Diff>> {
+        &self.oks
+    }
+
+    /// Returns a reference to the `errs` trace.
+    pub fn errs(&self) -> &PaddedTrace<ErrAgent<Timestamp, Diff>> {
+        &self.errs
+    }
+
     /// Returns a mutable reference to the `oks` trace.
     pub fn oks_mut(&mut self) -> &mut PaddedTrace<RowRowAgent<Timestamp, Diff>> {
         &mut self.oks
@@ -299,21 +300,6 @@ impl TraceBundle {
         &mut PaddedTrace<ErrAgent<Timestamp, Diff>>,
     ) {
         (&mut self.oks, &mut self.errs)
-    }
-
-    /// Imports both traces into `scope` as live arrangements, for publishers to attach to.
-    pub fn import_named<'scope>(
-        &self,
-        scope: Scope<'scope, Timestamp>,
-        name: &str,
-    ) -> (
-        Arranged<'scope, RowRowAgent<Timestamp, Diff>>,
-        Arranged<'scope, ErrAgent<Timestamp, Diff>>,
-    ) {
-        (
-            self.oks.import_named(scope.clone(), &format!("{name} oks")),
-            self.errs.import_named(scope, &format!("{name} errs")),
-        )
     }
 
     /// Returns a reference to the `to_drop` tokens.
