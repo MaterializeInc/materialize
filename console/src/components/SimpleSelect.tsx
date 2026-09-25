@@ -37,8 +37,7 @@ const SimpleSelect = forwardRef<SimpleSelectProps, "select">((props, ref) => {
         },
         _focus: {
           borderColor: colors.accent.brightPurple,
-          boxShadow:
-            "0px 0px 0px 0px hsla(0, 0%, 0%, 0), 0px 0px 0px 0px hsla(0, 0%, 0%, 0), 0px 0px 0px 2px hsla(257, 100%, 65%, 0.24)", // accent.brightPurple,
+          boxShadow: `0px 0px 0px 0px hsla(0, 0%, 0%, 0), 0px 0px 0px 0px hsla(0, 0%, 0%, 0), ${shadows.input.focus}`,
         },
         _invalid: {
           borderColor: colors.accent.red,
