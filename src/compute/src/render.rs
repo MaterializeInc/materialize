@@ -1652,12 +1652,15 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         // leaving only activations for data to pass through.
         builder.set_notify_for(0, FrontierInterest::IfCapability);
         builder.build(move |capabilities| {
-            // NOTE: The capabilities track the input frontier rather than sitting at the as-of.
-            // In an iterative scope, a capability at `refine(as_of)` would hold back the loop's
-            // inner frontier at iteration zero and prevent it from ever reaching the hydration
-            // frontier. Tracking the input frontier only delays the output frontier by one
-            // activation until hydration.
+            // NOTE: The capabilities sit at the hydration frontier. Anything earlier, such as the
+            // as-of or the current input frontier, livelocks inside an iterative scope: the
+            // capability feeds back around the loop and keeps the input frontier one iteration
+            // ahead of itself, so it never reaches the hydration frontier. The hydration frontier
+            // is past every iteration at the as-of, so the loop is never held back, and outside
+            // loops the input frontier is behind it until hydration, so the output frontier is
+            // unaffected.
             let mut capabilities = CapabilitySet::from(capabilities);
+            capabilities.downgrade(hydration_frontier.iter());
             let mut hydrated = false;
 
             for &export_id in &export_ids {
@@ -1691,8 +1694,6 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             hydrated,
                         }));
                     }
-                } else {
-                    capabilities.downgrade(frontier.iter());
                 }
             }
         });
