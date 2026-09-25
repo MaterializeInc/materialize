@@ -43,7 +43,7 @@ use crate::{
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
-    ManagedResource,
+    ConsoleAppearance, ManagedResource,
     console::v1alpha1::{Console, HttpConnectionScheme},
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
 };
@@ -77,6 +77,8 @@ struct AppConfig {
     auth: AppConfigAuth,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     balancerd_dns_names: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    appearance: Option<ConsoleAppearance>,
 }
 
 #[derive(Serialize)]
@@ -239,6 +241,7 @@ impl Context {
             auth: AppConfigAuth {
                 mode: console.spec.authenticator_kind,
             },
+            appearance: console.spec.appearance.clone(),
         })
         .expect("known valid");
         ConfigMap {
