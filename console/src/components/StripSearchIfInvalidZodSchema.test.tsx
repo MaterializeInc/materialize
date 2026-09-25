@@ -12,6 +12,8 @@ import React from "react";
 import { BrowserRouter } from "react-router-dom";
 import { z } from "zod";
 
+import { ROUTER_FUTURE_FLAGS } from "~/router";
+
 import StripSearchIfInvalidZodSchema from "./StripSearchIfInvalidZodSchema";
 
 describe("StripSearchIfInvalidZodSchema", () => {
@@ -26,7 +28,7 @@ describe("StripSearchIfInvalidZodSchema", () => {
     history.pushState(undefined, "", `/${searchParamString}`);
 
     render(
-      <BrowserRouter>
+      <BrowserRouter future={ROUTER_FUTURE_FLAGS}>
         <StripSearchIfInvalidZodSchema
           schema={z.object({
             param1: z.string(),
@@ -58,7 +60,7 @@ describe("StripSearchIfInvalidZodSchema", () => {
     const mockRenderProp = vi.fn(() => null);
 
     render(
-      <BrowserRouter>
+      <BrowserRouter future={ROUTER_FUTURE_FLAGS}>
         <StripSearchIfInvalidZodSchema
           schema={z.object({
             param1: z.number(),

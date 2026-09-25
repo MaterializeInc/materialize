@@ -22,6 +22,7 @@ import { OidcProviderWrapper } from "~/components/OidcProviderWrapper";
 import { useAppConfig } from "~/config/useAppConfig";
 import { JotaiProviderWrapper } from "~/layouts/JotaiProviderWrapper";
 import { getQueryClient } from "~/queryClient";
+import { ROUTER_FUTURE_FLAGS } from "~/router";
 import { config as themeConfig, initialColorMode } from "~/theme";
 
 import { UnauthenticatedRoutes } from "./UnauthenticatedRoutes";
@@ -34,10 +35,7 @@ const BrowserRouterWrapper = ({ children }: React.PropsWithChildren) => {
       basename={
         appConfig.mode === "cloud" ? appConfig.impersonationBasePath : ""
       }
-      future={{
-        v7_relativeSplatPath: true,
-        v7_startTransition: true,
-      }}
+      future={ROUTER_FUTURE_FLAGS}
     >
       {children}
     </BrowserRouter>

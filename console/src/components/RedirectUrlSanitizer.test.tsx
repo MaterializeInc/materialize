@@ -12,6 +12,8 @@ import React from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { ROUTER_FUTURE_FLAGS } from "~/router";
+
 import { RedirectUrlSanitizer } from "./RedirectUrlSanitizer";
 
 const TestContent = () => <div data-testid="test-content">Test Content</div>;
@@ -19,7 +21,7 @@ const LoginPage = () => <div data-testid="login-page">Login Page</div>;
 
 const renderWithRouter = () => {
   return render(
-    <BrowserRouter>
+    <BrowserRouter future={ROUTER_FUTURE_FLAGS}>
       <RedirectUrlSanitizer>
         <Routes>
           <Route path="/account/login" element={<LoginPage />} />

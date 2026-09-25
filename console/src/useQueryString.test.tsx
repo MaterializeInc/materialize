@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { BrowserRouter } from "react-router-dom";
+
+import { RouterWrapper } from "~/test/utils";
 
 import { useQueryStringState } from "./useQueryString";
 
@@ -23,7 +24,7 @@ describe("useQueryStringState", () => {
         current: [val, _setVal],
       },
     } = renderHook(() => useQueryStringState("key"), {
-      wrapper: BrowserRouter,
+      wrapper: RouterWrapper,
     });
     expect(val).toBe(undefined);
     await waitFor(() => expect(location.search).toBe(""));
@@ -33,7 +34,7 @@ describe("useQueryStringState", () => {
     history.pushState(undefined, "", "/?key=startingValue");
     await waitFor(() => expect(location.search).toBe("?key=startingValue"));
     const { result } = renderHook(() => useQueryStringState("key"), {
-      wrapper: BrowserRouter,
+      wrapper: RouterWrapper,
     });
     const [val] = result.current;
     expect(val).toBe("startingValue");
@@ -41,7 +42,7 @@ describe("useQueryStringState", () => {
 
   it("updates the query string when setValue is called", async () => {
     const { result } = renderHook(() => useQueryStringState("key"), {
-      wrapper: BrowserRouter,
+      wrapper: RouterWrapper,
     });
     let [val, setVal] = result.current;
     act(() => setVal("value"));
@@ -52,7 +53,7 @@ describe("useQueryStringState", () => {
 
   it("removes the query string key when the value is falsey", async () => {
     const { result } = renderHook(() => useQueryStringState("key"), {
-      wrapper: BrowserRouter,
+      wrapper: RouterWrapper,
     });
     let [val, setVal] = result.current;
     act(() => setVal(""));

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { findByText, screen } from "@testing-library/react";
+import { findByText, screen, waitFor } from "@testing-library/react";
 import { formatDate } from "date-fns";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
@@ -392,6 +392,22 @@ describe("SourceDetailRoutes", () => {
           formatDate(new Date(mockTimestamp), DATE_FORMAT_SHORT),
         ),
       ).toBeVisible();
+    });
+  });
+
+  describe("Redirect", () => {
+    it("sends an unknown tab back to the source overview", async () => {
+      const { source } = setupSourceErrorsPage();
+
+      renderSourceDetails([
+        `/${source.databaseName}/schemas/${source.schemaName}/sources/${source.name}/${source.id}/zzz`,
+      ]);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("pathname")).toHaveTextContent(
+          `/${source.databaseName}/schemas/${source.schemaName}/sources/${source.name}/${source.id}`,
+        ),
+      );
     });
   });
 });

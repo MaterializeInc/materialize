@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { formatDate } from "date-fns";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
@@ -243,6 +243,20 @@ describe("SinkDetailRoutes", () => {
           `/materialize/schemas/public/sinks/kafka_sink/${sink.id}`,
         ),
       ).toBeVisible();
+    });
+
+    it("sends an unknown tab back to the sink overview", async () => {
+      const { sink } = setupSinkDetailPage();
+
+      renderSinkDetails([
+        `/materialize/schemas/public/sinks/kafka_sink/${sink.id}/zzz`,
+      ]);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("pathname")).toHaveTextContent(
+          `/materialize/schemas/public/sinks/kafka_sink/${sink.id}`,
+        ),
+      );
     });
   });
 });
