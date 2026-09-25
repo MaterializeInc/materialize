@@ -21,6 +21,7 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::protocol::command::PeekTarget;
@@ -56,11 +57,13 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
+use crate::catalog::Catalog;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
+use crate::peek_client::CoordinatorClient;
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
-use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse};
+use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse, PeekClient};
 
 /// A peek is a request to read data from a maintained arrangement.
 #[derive(Debug)]
@@ -1023,6 +1026,34 @@ impl crate::coord::Coordinator {
             instance_id: compute_instance,
             strategy,
         })
+    }
+
+    /// Returns a [`PeekClient`] for coordinator-owned queries, which have to
+    /// run off the main loop because the client calls back into it.
+    ///
+    /// The client holds no session [`Client`](crate::Client), so it does not
+    /// keep the coordinator alive.
+    pub(crate) fn background_peek_client(&self, catalog: &Arc<Catalog>) -> PeekClient {
+        let build_version = catalog.state().config().build_info.human_version(None);
+        PeekClient::new(
+            CoordinatorClient::Background {
+                tx: self.internal_cmd_tx.clone(),
+                metrics: self.metrics.clone(),
+            },
+            catalog,
+            Arc::clone(&self.controller.storage_collections),
+            Arc::clone(&self.transient_id_gen),
+            self.optimizer_metrics.clone(),
+            self.persist_client.clone(),
+            self.statement_logging.create_frontend(build_version),
+            Arc::clone(&self.occ_write_semaphore),
+            // Background read-then-write always uses the frontend OCC path.
+            // This field only controls session fallback, so the flag does not
+            // gate background work.
+            FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs()),
+            self.group_commit_tx.clone(),
+            self.controller.read_only(),
+        )
     }
 
     /// Creates an async stream that processes peek responses and yields rows.
