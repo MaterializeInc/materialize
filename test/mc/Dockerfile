@@ -19,17 +19,12 @@ RUN apt-get update \
     && git clone --depth=1 --branch RELEASE.2025-08-13T08-35-41Z https://github.com/minio/mc.git \
     && cd mc \
     && CGO_ENABLED=0 go build -trimpath -o /out/mc .
-# Upstream's Makefile stamps a version through ldflags; this build does not, so
-# `mc --version` reports DEVELOPMENT. Nothing in the test suite reads it: the
-# `version` subcommand we use is `mc version enable`, which sets bucket
-# versioning and is unrelated.
+# Upstream's Makefile stamps a release version through ldflags; this build does
+# not, so `ReleaseTag` stays `DEVELOPMENT.GOGET`. That is what we want in CI:
+# `mc` only checks dl.min.io for updates when the tag starts with `RELEASE.`,
+# so this build never makes that call. (`mc version enable`, which the tests
+# use, sets bucket versioning and is unrelated to the binary's version.)
 
 MZFROM debian-base
 COPY --from=builder /out/mc /usr/local/bin/mc
-# `mc` reaches only http endpoints in CI, but it consults its own update
-# endpoint over TLS on some subcommands, which fails without a trust store.
-RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
 ENTRYPOINT ["mc"]
