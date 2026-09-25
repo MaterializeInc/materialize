@@ -212,7 +212,7 @@ pub(crate) async fn migrate(
         rewrite_sources_to_tables(tx, &conn_cat)?;
     }
 
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, conn_cat, _id, stmt| {
         let _catalog_version = catalog_version.clone();
         // Add per-item, post-planning AST migrations below. Most
         // migrations should be in the above `rewrite_ast_items` block.
@@ -228,6 +228,7 @@ pub(crate) async fn migrate(
         //
         // Migration functions may also take `tx` as input to stage
         // arbitrary changes to the catalog.
+        ast_rewrite_fold_refresh_times(conn_cat, stmt)?;
         Ok(())
     })?;
 
@@ -896,6 +897,46 @@ fn migrate_builtin_tables_to_mvs(tx: &mut Transaction) -> Result<(), anyhow::Err
 //
 // Please include the adapter team on any code reviews that add or edit
 // migrations.
+
+/// Folds the `REFRESH AT` times and `ALIGNED TO` alignments of a materialized
+/// view to `mz_timestamp` literals.
+///
+/// Purification folds them at creation (see `mz_sql::pure::fold_refresh_times`)
+/// and `mz_materialized_view_refresh_strategies` reads the literals back, but a
+/// statement stored before that fold existed carries the expression as typed.
+/// Only name resolution needs the catalog: the expressions reference functions
+/// and types, never relations.
+fn ast_rewrite_fold_refresh_times(
+    conn_cat: &ConnCatalog<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{RefreshOptionValue, WithOptionValue};
+
+    let Statement::CreateMaterializedView(cmvs) = &*stmt else {
+        return Ok(());
+    };
+    let has_refresh_time = cmvs.with_options.iter().any(|option| {
+        matches!(
+            option.value,
+            Some(WithOptionValue::Refresh(
+                RefreshOptionValue::At(_) | RefreshOptionValue::Every(_)
+            ))
+        )
+    });
+    if !has_refresh_time {
+        return Ok(());
+    }
+
+    let (resolved, _) = mz_sql::names::resolve(conn_cat, stmt.clone())?;
+    let Statement::CreateMaterializedView(mut resolved) = resolved else {
+        unreachable!("name resolution preserves the statement kind");
+    };
+    if mz_sql::pure::fold_refresh_times(conn_cat, &mut resolved) {
+        let sql = Statement::CreateMaterializedView(resolved).to_ast_string_stable();
+        *stmt = mz_sql::parse::parse(&sql)?.into_element().ast;
+    }
+    Ok(())
+}
 
 // Remove PARTITION STRATEGY from CREATE SINK statements.
 fn ast_rewrite_create_sink_partition_strategy(

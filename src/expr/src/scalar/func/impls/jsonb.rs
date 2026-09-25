@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_expr_derive::sqlfunc;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
@@ -20,10 +21,12 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::item_refs::collect_item_references;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
-    CreateSinkConnection, CreateSubsourceOptionName, Format, FormatSpecifier,
-    IcebergSinkConfigOptionName, IcebergSinkMode, KafkaSinkConfigOptionName,
-    KafkaSourceConfigOptionName, PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName,
-    SinkEnvelope, SourceEnvelope, SourceErrorPolicy, UnresolvedItemName, Value, WithOptionValue,
+    CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, Expr, Format,
+    FormatSpecifier, IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName,
+    KafkaSinkConfigOptionName, KafkaSourceConfigOptionName, MaterializedViewOptionName,
+    PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SinkEnvelope, SourceEnvelope, SourceErrorPolicy,
+    TableFromSourceOptionName, TableOptionName, UnresolvedItemName, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -405,6 +408,56 @@ fn option_string<T: AstInfo>(value: &WithOptionValue<T>) -> Option<String> {
     }
 }
 
+/// The compaction window a `RETAIN HISTORY` option plans to, in milliseconds.
+///
+/// Mirrors `plan_retain_history_option` and `OptionalDuration` in `mz_sql`: `NULL` and a zero
+/// duration disable compaction, which `CompactionWindow::comparable_timestamp` reports as
+/// `u64::MAX`.
+fn retain_history_millis<T: AstInfo>(value: Option<&WithOptionValue<T>>) -> Result<u64, String> {
+    let value = match value {
+        Some(WithOptionValue::RetainHistoryFor(value) | WithOptionValue::Value(value)) => value,
+        _ => return Err("invalid RETAIN HISTORY value".into()),
+    };
+    let interval = match value {
+        Value::Null => None,
+        Value::Interval(literal) => {
+            Some(Interval::from_literal(literal).map_err(|e| e.to_string())?)
+        }
+        Value::Number(s) | Value::String(s) => {
+            Some(strconv::parse_interval(s).map_err(|e| e.to_string())?)
+        }
+        Value::HexString(_) | Value::Boolean(_) => {
+            return Err("invalid RETAIN HISTORY value".into());
+        }
+    };
+    let duration = interval
+        .map(|interval| interval.duration().map_err(|e| e.to_string()))
+        .transpose()?
+        .filter(|duration| !duration.is_zero());
+    match duration {
+        None => Ok(u64::MAX),
+        Some(duration) => u64::try_from(duration.as_millis())
+            .map_err(|_| "RETAIN HISTORY duration out of range".to_string()),
+    }
+}
+
+/// The milliseconds of a `REFRESH AT` time or `ALIGNED TO` alignment.
+///
+/// Purification folds both to `<millis>::mz_timestamp` before the statement is stored (see
+/// `fold_refresh_times` in `mz_sql`). Anything else is a statement stored before that fold
+/// existed and not yet rewritten by the catalog migration, which reads as NULL rather than
+/// failing every catalog view.
+fn refresh_time_millis<T: AstInfo>(time: &Expr<T>) -> Option<u64> {
+    let literal = match time {
+        Expr::Cast { expr, .. } => expr.as_ref(),
+        expr => expr,
+    };
+    match literal {
+        Expr::Value(Value::Number(millis)) => millis.parse().ok(),
+        _ => None,
+    }
+}
+
 /// Parses a catalog `create_sql` string into a JSONB object.
 ///
 /// The returned JSONB does not fully reflect the parsed SQL and instead contains only fields
@@ -449,6 +502,17 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
         let mut info = BTreeMap::<&str, serde_json::Value>::new();
 
+        // Records the `RETAIN HISTORY` option of `$stmt`, if any. Each statement type has its own
+        // option type. Like `CatalogItem::update_retain_history`, the last one wins.
+        macro_rules! record_retain_history {
+            ($stmt:expr, $name:path) => {
+                if let Some(option) = $stmt.with_options.iter().rev().find(|o| o.name == $name) {
+                    let millis = retain_history_millis(option.value.as_ref())?;
+                    info.insert("retain_history_millis", json!(millis));
+                }
+            };
+        }
+
         use mz_sql_parser::ast::Statement::*;
         let item_type = match stmt {
             CreateSecret(_) => "secret",
@@ -481,16 +545,67 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 definition.push(';');
                 info.insert("definition", json!(definition));
 
+                record_retain_history!(stmt, MaterializedViewOptionName::RetainHistory);
+
+                if let Some(target) = stmt.replacement_for {
+                    info.insert("replacement_target", json!(get_item_id(target)?));
+                }
+
+                // Purification leaves at least one REFRESH option, but a statement stored
+                // before it did has none and means ON COMMIT.
+                let mut refresh = Vec::new();
+                for option in stmt.with_options {
+                    let Some(WithOptionValue::Refresh(value)) = option.value else {
+                        continue;
+                    };
+                    refresh.push(match value {
+                        RefreshOptionValue::OnCommit => json!({"type": "on-commit"}),
+                        // Purified to `AT <mz_now>` before storage.
+                        RefreshOptionValue::AtCreation => json!({"type": "at", "at": null}),
+                        RefreshOptionValue::At(RefreshAtOptionValue { time }) => {
+                            json!({"type": "at", "at": refresh_time_millis(&time)})
+                        }
+                        RefreshOptionValue::Every(RefreshEveryOptionValue {
+                            interval,
+                            aligned_to,
+                        }) => {
+                            // The same duration round trip as planning, so that `1 day`
+                            // renders as `24:00:00` rather than as a day.
+                            let interval = Interval::from_literal(&interval)
+                                .and_then(|interval| interval.duration())
+                                .and_then(|duration| Interval::from_duration(&duration))
+                                .map_err(|e| format!("invalid REFRESH EVERY interval: {e}"))?;
+                            json!({
+                                "type": "every",
+                                "interval": interval.to_string(),
+                                "aligned_to": aligned_to.as_ref().and_then(refresh_time_millis),
+                            })
+                        }
+                    });
+                }
+                if refresh.is_empty() {
+                    refresh.push(json!({"type": "on-commit"}));
+                }
+                info.insert("refresh", json!(refresh));
+
                 "materialized-view"
             }
-            CreateTable(_) => "table",
+            CreateTable(stmt) => {
+                record_retain_history!(stmt, TableOptionName::RetainHistory);
+
+                "table"
+            }
             CreateTableFromSource(stmt) => {
                 let source_id = get_item_id(stmt.source)?;
                 info.insert("source_id", json!(source_id));
 
+                record_retain_history!(stmt, TableFromSourceOptionName::RetainHistory);
+
                 "table"
             }
             CreateSource(stmt) => {
+                record_retain_history!(stmt, CreateSourceOptionName::RetainHistory);
+
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());
                 };
@@ -584,6 +699,8 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                     .any(|o| matches!(o.name, CreateSubsourceOptionName::Progress));
                 let source_type = if is_progress { "progress" } else { "subsource" };
                 info.insert("source_type", json!(source_type));
+
+                record_retain_history!(stmt, CreateSubsourceOptionName::RetainHistory);
 
                 if let Some(of_source) = stmt.of_source {
                     let of_source_id = get_item_id(of_source)?;
@@ -733,6 +850,7 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 info.insert("cluster_id", json!(cluster_id));
                 let on_id = get_item_id(stmt.on_name)?;
                 info.insert("on_id", json!(on_id));
+                record_retain_history!(stmt, IndexOptionName::RetainHistory);
                 "index"
             }
             CreateType(_) => "type",
@@ -2437,5 +2555,147 @@ mod tests {
             matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("failed to parse")),
             "wrong error variant/message"
         );
+    }
+
+    // --- parse_catalog_create_sql retain_history_millis ----------------------
+
+    fn table_sql(with_options: &str) -> String {
+        format!(
+            "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" pg_catalog.int4){with_options}"
+        )
+    }
+
+    #[mz_ore::test]
+    fn catalog_retain_history_absent_is_omitted() {
+        let out = super::parse_catalog_create_sql(&table_sql("")).expect("ok");
+        assert_eq!(as_serde(out).get("retain_history_millis"), None);
+    }
+
+    #[mz_ore::test]
+    fn catalog_retain_history_spellings() {
+        // A string or a bare number parses as an interval, the number as seconds, and an
+        // interval literal applies its range qualifier.
+        for (option, millis) in [
+            ("'1h'", 3_600_000u64),
+            ("90", 90_000),
+            ("INTERVAL '2' DAY", 172_800_000),
+            ("INTERVAL '1:30' MINUTE TO SECOND", 90_000),
+        ] {
+            let sql = table_sql(&format!(" WITH (RETAIN HISTORY = FOR {option})"));
+            let out = super::parse_catalog_create_sql(&sql).expect("ok");
+            assert_eq!(
+                as_serde(out)["retain_history_millis"],
+                json!(millis),
+                "{option}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn catalog_retain_history_zero_disables_compaction() {
+        for option in ["'0'", "0"] {
+            let sql = table_sql(&format!(" WITH (RETAIN HISTORY = FOR {option})"));
+            let out = super::parse_catalog_create_sql(&sql).expect("ok");
+            assert_eq!(
+                as_serde(out)["retain_history_millis"],
+                json!(u64::MAX),
+                "{option}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn catalog_retain_history_on_each_item_kind() {
+        let cases = [
+            (
+                "CREATE SOURCE \"materialize\".\"public\".\"s\" IN CLUSTER [u1] \
+                 FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '2h')",
+                7_200_000u64,
+            ),
+            (
+                "CREATE INDEX \"t_idx\" IN CLUSTER [u1] \
+                 ON [u2 AS \"materialize\".\"public\".\"t\"] (\"a\") \
+                 WITH (RETAIN HISTORY = FOR '3h')",
+                10_800_000,
+            ),
+            (
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" IN CLUSTER [u1] \
+                 WITH (RETAIN HISTORY = FOR '4h', REFRESH = ON COMMIT) AS SELECT 1",
+                14_400_000,
+            ),
+        ];
+        for (sql, millis) in cases {
+            let out = super::parse_catalog_create_sql(sql).expect("ok");
+            assert_eq!(
+                as_serde(out)["retain_history_millis"],
+                json!(millis),
+                "{sql}"
+            );
+        }
+    }
+
+    // --- parse_catalog_create_sql refresh / replacement_target ---------------
+
+    fn mv_sql(with_options: &str) -> String {
+        format!(
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" IN CLUSTER [u1]{with_options} \
+             AS SELECT 1"
+        )
+    }
+
+    const MZ_TIMESTAMP: &str = "[s1 AS \"pg_catalog\".\"mz_timestamp\"]";
+
+    #[mz_ore::test]
+    fn catalog_refresh_omitted_means_on_commit() {
+        let out = super::parse_catalog_create_sql(&mv_sql("")).expect("ok");
+        assert_eq!(as_serde(out)["refresh"], json!([{"type": "on-commit"}]));
+    }
+
+    #[mz_ore::test]
+    fn catalog_refresh_one_entry_per_option() {
+        let sql = mv_sql(&format!(
+            " WITH (REFRESH = AT 32472144000000::{MZ_TIMESTAMP}, \
+             REFRESH = EVERY '1 day' ALIGNED TO 946684800000::{MZ_TIMESTAMP}, \
+             REFRESH = EVERY '90 minutes' ALIGNED TO 5)"
+        ));
+        let out = super::parse_catalog_create_sql(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out)["refresh"],
+            json!([
+                {"type": "at", "at": 32472144000000u64},
+                {"type": "every", "interval": "24:00:00", "aligned_to": 946684800000u64},
+                {"type": "every", "interval": "01:30:00", "aligned_to": 5},
+            ])
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_refresh_unfolded_time_reads_null() {
+        // Stored by a version without the fold. The catalog migration rewrites it; until then
+        // the time is unknown rather than an error.
+        let sql = mv_sql(&format!(
+            " WITH (REFRESH = AT '2999-01-01 00:00:00+00', \
+             REFRESH = EVERY '1 day' ALIGNED TO 946684800000::{MZ_TIMESTAMP} + 1)"
+        ));
+        let out = super::parse_catalog_create_sql(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out)["refresh"],
+            json!([
+                {"type": "at", "at": null},
+                {"type": "every", "interval": "24:00:00", "aligned_to": null},
+            ])
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_replacement_target() {
+        let out = super::parse_catalog_create_sql(&mv_sql("")).expect("ok");
+        assert_eq!(as_serde(out).get("replacement_target"), None);
+
+        let sql = "CREATE REPLACEMENT MATERIALIZED VIEW \"materialize\".\"public\".\"rp\" \
+                   FOR [u7 AS \"materialize\".\"public\".\"mv\"] IN CLUSTER [u1] \
+                   WITH (REFRESH = ON COMMIT) AS SELECT 1";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out)["replacement_target"], json!("u7"));
     }
 }
