@@ -13,40 +13,33 @@ import { InferResult, sql } from "kysely";
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 
 /**
- * Peak utilization per replica over the last hour.
+ * The most recent utilization sample per replica, from the same `_3h` view the
+ * cluster detail charts read, so both surfaces show the same number.
  *
- * Reads the maintained `_3h` view that already backs the cluster detail page's
- * utilization charts, so the list and the charts agree and no new arrangement
- * is built for the list.
- *
- * NOTE: the view reports fractions of the replica's allocation, not
- * percentages, matching the rest of the utilization-history path. The column
- * names carry `percent` because the view's own columns do.
+ * NOTE: fractions, not percentages. The hour bound leaves a replica with no
+ * recent sample blank rather than hours stale.
  */
 export function buildReplicaUtilizationQuery() {
-  return (
-    queryBuilder
-      .selectFrom("mz_console_cluster_utilization_overview_3h")
-      // The view retains three hours; the list reports the last hour of it. The
-      // `mz_now()` form is what lets the filter bound the read rather than
-      // filtering after the fact.
-      .where(sql<boolean>`mz_now() <= occurred_at + INTERVAL '1 hour'`)
-      .groupBy("replica_id")
-      .select([
-        "replica_id as replicaId",
-        sql<number | null>`MAX(cpu_percent)`.as("cpuPercent"),
-        sql<number | null>`MAX(memory_percent)`.as("memoryPercent"),
-        sql<number | null>`MAX(disk_percent)`.as("diskPercent"),
-        sql<number | null>`MAX(heap_percent)`.as("heapPercent"),
-      ])
-  );
+  return queryBuilder
+    .selectFrom("mz_console_cluster_utilization_overview_3h")
+    .distinctOn("replica_id")
+    .where(sql<boolean>`mz_now() <= occurred_at + INTERVAL '1 hour'`)
+    .select([
+      "replica_id as replicaId",
+      "cpu_percent as cpuPercent",
+      "memory_percent as memoryPercent",
+      "disk_percent as diskPercent",
+      "heap_percent as heapPercent",
+    ])
+    .orderBy("replica_id")
+    .orderBy("occurred_at", "desc");
 }
 
 export type ReplicaUtilization = InferResult<
   ReturnType<typeof buildReplicaUtilizationQuery>
 >[0];
 
-/** Fetches last-hour peak utilization for every replica in the environment. */
+/** Fetches the latest utilization sample for every replica in the environment. */
 export async function fetchReplicaUtilization({
   queryKey,
   requestOptions,
