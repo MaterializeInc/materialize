@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The RBAC policy table, rendered per statement. See the module comment in tests/rbac.rs.
+#
+# These are the requirements a statement imposes, before any session filtering. A superuser or an
+# RBAC-disabled session faces a reduced set, which is a separate concern tested elsewhere.
+
+add-table
+t
+----
+u1
+
+# Reads require SELECT on the relation and USAGE on its schema. No cluster privilege appears
+# because the harness passes no target cluster.
+requirements
+SELECT * FROM t
+----
+
+# Creating an object requires CREATE on the containing schema, and USAGE on the item types the
+# statement can reference.
+requirements
+CREATE TABLE t2 (a int)
+----
+
+# A view records the same CREATE requirement as a table. The reads inside it are not required of
+# the creator here, they are required of the view's owner when someone later selects from it.
+requirements
+CREATE VIEW v AS SELECT * FROM t
+----
+
+# Index creation requires ownership of the indexed object, which is stronger than a privilege:
+# no grant can substitute for it.
+requirements
+CREATE INDEX i ON t (a)
+----
+
+# Dropping requires ownership of the object and USAGE on its container.
+requirements
+DROP TABLE t
+----
+
+# Role creation is gated on a system privilege rather than on any object.
+requirements
+CREATE ROLE r
+----
+
+# Database creation is likewise a system privilege.
+requirements
+CREATE DATABASE d
+----
+
+# SHOW CREATE can name an object without requiring any privilege on the object itself, only
+# USAGE on its schema. This is why it carries an empty item usage set.
+requirements
+SHOW CREATE TABLE t
+----
+
+# Statements with no catalog footprint require nothing at all.
+requirements
+SELECT 1
+----
