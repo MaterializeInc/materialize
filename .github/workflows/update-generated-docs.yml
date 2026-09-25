@@ -15,15 +15,17 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch: {} # Allow manual triggering
 
+permissions: {}
+
 jobs:
   update-docs:
     if: github.repository == 'MaterializeInc/materialize'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: write
-      pull-requests: write
-      id-token: write
+      contents: write # Pushes the automated docs branch.
+      pull-requests: write # Opens the docs PR.
+      id-token: write # Exchanges an OIDC token for the Claude GitHub App token.
       # Required by the "Set CLA status for bot author" step below, which
       # POSTs a commit status. GITHUB_TOKEN cannot trigger the CLA workflow
       # on bot-authored PRs, so we set the status directly instead.

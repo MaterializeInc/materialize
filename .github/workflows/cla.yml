@@ -30,15 +30,15 @@ on:
   pull_request_target:
     types: [opened, closed, synchronize]
 
-permissions:
-  actions: write
-  contents: read
-  pull-requests: write
-  statuses: write
+permissions: {}
 
 jobs:
   cla-assistant:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write # Re-runs the last failed CLA workflow run on the PR after a signature.
+      contents: read
+      pull-requests: write # Creates and updates the CLA comment on the PR.
     steps:
       - name: CLA Assistant
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'

@@ -18,6 +18,8 @@ on:
   pull_request_review:
     types: [submitted]
 
+permissions: {}
+
 concurrency:
   group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
   cancel-in-progress: false
@@ -32,8 +34,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read
-      id-token: write
+      pull-requests: read # Checks out the PR branch and reads PR context.
+      id-token: write # Exchanges an OIDC token for the Claude GitHub App token.
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
