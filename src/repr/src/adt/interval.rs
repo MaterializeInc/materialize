@@ -159,6 +159,19 @@ impl Interval {
         }
     }
 
+    /// Constructs a new `Interval` from component counts held in a wider type,
+    /// returning `None` if any of them overflows its field.
+    ///
+    /// This is the narrowing step for accumulations that sum the three
+    /// components independently in `i128`, as `sum(interval)` does.
+    pub fn try_new(months: i128, days: i128, micros: i128) -> Option<Interval> {
+        Some(Interval::new(
+            i32::try_from(months).ok()?,
+            i32::try_from(days).ok()?,
+            i64::try_from(micros).ok()?,
+        ))
+    }
+
     /// Converts a `Duration` to an `Interval`. The resulting `Interval` will only have
     /// microseconds. Errors if
     /// - the number of microseconds doesn't fit in i64, or

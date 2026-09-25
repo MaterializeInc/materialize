@@ -1518,11 +1518,159 @@ SELECT ('1 month 10 days'::interval)::text;
 ----
 1 mon 10 days
 
-# `avg(interval)` desugars to `sum(interval) / count(interval)` before type
-# checking, so the unsupported-sum error is the only message a user who typed
-# `avg` sees. It must mention both function names.
-statement error sum\(interval\) and avg\(interval\) not yet supported
-SELECT sum('1 day'::interval)
+# `sum(interval)` adds the three interval components independently, exactly as
+# `interval + interval` does: an out-of-range days count is never folded into
+# months, nor microseconds into days.
+query T
+SELECT sum(i) FROM (VALUES ('1 month'::interval), ('40 days'), ('2:30')) t(i)
+----
+1 mon 40 days 02:30:00
 
-statement error sum\(interval\) and avg\(interval\) not yet supported
-SELECT avg('1 day'::interval)
+query T
+SELECT sum(i) FROM (VALUES ('1 month'::interval), ('-1 month'), ('36 hours')) t(i)
+----
+36:00:00
+
+# Components that cancel still count as a non-null observation, so the sum is a
+# zero interval rather than NULL.
+query T
+SELECT sum(i) FROM (VALUES ('1 month'::interval), ('-1 month')) t(i)
+----
+00:00:00
+
+# Nulls are skipped, and an all-null or empty input sums to NULL.
+query T
+SELECT sum(i) FROM (VALUES ('1 day'::interval), (NULL), ('1 hour')) t(i)
+----
+1 day 01:00:00
+
+query T
+SELECT sum(i) FROM (VALUES (NULL::interval), (NULL)) t(i)
+----
+NULL
+
+query T
+SELECT sum(i) FROM (SELECT NULL::interval WHERE false) t(i)
+----
+NULL
+
+# `avg(interval)` desugars to `sum(interval) / count(interval)`, so the division
+# pushes each fractional component down into the next finer one: half a month
+# becomes 15 days, half a day becomes 12 hours.
+query T
+SELECT avg(i) FROM (VALUES ('1 month'::interval), ('2 months')) t(i)
+----
+1 mon 15 days
+
+query T
+SELECT avg(i) FROM (VALUES ('1 day'::interval), ('2 days')) t(i)
+----
+1 day 12:00:00
+
+query T
+SELECT avg(i) FROM (VALUES ('1 day'::interval), (NULL), ('2 days')) t(i)
+----
+1 day 12:00:00
+
+query T
+SELECT avg(i) FROM (VALUES (NULL::interval)) t(i)
+----
+NULL
+
+# `avg_internal_v1` is the compatibility shim that preserves the older
+# float-based promotion, and `mz_catalog` declares it over `interval`. That
+# promotion differs from `avg`'s only for integers, so interval takes the same
+# identity path and the two agree.
+query T
+SELECT mz_catalog.avg_internal_v1(i) FROM (VALUES ('1 month'::interval), ('2 months')) t(i)
+----
+1 mon 15 days
+
+# The variance family promotes its input and then squares it, and there is no
+# `interval * interval`. PostgreSQL rejects these too, though it reports the
+# missing aggregate rather than the missing operator.
+query error operator does not exist: interval \* interval
+SELECT var_samp(i) FROM (VALUES ('1 day'::interval), ('2 days')) t(i)
+
+query error operator does not exist: interval \* interval
+SELECT stddev(i) FROM (VALUES ('1 day'::interval), ('2 days')) t(i)
+
+query T
+SELECT sum(DISTINCT i) FROM (VALUES ('1 day'::interval), ('1 day'), ('2 days')) t(i)
+----
+3 days
+
+query T
+SELECT sum(i) FILTER (WHERE i > '1 day') FROM (VALUES ('1 day'::interval), ('2 days'), ('3 days')) t(i)
+----
+5 days
+
+# As a window aggregate, `sum` runs through the one-value-at-a-time evaluator
+# rather than the accumulable reduction.
+query T
+SELECT sum(i) OVER (ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM (VALUES (1, '1 month'::interval), (2, '10 days'), (3, '4:00')) t(o, i)
+ORDER BY o
+----
+1 mon
+1 mon 10 days
+1 mon 10 days 04:00:00
+
+# Grouped, over a table, so the aggregate runs as a dataflow reduction rather
+# than being constant-folded.
+statement ok
+CREATE TABLE intervals (g int, i interval)
+
+statement ok
+INSERT INTO intervals VALUES (1, '1 month 1 day 1 hour'), (1, '2 months 3 days'), (1, NULL), (2, NULL)
+
+query IT
+SELECT g, sum(i) FROM intervals GROUP BY g ORDER BY g
+----
+1  3␠mons␠4␠days␠01:00:00
+2  NULL
+
+query IT
+SELECT g, avg(i) FROM intervals GROUP BY g ORDER BY g
+----
+1  1␠mon␠17␠days␠00:30:00
+2  NULL
+
+# `DISTINCT` routes the interval accumulator through the distinct-ing reduce
+# rather than the single-pass one.
+statement ok
+INSERT INTO intervals VALUES (1, '2 months 3 days')
+
+query IT
+SELECT g, sum(DISTINCT i) FROM intervals GROUP BY g ORDER BY g
+----
+1  3␠mons␠4␠days␠01:00:00
+2  NULL
+
+# Retracting every non-null row must return the group to NULL, not to a zero
+# interval: the accumulator's non-null count goes back to zero with it.
+statement ok
+DELETE FROM intervals WHERE g = 1 AND i IS NOT NULL
+
+query IT
+SELECT g, sum(i) FROM intervals GROUP BY g ORDER BY g
+----
+1  NULL
+2  NULL
+
+statement ok
+DROP TABLE intervals
+
+# A sum whose components leave the `interval` field widths is an error, as it is
+# in PostgreSQL, rather than a silently wrapped value.
+statement ok
+CREATE TABLE big_intervals (i interval)
+
+statement ok
+INSERT INTO big_intervals VALUES ('2000000000 months'), ('2000000000 months')
+
+query error interval out of range
+SELECT sum(i) FROM big_intervals
+
+statement ok
+DROP TABLE big_intervals

@@ -3839,18 +3839,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float32) => AggregateFunc::SumFloat32 => Float32, 2110;
             params!(Float64) => AggregateFunc::SumFloat64 => Float64, 2111;
             params!(Numeric) => AggregateFunc::SumNumeric => Numeric, 2114;
-            params!(Interval) => Operation::unary(|_ecx, _e| {
-                // Explicitly providing this unsupported overload
-                // prevents `sum(NULL)` from choosing the `Float64`
-                // implementation, so that we match PostgreSQL's behavior.
-                // Plus we will one day want to support this overload.
-                //
-                // The message mentions `avg` because `avg(interval)` desugars
-                // to `sum(interval) / count(interval)` before type checking
-                // (see `plan_avg` in `transform_ast.rs`), so this error is all
-                // a user who typed only `avg` gets to see.
-                bail_unsupported!("sum(interval) and avg(interval)");
-            }) => Interval, 2113;
+            params!(Interval) => AggregateFunc::SumInterval => Interval, 2113;
         },
 
         // Scalar window functions.
@@ -5438,6 +5427,13 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                     ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID_INTERNAL_V1;
+            // `mz_catalog` declares `avg_internal_v1(interval)`, so this
+            // overload has to exist for that signature to plan. Promotion is
+            // the identity for intervals in both versions of this function,
+            // which differ only in what they promote integers to, so
+            // `avg_internal_v1` and `avg` agree over intervals.
+            params!(Interval) => Operation::identity()
+                => Interval, oid::FUNC_MZ_AVG_PROMOTION_INTERVAL_OID_INTERNAL_V1;
         },
         "mz_avg_promotion" => Scalar {
             // Promotes a numeric type to the smallest fractional type that
@@ -5484,6 +5480,11 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                     ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_NUMERIC_OID;
+            // `avg(interval)` is `sum(interval) / count(interval)`, and
+            // PostgreSQL's `interval / float8` already produces the fractional
+            // result, so no promotion is needed.
+            params!(Interval) => Operation::identity()
+                => Interval, oid::FUNC_MZ_AVG_PROMOTION_INTERVAL_OID;
         },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
