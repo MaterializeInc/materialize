@@ -1331,7 +1331,8 @@ mod tests {
     #[mz_ore::test]
     fn creation_evidence_requires_a_replica_create_event() {
         use mz_repr::adt::jsonb::Jsonb;
-        let details = Jsonb::from_serde_json(serde_json::json!({"replica_id": "u42"})).unwrap();
+        let details = Jsonb::from_serde_json(serde_json::json!({"replica_id": "u42"}))
+            .expect("valid audit details");
         let row = |event, object| {
             Row::pack_slice(&[
                 Datum::UInt64(1),
@@ -1339,7 +1340,11 @@ mod tests {
                 Datum::String(object),
                 details.as_ref().into_datum(),
                 Datum::Null,
-                Datum::TimestampTz(mz_ore::now::to_datetime(12_345).try_into().unwrap()),
+                Datum::TimestampTz(
+                    mz_ore::now::to_datetime(12_345)
+                        .try_into()
+                        .expect("valid timestamp"),
+                ),
             ])
         };
         assert_eq!(
