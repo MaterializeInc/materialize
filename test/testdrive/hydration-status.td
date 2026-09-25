@@ -629,6 +629,8 @@ mv_wmr       hydrated_test_4 true
 mv_wmr_const hydrated_test_4 true
 mv_wmr_stuck hydrated_test_4 false
 
+# The completed recursive constant MV has the same optional raw measurements
+# as `mv_const`. The stuck MV must still be present and unhydrated.
 > SELECT o.name, r.name, bool_and(h.hydrated)
   FROM mz_internal.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -636,7 +638,8 @@ mv_wmr_stuck hydrated_test_4 false
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%'
-  GROUP BY o.name, r.name;
+  GROUP BY o.name, r.name
+  HAVING o.name <> 'mv_wmr_const' OR bool_and(h.hydrated) IS NOT TRUE;
 mv_wmr       hydrated_test_4 true
 mv_wmr_stuck hydrated_test_4 false
 
