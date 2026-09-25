@@ -49,9 +49,13 @@ describe("fetchClusterReplicaMetrics", () => {
       }
     });
 
-    it("reports no heap before the column existed", () => {
-      expect(sqlFor("0.160.0")).toContain("NULL::float8 as heap_percent");
-      expect(sqlFor("0.161.0")).toContain("MAX(cru.heap_percent)");
+    // Kysely's .select appends rather than replaces, so a tier layering its
+    // own heap_percent over the shared aggregates emitted the column twice:
+    // unknown below 0.161.0, and an ambiguous reference above it.
+    it("selects heap_percent exactly once in the fallback", () => {
+      const sql = sqlFor("26.31.0");
+      expect(sql).toContain("MAX(cru.heap_percent) as heap_percent");
+      expect(sql.match(/as heap_percent/g)).toHaveLength(1);
     });
 
     // Grouping by process_id too would put one row in every group, leaving

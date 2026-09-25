@@ -72,8 +72,11 @@ const latestClusterReplicaUtilizationQuery = ({
 /**
  * The same reading from `mz_cluster_replica_utilization`, for environments
  * without the indexed view. Unwindowed and unindexed, so it disagrees with the
- * charts and costs a join per request; it exists only to keep these surfaces
- * working mid-rollout.
+ * charts and costs a join per request; it keeps these surfaces working
+ * mid-rollout.
+ *
+ * NOTE: the floor is 0.161.0, where `heap_percent` landed on this relation. No
+ * release pairs a console with an environmentd older than that.
  */
 const unindexedClusterReplicaUtilizationQuery = (
   _args: ClusterReplicaUtilizationArgs,
@@ -99,14 +102,6 @@ const unindexedClusterReplicaUtilizationQuery = (
       sql<number | null>`MAX(cru.heap_percent)`.as("heap_percent"),
     ]);
 
-/** As above, before `heap_percent` existed on the relation. */
-const legacyClusterReplicaUtilizationQuery = (
-  args: ClusterReplicaUtilizationArgs,
-) =>
-  unindexedClusterReplicaUtilizationQuery(args).select(
-    sql<number | null>`NULL::float8`.as("heap_percent"),
-  );
-
 const CLUSTER_REPLICA_UTILIZATION_QUERIES: VersionMap<
   ClusterReplicaUtilizationArgs,
   InferResult<ReturnType<typeof latestClusterReplicaUtilizationQuery>>[0]
@@ -115,8 +110,7 @@ const CLUSTER_REPLICA_UTILIZATION_QUERIES: VersionMap<
   // gates on the same version.
   // TODO: collapse to the indexed query once all environments are >= 26.32.
   "26.32.0": latestClusterReplicaUtilizationQuery,
-  "0.161.0": unindexedClusterReplicaUtilizationQuery,
-  "0.0.0": legacyClusterReplicaUtilizationQuery,
+  "0.0.0": unindexedClusterReplicaUtilizationQuery,
 };
 
 export function buildLatestClusterReplicaUtilizationTable(
