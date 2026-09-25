@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# DO NOT MERGE: changes this image's fingerprint so CI rebuilds and pushes it,
+# exercising the Docker Hub-only push path of #39147.
 MZFROM test-certs AS certs
 
 FROM mysql:9.7.0 AS seed
