@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+import os
+
 from materialize.mzcompose.service import (
     Service,
 )
@@ -15,7 +17,15 @@ from materialize.mzcompose.service import (
 
 class RQG(Service):
     def __init__(self, name: str = "rqg") -> None:
+        volumes = [".:/workdir"]
+        # RQG_CHECKOUT points at a local clone of MaterializeInc/RQG and
+        # mounts it over the pinned checkout baked into the image, so that
+        # changes to grammars or to the RQG library itself can be tested
+        # without rebuilding the image. CI never sets this; it always runs
+        # the commit pinned in test/rqg/Dockerfile.
+        if checkout := os.environ.get("RQG_CHECKOUT"):
+            volumes.append(f"{checkout}:/RQG")
         super().__init__(
             name=name,
-            config={"mzbuild": "rqg", "volumes": [".:/workdir"]},
+            config={"mzbuild": "rqg", "volumes": volumes},
         )
