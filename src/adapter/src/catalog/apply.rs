@@ -1482,9 +1482,7 @@ impl CatalogState {
             }
             StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Comment(_) => Vec::new(),
-            StateUpdateKind::SourceReferences(source_references) => {
-                self.pack_source_references_update(&source_references, diff)
-            }
+            StateUpdateKind::SourceReferences(_) => Vec::new(),
             // mz_audit_events is a MaterializedView backed by
             // mz_internal.mz_catalog_raw, so audit log rows do not produce
             // builtin table updates here.
