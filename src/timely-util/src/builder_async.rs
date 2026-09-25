@@ -41,9 +41,17 @@ use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
 
 use crate::containers::stack::FueledBuilder;
 
+thread_local! {
+    /// INSTR: counts messages pushed to timely outputs on this worker thread.
+    /// Read as a per-schedule delta to measure the descs->fabric send rate.
+    static DBG_OUTPUT_PUSHES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<'scope, T: Timestamp> {
     builder: OperatorBuilderRc<'scope, T>,
+    /// The operator name, retained for diagnostics.
+    name: String,
     /// The activator for this operator
     activator: Activator,
     /// The waker set up to activate this timely operator when woken
@@ -64,8 +72,9 @@ pub struct OperatorBuilder<'scope, T: Timestamp> {
 /// A helper trait abstracting over an input handle. It facilitates keeping around type erased
 /// handles for each of the operator inputs.
 trait InputQueue<T: Timestamp> {
-    /// Accepts all available input into local queues.
-    fn accept_input(&mut self);
+    /// Accepts all available input into local queues. Returns the number of
+    /// data messages pulled from the timely channel this call.
+    fn accept_input(&mut self) -> usize;
 
     /// Drains all available input and empties the local queue.
     fn drain_input(&mut self);
@@ -81,19 +90,20 @@ where
     C: InputConnection<T> + 'static,
     P: Pull<Message<T, D>> + 'static,
 {
-    fn accept_input(&mut self) {
+    fn accept_input(&mut self) -> usize {
         let mut queue = self.queue.borrow_mut();
-        let mut new_data = false;
+        let mut pulled = 0;
         self.handle.for_each(|cap, data| {
-            new_data = true;
+            pulled += 1;
             let cap = self.connection.accept(cap);
             queue.push_back(Event::Data(cap, std::mem::take(data)));
         });
-        if new_data {
+        if pulled > 0 {
             if let Some(waker) = self.waker.take() {
                 waker.wake();
             }
         }
+        pulled
     }
 
     fn drain_input(&mut self) {
@@ -226,6 +236,7 @@ impl<T: Timestamp, CB: ContainerBuilder> AsyncOutputHandleInner<T, CB> {
         while let Some(container) = self.builder.finish() {
             self.output
                 .give(self.capability.as_ref().expect("must exist"), container);
+            DBG_OUTPUT_PUSHES.with(|c| c.set(c.get() + 1));
         }
     }
 
@@ -256,6 +267,7 @@ impl<T: Timestamp, CB: ContainerBuilder> AsyncOutputHandleInner<T, CB> {
         while let Some(container) = self.builder.extract() {
             self.output
                 .give(self.capability.as_ref().expect("must exist"), container);
+            DBG_OUTPUT_PUSHES.with(|c| c.set(c.get() + 1));
         }
     }
 }
@@ -275,6 +287,7 @@ where
         let mut inner = self.inner.borrow_mut();
         inner.flush();
         inner.output.give(cap, container);
+        DBG_OUTPUT_PUSHES.with(|c| c.set(c.get() + 1));
     }
 }
 
@@ -435,7 +448,7 @@ impl<T: Timestamp, CB: ContainerBuilder> OutputIndex for AsyncOutputHandle<T, CB
 impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
     /// Allocates a new generic async operator builder from its containing scope.
     pub fn new(name: String, scope: Scope<'scope, T>) -> Self {
-        let builder = OperatorBuilderRc::new(name, scope);
+        let builder = OperatorBuilderRc::new(name.clone(), scope);
         let info = builder.operator_info();
         let activator = scope.activator_for(Rc::clone(&info.address));
         let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
@@ -448,6 +461,7 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
 
         OperatorBuilder {
             builder,
+            name,
             activator,
             operator_waker: Arc::new(operator_waker),
             input_frontiers: Default::default(),
@@ -578,10 +592,27 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         let mut input_queues = self.input_queues;
         let mut output_flushes = self.output_flushes;
         let mut shutdown_handle = self.shutdown_handle;
+        // INSTR: gate delivery-probe logging. `descs` name matches both
+        // shard_source_descs and shard_source_descs_return; only the former has
+        // an output, so the return operator logs nothing.
+        let dbg_is_fetch = self.name.contains("shard_source_fetch");
+        let dbg_is_descs = self.name.contains("shard_source_descs");
+        let dbg_name = self.name.clone();
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
+            // INSTR: cumulative schedules and messages accepted, to see whether
+            // the operator is scheduled often with ~1 message each (fabric
+            // dribble) or seldom with a bulk pull.
+            let mut dbg_schedules: u64 = 0;
+            let mut dbg_accepted_total: usize = 0;
+            // INSTR (send side): messages this operator pushes to the fabric per
+            // schedule. Answers whether descs flushes the whole flood in one
+            // poll (fabric then buffers) or dribbles it out over many polls.
+            let mut dbg_send_schedules: u64 = 0;
+            let mut dbg_send_pushed_total: u64 = 0;
             move |new_frontiers| {
                 operator_waker.active.store(true, Ordering::SeqCst);
+                let mut dbg_accepted_now: usize = 0;
                 for (i, queue) in input_queues.iter_mut().enumerate() {
                     // First, discover if there are any frontier notifications
                     let cur = &mut input_frontiers[i];
@@ -592,9 +623,23 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
                     }
                     // Then accept all input into local queues. This step registers the received
                     // messages with progress tracking.
-                    queue.accept_input();
+                    dbg_accepted_now += queue.accept_input();
                 }
                 operator_waker.active.store(false, Ordering::SeqCst);
+                if dbg_is_fetch {
+                    dbg_schedules += 1;
+                    dbg_accepted_total += dbg_accepted_now;
+                    // Log only when we actually pulled data. The `schedules`
+                    // delta between consecutive logs is how many times the
+                    // operator ran without new input, i.e. how much slack there
+                    // was to pull more if the fabric had it.
+                    if dbg_accepted_now > 0 {
+                        tracing::info!(
+                            target: "mz_persist_client::operators::shard_source",
+                            "INSTR accept: op={dbg_name} pulled={dbg_accepted_now} schedules={dbg_schedules} accepted_total={dbg_accepted_total}"
+                        );
+                    }
+                }
 
                 // If our worker pressed the button we stop scheduling the logic future and/or
                 // draining the input handles to stop producing data and frontier updates
@@ -612,6 +657,8 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
                         true
                     }
                 } else {
+                    // INSTR: fabric pushes before this schedule's poll+flush.
+                    let dbg_pushes_before = DBG_OUTPUT_PUSHES.with(|c| c.get());
                     // Schedule the logic future if any of the wakers above marked the task as ready
                     if let Some(fut) = logic_fut.as_mut() {
                         if operator_waker.task_ready.load(Ordering::SeqCst) {
@@ -626,6 +673,23 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
                             for flush in output_flushes.iter_mut() {
                                 (flush)();
                             }
+                        }
+                    }
+                    if dbg_is_descs {
+                        let dbg_pushed = DBG_OUTPUT_PUSHES
+                            .with(|c| c.get())
+                            .wrapping_sub(dbg_pushes_before);
+                        dbg_send_schedules += 1;
+                        // Log when this schedule pushed anything. `pushes` per
+                        // log is how many messages left the operator in one poll;
+                        // if descs ever logs ~1333 the send is bulk and the fabric
+                        // buffers, if it dribbles ~1 the send itself is paced.
+                        if dbg_pushed > 0 {
+                            dbg_send_pushed_total += dbg_pushed;
+                            tracing::info!(
+                                target: "mz_persist_client::operators::shard_source",
+                                "INSTR send: pushes={dbg_pushed} send_schedules={dbg_send_schedules} pushed_total={dbg_send_pushed_total}"
+                            );
                         }
                     }
 
@@ -892,5 +956,709 @@ mod test {
             }
         })
         .expect("timely panicked");
+    }
+
+    // MICROREPRO: does a flood of N records given via an Exchange pact at one
+    // timestamp arrive at an async consumer in bulk (letting a bounded-concurrency
+    // fetch loop ramp `in_flight` to the cap), or ~1 per schedule?
+    //
+    // Mirrors shard_source_fetch: producer floods N parts at one time; consumer
+    // runs the same `tokio::select! { biased; in_flight.next(); input.next() }`
+    // loop with a simulated fetch that stays in flight for a fixed number of
+    // polls. Reports the max `in_flight` depth reached and parts-per-event.
+    #[mz_ore::test]
+    fn microrepro_exchange_delivery() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use timely::dataflow::channels::pact::Exchange;
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        // Each simulated fetch stays in flight for this many polls (models blob
+        // fetch latency in units of operator schedules).
+        const FETCH_POLLS: usize = 80;
+
+        // A future that stays Pending for `0` polls, self-waking each time so the
+        // operator is rescheduled, then completes.
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let schedules_with_recv = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let swr = Arc::clone(&schedules_with_recv);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let swr = Arc::clone(&swr);
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (output, output_stream) =
+                    producer.new_output::<CapacityContainerBuilder<Vec<usize>>>();
+                let producer_button = producer.build(move |mut caps| async move {
+                    let cap = caps.pop().unwrap();
+                    // Only worker 0 produces; all records route to worker 1.
+                    if index == 0 {
+                        for i in 0..N {
+                            output.give(&cap, i);
+                        }
+                    }
+                    // Returning drops `cap`, advancing the frontier to empty so
+                    // the consumer observes end-of-input.
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                // Route every record to worker 1, exercising the inter-thread
+                // exchange channel exactly like `shard_source`'s pact.
+                let mut input =
+                    consumer.new_disconnected_input(output_stream, Exchange::new(|_: &usize| 1u64));
+                let consumer_button = consumer.build(move |_caps| async move {
+                    let mut pending: VecDeque<usize> = VecDeque::new();
+                    let mut in_flight = FuturesUnordered::new();
+                    let mut input_done = false;
+                    loop {
+                        while in_flight.len() < MAX_CONCURRENCY {
+                            match pending.pop_front() {
+                                Some(_) => in_flight.push(FetchSim(FETCH_POLLS)),
+                                None => break,
+                            }
+                        }
+                        let cur = in_flight.len();
+                        mif.fetch_max(cur, Ordering::SeqCst);
+
+                        tokio::select! {
+                            biased;
+                            Some(()) = in_flight.next(), if !in_flight.is_empty() => {}
+                            event = input.next(), if !input_done => {
+                                match event {
+                                    Some(Event::Data(_cap, data)) => {
+                                        let n = data.len();
+                                        mppe.fetch_max(n, Ordering::SeqCst);
+                                        swr.fetch_add(1, Ordering::SeqCst);
+                                        for x in data {
+                                            pending.push_back(x);
+                                        }
+                                        eprintln!(
+                                            "RECV parts={n} pending_now={} in_flight={}",
+                                            pending.len(),
+                                            in_flight.len(),
+                                        );
+                                    }
+                                    Some(Event::Progress(_)) => {}
+                                    None => input_done = true,
+                                }
+                            }
+                            else => break,
+                        }
+                    }
+                });
+
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
+            });
+
+            // Step until the dataflow quiesces (consumer finished draining and
+            // all simulated fetches completed).
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let swr = schedules_with_recv.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO RESULT: max_in_flight={mif} max_parts_per_event={mppe} \
+             recv_events={swr} (N={N}, cap={MAX_CONCURRENCY})"
+        );
+    }
+
+    // MICROREPRO variant: producer emits ONE record per container (=> one timely
+    // Message per record), mirroring the real shard_source observation of
+    // `parts=1` per event. Tests whether N separate messages sent in one
+    // producer schedule arrive at the consumer's `accept_input` in bulk (all N
+    // ready next schedule) or trickle ~1 per `worker.step()`.
+    #[mz_ore::test]
+    fn microrepro_exchange_delivery_one_msg_per_record() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use timely::dataflow::channels::pact::Exchange;
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        const FETCH_POLLS: usize = 80;
+
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let recv_events = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let re = Arc::clone(&recv_events);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let re = Arc::clone(&re);
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (output, output_stream) =
+                    producer.new_output::<CapacityContainerBuilder<Vec<usize>>>();
+                let producer_button = producer.build(move |mut caps| async move {
+                    let cap = caps.pop().unwrap();
+                    if index == 0 {
+                        // One record per container => one timely Message each,
+                        // all at the same timestamp.
+                        for i in 0..N {
+                            let mut container = vec![i];
+                            output.give_container(&cap, &mut container);
+                        }
+                    }
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                let mut input =
+                    consumer.new_disconnected_input(output_stream, Exchange::new(|_: &usize| 1u64));
+                let consumer_button = consumer.build(move |_caps| async move {
+                    let mut pending: VecDeque<usize> = VecDeque::new();
+                    let mut in_flight = FuturesUnordered::new();
+                    let mut input_done = false;
+                    loop {
+                        while in_flight.len() < MAX_CONCURRENCY {
+                            match pending.pop_front() {
+                                Some(_) => in_flight.push(FetchSim(FETCH_POLLS)),
+                                None => break,
+                            }
+                        }
+                        mif.fetch_max(in_flight.len(), Ordering::SeqCst);
+
+                        tokio::select! {
+                            biased;
+                            Some(()) = in_flight.next(), if !in_flight.is_empty() => {}
+                            event = input.next(), if !input_done => {
+                                match event {
+                                    Some(Event::Data(_cap, data)) => {
+                                        let n = data.len();
+                                        mppe.fetch_max(n, Ordering::SeqCst);
+                                        re.fetch_add(1, Ordering::SeqCst);
+                                        for x in data {
+                                            pending.push_back(x);
+                                        }
+                                    }
+                                    Some(Event::Progress(_)) => {}
+                                    None => input_done = true,
+                                }
+                            }
+                            else => break,
+                        }
+                    }
+                });
+
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
+            });
+
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let re = recv_events.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO 1-MSG RESULT: max_in_flight={mif} max_parts_per_event={mppe} \
+             recv_events={re} (N={N}, cap={MAX_CONCURRENCY})"
+        );
+    }
+
+    // MICROREPRO variant: LARGE per-record payloads (like ExchangeableBatchPart),
+    // to see whether timely's exchange stops coalescing above a per-message byte
+    // threshold => many small receive events => does the fetch loop still ramp?
+    #[mz_ore::test]
+    fn microrepro_exchange_delivery_large_payload() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use timely::dataflow::channels::pact::Exchange;
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        const FETCH_POLLS: usize = 80;
+        // ~256 KiB per record, comparable order to a real part descriptor's
+        // inline footprint being non-trivial.
+        const PAYLOAD_BYTES: usize = 256 * 1024;
+
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let recv_events = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let re = Arc::clone(&recv_events);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let re = Arc::clone(&re);
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (output, output_stream) =
+                    producer.new_output::<CapacityContainerBuilder<Vec<Vec<u8>>>>();
+                let producer_button = producer.build(move |mut caps| async move {
+                    let cap = caps.pop().unwrap();
+                    if index == 0 {
+                        for _ in 0..N {
+                            output.give(&cap, vec![0u8; PAYLOAD_BYTES]);
+                        }
+                    }
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                let mut input = consumer
+                    .new_disconnected_input(output_stream, Exchange::new(|_: &Vec<u8>| 1u64));
+                let consumer_button = consumer.build(move |_caps| async move {
+                    let mut pending: VecDeque<Vec<u8>> = VecDeque::new();
+                    let mut in_flight = FuturesUnordered::new();
+                    let mut input_done = false;
+                    loop {
+                        while in_flight.len() < MAX_CONCURRENCY {
+                            match pending.pop_front() {
+                                Some(_) => in_flight.push(FetchSim(FETCH_POLLS)),
+                                None => break,
+                            }
+                        }
+                        mif.fetch_max(in_flight.len(), Ordering::SeqCst);
+
+                        tokio::select! {
+                            biased;
+                            Some(()) = in_flight.next(), if !in_flight.is_empty() => {}
+                            event = input.next(), if !input_done => {
+                                match event {
+                                    Some(Event::Data(_cap, data)) => {
+                                        let n = data.len();
+                                        mppe.fetch_max(n, Ordering::SeqCst);
+                                        re.fetch_add(1, Ordering::SeqCst);
+                                        for x in data {
+                                            pending.push_back(x);
+                                        }
+                                    }
+                                    Some(Event::Progress(_)) => {}
+                                    None => input_done = true,
+                                }
+                            }
+                            else => break,
+                        }
+                    }
+                });
+
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
+            });
+
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let re = recv_events.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO LARGE RESULT: max_in_flight={mif} max_parts_per_event={mppe} \
+             recv_events={re} (N={N}, payload={PAYLOAD_BYTES}B, cap={MAX_CONCURRENCY})"
+        );
+    }
+
+    // MICROREPRO variant: faithful `shard_source` TOPOLOGY. Producer (descs
+    // substitute) runs in the OUTER scope and floods N parts at one time; the
+    // stream `enter`s a nested scope where the consumer (fetch substitute) runs
+    // with a CONNECTED input (`new_input_for_many` -> two outputs) and a
+    // `completed`-fetches FEEDBACK loop back to the producer, exactly like
+    // `persist_client::operators::shard_source`. The fetch is simulated as a
+    // latent future. If in_flight stays ~1 here (but ramped in the flat repro),
+    // the nested-scope + feedback topology is the hydration throttle.
+    #[mz_ore::test]
+    fn microrepro_nested_scope_feedback() {
+        use std::convert::Infallible;
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use mz_ore::cast::CastFrom;
+        use timely::dataflow::channels::pact::Exchange;
+        use timely::dataflow::operators::{
+            Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave,
+        };
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        const FETCH_POLLS: usize = 80;
+
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let recv_events = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let re = Arc::clone(&recv_events);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let re = Arc::clone(&re);
+            let tokens = worker.dataflow::<u64, _, _>(move |outer| {
+                outer.clone().scoped::<u64, _, _>("inner", move |inner| {
+                    // Feedback lives in the nested scope; it leaves to the outer
+                    // scope to feed the producer, mirroring
+                    // `completed_fetches_feedback_stream.leave(outer)`.
+                    let (fb_handle, fb_stream) = inner.feedback(Default::default());
+
+                    // Producer (descs substitute) in the OUTER scope.
+                    let mut producer = OperatorBuilder::new("producer".to_string(), outer.clone());
+                    let (descs_out, descs_stream) =
+                        producer.new_output::<CapacityContainerBuilder<Vec<(usize, usize)>>>();
+                    let mut fb_input =
+                        producer.new_disconnected_input(fb_stream.leave(outer.clone()), Pipeline);
+                    let producer_button = producer.build(move |caps| async move {
+                        let mut cap_set =
+                            CapabilitySet::from_elem(caps.into_iter().next().unwrap());
+                        if index == 0 {
+                            let cap = cap_set.delayed(&0u64);
+                            // Route every part to worker 1 (cross-thread exchange).
+                            for i in 0..N {
+                                descs_out.give(&cap, (1usize, i));
+                            }
+                            drop(cap);
+                        }
+                        // Release our capability so the consumer observes end of
+                        // input once it has drained.
+                        let empty: [u64; 0] = [];
+                        cap_set.downgrade(empty.iter());
+                        // Drain the feedback (progress only) to keep the operator
+                        // alive until the loop closes, like `shard_source`'s
+                        // lease-returner.
+                        while (fb_input.next().await).is_some() {}
+                    });
+
+                    // Fetch (consumer substitute) in the NESTED scope, reached via
+                    // `enter`, with a connected input to two outputs.
+                    let descs_entered = descs_stream.enter(inner);
+                    let mut fetch = OperatorBuilder::new("fetch".to_string(), inner.clone());
+                    let (fetched_out, _fetched_stream) =
+                        fetch.new_output::<CapacityContainerBuilder<Vec<()>>>();
+                    let (_completed_out, completed_stream) =
+                        fetch.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
+                    let mut descs_input = fetch.new_input_for_many(
+                        descs_entered,
+                        Exchange::new(|&(i, _): &(usize, usize)| u64::cast_from(i)),
+                        [&fetched_out, &_completed_out],
+                    );
+                    let fetch_button = fetch.build(move |_caps| async move {
+                        let mut pending: VecDeque<[Capability<u64>; 2]> = VecDeque::new();
+                        let mut in_flight = FuturesUnordered::new();
+                        let mut input_done = false;
+                        loop {
+                            while in_flight.len() < MAX_CONCURRENCY {
+                                match pending.pop_front() {
+                                    Some(caps) => in_flight.push(async move {
+                                        FetchSim(FETCH_POLLS).await;
+                                        caps
+                                    }),
+                                    None => break,
+                                }
+                            }
+                            mif.fetch_max(in_flight.len(), Ordering::SeqCst);
+
+                            tokio::select! {
+                                biased;
+                                Some(caps) = in_flight.next(), if !in_flight.is_empty() => {
+                                    let [c0, _c1] = caps;
+                                    fetched_out.give(&c0, ());
+                                }
+                                event = descs_input.next(), if !input_done => {
+                                    match event {
+                                        Some(Event::Data(caps, data)) => {
+                                            let n = data.len();
+                                            mppe.fetch_max(n, Ordering::SeqCst);
+                                            re.fetch_add(1, Ordering::SeqCst);
+                                            for _ in data {
+                                                pending.push_back(caps.clone());
+                                            }
+                                        }
+                                        Some(Event::Progress(_)) => {}
+                                        None => input_done = true,
+                                    }
+                                }
+                                else => break,
+                            }
+                        }
+                    });
+                    completed_stream.connect_loop(fb_handle);
+
+                    (
+                        producer_button.press_on_drop(),
+                        fetch_button.press_on_drop(),
+                    )
+                })
+            });
+
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let re = recv_events.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO NESTED+FEEDBACK RESULT: max_in_flight={mif} \
+             max_parts_per_event={mppe} recv_events={re} (N={N}, cap={MAX_CONCURRENCY})"
+        );
+    }
+
+    // MICROREPRO variant: faithful topology, but the producer gives each part at
+    // a DISTINCT timestamp (like the real refined part times). Distinct times
+    // force the output to flush one part per message (matching the observed
+    // parts=1 per event on staging). Tests whether per-part timestamps collapse
+    // the fetch ramp.
+    #[mz_ore::test]
+    fn microrepro_distinct_times() {
+        use std::convert::Infallible;
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures_util::stream::FuturesUnordered;
+        use mz_ore::cast::CastFrom;
+        use timely::dataflow::channels::pact::Exchange;
+        use timely::dataflow::operators::{
+            Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave,
+        };
+
+        const N: usize = 200;
+        const MAX_CONCURRENCY: usize = 32;
+        const FETCH_POLLS: usize = 80;
+
+        struct FetchSim(usize);
+        impl Future for FetchSim {
+            type Output = ();
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.0 == 0 {
+                    Poll::Ready(())
+                } else {
+                    self.0 -= 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+        }
+
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_parts_per_event = Arc::new(AtomicUsize::new(0));
+        let recv_events = Arc::new(AtomicUsize::new(0));
+
+        let mif = Arc::clone(&max_in_flight);
+        let mppe = Arc::clone(&max_parts_per_event);
+        let re = Arc::clone(&recv_events);
+
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), move |worker| {
+            let index = worker.index();
+            let mif = Arc::clone(&mif);
+            let mppe = Arc::clone(&mppe);
+            let re = Arc::clone(&re);
+            let tokens = worker.dataflow::<u64, _, _>(move |outer| {
+                outer.clone().scoped::<u64, _, _>("inner", move |inner| {
+                    let (fb_handle, fb_stream) = inner.feedback(Default::default());
+
+                    let mut producer = OperatorBuilder::new("producer".to_string(), outer.clone());
+                    let (descs_out, descs_stream) =
+                        producer.new_output::<CapacityContainerBuilder<Vec<(usize, usize)>>>();
+                    let mut fb_input =
+                        producer.new_disconnected_input(fb_stream.leave(outer.clone()), Pipeline);
+                    let producer_button = producer.build(move |caps| async move {
+                        let mut cap_set =
+                            CapabilitySet::from_elem(caps.into_iter().next().unwrap());
+                        if index == 0 {
+                            // Each part at a DISTINCT time => one flush (message)
+                            // per part.
+                            for i in 0..N {
+                                let t = u64::cast_from(i);
+                                descs_out.give(&cap_set.delayed(&t), (1usize, i));
+                            }
+                        }
+                        let empty: [u64; 0] = [];
+                        cap_set.downgrade(empty.iter());
+                        while (fb_input.next().await).is_some() {}
+                    });
+
+                    let descs_entered = descs_stream.enter(inner);
+                    let mut fetch = OperatorBuilder::new("fetch".to_string(), inner.clone());
+                    let (fetched_out, _fetched_stream) =
+                        fetch.new_output::<CapacityContainerBuilder<Vec<()>>>();
+                    let (_completed_out, completed_stream) =
+                        fetch.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
+                    let mut descs_input = fetch.new_input_for_many(
+                        descs_entered,
+                        Exchange::new(|&(i, _): &(usize, usize)| u64::cast_from(i)),
+                        [&fetched_out, &_completed_out],
+                    );
+                    let fetch_button = fetch.build(move |_caps| async move {
+                        let mut pending: VecDeque<[Capability<u64>; 2]> = VecDeque::new();
+                        let mut in_flight = FuturesUnordered::new();
+                        let mut input_done = false;
+                        loop {
+                            while in_flight.len() < MAX_CONCURRENCY {
+                                match pending.pop_front() {
+                                    Some(caps) => in_flight.push(async move {
+                                        FetchSim(FETCH_POLLS).await;
+                                        caps
+                                    }),
+                                    None => break,
+                                }
+                            }
+                            mif.fetch_max(in_flight.len(), Ordering::SeqCst);
+
+                            tokio::select! {
+                                biased;
+                                Some(caps) = in_flight.next(), if !in_flight.is_empty() => {
+                                    let [c0, _c1] = caps;
+                                    fetched_out.give(&c0, ());
+                                }
+                                event = descs_input.next(), if !input_done => {
+                                    match event {
+                                        Some(Event::Data(caps, data)) => {
+                                            let n = data.len();
+                                            mppe.fetch_max(n, Ordering::SeqCst);
+                                            re.fetch_add(1, Ordering::SeqCst);
+                                            for _ in data {
+                                                pending.push_back(caps.clone());
+                                            }
+                                        }
+                                        Some(Event::Progress(_)) => {}
+                                        None => input_done = true,
+                                    }
+                                }
+                                else => break,
+                            }
+                        }
+                    });
+                    completed_stream.connect_loop(fb_handle);
+
+                    (
+                        producer_button.press_on_drop(),
+                        fetch_button.press_on_drop(),
+                    )
+                })
+            });
+
+            for _ in 0..200_000 {
+                worker.step();
+            }
+            drop(tokens);
+        })
+        .expect("timely panicked");
+
+        let mif = max_in_flight.load(Ordering::SeqCst);
+        let mppe = max_parts_per_event.load(Ordering::SeqCst);
+        let re = recv_events.load(Ordering::SeqCst);
+        eprintln!(
+            "MICROREPRO DISTINCT-TIMES RESULT: max_in_flight={mif} \
+             max_parts_per_event={mppe} recv_events={re} (N={N}, cap={MAX_CONCURRENCY})"
+        );
     }
 }
