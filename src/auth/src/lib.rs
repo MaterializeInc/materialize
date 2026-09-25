@@ -24,6 +24,8 @@ pub enum AuthenticatorKind {
     Sasl,
     /// Authenticated via OIDC (JWT tokens).
     Oidc,
+    /// Authenticated via an Ory Talos app password (derived-JWT exchange).
+    Talos,
     /// No authentication performed.
     #[default]
     None,
