@@ -26,7 +26,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::context::ArrangementFlavor;
 use crate::render::errors::DataflowErrorSer;
 use crate::shared_trace::adopt_trace;
-use crate::shared_trace::tests::SharedReaderExt;
+use crate::shared_trace::tests::{SharedReaderExt, drop_dataflows};
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 use super::*;
@@ -1075,6 +1075,7 @@ fn shared_trace_flavor_feeds_join_and_reduce() {
             steps += 1;
             assert!(steps < 10_000, "dataflow did not seal through {seal_ts:?}");
         }
+        drop_dataflows(worker);
     });
 
     assert_eq!(
@@ -1292,6 +1293,7 @@ fn stale_as_of_import_over_merged_chain_matches_direct() {
             steps += 1;
             assert!(steps < 10_000, "dataflow did not seal through {seal_ts:?}");
         }
+        drop_dataflows(worker);
     });
 
     assert_eq!(

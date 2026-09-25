@@ -22,8 +22,7 @@ use timely::progress::Antichain;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::shared_trace::SharedOksFrontier;
-use crate::shared_trace::adopt_trace;
-use crate::shared_trace::tests::SharedReaderExt;
+use crate::shared_trace::tests::{SharedReaderExt, drop_dataflows};
 use crate::sharing::ArrangementSharingRegistry;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
 
@@ -337,6 +336,7 @@ fn interactive_import_hold_releases_on_drop() {
             released_oks.snapshot_at(&as_of_time).is_none(),
             "after the hold drops, the trace must be free to compact past `as_of`"
         );
+        drop_dataflows(worker);
     });
 }
 
@@ -416,6 +416,7 @@ fn interactive_import_holds_after_construction() {
             timely::PartialOrder::less_equal(&holds, &as_of),
             "the import's hold must not have released past its own as_of: {holds:?}"
         );
+        drop_dataflows(worker);
     });
 }
 
@@ -470,6 +471,7 @@ fn published_since_does_not_chase_reader_holds() {
             since.elements(),
             low.elements()
         );
+        drop_dataflows(worker);
     });
 }
 
@@ -529,6 +531,7 @@ fn import_reports_physical_within_chain_coverage() {
             physical.elements(),
             coverage.elements()
         );
+        drop_dataflows(worker);
     });
 }
 
@@ -624,6 +627,7 @@ fn interactive_import_hold_downgrades_while_live() {
             "the downgraded frontier must still be readable"
         );
         drop((oks_trace, errs_trace));
+        drop_dataflows(worker);
     });
 }
 
@@ -759,6 +763,7 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
             released_oks.snapshot_at(&as_of_time).is_none(),
             "with the standing hold advanced and no reader left, the arrangement must compact"
         );
+        drop_dataflows(worker);
     });
 }
 
