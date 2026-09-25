@@ -20,6 +20,94 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.43.0
+*Released to Materialize Cloud: 2026-09-23* <br>
+*Released to Materialize Self-Managed: 2026-09-24* <br>
+
+### Iceberg support for Databricks on Azure {#v26.43-iceberg-support-for-databricks-on-azure}
+
+{{< public-preview />}}
+
+Iceberg sinks can now write to Apache Iceberg tables registered in [Databricks
+Unity Catalog](/export-data/iceberg-databricks/) on Azure, where catalogs store
+their data in Azure Data Lake Storage Gen2. Set `STORAGE PROVIDER = 'adls'` on
+the Iceberg catalog connection alongside `ACCESS DELEGATION =
+'vended-credentials'`, and Materialize writes to Azure Data Lake Storage with
+temporary, table-scoped credentials that Unity Catalog vends. Materialize
+refreshes both the OAuth2 token and the vended credentials while the sink runs,
+so the sink needs no Azure credentials of its own.
+
+```mzsql
+CREATE SECRET databricks_oauth
+  AS '<client_id>:<client_secret>';
+
+CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+    CATALOG TYPE = 'rest',
+    URL = 'https://adb-<workspace_id>.<region_id>.azuredatabricks.net/api/2.1/unity-catalog/iceberg-rest',
+    WAREHOUSE = '<catalog_name>',
+    CREDENTIAL = SECRET databricks_oauth,
+    OAUTH2 SERVER URL = 'https://adb-<workspace_id>.<region_id>.azuredatabricks.net/oidc/v1/token',
+    SCOPE = 'all-apis',
+    ACCESS DELEGATION = 'vended-credentials',
+    STORAGE PROVIDER = 'adls'
+);
+
+CREATE SINK <sink_name>
+  IN CLUSTER <sink_cluster>
+  FROM <my_materialize_object>
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = '<unity_catalog_schema>',
+    TABLE = '<my_iceberg_table>'
+  )
+  MODE APPEND
+  WITH (COMMIT INTERVAL = '<commit_interval>');
+```
+
+For more information, see:
+- [Guide: Databricks Unity Catalog](/export-data/iceberg-databricks/)
+- [`CREATE CONNECTION`: Iceberg catalog](/sql/create-connection/#iceberg-catalog), including [storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation)
+- [`CREATE SINK`: Iceberg](/sql/create-sink/iceberg/), including [append mode](/sql/create-sink/iceberg/#append-mode)
+
+### Claude Code and Codex plugins for Materialize {#v26.43-agent-skills-plugins}
+
+The [Materialize agent skills](/developer-tools/mcp-server/coding-agent-skills/)
+are now available as a plugin for Claude Code and Codex. The plugin installs all
+the skills at once, and helps you keep them up to date automatically.
+
+In Claude Code:
+
+```
+/plugin marketplace add MaterializeInc/agent-skills
+/plugin install materialize@materialize
+```
+
+In Codex:
+
+```bash
+codex plugin marketplace add MaterializeInc/agent-skills
+codex plugin add materialize@materialize
+```
+
+If you installed the skills with `npx skills`, remove them before you install
+the plugin, so each skill appears only once. For more information, see [Agent
+Skills](/developer-tools/mcp-server/coding-agent-skills/#install-as-a-plugin).
+
+### Improvements {#v26.43-improvements}
+- **Graceful cluster resizes wait for replacements to catch up**: A graceful resize now retires the outgoing replicas only once the new replicas have hydrated and caught up to the replicas they replace, so cut-overs no longer stall query progress. A resize that cannot catch up in time follows its `ON TIMEOUT` policy, which defaults to `ROLLBACK`.
+- **Swap usage in replica metrics**: `mz_internal.mz_cluster_replica_metrics` and `mz_cluster_replica_metrics_history` now report `swap_bytes` for each replica process, and `mz_internal.mz_cluster_replica_utilization` and `mz_cluster_replica_utilization_history` expose `swap_percent` as a share of the replica's heap allocation, so you can see how much of a replica's memory has spilled to swap.
+- **Per-process peaks in replica hydration history**: `mz_internal.mz_replica_hydration_history` now records one row per replica process, carrying that process's own memory and disk peaks, so resource skew across the processes of a multi-process replica is visible.
+
+### Guides {#v26.43-guides}
+- [Understand the lifecycle of a sink](/export-data/lifecycle-of-a-sink/)
+- [PostgreSQL: Supported database operations](/ingest-data/postgres/#supported-database-operations)
+- [SQL Server: Supported database operations](/ingest-data/sql-server/#supported-database-operations)
+
+### Bug Fixes {#v26.43-bug-fixes}
+- Fixed `DEALLOCATE`, `CLOSE`, `EXECUTE`, and `FETCH` failing with a "does not exist" error and aborting the surrounding transaction when the prepared statement or cursor name was given in double quotes; a name created over the extended wire protocol is stored exactly as it arrives, but these statements re-quoted it before looking it up, so drivers such as psqlODBC that prepare statements over the protocol and later deallocate them by quoted name could not release them.
+- Fixed an abort that dropped every session in the environment when a cursor declared over a `CLOSE` statement naming that same cursor was fetched from.
+- Fixed Iceberg sinks applying a commit's changes on top of newer table state when retrying, which could duplicate written data if an earlier attempt had in fact succeeded or another writer had taken over; the sink now inspects the catalog's table state before applying the commit.
+- Fixed `object_count` in `mz_internal.mz_replica_hydration_history` counting a replica's built-in introspection dataflows, which made it disagree with the rows recorded in `mz_internal.mz_object_hydration_history` for the same episode; introspection-only episodes are still recorded, with `object_count = 0`.
+
 ## v26.42.0
 *Released to Materialize Self-Managed: 2026-09-18* <br>
 
