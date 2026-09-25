@@ -169,10 +169,21 @@ for that history.
 ### Find what is holding compaction back
 
 An object holds a read hold on its inputs at a time no greater than its own
-write frontier, and a cluster with no replicas never advances that frontier.
-Materialized views and sinks on such a cluster therefore pin their inputs for
-as long as they exist, however idle the cluster itself is. List what a
-zero-replica cluster still carries:
+write frontier, so anything whose write frontier has stopped advancing pins the
+history of everything it reads.
+
+#### Possible cause: an object cannot finish hydrating
+
+The rehydration loop in [Step 2](#step-2-check-for-a-rehydration-loop) freezes
+that object's write frontier, so it pins its own inputs for as long as the loop
+runs, and each restart has more history to replay than the last. Resolve it as
+described in [Step 2](#step-2-check-for-a-rehydration-loop).
+
+#### Possible cause: a cluster has a replication factor of `0`
+
+A cluster with no replicas never advances the write frontiers of the objects on
+it, so those objects pin their inputs for as long as they exist. List what such
+a cluster still carries:
 
 ```mzsql
 SELECT
@@ -196,41 +207,16 @@ ORDER BY c.name, o.name;
 (2 rows)
 ```
 
-Cross-check each input against `retained_history` before acting. Materialized
-views and sinks are the ones that pin reliably. An index on a cluster with no
-replica can instead be fast-forwarded past its stalled write frontier, because
-no replica can serve reads from it anyway.
+Materialized views and sinks pin their inputs this way. An index may not,
+because Materialize can fast-forward an index that no replica can serve reads
+from. Cross-check each input against `retained_history` before acting.
 
-A replica that cannot make progress has the same effect on every object type:
-the rehydration loop in [Step 2](#step-2-check-for-a-rehydration-loop) freezes
-the write frontier, so the loop makes each successive restart more expensive
-than the last.
-
-**Resolution**: drop the objects whose inputs show a large
-`retained_history`, or drop the cluster that carries them. Setting a
-cluster's replication factor to `0` does not release its read holds, because
-the objects remain. Only dropping them does. Capture the object definitions
-with [`SHOW CREATE MATERIALIZED
-VIEW`](/sql/show-create-materialized-view/) or [`SHOW CREATE
+**Resolution**: drop the objects, or drop the cluster that carries them.
+Setting a cluster's replication factor to `0` does not release its read holds,
+because the objects remain. Capture the object definitions with [`SHOW CREATE
+MATERIALIZED VIEW`](/sql/show-create-materialized-view/) or [`SHOW CREATE
 INDEX`](/sql/show-create-index/) before dropping anything you intend to
 recreate.
-
-{{< note >}}
-Compaction is not scheduled. It happens as a side effect of other work, so
-`retained_history` does not shrink the moment you drop the holders. The
-immediate benefit is that objects created afterwards start from a current
-time rather than the pinned one.
-{{< /note >}}
-
-Two cases do not hold compaction back, and need no action:
-
-- Materialized views with a [`REFRESH
-  EVERY`](/transform-data/patterns/refresh-strategies/) strategy, whose write
-  frontiers advance to the next refresh time.
-- Collections with an explicit `RETAIN HISTORY` window, which hold history back
-  deliberately. Check for one in
-  [`mz_internal.mz_history_retention_strategies`](/sql/system-catalog/mz_internal/#mz_history_retention_strategies)
-  before treating a large `retained_history` as a fault.
 
 ## Related pages
 
