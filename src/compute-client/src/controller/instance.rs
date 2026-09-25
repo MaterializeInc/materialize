@@ -160,12 +160,11 @@ pub(super) struct Instance {
     log_sources: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
     ///
-    /// New entries are added for all peeks initiated through [`Instance::peek`].
+    /// Entries are added by [`Instance::peek`] and removed by [`Instance::finish_peek`], which
+    /// runs on the first accepted response, on cancellation, or when the target replica is removed.
     ///
-    /// The entry for a peek is removed once the first replica has responded to it (or the peek is
-    /// cancelled). This is currently required to ensure all replicas have stopped reading from the
-    /// peeked collection's inputs before we allow them to compact. database-issues#4822 tracks changing this so we only have to wait
-    /// for the first peek response.
+    /// [`Instance::target_replica`] routes `Peek` commands through this map, so an entry must exist
+    /// for as long as its `Peek` command can be sent or replayed.
     peeks: BTreeMap<Uuid, PendingPeek>,
     /// Currently in-progress subscribes.
     ///
@@ -1211,8 +1210,9 @@ impl Instance {
     /// collection named by the command, and returns the target replica if
     /// it is set, and None if not set, or the command doesn't name a collection.
     ///
-    /// For `Peek` and `CancelPeek`, the target replica is resolved through the pending peek
-    /// registered in `self.peeks`, since these commands don't otherwise name a collection.
+    /// For `Peek`, the target replica is resolved through the pending peek registered in
+    /// `self.peeks`, since the command doesn't otherwise name a collection. `CancelPeek` resolves
+    /// to `None`, because [`Self::finish_peek`] routes it explicitly after removing the entry.
     ///
     /// Panics if a create-dataflow command names collections that have different
     /// target replicas. It is an error to construct such an object and would
@@ -1236,13 +1236,18 @@ impl Instance {
                 }
                 target_replica
             }
-            // `Instance::peek` inserts the `PendingPeek` into `self.peeks` before calling
-            // `send`, so the lookup here always finds the entry.
-            ComputeCommand::Peek(peek) => self.peeks.get(&peek.uuid).and_then(|p| p.target_replica),
-            ComputeCommand::CancelPeek { uuid } => {
-                self.peeks.get(uuid).and_then(|p| p.target_replica)
-            }
-            ComputeCommand::Hello { .. }
+            // `Instance::peek` inserts the `PendingPeek` into `self.peeks` before calling `send`,
+            // and history reduction drops a finished peek's `Peek` before any replay, so a miss is
+            // a bug. Broadcasting on a miss would panic every replica without the peeked index.
+            ComputeCommand::Peek(peek) => match self.peeks.get(&peek.uuid) {
+                Some(pending) => pending.target_replica,
+                None => {
+                    soft_panic_or_log!("peek {} has no pending entry", peek.uuid);
+                    None
+                }
+            },
+            ComputeCommand::CancelPeek { .. }
+            | ComputeCommand::Hello { .. }
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
             | ComputeCommand::UpdateConfiguration(_) => None,

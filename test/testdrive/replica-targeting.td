@@ -120,11 +120,12 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > SET cluster = test
 > SET cluster_replica = r1
 
-# Every query in this block is slow path: even a bare aggregate over an
+# The aggregates below are slow path: even a bare aggregate over an
 # introspection relation needs a dataflow and a transient index, replica-
-# targeted at r1, the same replica as the peek that reads it. A broadcast peek
-# against an index that exists only on r1 would panic r2 in `handle_peek` on
-# the missing trace. That panic aborts this test's `materialized` container,
+# targeted at r1, the same replica as the peek that reads it. It is repeated so
+# that a controller that broadcasts peeks leaves several in r2's histogram. A
+# broadcast peek against an index that exists only on r1 would panic r2 in
+# `handle_peek` on the missing trace. That panic aborts this test's `materialized` container,
 # because the harness runs with `propagate_crashes`. The regression protection
 # remains the `mz_peek_durations_histogram_raw` check on r2 at the end of this
 # block: it only reads 0 because r2 never received any of these peeks.
@@ -154,11 +155,9 @@ SELECT mz_now()::text
 # Waiting for r2's own reported frontier to advance past `ts` (captured right
 # after the r1 queries above) proves r2's replica has communicated with the
 # controller at least once since those queries ran, without guessing at a
-# wall-clock duration. This assumes the
-# controller's frontier reports and a replica's own introspection-log
-# publication are not arbitrarily far apart in time. That has held in
-# practice, but if r2 is ever observed to still see stale data at this point,
-# this barrier is why.
+# wall-clock duration. The barrier can only err toward r2 reading stale
+# introspection data, which would hide peeks it received and let a broadcasting
+# controller pass. It cannot make this check fail when r2 received no peeks.
 > SELECT bool_and(f.write_frontier > ${ts})
   FROM mz_cluster_replicas r, mz_cluster_replica_frontiers f
   WHERE r.id = f.replica_id AND r.name = 'r2'

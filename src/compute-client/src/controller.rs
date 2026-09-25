@@ -869,16 +869,15 @@ impl ComputeController {
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// A dataflow with a `target_replica` is installed on that replica only. Sink exports
-    /// (materialized views, subscribes, copy-tos, metric sinks) may be targeted: a user's
-    /// `CREATE METRIC SINK` runs untargeted, so every replica renders it into its own registry,
-    /// while the coordinator's curated metric sinks are installed per replica and do target one,
-    /// so each replica's series are attributable to it.
+    /// A dataflow with a `target_replica` is installed on that replica only, and every reader of
+    /// its index exports must target the same replica. A user's `CREATE METRIC SINK` runs
+    /// untargeted, so every replica renders it into its own registry. The coordinator's curated
+    /// metric sinks are installed per replica and do target one, so each replica's series are
+    /// attributable to it.
     ///
-    /// Index exports may be targeted only when every reader of the index targets the same
-    /// replica. The coordinator relies on this for the transient index of a replica-targeted
-    /// slow-path `SELECT`, whose only reader is the peek that follows it. Catalog indexes are
-    /// never targeted.
+    /// # Panics
+    ///
+    /// Panics if `target_replica` is set and the dataflow exports a non-transient index.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
@@ -894,6 +893,13 @@ impl ComputeController {
             if !instance.replicas.contains(&replica_id) {
                 return Err(ReplicaMissing(replica_id));
             }
+            // A targeted index needs readers that target the same replica. Only a transient index,
+            // read by the single peek it was built for, can promise that.
+            assert!(
+                dataflow.exported_index_ids().all(|id| id.is_transient()),
+                "replica-targeted dataflow {} exports a non-transient index",
+                dataflow.debug_name,
+            );
         }
 
         // Validation: as_of
