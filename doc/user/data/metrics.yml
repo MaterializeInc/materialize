@@ -693,6 +693,14 @@ metrics:
   help: Spill entries queued or being processed.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_column_pool_spill_reads_in_flight
+  help: Queued pool reads whose copy has not completed.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_spill_reads_total
+  help: Nonresident pool reads queued on the spill threads.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_column_pool_spill_scheduled_total
   help: Evictions handed to buffer-pool spill threads.
   source: src/timely-util/src/pool_config/metrics.rs
