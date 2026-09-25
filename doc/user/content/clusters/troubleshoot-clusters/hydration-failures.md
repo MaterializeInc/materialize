@@ -115,11 +115,10 @@ resize still resolve to a name.
 {{< /note >}}
 
 **Resolution**: size the cluster up with [`ALTER CLUSTER ... SET (SIZE =
-'<new_size>')`](/sql/alter-cluster/) *before* the next restart or upgrade,
-rather than during one. To choose a size from what the last successful
-hydration actually required, see [Optimize cluster
-size](/clusters/sizing/). To lower the peak instead of raising the
-size, see [Optimize hydration
+'<new_size>')`](/sql/alter-cluster/). To choose a size from what the last
+successful hydration actually required, see [Optimize cluster
+size](/clusters/sizing/). To lower the peak instead of raising the size, see
+[Optimize hydration
 requirements](/clusters/optimize-hydration-requirements/).
 
 ## Step 3: Check whether an input's history is pinned
