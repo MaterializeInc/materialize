@@ -858,9 +858,9 @@ impl crate::coord::Coordinator {
         // `as_of`, so the subsequent `acquire_read_hold` lands at
         // `as_of <= timestamp`.
         //
-        // Targeted at the same replica as the peek issued below: the index's only
-        // reader is that peek, so shipping it everywhere would be wasted work, and a
-        // mismatched target would panic the other replica's `handle_peek`.
+        // Targeted at the same replica as the peek issued below. The index's only
+        // reader is that peek, so installing it on every replica would be wasted
+        // work, and the controller asserts that the two targets match.
         self.controller
             .compute
             .create_dataflow(compute_instance, dataflow, target_replica)
