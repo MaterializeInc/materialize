@@ -578,6 +578,11 @@
     "trunc_float32": {"display":"truncf32","sqlfunc_decl":"#[sqlfunc(sqlname = \"truncf32\")] fn trunc_float32(a: f32) -> f32","body_fingerprint":"b9a309bede7a3d9d"},
     "trunc_float64": {"display":"truncf64","sqlfunc_decl":"#[sqlfunc(sqlname = \"truncf64\")] fn trunc_float64(a: f64) -> f64","body_fingerprint":"b9a309bede7a3d9d"},
     "trunc_numeric": {"display":"truncnumeric","sqlfunc_decl":"#[sqlfunc(sqlname = \"truncnumeric\", is_monotone = true)] fn trunc_numeric(mut a: Numeric) -> Numeric","body_fingerprint":"325db9fb2ac6dff2"},
+    "try_cast": {"display":"try_cast[text_to_integer]","sqlfunc_decl":null,"body_fingerprint":null},
+    "try_cast[infallible]": {"display":"try_cast[integer_to_bigint]","sqlfunc_decl":null,"body_fingerprint":null},
+    "try_cast[jsonb]": {"display":"try_cast[jsonb_to_numeric]","sqlfunc_decl":null,"body_fingerprint":null},
+    "try_cast[list]": {"display":"try_cast[list1tolist2]","sqlfunc_decl":null,"body_fingerprint":null},
+    "try_cast[narrowing]": {"display":"try_cast[bigint_to_integer]","sqlfunc_decl":null,"body_fingerprint":null},
     "try_parse_monotonic_iso8601_timestamp": {"display":"try_parse_monotonic_iso8601_timestamp","sqlfunc_decl":"#[sqlfunc(sqlname = \"try_parse_monotonic_iso8601_timestamp\")] fn try_parse_monotonic_iso8601_timestamp<'a>(a: &'a str,) -> Option<CheckedTimestamp<NaiveDateTime>>","body_fingerprint":"248be614321cc3e0"},
     "upper": {"display":"upper","sqlfunc_decl":"#[sqlfunc] fn upper<'a>(a: &'a str) -> String","body_fingerprint":"b2fbf9e0812208ab"}
   },

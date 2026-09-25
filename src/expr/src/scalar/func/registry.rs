@@ -579,6 +579,53 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
             record_type(),
         ),
         unary(RecordGet(1), record_type()),
+        // The null-fallback wrapper around a cast. Its properties derive from
+        // the wrapped function, so the samples cover the branches that differ:
+        // a fallible parse, a narrowing cast with an inverse (which the wrapper
+        // must not inherit), a nullable output the wrapper only forces nullable,
+        // a container cast whose element cast lives inside the wrapper, and a
+        // wrapper around a function that cannot error, which the planner never
+        // emits but the type allows.
+        unary(
+            TryCast {
+                inner: Box::new(CastStringToInt32.into()),
+            },
+            SqlScalarType::String,
+        ),
+        unary(
+            TryCast {
+                inner: Box::new(CastInt64ToInt32.into()),
+            },
+            SqlScalarType::Int64,
+        )
+        .labeled("narrowing"),
+        unary(
+            TryCast {
+                inner: Box::new(CastJsonbToNumeric(None).into()),
+            },
+            SqlScalarType::Jsonb,
+        )
+        .labeled("jsonb"),
+        unary(
+            TryCast {
+                inner: Box::new(
+                    CastList1ToList2 {
+                        return_ty: list_type(SqlScalarType::Int32),
+                        cast_expr: column(0),
+                    }
+                    .into(),
+                ),
+            },
+            list_type(SqlScalarType::Int64),
+        )
+        .labeled("list"),
+        unary(
+            TryCast {
+                inner: Box::new(CastInt32ToInt64.into()),
+            },
+            SqlScalarType::Int32,
+        )
+        .labeled("infallible"),
         unary(
             CastStringToArray {
                 return_ty: array_type(SqlScalarType::Int32),

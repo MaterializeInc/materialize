@@ -71,7 +71,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_expr::{
-    Eval, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan, UnmaterializableFunc,
+    Eval, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan, UnaryFunc, UnmaterializableFunc,
     VariadicFunc, func,
 };
 use mz_repr::{Datum, Diff, ReprScalarType, Row, RowArena, Timestamp};
@@ -165,6 +165,22 @@ fn gen_leaf(u: &mut Unstructured, want: Ty, cols: &[Ty]) -> arbitrary::Result<Mi
     })
 }
 
+/// A cast as the planner emits it: strict, or, half the time, as `TRY_CAST`
+/// would emit it, wrapped in `TryCast` when it could error. The wrapper is
+/// strict in its argument and never errors, so it needs no special handling in
+/// the oracle; generating it checks that `reduce` treats it that way.
+fn maybe_try_cast(
+    u: &mut Unstructured,
+    cast: impl Into<UnaryFunc>,
+) -> arbitrary::Result<UnaryFunc> {
+    let cast = cast.into();
+    Ok(if bool::arbitrary(u)? {
+        UnaryFunc::try_cast(cast)
+    } else {
+        cast
+    })
+}
+
 fn gen_scalar(
     u: &mut Unstructured,
     want: Ty,
@@ -192,7 +208,8 @@ fn gen_scalar(
             4 => Ok(gen_scalar(u, Ty::Int, cols, d)?
                 .call_binary(gen_scalar(u, Ty::Int, cols, d)?, func::ModInt32)),
             // int8 -> int4 (fallible: out-of-range overflows).
-            _ => Ok(gen_scalar(u, Ty::Long, cols, d)?.call_unary(func::CastInt64ToInt32)),
+            _ => Ok(gen_scalar(u, Ty::Long, cols, d)?
+                .call_unary(maybe_try_cast(u, func::CastInt64ToInt32)?)),
         },
         Ty::Long => match u.int_in_range(0u8..=4)? {
             0 => {
@@ -208,7 +225,8 @@ fn gen_scalar(
             3 => Ok(gen_scalar(u, Ty::Long, cols, d)?
                 .call_binary(gen_scalar(u, Ty::Long, cols, d)?, func::MulInt64)),
             // int4 -> int8 (infallible widening).
-            _ => Ok(gen_scalar(u, Ty::Int, cols, d)?.call_unary(func::CastInt32ToInt64)),
+            _ => Ok(gen_scalar(u, Ty::Int, cols, d)?
+                .call_unary(maybe_try_cast(u, func::CastInt32ToInt64)?)),
         },
         Ty::Bool => match u.int_in_range(0u8..=5)? {
             0 => {
