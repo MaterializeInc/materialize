@@ -9,19 +9,29 @@
 
 //! Postgres sink.
 //!
-//! The write path has two stages. The setup operator, on a single worker,
+//! The write path has three stages. The setup operator, on a single worker,
 //! creates the target table, the staging table and the shared progress table,
 //! and truncates the staging table. Once it releases its barrier every worker
 //! streams its share of updates into the staging table with `COPY ... FROM
 //! STDIN`, tagging each row with the Materialize timestamp and a diff of `1`
 //! or `-1`. Rows are copied as soon as they arrive, including rows beyond the
-//! input frontier. Correctness rests on two rules: only completed timestamps
-//! are ever moved from staging into the target table, and the staging table is
-//! truncated on every dataflow start. A COPY that fails on any worker halts the
-//! sink, which restarts the whole dataflow and therefore re-runs setup, because
-//! after a failed COPY there is no way to know which rows landed.
+//! input frontier. Finally the apply operator, again on a single worker, moves
+//! each completed timestamp window from the staging table into the target table
+//! in one transaction.
+//!
+//! Correctness rests on two rules: only completed timestamps are ever moved
+//! from staging into the target table, and the staging table is truncated on
+//! every dataflow start. A COPY that fails on any worker halts the sink, which
+//! restarts the whole dataflow and therefore re-runs setup, because after a
+//! failed COPY there is no way to know which rows landed.
+//!
+//! `materialize.sink_progress` records how far the sink has got. It is the
+//! source of truth, because it is updated in the same transaction that writes
+//! the rows. The persist progress shard mirrors it and is reconciled forward at
+//! startup.
 
 use std::convert::Infallible;
+use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -40,17 +50,20 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_pgcopy::{CopyFormatParams, encode_copy_format};
 use mz_pgrepr::TextEncodeSettings;
-use mz_postgres_util::{Client, Sql, batch_execute, sql};
+use mz_postgres_util::{Client, Sql, batch_execute, execute, query_one, sql};
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, Row, SqlColumnType, SqlRelationType, SqlScalarType,
     Timestamp,
 };
+use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{PostgresSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::SourceData;
+use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::{Map, ToStream};
@@ -107,9 +120,7 @@ impl<'scope> SinkRender<'scope> for PostgresSinkConnection {
     ) {
         let scope = batches.scope();
 
-        // TODO: consumed by the staging-to-target step, which advances the
-        // progress shard in lockstep with the progress table.
-        let _write_handle = {
+        let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
             let shard_meta = sink.to_storage_metadata.clone();
             async move {
@@ -149,19 +160,26 @@ impl<'scope> SinkRender<'scope> for PostgresSinkConnection {
         let (staged, copy_status, copy_token) = encode_and_stage_input(
             format!("postgres-{sink_id}-copy-staging"),
             batches,
-            tables_ready,
+            tables_ready.clone(),
             self.clone(),
             storage_state.storage_configuration.clone(),
             sink.from_desc.clone(),
             sink_id,
-            statistics,
+            statistics.clone(),
         );
 
-        insert_into_target_table(
+        let (apply_status, apply_token) = insert_into_target_table(
             format!("postgres-{sink_id}-insert-target"),
             staged,
-            self,
+            tables_ready,
+            self.clone(),
+            storage_state.storage_configuration.clone(),
+            sink.from_desc.clone(),
+            sink.as_of.clone(),
             sink_id,
+            statistics,
+            write_handle,
+            write_frontier,
         );
 
         let running_status = Some(HealthStatusMessage {
@@ -171,9 +189,9 @@ impl<'scope> SinkRender<'scope> for PostgresSinkConnection {
         })
         .to_stream(scope);
 
-        let status = scope.concatenate([running_status, setup_status, copy_status]);
+        let status = scope.concatenate([running_status, setup_status, copy_status, apply_status]);
 
-        (status, vec![setup_token, copy_token])
+        (status, vec![setup_token, copy_token, apply_token])
     }
 }
 
@@ -384,15 +402,509 @@ fn encode_and_stage_input<'scope>(
     (progress, health_statuses(errors), button.press_on_drop())
 }
 
-/// TODO: move completed timestamps from the staging table into the target
-/// table and advance the sink's row in the progress table, skipping rows at or
-/// below the frontier recorded there.
+/// Moves each completed timestamp window from the staging table into the target
+/// table, advancing the sink's recorded frontier in the same transaction.
+///
+/// Runs on one worker, because the windows have to be applied in order and a
+/// window is applied by a single transaction. Reads nothing from `staged`: that
+/// stream carries no data, and its frontier is what says a timestamp is
+/// complete in staging across every worker.
 fn insert_into_target_table<'scope>(
-    _name: String,
-    _staged: StreamVec<'scope, Timestamp, Infallible>,
-    _connection: &PostgresSinkConnection,
-    _sink_id: GlobalId,
+    name: String,
+    staged: StreamVec<'scope, Timestamp, Infallible>,
+    tables_ready: StreamVec<'scope, Timestamp, Infallible>,
+    connection: PostgresSinkConnection,
+    storage_configuration: StorageConfiguration,
+    from_desc: RelationDesc,
+    as_of: Antichain<Timestamp>,
+    sink_id: GlobalId,
+    statistics: SinkStatistics,
+    write_handle: impl Future<
+        Output = Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>, anyhow::Error>,
+    > + 'static,
+    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+) -> (
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
+    PressOnDropButton,
 ) {
+    let scope = staged.scope();
+    let is_active_worker = usize::cast_from(sink_id.hashed()) % scope.peers() == scope.index();
+    let mut builder = OperatorBuilder::new(name.clone(), scope);
+    let mut staged = builder.new_disconnected_input(staged, Pipeline);
+    let mut tables_ready = builder.new_disconnected_input(tables_ready, Pipeline);
+
+    let (button, errors) = builder.build_fallible(move |_caps| {
+        Box::pin(async move {
+            if !is_active_worker {
+                // Leaving a frontier here would hold back what the controller
+                // sees for the whole sink.
+                write_frontier.borrow_mut().clear();
+                return Ok(());
+            }
+
+            while let Some(_) = tables_ready.next().await {
+                // Wait for the setup operator to release its barrier.
+            }
+
+            let mut write_handle = write_handle.await?;
+            let mut client = connect(
+                &connection,
+                &storage_configuration,
+                sink_id,
+                &format!("postgres-sink-{sink_id}-apply"),
+            )
+            .await?;
+
+            let statements = ApplyStatements::new(&connection, &from_desc, sink_id)?;
+            let resume_upper =
+                reconcile_frontiers(&client, &statements, &mut write_handle, &write_frontier)
+                    .await?;
+
+            // The input has overcompacted if we have made progress in the past
+            // but the since frontier is now beyond it, in which case the rows
+            // between the two will never be replayed.
+            let overcompacted = *resume_upper != [Timestamp::minimum()]
+                && !PartialOrder::less_equal(&as_of, &resume_upper);
+            if overcompacted {
+                bail!(
+                    "{name}: input compacted past resume upper: as_of {}, resume_upper: {}",
+                    as_of.pretty(),
+                    resume_upper.pretty()
+                );
+            }
+
+            let Some(mut lower) = resume_upper.clone().into_option() else {
+                write_frontier.borrow_mut().clear();
+                return Ok(());
+            };
+
+            while let Some(event) = staged.next().await {
+                let Event::Progress(progress) = event else {
+                    // The stream is `Infallible`, so it carries no data.
+                    continue;
+                };
+                // Ignore progress below where we resumed.
+                if !PartialOrder::less_equal(&resume_upper, &progress) {
+                    continue;
+                }
+                // Only start applying once strictly beyond the as_of. A sink
+                // restarted with an earlier as_of replays its snapshot at the
+                // earlier time, and applying before then would record progress
+                // that skips it.
+                if !as_of.iter().all(|t| !progress.less_equal(t)) {
+                    continue;
+                }
+
+                let upper = frontier_bound(&progress)?;
+                apply_window(
+                    &mut client,
+                    &statements,
+                    timestamp_to_i64(lower)?,
+                    upper,
+                    &statistics,
+                )
+                .await?;
+
+                // Only now that the rows are durable in Postgres does the
+                // progress shard move. See `reconcile_frontiers` for why this
+                // order and not the reverse.
+                advance_persist(&mut write_handle, &progress).await;
+                write_frontier.borrow_mut().clone_from(&progress);
+
+                match progress.into_option() {
+                    Some(new_lower) => lower = new_lower,
+                    None => break,
+                }
+            }
+
+            Ok::<(), anyhow::Error>(())
+        })
+    });
+
+    (health_statuses(errors), button.press_on_drop())
+}
+
+/// Brings the persist progress shard in line with the sink's recorded frontier
+/// and returns the frontier to resume from.
+///
+/// `materialize.sink_progress` is the source of truth, because it is written in
+/// the same transaction as the rows themselves. The shard is appended to only
+/// after that transaction commits, so a process that dies in between leaves the
+/// progress row ahead, and this pulls the shard forward to match. The reverse
+/// order would leave the shard ahead of the target table with no way to tell
+/// whether the window had been applied.
+async fn reconcile_frontiers(
+    client: &Client,
+    statements: &ApplyStatements,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    write_frontier: &Rc<RefCell<Antichain<Timestamp>>>,
+) -> Result<Antichain<Timestamp>, anyhow::Error> {
+    let row = query_one(&**client, statements.read_progress.clone(), &[]).await?;
+    let recorded: i64 = row.get(0);
+    let recorded = Antichain::from_elem(Timestamp::from(u64::try_from(recorded).context(
+        "sink_progress.mz_frontier is negative, which no frontier this sink writes can be",
+    )?));
+
+    let persisted = write_handle.shared_upper();
+    if persisted.is_empty() {
+        // The shard is closed, so there is nothing left to write.
+        return Ok(persisted);
+    }
+
+    if PartialOrder::less_than(&persisted, &recorded) {
+        advance_persist(write_handle, &recorded).await;
+        write_frontier.borrow_mut().clone_from(&recorded);
+    } else if PartialOrder::less_than(&recorded, &persisted) {
+        // The target database lost progress the shard says was committed, for
+        // instance because it was restored from a backup. Those rows cannot be
+        // replayed: a persist upper only moves forward, and the source may
+        // already have compacted past them.
+        bail!(
+            "Postgres sink progress ({}) is behind its progress shard ({}). \
+             The target database has lost writes this sink already committed, \
+             so the sink has to be dropped and recreated.",
+            recorded.pretty(),
+            persisted.pretty(),
+        );
+    }
+
+    Ok(recorded)
+}
+
+/// Appends empty batches until the progress shard reaches `target`.
+async fn advance_persist(
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    target: &Antichain<Timestamp>,
+) {
+    const EMPTY: &[((SourceData, ()), Timestamp, StorageDiff)] = &[];
+    let mut expect_upper = write_handle.shared_upper();
+    loop {
+        if PartialOrder::less_equal(target, &expect_upper) {
+            return;
+        }
+        match write_handle
+            .compare_and_append(EMPTY, expect_upper, target.clone())
+            .await
+            .expect("valid usage")
+        {
+            Ok(()) => return,
+            Err(mismatch) => expect_upper = mismatch.current,
+        }
+    }
+}
+
+/// Applies every staged row with a timestamp in `[lower, upper)` to the target
+/// table and records `upper` as the sink's new frontier, in one transaction.
+async fn apply_window(
+    client: &mut Client,
+    statements: &ApplyStatements,
+    lower: i64,
+    upper: i64,
+    statistics: &SinkStatistics,
+) -> Result<(), anyhow::Error> {
+    let txn = client.transaction().await?;
+
+    // Rows below `lower` were applied by an earlier incarnation that died
+    // before its progress reached the shard, so the copy operator staged them
+    // again. Applying them twice would duplicate them in the target.
+    execute(&txn, statements.discard.clone(), &[&lower]).await?;
+
+    let applied = match &statements.apply {
+        ApplyKind::Keyed(statement) => {
+            let row = query_one(&txn, statement.clone(), &[&upper]).await?;
+            let (deleted, touched, inserted): (i64, i64, i64) =
+                (row.get(0), row.get(1), row.get(2));
+            if deleted > touched {
+                bail!(
+                    "Postgres sink deleted {deleted} rows for {touched} keys, so the \
+                     target table holds more than one row per key"
+                );
+            }
+            u64::try_from(deleted + inserted).expect("counts are non-negative")
+        }
+        ApplyKind::Keyless { insert, retract } => {
+            let inserted = execute(&txn, insert.clone(), &[&upper]).await?;
+            let row = query_one(&txn, retract.clone(), &[&upper]).await?;
+            let (retracted, deleted): (i64, i64) = (row.get(0), row.get(1));
+            if retracted != deleted {
+                bail!(
+                    "Postgres sink retracted {retracted} rows but found {deleted} to delete, \
+                     so the target table is missing rows this sink expected to remove"
+                );
+            }
+            inserted + u64::try_from(deleted).expect("counts are non-negative")
+        }
+    };
+
+    let updated = execute(&txn, statements.record_progress.clone(), &[&upper]).await?;
+    if updated != 1 {
+        bail!("Postgres sink progress row is missing from materialize.sink_progress");
+    }
+
+    txn.commit().await?;
+    statistics.inc_messages_committed_by(applied);
+    Ok(())
+}
+
+/// The statements `apply_window` runs, built once per sink.
+struct ApplyStatements {
+    read_progress: Sql,
+    record_progress: Sql,
+    discard: Sql,
+    apply: ApplyKind,
+}
+
+/// How a window is applied, which depends on whether the sink has a key.
+enum ApplyKind {
+    /// One statement that replaces every key the window touches.
+    Keyed(Sql),
+    /// Insertions, then retractions matched on every column.
+    Keyless { insert: Sql, retract: Sql },
+}
+
+impl ApplyStatements {
+    fn new(
+        connection: &PostgresSinkConnection,
+        from_desc: &RelationDesc,
+        sink_id: GlobalId,
+    ) -> Result<Self, anyhow::Error> {
+        let schema = Sql::ident(&connection.schema);
+        let target = Sql::ident(&connection.table);
+        let staging = Sql::ident(&connection.staging_table_name(sink_id));
+        let mz_schema = Sql::ident(PostgresSinkConnection::MZ_SCHEMA);
+        let progress = Sql::ident(PostgresSinkConnection::PROGRESS_TABLE);
+        let sink_id = Sql::literal(&sink_id.to_string());
+        let timestamp = Sql::ident(TIMESTAMP_COLUMN);
+        let diff = Sql::ident(DIFF_COLUMN);
+        let column_names: Vec<String> = from_desc
+            .iter_names()
+            .map(|name| name.to_string())
+            .collect();
+        let columns = Sql::join(column_names.iter().map(|name| Sql::ident(name)), ", ");
+
+        let apply = match key_columns(connection, from_desc) {
+            Some(keys) => ApplyKind::Keyed(Self::keyed_statement(
+                &schema, &target, &staging, &columns, &keys, &timestamp, &diff,
+            )),
+            None => ApplyKind::Keyless {
+                insert: sql!(
+                    "WITH moved AS (\
+                       DELETE FROM {}.{} WHERE {} < {} AND {} > 0 RETURNING {}\
+                     ) \
+                     INSERT INTO {}.{} ({}) SELECT {} FROM moved",
+                    schema.clone(),
+                    staging.clone(),
+                    timestamp.clone(),
+                    Sql::param(1),
+                    diff.clone(),
+                    columns.clone(),
+                    schema.clone(),
+                    target.clone(),
+                    columns.clone(),
+                    columns.clone(),
+                ),
+                retract: Self::keyless_retract_statement(
+                    &schema,
+                    &target,
+                    &staging,
+                    &columns,
+                    &column_names,
+                    &timestamp,
+                    &diff,
+                ),
+            },
+        };
+
+        Ok(ApplyStatements {
+            read_progress: sql!(
+                "SELECT mz_frontier FROM {}.{} WHERE sink_id = {}",
+                mz_schema.clone(),
+                progress.clone(),
+                sink_id.clone(),
+            ),
+            record_progress: sql!(
+                "UPDATE {}.{} SET mz_frontier = {} WHERE sink_id = {}",
+                mz_schema,
+                progress,
+                Sql::param(1),
+                sink_id,
+            ),
+            discard: sql!(
+                "DELETE FROM {}.{} WHERE {} < {}",
+                schema,
+                staging,
+                timestamp,
+                Sql::param(1),
+            ),
+            apply,
+        })
+    }
+
+    /// Replaces every key the window touches with that key's final state.
+    ///
+    /// Postgres sinks are always upsert, so a window is applied as one: delete
+    /// the rows for every key it mentions, then reinsert the keys whose last
+    /// event is an insertion. Replaying the individual diffs instead would not
+    /// work, because an update leaves two rows for the key in flight and a
+    /// key-matched retraction cannot tell which of them to remove.
+    ///
+    /// The data-modifying branches all read the same snapshot, so the delete
+    /// never sees the rows the insert adds.
+    fn keyed_statement(
+        schema: &Sql,
+        target: &Sql,
+        staging: &Sql,
+        columns: &Sql,
+        keys: &[String],
+        timestamp: &Sql,
+        diff: &Sql,
+    ) -> Sql {
+        let key_columns = Sql::join(keys.iter().map(|key| Sql::ident(key)), ", ");
+        let key_match = Sql::join(
+            keys.iter().map(|key| {
+                sql!(
+                    "t.{} IS NOT DISTINCT FROM l.{}",
+                    Sql::ident(key),
+                    Sql::ident(key)
+                )
+            }),
+            " AND ",
+        );
+        sql!(
+            "WITH win AS (\
+               DELETE FROM {}.{} WHERE {} < {} RETURNING {}, {}, {}\
+             ), \
+             latest AS (\
+               SELECT DISTINCT ON ({}) {}, {} FROM win ORDER BY {}, {} DESC, {} DESC\
+             ), \
+             deleted AS (\
+               DELETE FROM {}.{} t USING latest l WHERE {} RETURNING 1\
+             ), \
+             inserted AS (\
+               INSERT INTO {}.{} ({}) SELECT {} FROM latest WHERE {} > 0 RETURNING 1\
+             ) \
+             SELECT (SELECT count(*) FROM deleted), (SELECT count(*) FROM latest), \
+                    (SELECT count(*) FROM inserted)",
+            schema.clone(),
+            staging.clone(),
+            timestamp.clone(),
+            Sql::param(1),
+            columns.clone(),
+            timestamp.clone(),
+            diff.clone(),
+            key_columns.clone(),
+            columns.clone(),
+            diff.clone(),
+            key_columns,
+            timestamp.clone(),
+            diff.clone(),
+            schema.clone(),
+            target.clone(),
+            key_match,
+            schema.clone(),
+            target.clone(),
+            columns.clone(),
+            columns.clone(),
+            diff.clone(),
+        )
+    }
+
+    /// Deletes exactly as many copies of each retracted row as were retracted.
+    ///
+    /// A keyless target may legitimately hold duplicates, so a plain
+    /// `DELETE ... WHERE` would remove every copy instead of the retracted
+    /// count. `ctid` picks out individual rows for that reason.
+    ///
+    /// NOTE: this join matches on every column and so cannot use an index. That
+    /// is the cost of a sink without a key.
+    fn keyless_retract_statement(
+        schema: &Sql,
+        target: &Sql,
+        staging: &Sql,
+        columns: &Sql,
+        column_names: &[String],
+        timestamp: &Sql,
+        diff: &Sql,
+    ) -> Sql {
+        let column_match = Sql::join(
+            column_names.iter().map(|column| {
+                sql!(
+                    "t.{} IS NOT DISTINCT FROM c.{}",
+                    Sql::ident(column),
+                    Sql::ident(column),
+                )
+            }),
+            " AND ",
+        );
+        let target_columns = Sql::join(
+            column_names
+                .iter()
+                .map(|column| sql!("t.{}", Sql::ident(column))),
+            ", ",
+        );
+        sql!(
+            "WITH retracted AS (\
+               DELETE FROM {}.{} WHERE {} < {} AND {} < 0 RETURNING {}\
+             ), \
+             counts AS (SELECT {}, count(*) AS n FROM retracted GROUP BY {}), \
+             ranked AS (\
+               SELECT t.ctid, c.n, row_number() OVER (PARTITION BY {} ORDER BY t.ctid) AS rn \
+               FROM {}.{} t JOIN counts c ON {}\
+             ), \
+             deleted AS (\
+               DELETE FROM {}.{} WHERE ctid IN (SELECT ctid FROM ranked WHERE rn <= n) RETURNING 1\
+             ) \
+             SELECT (SELECT count(*) FROM retracted), (SELECT count(*) FROM deleted)",
+            schema.clone(),
+            staging.clone(),
+            timestamp.clone(),
+            Sql::param(1),
+            diff.clone(),
+            columns.clone(),
+            columns.clone(),
+            columns.clone(),
+            target_columns,
+            schema.clone(),
+            target.clone(),
+            column_match,
+            schema.clone(),
+            target.clone(),
+        )
+    }
+}
+
+/// The columns that identify a row in the target table, if the sink has any.
+///
+/// Prefers the user's `KEY`, then a natural key of the relation, matching the
+/// order the sink's own arrangement uses.
+fn key_columns(
+    connection: &PostgresSinkConnection,
+    from_desc: &RelationDesc,
+) -> Option<Vec<String>> {
+    let indices = connection
+        .key_desc_and_indices
+        .as_ref()
+        .map(|(_, indices)| indices)
+        .or(connection.relation_key_indices.as_ref())?;
+    let names: Vec<_> = from_desc
+        .iter_names()
+        .map(|name| name.to_string())
+        .collect();
+    Some(indices.iter().map(|&index| names[index].clone()).collect())
+}
+
+/// The exclusive upper bound of the window a frontier closes.
+///
+/// An empty frontier closes every remaining timestamp.
+fn frontier_bound(frontier: &Antichain<Timestamp>) -> Result<i64, anyhow::Error> {
+    match frontier.as_option() {
+        Some(time) => timestamp_to_i64(*time),
+        None => Ok(i64::MAX),
+    }
+}
+
+fn timestamp_to_i64(time: Timestamp) -> Result<i64, anyhow::Error> {
+    i64::try_from(u64::from(time)).context("timestamp does not fit in a bigint")
 }
 
 /// Creates the schema, progress table, target table and staging table if they
