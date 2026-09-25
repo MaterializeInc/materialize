@@ -641,6 +641,19 @@ impl Coordinator {
 
         let initial_as_of = storage_as_of.clone();
 
+        // A pinned retention must not ask for history from before the earliest time the new
+        // collection can ever be read at: nothing exists there, so a dependent reading at the pin
+        // would otherwise silently see the snapshot at the initial as-of instead.
+        if let Some(CompactionWindow::PinAt(pin)) = compaction_window {
+            if !storage_as_of.less_equal(&pin) {
+                return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                    "RETAIN HISTORY PIN AT {pin} is before the initial as-of {:?} of the \
+                     materialized view; the pin must be at or after it",
+                    storage_as_of.elements()
+                )));
+            }
+        }
+
         // Update the `create_sql` with the selected `as_of`. This is how we make sure the `as_of`
         // is persisted to the catalog and can be relied on during bootstrapping.
         // This has to be the `storage_as_of`, because bootstrapping uses this in
