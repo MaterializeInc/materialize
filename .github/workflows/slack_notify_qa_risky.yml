@@ -70,8 +70,10 @@ jobs:
           persist-credentials: false
       - name: "Long change filter"
         id: long
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          num_lines=$(git diff --diff-filter=AM ${{ github.event.pull_request.base.sha }} -- '*.rs' | grep "^+" | grep -v "^+++" | wc -l)
+          num_lines=$(git diff --diff-filter=AM "$BASE_SHA" -- '*.rs' | grep "^+" | grep -v "^+++" | wc -l)
           if [[ $num_lines -gt 300 ]]; then
             echo "long=true" >> $GITHUB_OUTPUT
           fi

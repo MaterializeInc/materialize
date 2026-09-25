@@ -34,6 +34,7 @@ permissions: {}
 
 jobs:
   cla-assistant:
+    name: cla-assistant
     runs-on: ubuntu-latest
     permissions:
       actions: write # Re-runs the last failed CLA workflow run on the PR after a signature.

@@ -31,6 +31,7 @@ permissions:
 
 jobs:
   notify:
+    name: notify
     runs-on: ubuntu-latest
     steps:
       - uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
