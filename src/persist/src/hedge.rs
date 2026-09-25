@@ -234,7 +234,8 @@ pub struct HedgedBlob {
 /// exactly when it must not. While hedging is disabled the warmer idles
 /// and the sibling sees no traffic at all, so a freshly enabled flag can
 /// find a cold pool for up to one warm interval plus a handshake. Hedges
-/// in that window are merely no better than no hedge, never worse.
+/// in that window are no better than no hedge, and never worse except for
+/// the grace window's delay on a late primary error.
 fn spawn_warmer(
     hedge: Arc<dyn Blob>,
     cfg: Arc<ConfigSet>,

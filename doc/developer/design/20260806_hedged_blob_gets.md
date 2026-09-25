@@ -51,7 +51,7 @@ hung requests never incremented the corresponding timeout counters
 (`mz_persist_s3_read_timeouts` and friends). A different, smaller set of
 events fleet-wide does trip those counters at a low background rate.
 
-We characterized three manifestations of the class:
+We characterized two manifestations of the class:
 
 - A background rate of roughly two connection events per hour per pod.
   Almost all are invisible, absorbed by the retry off any hot path.
@@ -61,10 +61,6 @@ We characterized three manifestations of the class:
   occurred roughly once per day in the busy environment where we
   characterized the class, each a multi-second freshness stall for a
   workload with single-digit-second freshness expectations.
-- A regionally synchronized burst, in which the table shards of at least 17
-  environments stalled 7 to 15 seconds simultaneously (each environment's
-  single txns shard fanning the stall out to all of its tables) while S3
-  itself served normally.
 
 The evidence says a hedge on a separate connection would have won almost
 all of these races. During one event, 58 of 67 storage collections on the
@@ -73,13 +69,19 @@ normal latency, and the stalled nine were the collections behind the
 affected fetch path, so the other established connections were fine at
 that instant.
 A peer replica of the affected one read the same shard with normal latency
-at the same moment. Fleet-wide latency histograms showed no elevated gets
-during the regional burst. And every observed recovery was itself a
-successful fresh-connection retry, which is exactly a hedge that fired
-late. One caveat feeds the design below: during the correlated bursts the
-fleet's connect-timeout counters also stepped, so brand-new connections
-were sometimes slow to establish mid-event, and a useful hedge therefore
-needs an already-established connection waiting.
+at the same moment. And every observed recovery was itself a successful
+fresh-connection retry, which is exactly a hedge that fired late. One
+caveat feeds the design below: connection deaths sometimes cluster (three
+on one pod within 1.5 seconds), and during regional network events the
+fleet's connect-timeout counters step, so brand-new connections are
+sometimes slow to establish exactly when they are needed, and a useful
+hedge therefore needs an already-established connection waiting.
+
+Regionally synchronized stalls, in which the table shards of many
+environments stall for several seconds at once, are a different class. In
+the one examined closely, the stalled environments were exactly those whose
+compare-and-set round trips to CockroachDB took over 2 seconds in those
+minutes, while gets stayed fast. Hedging does not address them.
 
 Hedging slow requests is what the object-store vendors recommend. AWS's
 S3 performance guidance advises aggressively retrying slow operations on
@@ -202,18 +204,35 @@ Persist startup must not regress for this feature.
 ### Keeping the sibling warm
 
 A cold hedge can pay a connection handshake of up to the 7 second connect
-timeout, and the burst evidence above shows fresh connects are sometimes
-slow exactly during the correlated events. So the sibling's pool must hold
-already-established connections. A background task issues concurrent
-liveness gets on the sibling (fetching a reserved key that never exists, so
-each ping is a cheap not-found response) immediately at startup and then
-every 20 seconds, well inside hyper's eviction of connections idle for 90
-seconds. (NOTE: that 90 is coincidentally equal to, and unrelated to, the
-SDK's 90 second attempt timeout.) The number of concurrent pings follows
-the hedge concurrency cap, because HTTP/1.1 allows one in-flight request
-per connection: N concurrent pings force N warm sockets, so hedges the cap
-admits are normally served warm. (A raised cap grows the warm pool at the
-next cycle.)
+timeout, and fresh connects are sometimes slow exactly during the
+correlated events (see The Problem). So the design keeps the sibling's pool
+warm. A background task issues concurrent liveness gets on the sibling
+(fetching a reserved key that never exists, so each ping is a cheap
+not-found response) immediately at startup and then every 20 seconds, well
+inside hyper's eviction of connections idle for 90 seconds. (NOTE: that 90
+is coincidentally equal to, and unrelated to, the SDK's 90 second attempt
+timeout.) The number of concurrent pings follows the hedge concurrency
+cap, because HTTP/1.1 allows one in-flight request per connection: N
+concurrent pings open or refresh N sockets. (A raised cap grows the pool
+at the next cycle.)
+
+How warm that keeps the pool is limited by S3 itself, which closes a
+keep-alive connection after about 6 seconds idle. This was measured
+directly, and in-region through the warmer's own round-trip gauge, which
+reads 20 to 40 ms per cycle, the cost of a fresh TLS handshake. At the 20
+second interval the sibling's sockets are therefore closed for most of
+each cycle, and a hedge usually opens a fresh connection: 20 to 40 ms in
+normal conditions, up to the connect timeout during a connect-path stall.
+Such a stall hits the sibling's fresh connections as much as the
+primary's: in the regional connect stalls observed since enablement, the
+sibling's pings on the affected pods took 7.4 to 7.9 seconds. Two effects
+shrink the pool further. A lost hedge closes its socket, because hyper
+closes a connection whose response body was dropped mid-stream instead of
+returning it to the pool. And a hedge of a multi-part blob opens one
+connection per part (`S3Blob::get` fetches all 8 MiB parts at once, up to
+16 for a 128 MiB part), of which at most the concurrency cap were warm.
+Whether the warmer earns its cost is an open question (see Open
+questions).
 
 Each warm cycle is bounded by a timeout: an unbounded hung ping would block
 warming past the idle eviction, going cold exactly during the correlated
@@ -235,15 +254,17 @@ and leave later gets unhedged with
 therefore survives a correlated event that also hits the sibling's
 sockets only if the sibling escaped it.
 
-A single-digit interval would cut that exposure to a few seconds and let
-the pool heal mid-event, and its restarted handshakes probe better than
-one patient handshake: each resets TCP's exponential SYN backoff (about
-one probe per second) and re-resolves DNS, which can retarget a rotated
-S3 front-end address once the record's short TTL lapses. Nothing waits
-on a warming handshake, so aborting a viable-but-slow one costs nothing.
-The interval nevertheless stays at 20 seconds on cost: there the warmer
-is a modest fraction of the fleet's organic blob gets, while at a few
-seconds it would rival or exceed the fleet's entire organic blob-get
+An interval under the 6 second idle close would keep the sibling's
+sockets open between cycles, cut the dead-socket exposure to a few
+seconds and let the pool heal mid-event, and its restarted handshakes
+probe better than one patient handshake: each resets TCP's exponential
+SYN backoff (about one probe per second) and re-resolves DNS, which can
+retarget a rotated S3 front-end address once the record's short TTL
+lapses. Nothing waits on a warming handshake, so aborting a
+viable-but-slow one costs nothing. The interval nevertheless stays at 20
+seconds on cost: there the warmer adds about an eighth to the fleet's
+organic blob gets, while at 5 seconds it would add about half, and at a
+few seconds it would rival or exceed the fleet's entire organic blob-get
 request volume. The evidence that would justify that spend is correlated
 events still visible in freshness after enablement, hedges erroring on
 dead sibling sockets, concurrency skips clustering at event times, and
@@ -257,8 +278,10 @@ refresh lazily, on use), and its startup sockets idle out. The trade-off
 is a short cold window after a runtime enablement: until the warmer's
 first cycle, up to one warm interval plus a handshake later, a hedge can
 land on an empty pool and pay a cold connect (bounded by the connect
-timeout). Hedges in that window are merely no better than no hedge, never
-worse, since the primary keeps racing regardless. Setting the warm
+timeout). Hedges in that window are no better than no hedge, and never
+worse since the primary keeps racing regardless, except that a primary
+error arriving after the delay reaches the caller up to one delay later
+(the grace window, see The race). Setting the warm
 interval to zero stops warmer traffic while keeping hedging on.
 
 ### Bounding amplification
@@ -284,14 +307,33 @@ large gets that legitimately exceed the delay (a 128 MiB part on a
 bandwidth-constrained pod) from settling into permanent double egress.
 The bucket starts full, so a low-traffic process can still hedge the
 rare event that motivates the feature, and 32 is an order of magnitude
-above the handful of rescues one event needs per process. The blind spot
-mirrors the protection: where more than one percent of gets are
-legitimately slow, the drained bucket also refuses the occasional
-genuine dead-connection hang, visible as `hedges_skipped{reason="budget"}`.
+above the handful of rescues one event needs per process. The bucket is
+per process and refills only as gets complete, with no clock, so once
+drained it admits about one hedge per 100 completed gets, and a full
+refill takes 3,200 gets without a hedge. The blind spot mirrors the
+protection: where more than one percent of gets are legitimately slow,
+the drained bucket also refuses the occasional genuine dead-connection
+hang, visible as `hedges_skipped{reason="budget"}`.
+
+Which guard refuses depends on how many gets are slow. An ordinary
+hydration has only a few gets over the delay, never empties the bucket,
+and is capped by concurrency. Where more than about one percent of a
+process's gets are slow, the bucket drains and budget refusals dominate:
+hydrations of the largest replicas reading hundreds of GB per hour, bulk
+readers of large parts, and small replicas too slow for their workload.
+Observed small replicas of that kind fired 6 to 52 hedges per hour for
+days, won 1 to 5% of them, and added 0.7 to 1% extra gets. A process
+whose hedges themselves hang pins both slots and stays capped by
+concurrency. Because the concurrency check runs first,
+`hedges_skipped{reason="concurrency"}` also counts refusals that the
+empty bucket would have made.
 
 ### Configuration
 
-Five dyncfgs, all readable per call so LaunchDarkly changes apply live:
+Five dyncfgs, all readable per call so LaunchDarkly changes apply live.
+One exception: an environmentd generation that has not been promoted yet,
+such as the new generation during a release rollout, applies LaunchDarkly
+changes only once promoted.
 
 | Name | Default | Purpose |
 | --- | --- | --- |
@@ -375,12 +417,19 @@ two handles observe different stores, which is exactly what
 `open_hedge_sibling`'s per-backend contract prevents.
 
 Write-once is a statement about blob contents, not key existence: a
-concurrent delete can legitimately change the answer between the two legs,
-and the hedge leg can observe the store up to the delay later than the
-primary would have. What makes that irrelevant in practice is the same
-thing that protects sequential gets today: persist only deletes blobs that
-no live reader can reference, enforced by seqno leases. (This is also why
-a runtime cross-check that both legs agree was rejected, see Alternatives.)
+concurrent delete can change the answer between the two legs, and the
+hedge leg observes the store up to one delay later than the primary would
+have. That adds no new outcome. An unhedged get whose request reached the
+store at the same moment, after a slow network path or as a retry after a
+hang, would return the same answer, so a caller that is correct without
+hedging stays correct with it. Leased reads cannot race a delete at all:
+garbage collection keeps every blob that a leased seqno references. Reads
+that hold no lease (unleased snapshots, rollup reads) already race garbage
+collection without hedging, and hedging only moves their read point
+within the call. For the dead-connection class it moves it earlier: the
+hedge reads about 2 seconds into the call, where the unhedged retry reads
+after the 5 to 15 second hang. (This is also why a runtime cross-check
+that both legs agree was rejected, see Alternatives.)
 
 The error surface is unchanged: callers see a success or the primary's
 error exactly as they would have without hedging, so the error text, the
@@ -418,7 +467,13 @@ legs of a hedged get plus the warmer's pings, so they can exceed the logical
 chain has rotted, which would otherwise silently turn the feature into a
 no-op. Both only move while hedging is enabled, so expect any rot to
 surface within the first warm cycles after enablement. `hedge_armed` only certifies
-that the sibling opened at process start.
+that the sibling opened at process start. Neither counter is specific to
+credentials, though. The discriminator is whether the primary fails on the
+same process at the same time. Hedge errors alongside primary failures
+have a shared cause: a pod starved at its network limit, or a connection
+reset or credential outage hitting both clients at once. Hedge errors and
+warm errors without primary failures, across many processes, point at the
+sibling itself.
 
 ## Alternatives
 
@@ -442,10 +497,13 @@ be kept warm without distorting the primary's pool.
 Lowering the client timeouts instead of hedging was the 2023 answer to
 this class (connect and read were cut from 30 and 60 seconds to today's
 7 and 10), and the residual hang is what that lever left behind.
-Tightening further runs into the structural limits The Problem lists,
-and a mid-body hang stays bounded only by the 90 second attempt timeout,
-which cannot come down without killing legitimately long large-part
-fetches. A timeout is also sequential and forces a trade: it converts a
+Tightening further runs into the structural limits The Problem lists, and
+the timeouts do not cover the response body at all. A body that stops
+delivering bytes fails after about 6 seconds through the SDK's
+stalled-stream protection, but a body that keeps trickling a byte every
+few seconds is bounded by no timeout, and the attempt timeout could not
+come down anyway without killing legitimately long large-part fetches. A
+timeout is also sequential and forces a trade: it converts a
 possibly-about-to-succeed request into an error, pays backoff and
 restart, and retries on the same pool with no fresh connection or DNS
 resolution guaranteed, so its threshold must stay conservative. A hedge
@@ -500,13 +558,12 @@ runtime. Cloud enabled it per environment through LaunchDarkly, in steps
 that reached every cloud environment. The compiled-in default is now on,
 which enables hedging for deployments that do not set the parameter, such
 as self-managed ones. `enabled = false` remains the kill switch. On
-enablement,
-expect the old detection signals to fade (see Observability),
+enablement, expect the old detection signals to fade (see Observability),
 `hedges_fired` to run at a low background rate (measured on a busy
 reference environment: gets over the 2s delay ran at roughly 4 per day
 on the busiest replica and a few per hour environment-wide, so
 single-digit fires per day per process is the expected order, with
-hydration bursts of large parts as the exception the budget caps), and
+hydration bursts of large parts as the exception the guards cap), and
 `hedges_won` to step where the old signals would have fired.
 Success is the dead-connection class becoming sub-breach: each
 instance should cap near the hedge delay plus one normal get, and the
@@ -516,3 +573,20 @@ residual is the case where both legs stall (a correlated event defeating
 the warm pool, or a drained budget), which falls back to today's behavior
 and stays visible as `hedge_won_seconds` outliers and
 `hedges_skipped` increments.
+
+## Open questions
+
+**Is the warmer worth its cost?** At the 20 second interval the sibling's
+sockets are closed for most of each cycle (see Keeping the sibling warm),
+so the warmer mostly does not keep a warm pool. What it does provide is a
+health signal for the sibling (`hedge_warm_errors`, `hedge_rtt_latency`)
+and an exercised credential chain, at about an eighth of the fleet's
+organic blob gets. The options are to keep it as is, to shorten the
+interval below the 6 second idle close so that sockets actually stay warm
+(about half the fleet's organic blob gets at 5 seconds), or to drop it and
+let hedges open their own connections. A shorter interval is what would
+carry the sibling through a connect-path stall on sockets it established
+before the stall, since at 20 seconds every cycle reconnects and stalls
+along with the primary. The deciding evidence would be hedge wins in the 4
+to 8 s bucket or later that coincide with slow connects a warm pool would
+have avoided.
