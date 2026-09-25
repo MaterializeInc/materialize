@@ -2119,7 +2119,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     in the process of reconciliation.
     """
 
-    c.up("materialized", "clusterd1")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2136,60 +2136,80 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
         ));
-        SET cluster = cluster1;
-
-        -- index on table
-        CREATE TABLE t1 (a int);
-        CREATE DEFAULT INDEX on t1;
-
-        -- index on view
-        CREATE VIEW v AS SELECT a + 1 FROM t1;
-        CREATE DEFAULT INDEX on v;
-
-        -- materialized view on table
-        CREATE TABLE t2 (a int);
-        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
-
-        -- materialized view on index
-        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
         """)
 
-    # Set up a subscribe dataflow that will be dropped during reconciliation.
-    cursor = c.sql_cursor()
-    cursor.execute("SET cluster = cluster1")
-    cursor.execute("INSERT INTO t1 VALUES (1)")
-    cursor.execute("BEGIN")
-    cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t1")
-    cursor.execute("FETCH 1 c")
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+           FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+           WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+    catalog_options = native_catalog_options(c)
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        ),
+    ):
+        c.up("clusterd1")
 
-    # Perform a query to ensure dataflows have been installed.
-    c.sql("""
-        SET cluster = cluster1;
-        SELECT * FROM t1, v, mv1, mv2;
-        """)
+        c.sql("""
+            SET cluster = cluster1;
 
-    # We don't have much control over compute reconciliation from here. We
-    # drop a dataflow and immediately kill environmentd, in hopes of maybe
-    # provoking an interesting race that way.
-    c.sql("DROP MATERIALIZED VIEW mv2")
+            -- index on table
+            CREATE TABLE t1 (a int);
+            CREATE DEFAULT INDEX on t1;
 
-    # Restart environmentd to trigger a reconciliation.
-    c.kill("materialized")
-    c.up("materialized")
+            -- index on view
+            CREATE VIEW v AS SELECT a + 1 FROM t1;
+            CREATE DEFAULT INDEX on v;
 
-    # Perform a query to ensure reconciliation has finished.
-    c.sql("""
-        SET cluster = cluster1;
-        SELECT * FROM v;
-        """)
+            -- materialized view on table
+            CREATE TABLE t2 (a int);
+            CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
 
-    # Verify the absence of logged errors.
-    for service in ("materialized", "clusterd1"):
-        p = c.invoke("logs", service, capture=True)
-        for line in p.stdout.splitlines():
-            assert (
-                " ERROR " not in line or "repr type error" in line
-            ), f"found non-repr-type ERROR in service {service}: {line}"
+            -- materialized view on index
+            CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+            """)
+
+        # Set up a subscribe dataflow that will be dropped during reconciliation.
+        cursor = c.sql_cursor()
+        cursor.execute("SET cluster = cluster1")
+        cursor.execute("INSERT INTO t1 VALUES (1)")
+        cursor.execute("BEGIN")
+        cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t1")
+        cursor.execute("FETCH 1 c")
+
+        # Perform a query to ensure dataflows have been installed.
+        c.sql("""
+            SET cluster = cluster1;
+            SELECT * FROM t1, v, mv1, mv2;
+            """)
+
+        # We don't have much control over compute reconciliation from here. We
+        # drop a dataflow and immediately kill environmentd, in hopes of maybe
+        # provoking an interesting race that way.
+        c.sql("DROP MATERIALIZED VIEW mv2")
+
+        # Restart environmentd to reconnect to the replica.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Perform a query to ensure the reconnected replica serves queries.
+        c.sql("""
+            SET cluster = cluster1;
+            SELECT * FROM v;
+            """)
+
+        # Verify the absence of logged errors.
+        for service in ("materialized", "clusterd1"):
+            p = c.invoke("logs", service, capture=True)
+            for line in p.stdout.splitlines():
+                assert (
+                    " ERROR " not in line or "repr type error" in line
+                ), f"found non-repr-type ERROR in service {service}: {line}"
 
 
 def workflow_test_drop_during_reconciliation(c: Composition) -> None:
@@ -7017,26 +7037,48 @@ def workflow_crash_on_replica_expiration_mv(
     """
     Tests that clusterd crashes when a replica is set to expire
     """
+    offset = 20
+
+    c.up("materialized")
+    c.sql(
+        f"""
+        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
+        ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
+
+        CREATE CLUSTER test REPLICAS (
+            test (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            )
+        );
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+           FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+           WHERE c.name = 'test' AND r.name = 'test'""")
+    catalog_options = native_catalog_options(c)
     with c.override(
-        Clusterd(name="clusterd1", restart="on-failure"),
+        Clusterd(
+            name="clusterd1",
+            workers=1,
+            restart="on-failure",
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        ),
     ):
-        offset = 20
+        c.up("clusterd1")
 
-        c.up("materialized", "clusterd1")
         c.sql(
-            f"""
-            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
-            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
-
-            CREATE CLUSTER test REPLICAS (
-                test (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
-                )
-            );
+            """
             SET CLUSTER TO test;
 
             CREATE TABLE t (x int);
@@ -7077,26 +7119,48 @@ def workflow_crash_on_replica_expiration_index(
     """
     Tests that clusterd crashes when a replica is set to expire
     """
+    offset = 20
+
+    c.up("materialized")
+    c.sql(
+        f"""
+        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
+        ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
+
+        CREATE CLUSTER test REPLICAS (
+            test (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            )
+        );
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+           FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+           WHERE c.name = 'test' AND r.name = 'test'""")
+    catalog_options = native_catalog_options(c)
     with c.override(
-        Clusterd(name="clusterd1", restart="on-failure"),
+        Clusterd(
+            name="clusterd1",
+            workers=1,
+            restart="on-failure",
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        ),
     ):
-        offset = 20
+        c.up("clusterd1")
 
-        c.up("materialized", "clusterd1")
         c.sql(
-            f"""
-            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
-            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
-
-            CREATE CLUSTER test REPLICAS (
-                test (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
-                )
-            );
+            """
             SET CLUSTER TO test;
 
             CREATE TABLE t (x int);
