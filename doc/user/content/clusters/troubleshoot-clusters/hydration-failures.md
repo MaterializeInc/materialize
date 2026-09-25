@@ -125,11 +125,17 @@ requirements](/clusters/optimize-hydration-requirements/).
 ## Step 3: Check whether an input's history is pinned
 
 A new object starts reading data at the most recent time at which all of its
-upstream inputs are readable. 
+upstream inputs are readable.
 
-Materialize compacts historical data whenever possible, to reduce resource consumption. Under normal circumstances, this means that about 1 second of history is available, and so a new object will have to read just 1 second of upstream history to hydrate. However, if compaction did not succeed, the new object will need to replay more upstream history. This can take longer, and require more memory.
+Materialize compacts historical data whenever possible, to reduce resource
+consumption. Under normal circumstances, this means that about 1 second of
+history is available, and so a new object will have to read just 1 second of
+upstream history to hydrate. However, if compaction did not succeed, the new
+object will need to replay more upstream history. This can take longer, and
+require more memory.
 
-To determine if the input history is pinned, compare each object's "read frontier", against its "write frontier", using
+To determine if the input history is pinned, compare each object's "read
+frontier" against its "write frontier", using
 [`mz_internal.mz_frontiers`](/sql/system-catalog/mz_internal/#mz_frontiers):
 
 ```mzsql
@@ -159,7 +165,6 @@ LIMIT 5;
 A healthy object retains about a second of history. Hours or days mean
 something is holding its compaction back, and anything hydrating from it pays
 for that history.
-
 
 ### Find what is holding compaction back
 
