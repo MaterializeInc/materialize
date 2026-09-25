@@ -50,31 +50,13 @@ not replace its staging or commit measurement with a first-row measurement.
 
 ### Why TTFR fits Materialize reads
 
-An ordinary compute peek does not stream partial query answers from individual
-workers to the SQL client. The replica response waits for all worker responses.
-For a successful offloaded peek, the scan and any stash upload finish before the
-worker responds. Thus, by the first adapter result, the chosen replica's work to
-produce the peek result has completed. This does not mean that ongoing dataflow
-maintenance has stopped.
-
-For inline results, the adapter receives the result collections and performs
-merging and finishing before exposing the row iterator. Much of the subsequent
-work is iterating/projecting rows, protocol encoding, and delivery. Waiting until
-the last row is handed to the transport mixes initial query latency with those
-costs and slow-client backpressure. TTFR is a useful diagnostic alongside the
-client timer precisely because it stops earlier.
-
-Large stashed results qualify this argument: the response can contain references
-to completed persist batches, not all the rows in `environmentd` memory. The
-adapter fetches, consolidates, re-encodes, and incrementally finishes these results.
-Some of that work can happen after the first row, so TTFR is not total database
-work even though the replica has produced its result. Constant queries can also
-be answered within `environmentd`, without a replica round trip. The common
-contract is the adapter's first-row observation, not a particular compute path.
-
-These boundaries follow from the code. Whether client consumption dominates the
-remaining elapsed time is a workload-dependent question to measure, not an
-assumption needed to justify TTFR.
+For ordinary compute-backed reads, the replica completes its work to produce the
+query result before returning it to `environmentd`. TTFR therefore captures that
+initial query latency without waiting for the entire result to be delivered to
+the client. Result processing can continue afterward, but measuring through the
+last row mixes those costs with slow-client backpressure. TTFR and client
+completion answer two useful, distinct questions without assuming which cost
+dominates.
 
 ### What the duration means
 
@@ -92,16 +74,9 @@ This boundary also excludes real server work, not just client/network time.
 | Explicit `COMMIT` | The commit has completed successfully, measured from the start of executing `COMMIT` |
 | DDL, session commands, other transaction control | The command completes according to its SQL semantics |
 
-An empty intermediate batch is not a first row and does not establish that the
-result is empty. This distinction matters for stashed results and must hold across
-transports. Observing a first row is also not proof of successful completion:
-under this proposal's success-only scope, a later failure must not be presented
-as a successfully completed read with a timing.
-
 TTFR includes execution work and waits up to the observation, but excludes
-subsequent result processing and delivery. It is less exposed to result-streaming
-backpressure than last-row timing, not independent of transport: scheduling and
-protocol messages sent before the result is polled can delay the observation.
+subsequent result processing and delivery. It is a server-side elapsed duration,
+not an isolated measurement of computation or proof of successful completion.
 For DDL, completion does not mean that all ongoing work initiated by the command,
 such as maintaining a materialized view, has finished.
 
@@ -183,15 +158,8 @@ caveat: an arbitrarily long client pause should not appear as server execution.
 ## Prior designs and current constraints
 
 - The [compute response merger](../../../src/compute-client/src/service.rs) waits
-  for every worker shard, and the
-  [offloaded peek](../../../src/compute/src/compute_state/peek_offload.rs) finishes
-  scanning and stash upload before responding. The
-  [adapter result stream](../../../src/adapter/src/coord/peek.rs) distinguishes
-  fully received inline results from incrementally retrieved stashed results.
-- The [existing TTFR histogram](../../../src/adapter/src/client.rs) records the
-  first `Rows` response, even if that batch is empty. It establishes a useful
-  measurement boundary but does not exactly implement the proposed actual-row
-  contract. Do not publish its current value as TTFR without resolving this.
+  for every worker shard before returning the peek result. This supports the
+  distinction between producing the result and delivering it to the SQL client.
 - [Statement Logging (2023)](20230519_statement_logging.md) deliberately chooses
   sampled, buffered history rather than durable recording on every query's
   critical path. Live timing should not depend on making that history complete.
@@ -225,10 +193,10 @@ caveat: an arbitrarily long client pause should not appear as server execution.
 ## Alternatives and tradeoffs
 
 **Report last-row/total server elapsed time (the original proposal).** This
-captures result processing that TTFR omits, including retrieval of stashed rows,
-and is useful when the consumer needs the entire result. It can expose a slow
-tail hidden by an early first row. But pgwire and WebSocket also wait for slow
-clients while streaming, whereas buffered HTTP builds its response before
+captures result processing that TTFR omits and is useful when the consumer needs
+the entire result. It can expose a slow tail hidden by an early first row. But
+pgwire and WebSocket also wait for slow clients while streaming, whereas buffered
+HTTP builds its response before
 transfer. This makes the number both client-sensitive and transport-dependent.
 Prefer TTFR as the added read diagnostic while retaining client completion time.
 A first row in 2ms followed by a long transfer is not a misleading TTFR, provided
@@ -240,11 +208,9 @@ processing from client backpressure, but needs more measurement and a precise
 definition of which waits to remove. It still does not measure CPU time. It is a
 different diagnostic rather than a prerequisite for reporting first-row latency.
 
-**Time to the first page or batch.** One row followed by a long stall is not a
+**Time to the first page.** One row followed by a long stall is not a
 responsive result browser. Time to a useful page can better describe that
-experience, but requires choosing a page size. First-batch timing matches an
-existing observation, but batch size is an implementation detail and a batch can
-be empty. Prefer an actual first-row contract for this API.
+experience, but requires choosing a page size.
 
 The literature supports choosing a metric for the consumer's goal rather than
 treating total time as universally better:
@@ -291,14 +257,11 @@ feature to two numbers rather than building a profiler into the result footer.
 ## Validation and decisions before implementation
 
 No prototype accompanies this document. First validate the meaning and usefulness
-of TTFR beside client completion over realistic browser connections. Cover inline
-and stashed results, constant queries, truly empty results, empty intermediate
-batches, and slow readers. Distinguish delays before the first-row observation
-from delays retrieving and delivering the rest. Check that a later failure is
-not presented as success. Do not assume the tail is client-dominated. Use
-per-execution observations, since aggregate histograms cannot attribute costs to
-the same query. Compare with client timers such as `psql`'s `\timing` as measures
-of user wait, not as ground truth for server execution.
+of TTFR beside client completion over realistic browser connections, with small,
+large, and empty results and slow readers. Use per-execution observations to
+distinguish waiting for results from processing and delivering them. Compare with
+client timers such as `psql`'s `\timing` as measures of user wait, not as ground
+truth for server execution.
 
 Exercise explicit and multi-statement implicit transactions, extended-protocol
 commit delays, errors at commit, and suspended portals. In an explicit
@@ -311,9 +274,9 @@ supported and older servers and notice filtering.
 
 Before proceeding, decide:
 
-1. Does server TTFR provide a useful distinction from client completion across
-   inline and stashed results? Are the labels clear about read readiness versus
-   write/commit completion, and do they describe empty results accurately?
+1. Does server TTFR provide a useful distinction from client completion? Are the
+   labels clear about read readiness versus write/commit completion, and do they
+   describe empty results accurately?
 2. How will shared commit cost and delayed notices be represented and associated
    across all three transports?
 3. How will the Console detect support without errors or hidden unrelated notices
