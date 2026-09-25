@@ -353,6 +353,7 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_simplify_from_less_existence: config
                 .features
                 .enable_simplify_from_less_existence,
+            enable_window_bucketing: config.features.enable_window_bucketing,
         }
     }
 }

@@ -41,6 +41,7 @@ use crate::plan::query::{
     EXECUTE_CAST_CONTEXT, ExprContext, execute_expr_context, offset_into_value,
 };
 use crate::plan::typeconv::{self, CastContext, plan_cast};
+use crate::plan::with_options::WindowBucketWidth;
 use crate::plan::{Params, QueryContext, QueryLifetime, StatementContext};
 
 use super::plan_utils::GroupSizeHints;
@@ -290,6 +291,13 @@ pub struct WindowExpr {
     /// Note that the `column` field in the `ColumnOrder`s point into the Row constructed in the
     /// lowering, and not to original input columns.
     pub order_by: Vec<HirScalarExpr>,
+    /// Width of one bucket when this window is split by a coarsening of its
+    /// primary `ORDER BY` key. `None` leaves the choice to the optimizer.
+    ///
+    /// Set from the `WINDOW BUCKET WIDTH` query hint. It tunes a constant
+    /// inside one expression and changes neither the plan's shape nor its
+    /// results, so an unhelpful value costs performance and nothing else.
+    pub bucket_width: Option<WindowBucketWidth>,
 }
 
 impl WindowExpr {
@@ -4304,6 +4312,7 @@ impl HirScalarExpr {
                         func,
                         partition_by,
                         order_by,
+                        bucket_width: _,
                     },
                     _,
                 ) => {
@@ -4373,6 +4382,7 @@ impl HirScalarExpr {
                         func,
                         partition_by,
                         order_by,
+                        bucket_width: _,
                     },
                     _,
                 ) => {

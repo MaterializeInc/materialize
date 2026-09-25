@@ -8179,25 +8179,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_select_option(&mut self) -> Result<SelectOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[EXPECTED, AGGREGATE, DISTINCT, LIMIT])? {
-            EXPECTED => {
-                self.expect_keywords(&[GROUP, SIZE])?;
-                SelectOptionName::ExpectedGroupSize
-            }
-            AGGREGATE => {
-                self.expect_keywords(&[INPUT, GROUP, SIZE])?;
-                SelectOptionName::AggregateInputGroupSize
-            }
-            DISTINCT => {
-                self.expect_keywords(&[ON, INPUT, GROUP, SIZE])?;
-                SelectOptionName::DistinctOnInputGroupSize
-            }
-            LIMIT => {
-                self.expect_keywords(&[INPUT, GROUP, SIZE])?;
-                SelectOptionName::LimitInputGroupSize
-            }
-            _ => unreachable!(),
-        };
+        let name =
+            match self.expect_one_of_keywords(&[EXPECTED, AGGREGATE, DISTINCT, LIMIT, WINDOW])? {
+                EXPECTED => {
+                    self.expect_keywords(&[GROUP, SIZE])?;
+                    SelectOptionName::ExpectedGroupSize
+                }
+                AGGREGATE => {
+                    self.expect_keywords(&[INPUT, GROUP, SIZE])?;
+                    SelectOptionName::AggregateInputGroupSize
+                }
+                DISTINCT => {
+                    self.expect_keywords(&[ON, INPUT, GROUP, SIZE])?;
+                    SelectOptionName::DistinctOnInputGroupSize
+                }
+                LIMIT => {
+                    self.expect_keywords(&[INPUT, GROUP, SIZE])?;
+                    SelectOptionName::LimitInputGroupSize
+                }
+                WINDOW => {
+                    self.expect_keywords(&[BUCKET, WIDTH])?;
+                    SelectOptionName::WindowBucketWidth
+                }
+                _ => unreachable!(),
+            };
         Ok(SelectOption {
             name,
             value: self.parse_optional_option_value()?,

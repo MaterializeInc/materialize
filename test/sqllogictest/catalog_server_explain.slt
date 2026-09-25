@@ -8339,27 +8339,49 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_aws_privatelink_connection_statuses";
 ----
 Explained Query:
-  →Differential Join %0[#1] » %1:mz_connections[#0{id}]
-    →Monotonic Top1
-      Group By #1
-      Order By #0 desc nulls_first
+  →With
+    cte l0 =
       →Map/Filter/Project
-        Project: #5, #3, #4
-        Map: record_get[1](#1), record_get[1](#2), record_get[2](#2), record_get[0](#2)
+        Project: #2
+          →Fused with Child Table Function unnest_list
+            →Non-incremental GroupAggregate
+              Aggregation: fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]], lead[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(#0, #1, #2), row(row(#2{status}, 1, null), [1, 1, null], [1, 1, null])), #0{occurred_at}))
+            Key:
+              Project: #1, #3
+              Map: bin_unix_epoch_timestamptz(01:00:00, #0{occurred_at})
+            →Stream mz_internal.mz_aws_privatelink_connection_status_history
+  →Return
+    →Differential Join %0[#1] » %1:mz_connections[#0{id}]
+      →Monotonic Top1
+        Group By #1
+        Order By #0 desc nulls_first
+        →Union
           →Fused with Child Map/Filter/Project
-            Filter: (record_get[1](#2)) IS NOT NULL AND ((#3) IS NULL OR (#3 != record_get[2](#2)))
-            Map: record_get[1](#1), record_get[0](#1)
-              →Fused with Child Table Function unnest_list
-                →Non-incremental GroupAggregate
-                  Aggregation: lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1, #2), row(#2{status}, 1, null)), #0{occurred_at}))
-                Key:
-                  Project: #1
-                →Stream mz_internal.mz_aws_privatelink_connection_status_history
-    →Arrange (#0{id})
-      →Fused with Child Map/Filter/Project
-        Project: #1, #3
-          →Arranged mz_catalog.mz_connections
-            Key: (#2{schema_id})
+            Project: #6, #3, #5
+            Filter: (record_get[1](#1)) IS NOT NULL AND (#3) IS NOT NULL AND ((#4) IS NULL OR (#4 != #5))
+            Map: record_get[0](#0), record_get[1](#0), record_get[1](#2), record_get[0](#1), record_get[2](#2), record_get[0](#2)
+              →Read l0
+          →Map/Filter/Project
+            Project: #5, #3, #4
+            Map: record_get[1](#1), record_get[1](#2), record_get[2](#2), record_get[0](#2)
+              →Fused with Child Map/Filter/Project
+                Filter: record_get[3](#2) AND (record_get[1](#2)) IS NOT NULL AND ((#3) IS NULL OR (#3 != record_get[2](#2)))
+                Map: record_get[1](#1), record_get[0](#1)
+                  →Fused with Child Table Function unnest_list
+                    →Non-incremental GroupAggregate
+                      Aggregation: lag[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), (record_get[1](record_get[0](#0))) IS NULL), row(record_get[2](record_get[1](#0)), 1, null)), record_get[0](record_get[1](#0))))
+                    Key:
+                      Project: #1
+                      Map: record_get[1](record_get[1](#0))
+                    →Fused with Child Map/Filter/Project
+                      Filter: ((record_get[1](#1)) IS NULL OR (record_get[2](#1)) IS NULL)
+                      Map: record_get[0](#0)
+                        →Read l0
+      →Arrange (#0{id})
+        →Fused with Child Map/Filter/Project
+          Project: #1, #3
+            →Arranged mz_catalog.mz_connections
+              Key: (#2{schema_id})
 
 Source mz_internal.mz_aws_privatelink_connection_status_history
 
