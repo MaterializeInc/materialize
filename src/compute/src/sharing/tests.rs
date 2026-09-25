@@ -220,9 +220,9 @@ fn cross_runtime_read_sees_published_rows() {
 fn insert_marks_dirty_and_take_drains() {
     let id = GlobalId::User(1);
     let registry = ArrangementSharingRegistry::new();
-    // These tests assert the dirty-set and coalescing semantics, not that a mark wakes anyone, so
-    // the waker is the test's own thread. `unpark` on a thread that never parks is a no-op beyond
-    // leaving a token behind, and no test here parks.
+    // These tests assert the dirty-set semantics, not that a mark wakes anyone, so the waker is
+    // the test's own thread. `unpark` on a thread that never parks is a no-op beyond leaving a
+    // token behind, and no test here parks.
     registry.register_waker(0, thread::current());
 
     // Publication on worker 0 marks `id` dirty for worker 0.
@@ -274,27 +274,18 @@ fn seal_signal_dirties_its_worker() {
 }
 
 #[mz_ore::test]
-fn notifications_coalesce_until_taken() {
+fn notifications_accumulate_until_taken() {
     let id1 = GlobalId::User(1);
     let id2 = GlobalId::User(2);
     let id3 = GlobalId::User(3);
     let registry = ArrangementSharingRegistry::new();
     registry.register_waker(0, thread::current());
 
-    // The first notification arms the coalescing flag (one activation outstanding).
     registry.notify(id1, 0);
-    assert!(registry.waker_pending(0));
-    // A second notification before the worker drains stays coalesced: still one activation.
     registry.notify(id2, 0);
-    assert!(registry.waker_pending(0));
-
-    // Draining returns both accumulated ids and disarms the flag.
     assert_eq!(registry.take_dirty(0), BTreeSet::from([id1, id2]));
-    assert!(!registry.waker_pending(0));
 
-    // A notification after the drain re-arms the flag.
     registry.notify(id3, 0);
-    assert!(registry.waker_pending(0));
     assert_eq!(registry.take_dirty(0), BTreeSet::from([id3]));
 }
 
