@@ -1,10 +1,10 @@
 ---
 headless: true
 ---
-To federate logins through one or more upstream OIDC providers (Okta, Google Workspace, Auth0, Entra), add an `upstream_oidc_providers` list. Each entry renders as a "Sign in with ..." button on the selfservice UI:
+To federate logins through one or more upstream OIDC providers (Okta, Google Workspace, Auth0, Entra), add an `upstream_identity_providers` list. Each entry renders as a "Sign in with ..." button on the selfservice UI:
 
 ```hcl
-upstream_oidc_providers = [
+upstream_identity_providers = [
   {
     id            = "okta"
     provider      = "generic"

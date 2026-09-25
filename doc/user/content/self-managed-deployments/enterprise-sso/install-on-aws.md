@@ -129,7 +129,9 @@ An active AWS account with permission to create:
    - `name_prefix`: Prefix for all resource names
    - `license_key`: Materialize license key JWT with the `ory` entitlement
    - `k8s_apiserver_authorized_networks`: CIDRs allowed to reach the EKS API server (required, no default)
-   - `ory_hydra_fqdn`, `ory_ui_fqdn`, `ory_kratos_fqdn`, `materialize_console_fqdn`, `materialize_balancerd_fqdn`: Public hostnames for the browser-facing services
+   - `ory_hydra_fqdn`, `ory_ui_fqdn`, `ory_kratos_fqdn`, `materialize_console_fqdn`, `materialize_balancerd_fqdn`: Hostnames for the browser-facing services
+   - `internal_load_balancer`: Defaults to `true`, which gives every load balancer a private address. Set it to `false` to reach the endpoints from outside the VPC. SCIM from a cloud IdP such as Okta requires this, because the IdP must reach Polis
+   - `ingress_cidr_blocks`: CIDRs allowed to reach the load balancers when `internal_load_balancer = false` (defaults to `0.0.0.0/0`, tighten for production)
    - `tags`: Map of tags to apply to resources
 
    ```hcl

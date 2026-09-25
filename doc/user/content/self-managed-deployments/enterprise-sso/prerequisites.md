@@ -113,8 +113,9 @@ provider API token, and point `cert_issuer_ref` at it.
 
 ## Polis (Optional, SAML and SCIM)
 
-Polis is the SAML-to-OIDC bridge that lets Kratos consume a SAML IdP as an
-upstream OIDC provider, and exposes a SCIM endpoint for IdP-driven user
+Polis is the SAML-to-OIDC bridge that acts as the SAML service provider for
+your IdP. Kratos consumes it through its SAML sign-in method (`saml_providers`),
+not as an upstream OIDC provider. Polis also exposes a SCIM endpoint for IdP-driven user
 provisioning. It is off by default; opt in by setting `enable_polis = true`
 and supplying `ory_polis_fqdn` in the per-cloud install.
 
