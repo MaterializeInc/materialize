@@ -30,7 +30,6 @@ import {
 } from "~/api/materialize/cluster/clusterList";
 import { getStore } from "~/jotai";
 import { getQueryClient } from "~/queryClient";
-import { ROUTER_FUTURE_FLAGS } from "~/router";
 import { SentryRoutes } from "~/sentry";
 import {
   CreatingEnvironment,
@@ -204,7 +203,7 @@ export const createProviderWrapper = async ({
           <EnvironmentProvider>
             <React.Suspense fallback="provider-wrapper-suspense-fallback">
               <QueryClientProvider client={queryClient}>
-                <Router future={ROUTER_FUTURE_FLAGS} {...routerProps}>
+                <Router {...routerProps}>
                   <SentryRoutes>
                     <Route index path="*" element={children} />
                   </SentryRoutes>
@@ -220,11 +219,11 @@ export const createProviderWrapper = async ({
 };
 
 /**
- * A `BrowserRouter` carrying {@link ROUTER_FUTURE_FLAGS}, for passing to
- * `renderHook`'s `wrapper`, which takes a component rather than an element.
+ * A `BrowserRouter` for passing to `renderHook`'s `wrapper`, which takes a
+ * component rather than an element.
  */
 export const RouterWrapper = ({ children }: React.PropsWithChildren) => (
-  <BrowserRouter future={ROUTER_FUTURE_FLAGS}>{children}</BrowserRouter>
+  <BrowserRouter>{children}</BrowserRouter>
 );
 
 export function buildCluster(
