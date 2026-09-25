@@ -61,11 +61,6 @@ struct Waker {
     /// Ids marked dirty (published, removed, or frontier-advanced) since the worker's last
     /// `take_dirty`.
     dirty: BTreeSet<GlobalId>,
-    /// Coalescing flag: `true` once `worker` has been unparked without the worker having drained
-    /// since.
-    /// While set, further marks skip re-activating, so a burst of events between wakes collapses to
-    /// one activation. `take_dirty` clears it. Mirrors `ArcActivator`'s pending flag.
-    pending: bool,
 }
 
 /// The registry's state: the published slots and one [`Waker`] per interactive worker index. One
@@ -199,8 +194,7 @@ impl ArrangementSharingRegistry {
     /// Registers `worker` as interactive worker `worker_index`'s waker, growing the waker vector as
     /// needed. Called once per interactive worker at startup, from that worker's own thread.
     ///
-    /// Overwrites any prior waker for that index, starting with an empty dirty set and a cleared
-    /// coalescing flag.
+    /// Overwrites any prior waker for that index, starting with an empty dirty set.
     pub(crate) fn register_waker(&self, worker_index: usize, worker: Thread) {
         let mut inner = self.lock();
         let wakers = &mut inner.wakers;
@@ -210,12 +204,11 @@ impl ArrangementSharingRegistry {
         wakers[worker_index] = Some(Waker {
             worker,
             dirty: BTreeSet::new(),
-            pending: false,
         });
     }
 
-    /// Atomically drains and returns worker `worker_index`'s dirty set, clearing its coalescing
-    /// flag so the next event re-arms the waker. Returns empty if no waker is registered.
+    /// Atomically drains and returns worker `worker_index`'s dirty set. Returns empty if no waker is
+    /// registered.
     ///
     /// Called by the interactive server loop on wake. See `notify` for why the loop MUST
     /// call this before re-reading the map: draining before the map re-check is what closes the
@@ -223,10 +216,7 @@ impl ArrangementSharingRegistry {
     pub(crate) fn take_dirty(&self, worker_index: usize) -> BTreeSet<GlobalId> {
         let mut inner = self.lock();
         match inner.wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
-            Some(waker) => {
-                waker.pending = false;
-                std::mem::take(&mut waker.dirty)
-            }
+            Some(waker) => std::mem::take(&mut waker.dirty),
             None => BTreeSet::new(),
         }
     }
@@ -260,7 +250,7 @@ impl ArrangementSharingRegistry {
         }
     }
 
-    /// Marks `id` dirty for worker `worker_index` and fires its coalescing waker.
+    /// Marks `id` dirty for worker `worker_index` and unparks it.
     ///
     /// [`Self::publish`] calls this once a slot's publishers are installed, and each publisher calls
     /// it again on every seal, since a fast-path peek waiting on the shared trace's `upper` is
@@ -280,10 +270,9 @@ impl ArrangementSharingRegistry {
     /// * W2 observes P1's write: the worker serves the work immediately, no park, no lost wake.
     /// * W2 precedes P1: the worker misses the slot and will park. Then W2 -> P1 combined with
     ///   W1 -> W2 and P1 -> P2 gives W1 -> P2, so this mark lands in a dirty set the worker has
-    ///   ALREADY drained, sets `pending = true`, and unparks. An unpark landing before the park is
-    ///   remembered, so the worker's next `step_or_park` returns at once (or never parks), it
-    ///   re-runs `take_dirty` and sees `id`, re-reads the slot (now past P1), and serves. No lost
-    ///   wake.
+    ///   ALREADY drained, and unparks. An unpark landing before the park is remembered, so the
+    ///   worker's next `step_or_park` returns at once (or never parks), it re-runs `take_dirty`
+    ///   and sees `id`, re-reads the slot (now past P1), and serves. No lost wake.
     ///
     /// The contradictory interleaving P2 -> W1 with W2 -> P1 is impossible: it would require
     /// P1 -> P2 -> W1 -> W2 -> P1, a cycle. Hence the drain-before-re-read ordering the server loop
@@ -295,25 +284,12 @@ impl ArrangementSharingRegistry {
         }
     }
 
-    /// Inserts `id` into `waker`'s dirty set and, if no wake is outstanding, arms the flag and
-    /// unparks the worker. The coalescing flag collapses a burst of marks into one unpark.
+    /// Inserts `id` into `waker`'s dirty set and unparks the worker.
     fn mark(waker: &mut Waker, id: GlobalId) {
         waker.dirty.insert(id);
-        if !waker.pending {
-            waker.pending = true;
-            waker.worker.unpark();
-        }
-    }
-
-    /// Whether worker `worker_index`'s coalescing flag is armed. Lets tests assert that a burst of
-    /// marks collapses to one activation without observing the (asynchronous) fire.
-    #[cfg(test)]
-    fn waker_pending(&self, worker_index: usize) -> bool {
-        self.lock()
-            .wakers
-            .get(worker_index)
-            .and_then(|w| w.as_ref())
-            .is_some_and(|w| w.pending)
+        // `unpark` coalesces by itself: the thread keeps one token, and a wake while it runs costs
+        // an atomic swap without a syscall.
+        waker.worker.unpark();
     }
 }
 
