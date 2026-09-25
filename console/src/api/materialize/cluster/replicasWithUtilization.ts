@@ -10,20 +10,27 @@
 import { QueryKey } from "@tanstack/react-query";
 import { InferResult, sql } from "kysely";
 
+import { extractEnvironmentVersion } from "~/api/buildQueryKeySchema";
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 import {
   buildLatestClusterReplicaUtilizationTable,
   getOwners,
 } from "~/api/materialize/expressionBuilders";
 
-export function buildClusterReplicasWithUtilizationQuery(clusterId: string) {
+export function buildClusterReplicasWithUtilizationQuery(
+  clusterId: string,
+  environmentVersion?: string,
+) {
   return queryBuilder
     .selectFrom("mz_cluster_replicas as cr")
     .innerJoin(getOwners().as("owners"), "owners.id", "cr.owner_id")
     .innerJoin("mz_clusters as c", "c.id", "cr.cluster_id")
     .innerJoin("mz_cluster_replica_sizes as crs", "crs.size", "cr.size")
     .innerJoin(
-      buildLatestClusterReplicaUtilizationTable(clusterId).as("cru"),
+      buildLatestClusterReplicaUtilizationTable(
+        clusterId,
+        environmentVersion,
+      ).as("cru"),
       "cr.id",
       "cru.replica_id",
     )
@@ -62,6 +69,7 @@ export async function fetchClusterReplicasWithUtilization(
 ) {
   const compiledQuery = buildClusterReplicasWithUtilizationQuery(
     params.clusterId,
+    extractEnvironmentVersion(queryKey),
   ).compile();
   return executeSqlV2({
     queries: compiledQuery,

@@ -10,6 +10,7 @@
 import { QueryKey } from "@tanstack/react-query";
 import { InferResult, sql } from "kysely";
 
+import { extractEnvironmentVersion } from "~/api/buildQueryKeySchema";
 import { queryBuilder } from "~/api/materialize";
 import { executeSqlV2 } from "~/api/materialize/executeSqlV2";
 import {
@@ -19,13 +20,17 @@ import {
 
 export function buildClusterReplicaMetricsQuery({
   clusterId,
+  environmentVersion,
 }: ClusterReplicaMetricsParameters) {
   return (
     queryBuilder
       .selectFrom("mz_cluster_replicas as cr")
       .innerJoin("mz_cluster_replica_sizes as crs", "crs.size", "cr.size")
       .innerJoin(
-        buildLatestClusterReplicaUtilizationTable(clusterId).as("cru"),
+        buildLatestClusterReplicaUtilizationTable(
+          clusterId,
+          environmentVersion,
+        ).as("cru"),
         (join) => join.onRef("cr.id", "=", "cru.replica_id"),
       )
       // heap bytes are stored in cluster replica metrics because replicas of same sizes can have different swap limits
@@ -66,6 +71,7 @@ export type ClusterReplicaMetricsResult = InferResult<
 
 export type ClusterReplicaMetricsParameters = {
   clusterId: string;
+  environmentVersion?: string;
 };
 
 /**
@@ -80,7 +86,15 @@ export async function fetchClusterReplicaMetrics({
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
-  const compiledQuery = buildClusterReplicaMetricsQuery(parameters).compile();
+  // Environment version is nested in the clusterMetricsQueryKey from buildRegionQueryKey.
+  const environmentVersion = extractEnvironmentVersion(
+    queryKey[0] as readonly unknown[],
+  );
+
+  const compiledQuery = buildClusterReplicaMetricsQuery({
+    ...parameters,
+    environmentVersion,
+  }).compile();
   return executeSqlV2({
     queries: compiledQuery,
     queryKey: queryKey,

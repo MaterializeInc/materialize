@@ -22,4 +22,45 @@ describe("fetchClusterReplicaMetrics", () => {
 
     expect({ sql, parameters }).toMatchSnapshot();
   });
+
+  // The indexed view only exists on mz >= 26.32, and reading it on an older
+  // environment errors the Replicas tab and the cluster metrics card rather
+  // than degrading. useReplicaUtilizationHistory gates the charts on the same
+  // version.
+  describe("utilization source by environment version", () => {
+    const sqlFor = (environmentVersion?: string) =>
+      buildClusterReplicaMetricsQuery({ clusterId: "u1", environmentVersion })
+        .compile()
+        .sql.replaceAll('"', "");
+
+    it("reads the indexed view on 26.32 and later", () => {
+      for (const version of ["26.32.0", "26.44.0", undefined]) {
+        expect(sqlFor(version)).toContain(
+          "mz_console_cluster_utilization_overview_3h",
+        );
+      }
+    });
+
+    it("falls back to mz_cluster_replica_utilization before 26.32", () => {
+      for (const version of ["0.161.0", "26.31.0"]) {
+        const sql = sqlFor(version);
+        expect(sql).toContain("mz_cluster_replica_utilization");
+        expect(sql).not.toContain("mz_console_cluster_utilization_overview_3h");
+      }
+    });
+
+    it("reports no heap before the column existed", () => {
+      expect(sqlFor("0.160.0")).toContain("NULL::float8 as heap_percent");
+      expect(sqlFor("0.161.0")).toContain("MAX(cru.heap_percent)");
+    });
+
+    // Grouping by process_id too would put one row in every group, leaving
+    // COUNT at 1, SUM(x)/COUNT(x) equal to x, and one row per process fanning
+    // out the join.
+    it("aggregates the fallback across processes, not per process", () => {
+      const sql = sqlFor("26.31.0");
+      expect(sql).toContain("group by replica_id");
+      expect(sql).not.toContain("process_id,");
+    });
+  });
 });

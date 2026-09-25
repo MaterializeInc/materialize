@@ -10,7 +10,11 @@
 import { InferResult, RawBuilder, sql } from "kysely";
 
 import { queryBuilder } from "./db";
-import { getQueryBuilderForVersion, semverParseGte } from "./versioning";
+import {
+  getQueryBuilderForVersion,
+  semverParseGte,
+  VersionMap,
+} from "./versioning";
 
 export { semverParseGte };
 
@@ -40,14 +44,18 @@ export function jsonArrayFrom<T, R = unknown>(expr: R): RawBuilder<T[]> {
   return sql`(select coalesce(jsonb_agg(agg), '[]') from ${expr} as agg)`;
 }
 
+type ClusterReplicaUtilizationArgs = { clusterId: string };
+
 /**
  * The most recent utilization sample per replica of a cluster, from the same
  * view the utilization charts read. Filtered on `cluster_id`, its index key.
  *
  * NOTE: scaled to 0-100; the view reports fractions.
  */
-export function buildLatestClusterReplicaUtilizationTable(clusterId: string) {
-  return queryBuilder
+const latestClusterReplicaUtilizationQuery = ({
+  clusterId,
+}: ClusterReplicaUtilizationArgs) =>
+  queryBuilder
     .selectFrom("mz_console_cluster_utilization_overview_3h as cru")
     .distinctOn("cru.replica_id")
     .where("cru.cluster_id", "=", clusterId)
@@ -60,6 +68,65 @@ export function buildLatestClusterReplicaUtilizationTable(clusterId: string) {
     ])
     .orderBy("cru.replica_id")
     .orderBy("cru.occurred_at", "desc");
+
+/**
+ * The same reading from `mz_cluster_replica_utilization`, for environments
+ * without the indexed view. Unwindowed and unindexed, so it disagrees with the
+ * charts and costs a join per request; it exists only to keep these surfaces
+ * working mid-rollout.
+ */
+const unindexedClusterReplicaUtilizationQuery = (
+  _args: ClusterReplicaUtilizationArgs,
+) =>
+  queryBuilder
+    .selectFrom("mz_cluster_replica_utilization as cru")
+    .groupBy("replica_id")
+    .select([
+      "replica_id",
+      sql<number | null>`SUM(cru.cpu_percent) / COUNT(process_id)`.as(
+        "cpu_percent",
+      ),
+      // Processes of a replica share a size, so the mean of their per-process
+      // ratios is the replica's share of its total allocation. An offline
+      // process contributes a null that SUM skips and COUNT still counts, which
+      // is what makes it read as idle rather than absent.
+      sql<number | null>`SUM(cru.memory_percent) / COUNT(process_id)`.as(
+        "memory_percent",
+      ),
+      sql<number | null>`SUM(cru.disk_percent) / COUNT(process_id)`.as(
+        "disk_percent",
+      ),
+      sql<number | null>`MAX(cru.heap_percent)`.as("heap_percent"),
+    ]);
+
+/** As above, before `heap_percent` existed on the relation. */
+const legacyClusterReplicaUtilizationQuery = (
+  args: ClusterReplicaUtilizationArgs,
+) =>
+  unindexedClusterReplicaUtilizationQuery(args).select(
+    sql<number | null>`NULL::float8`.as("heap_percent"),
+  );
+
+const CLUSTER_REPLICA_UTILIZATION_QUERIES: VersionMap<
+  ClusterReplicaUtilizationArgs,
+  InferResult<ReturnType<typeof latestClusterReplicaUtilizationQuery>>[0]
+> = {
+  // The indexed view the charts read; see useReplicaUtilizationHistory, which
+  // gates on the same version.
+  // TODO: collapse to the indexed query once all environments are >= 26.32.
+  "26.32.0": latestClusterReplicaUtilizationQuery,
+  "0.161.0": unindexedClusterReplicaUtilizationQuery,
+  "0.0.0": legacyClusterReplicaUtilizationQuery,
+};
+
+export function buildLatestClusterReplicaUtilizationTable(
+  clusterId: string,
+  environmentVersion?: string,
+) {
+  return getQueryBuilderForVersion(
+    environmentVersion,
+    CLUSTER_REPLICA_UTILIZATION_QUERIES,
+  )({ clusterId });
 }
 
 /**
