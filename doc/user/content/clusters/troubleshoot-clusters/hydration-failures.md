@@ -1,6 +1,6 @@
 ---
 title: "Troubleshoot hydration failures"
-description: "Diagnose an object that never finishes hydrating, and the conditions that make hydration cost more than it used to."
+description: "Diagnose a cluster that never finishes hydrating, and the conditions that make hydration cost more than it used to."
 menu:
   main:
     name: "Hydration failures"
@@ -9,14 +9,15 @@ menu:
     weight: 30
 ---
 
-[Hydration](/fundamentals/concepts/hydration/) rebuilds an object's in-memory
-state by reading from Materialize's storage layer. Queries against an object
-that is still hydrating block until it completes, so an object that never
-finishes hydrating looks like a query that never returns, and a blue/green
-deployment that waits on it never cuts over.
+[Hydration](/fundamentals/concepts/hydration/) rebuilds the in-memory state of
+the objects on a cluster by reading from Materialize's storage layer. A cluster
+is hydrated once every object on it is. Queries against an object that is still
+hydrating block until it completes, so a cluster that never finishes hydrating
+looks like a query that never returns, and a blue/green deployment that waits
+on it never cuts over.
 
-This guide covers objects that do not reach a hydrated state. For a hydration
-that completes but spikes memory, see [Memory
+This guide helps you diagnose a cluster that never reaches a hydrated state.
+For a hydration that completes but spikes memory, see [Memory
 spikes](/clusters/troubleshoot-clusters/memory-spike/). To size a cluster from
 a hydration that did complete, see [Optimize cluster
 size](/clusters/sizing/).
