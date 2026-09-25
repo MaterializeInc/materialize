@@ -11,10 +11,12 @@ pub mod auth;
 pub mod group;
 pub mod scim;
 pub mod sso;
+pub mod tenant;
 pub mod user;
 
 pub use auth::*;
 pub use group::*;
 pub use scim::*;
 pub use sso::*;
+pub use tenant::*;
 pub use user::*;
