@@ -497,9 +497,9 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             # before cluster creation, since disabling metric sinks does not
             # remove sinks that are already installed.
             #
-            # TODO(CPU-255, database-issues#8091): Give log collections a per-replica read hold so a
-            #                                      failing target doesn't pin compaction on healthy
-            #                                      replicas.
+            # TODO(CPU-255, database-issues#8091): Give log collections a
+            # per-replica read hold so a failing target doesn't pin compaction
+            # on healthy replicas.
             c.sql(
                 """
                 ALTER SYSTEM SET enable_introspection_subscribes = false;

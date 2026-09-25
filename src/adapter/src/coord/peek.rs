@@ -693,9 +693,9 @@ impl crate::coord::Coordinator {
         );
         let mfp = mfp_to_safe_plan(mfp)?;
 
-        // Targeted at the same replica as the peek on it: the index's only reader is
-        // that peek, so shipping it everywhere would be wasted work, and a mismatched
-        // target would panic the other replica's `handle_peek`.
+        // Targeted at the same replica as the peek on it. The index's only reader is
+        // that peek, so installing it on every replica would be wasted work, and the
+        // controller asserts that the two targets match.
         self.controller
             .compute
             .create_dataflow(compute_instance, dataflow, target_replica)
