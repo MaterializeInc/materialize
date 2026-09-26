@@ -238,6 +238,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedView
             | ExecuteResponse::CreatedViews
             | ExecuteResponse::CreatedMaterializedView
+            | ExecuteResponse::CreatedStandingQuery
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedNetworkPolicy
             | ExecuteResponse::Deallocate { .. }

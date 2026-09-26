@@ -367,6 +367,9 @@ impl<'a> DataflowBuilder<'a> {
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);
                     }
+                    CatalogItem::StandingQuery(sq) => {
+                        dataflow.import_source(*id, sq.desc.typ().clone(), monotonic);
+                    }
                     CatalogItem::Sink(_)
                     | CatalogItem::MetricSink(_)
                     | CatalogItem::Index(_)
@@ -554,7 +557,8 @@ impl<'a> DataflowBuilder<'a> {
                 | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
                 | CatalogItem::MetricSink(_)
-                | CatalogItem::Func(_) => Ok(false),
+                | CatalogItem::Func(_)
+                | CatalogItem::StandingQuery(_) => Ok(false),
             }
         })?;
 

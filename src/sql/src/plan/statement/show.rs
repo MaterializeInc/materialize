@@ -461,6 +461,9 @@ pub fn show_objects<'a>(
             ensure_no_from(from)?;
             show_role_membership(scx, role, filter)
         }
+        ShowObjectType::StandingQuery { in_cluster: _ } => {
+            bail_unsupported!("SHOW STANDING QUERIES")
+        }
         ShowObjectType::NetworkPolicy => {
             ensure_no_from(from)?;
             show_network_policies(scx, filter)
@@ -793,7 +796,8 @@ pub fn show_columns<'a>(
         CatalogItemType::Source
         | CatalogItemType::Table
         | CatalogItemType::View
-        | CatalogItemType::MaterializedView => (),
+        | CatalogItemType::MaterializedView
+        | CatalogItemType::StandingQuery => (),
         ty @ CatalogItemType::Connection
         | ty @ CatalogItemType::Index
         | ty @ CatalogItemType::Func

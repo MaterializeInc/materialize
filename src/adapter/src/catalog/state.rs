@@ -32,14 +32,14 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    StandingQuery as CatalogStandingQuery, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirRelationExpr, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -75,8 +75,8 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateStandingQueryPlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -585,7 +585,8 @@ impl CatalogState {
                 CatalogItem::Log(_) => out.push(id),
                 item @ (CatalogItem::View(_)
                 | CatalogItem::MaterializedView(_)
-                | CatalogItem::Connection(_)) => {
+                | CatalogItem::Connection(_)
+                | CatalogItem::StandingQuery(_)) => {
                     // TODO Unclear if this table wants to include all uses or only references.
                     for item_id in item.references().items() {
                         if seen.insert(*item_id) {
@@ -1755,6 +1756,46 @@ impl CatalogState {
                 details,
                 resolved_ids,
             }),
+            Plan::CreateStandingQuery(CreateStandingQueryPlan {
+                standing_query:
+                    mz_sql::plan::StandingQuery {
+                        create_sql,
+                        expr,
+                        dependencies,
+                        column_names: _,
+                        desc,
+                        params,
+                        cluster_id,
+                    },
+                ..
+            }) => {
+                // TODO: persist param_collection_id properly in the SQL.
+                // For now, derive it as global_id + 1 (they are allocated together).
+                let param_collection_id = match global_id {
+                    GlobalId::User(n) => GlobalId::User(n + 1),
+                    _ => unreachable!("standing query must have User global_id"),
+                };
+                CatalogItem::StandingQuery(CatalogStandingQuery {
+                    create_sql,
+                    global_id,
+                    raw_expr: expr.into(),
+                    // Placeholder — will be overwritten by cached expressions on boot.
+                    optimized_expr: OptimizedMirRelationExpr(MirRelationExpr::Constant {
+                        rows: Ok(vec![]),
+                        typ: mz_repr::ReprRelationType::empty(),
+                    })
+                    .into(),
+                    desc,
+                    params,
+                    param_collection_id,
+                    resolved_ids,
+                    dependencies,
+                    cluster_id,
+                    optimized_plan: None,
+                    physical_plan: None,
+                    dataflow_metainfo: None,
+                })
+            }
             _ => {
                 return Err((
                     Error::new(ErrorKind::Corruption {
@@ -2088,7 +2129,8 @@ impl CatalogState {
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => schema.items[builtin.name()],
+            | CatalogItemType::Connection
+            | CatalogItemType::StandingQuery => schema.items[builtin.name()],
         }
     }
 
@@ -2916,7 +2958,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => Some(*id),
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::StandingQuery(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2946,7 +2989,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => {
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::StandingQuery(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()

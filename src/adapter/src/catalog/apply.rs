@@ -1506,7 +1506,7 @@ impl CatalogState {
     /// Set the optimized plan for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
+    /// If the item is not an `Index`, `MaterializedView`, `MetricSink`, or `StandingQuery`.
     pub(super) fn set_optimized_plan(
         &mut self,
         id: GlobalId,
@@ -1518,6 +1518,7 @@ impl CatalogState {
             CatalogItem::Index(idx) => idx.optimized_plan = Some(Arc::new(plan)),
             CatalogItem::MaterializedView(mv) => mv.optimized_plan = Some(Arc::new(plan)),
             CatalogItem::MetricSink(ms) => ms.optimized_plan = Some(Arc::new(plan)),
+            CatalogItem::StandingQuery(sq) => sq.optimized_plan = Some(Arc::new(plan)),
             other => panic!("set_optimized_plan called on {} ({:?})", id, other.typ()),
         }
     }
@@ -1525,7 +1526,7 @@ impl CatalogState {
     /// Set the physical plan for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
+    /// If the item is not an `Index`, `MaterializedView`, `MetricSink`, or `StandingQuery`.
     pub(super) fn set_physical_plan(
         &mut self,
         id: GlobalId,
@@ -1537,6 +1538,7 @@ impl CatalogState {
             CatalogItem::Index(idx) => idx.physical_plan = Some(Arc::new(plan)),
             CatalogItem::MaterializedView(mv) => mv.physical_plan = Some(Arc::new(plan)),
             CatalogItem::MetricSink(ms) => ms.physical_plan = Some(Arc::new(plan)),
+            CatalogItem::StandingQuery(sq) => sq.physical_plan = Some(Arc::new(plan)),
             other => panic!("set_physical_plan called on {} ({:?})", id, other.typ()),
         }
     }
@@ -1544,7 +1546,7 @@ impl CatalogState {
     /// Set the `DataflowMetainfo` for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
+    /// If the item is not an `Index`, `MaterializedView`, `MetricSink`, or `StandingQuery`.
     pub(super) fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
@@ -1573,6 +1575,7 @@ impl CatalogState {
             CatalogItem::Index(idx) => idx.dataflow_metainfo = Some(metainfo),
             CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo = Some(metainfo),
             CatalogItem::MetricSink(ms) => ms.dataflow_metainfo = Some(metainfo),
+            CatalogItem::StandingQuery(sq) => sq.dataflow_metainfo = Some(metainfo),
             other => panic!("set_dataflow_metainfo called on {} ({:?})", id, other.typ()),
         }
     }
@@ -2359,6 +2362,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let mut tables = Vec::new();
         let mut derived_items = Vec::new();
         let mut sinks = Vec::new();
+        // Standing queries can depend on any relation, and nothing depends on them.
+        let mut standing_queries = Vec::new();
         for update in item_updates {
             match update.0.item_type() {
                 CatalogItemType::Type => types.push(update),
@@ -2372,6 +2377,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 | CatalogItemType::Index
                 | CatalogItemType::MetricSink => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
+                CatalogItemType::StandingQuery => standing_queries.push(update),
             }
         }
 
@@ -2389,6 +2395,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             &mut sources,
             &mut tables,
             &mut sinks,
+            &mut standing_queries,
         ] {
             group.sort_by_key(|(item, _, _)| item.id);
         }
@@ -2402,6 +2409,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             .chain(tables)
             .chain(derived_items)
             .chain(sinks)
+            .chain(standing_queries)
             .collect()
     }
 

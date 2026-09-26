@@ -2935,6 +2935,7 @@ SELECT
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
         WHEN '19' THEN 'metric-sink'
+        WHEN '20' THEN 'standing-query'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -3797,13 +3798,14 @@ mod tests {
     fn object_type_case_matches_proto_display() {
         // `None` means the variant never shows up in a stored `DefaultPrivilege`
         // key, so the CASE deliberately has no arm for it: `Unknown` is the
-        // zero-value sentinel, and `ON METRIC SINKS` is rejected by
-        // `plan_alter_default_privileges` before a key ever gets built. Match is
-        // exhaustive: a new variant forces an update.
+        // zero-value sentinel, and `ON METRIC SINKS` and `ON STANDING QUERIES`
+        // are rejected by `plan_alter_default_privileges` before a key ever gets
+        // built. Match is exhaustive: a new variant forces an update.
         fn expected_for(proto: ProtoObjectType) -> Option<SqlObjectType> {
             match proto {
                 ProtoObjectType::Unknown => None,
                 ProtoObjectType::MetricSink => None,
+                ProtoObjectType::StandingQuery => None,
                 ProtoObjectType::Table => Some(SqlObjectType::Table),
                 ProtoObjectType::View => Some(SqlObjectType::View),
                 ProtoObjectType::MaterializedView => Some(SqlObjectType::MaterializedView),
@@ -3846,6 +3848,7 @@ mod tests {
             ProtoObjectType::Func,
             ProtoObjectType::NetworkPolicy,
             ProtoObjectType::MetricSink,
+            ProtoObjectType::StandingQuery,
         ];
 
         let sql = MZ_DEFAULT_PRIVILEGES.sql;

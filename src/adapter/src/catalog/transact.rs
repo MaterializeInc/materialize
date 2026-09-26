@@ -903,7 +903,8 @@ impl Catalog {
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
                     | CatalogItem::Connection(_)
-                    | CatalogItem::MetricSink(_) => {}
+                    | CatalogItem::MetricSink(_)
+                    | CatalogItem::StandingQuery(_) => {}
                 }
             }
         }
@@ -1685,6 +1686,11 @@ impl Catalog {
                             storage_collections_to_create.insert(mv_gid);
                         }
                     }
+                    CatalogItem::StandingQuery(sq) => {
+                        // The standing query itself uses a subscribe sink (no storage collection).
+                        // But the internal parameter collection needs a storage collection.
+                        storage_collections_to_create.insert(sq.param_collection_id);
+                    }
                     CatalogItem::Sink(sink) => {
                         storage_collections_to_create.insert(sink.global_id());
                     }
@@ -1882,10 +1888,13 @@ impl Catalog {
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
                         | CatalogItem::Connection(_)
-                        | CatalogItem::MetricSink(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
-                            id: id.to_string(),
-                            name,
-                        }),
+                        | CatalogItem::MetricSink(_)
+                        | CatalogItem::StandingQuery(_) => {
+                            EventDetails::IdFullNameV1(IdFullNameV1 {
+                                id: id.to_string(),
+                                name,
+                            })
+                        }
                     };
                     CatalogState::add_to_audit_log(
                         &state.system_configuration,
@@ -2018,7 +2027,13 @@ impl Catalog {
                     let entry = state.get_entry(&item_id);
 
                     if entry.item().is_storage_collection() {
-                        storage_collections_to_drop.extend(entry.global_ids());
+                        // For standing queries, the storage collection is the param collection,
+                        // not the standing query's own global_id (which is a subscribe sink).
+                        if let CatalogItem::StandingQuery(sq) = entry.item() {
+                            storage_collections_to_drop.insert(sq.param_collection_id);
+                        } else {
+                            storage_collections_to_drop.extend(entry.global_ids());
+                        }
                     }
 
                     if state.source_references.contains_key(&item_id) {

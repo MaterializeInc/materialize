@@ -118,6 +118,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             mz_audit_log::ObjectType::Source => {
                 crate::objects::audit_log_event_v1::ObjectType::Source
             }
+            mz_audit_log::ObjectType::StandingQuery => {
+                crate::objects::audit_log_event_v1::ObjectType::StandingQuery
+            }
             mz_audit_log::ObjectType::System => {
                 crate::objects::audit_log_event_v1::ObjectType::System
             }
@@ -177,6 +180,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             }
             crate::objects::audit_log_event_v1::ObjectType::Source => {
                 Ok(mz_audit_log::ObjectType::Source)
+            }
+            crate::objects::audit_log_event_v1::ObjectType::StandingQuery => {
+                Ok(mz_audit_log::ObjectType::StandingQuery)
             }
             crate::objects::audit_log_event_v1::ObjectType::System => {
                 Ok(mz_audit_log::ObjectType::System)

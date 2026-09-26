@@ -34,7 +34,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, RelationVersion,
-    RelationVersionSelector, SqlColumnType, Timestamp, VersionedRelationDesc,
+    RelationVersionSelector, SqlColumnType, SqlScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
@@ -760,6 +760,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         mz_sql::catalog::CatalogItem::connection(&self.entry)
     }
 
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], SqlCatalogError> {
+        self.entry.standing_query_params()
+    }
+
     fn create_sql(&self) -> &str {
         self.entry.create_sql()
     }
@@ -866,6 +870,7 @@ pub enum CatalogItem {
     Secret(Secret),
     Connection(Connection),
     MetricSink(MetricSink),
+    StandingQuery(StandingQuery),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1694,6 +1699,46 @@ impl Connection {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct StandingQuery {
+    /// Parse-able SQL that defines this standing query.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this standing query from outside the catalog.
+    pub global_id: GlobalId,
+    /// The raw HirRelationExpr for the standing query (the user's original query).
+    pub raw_expr: Arc<HirRelationExpr>,
+    /// The optimized MIR expression (the rewritten join with parameter table).
+    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Columns for this standing query's result (excludes internal request_id column).
+    pub desc: RelationDesc,
+    /// Parameter names and their scalar types.
+    pub params: Vec<(String, SqlScalarType)>,
+    /// The [`GlobalId`] of the internal parameter storage collection.
+    pub param_collection_id: GlobalId,
+    /// Other catalog items that this standing query references, determined at name resolution.
+    pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this standing query.
+    pub dependencies: DependencyIds,
+    /// Cluster that this standing query runs on.
+    pub cluster_id: ClusterId,
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+}
+
+impl StandingQuery {
+    /// The single [`GlobalId`] used to reference this standing query.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct NetworkPolicy {
     pub name: String,
@@ -1776,6 +1821,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
             CatalogItem::MetricSink(_) => CatalogItemType::MetricSink,
+            CatalogItem::StandingQuery(_) => CatalogItemType::StandingQuery,
         }
     }
 
@@ -1789,6 +1835,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mv) => {
                 return itertools::Either::Left(mv.collections.values().copied());
             }
+            CatalogItem::StandingQuery(sq) => sq.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
@@ -1812,6 +1859,7 @@ impl CatalogItem {
             CatalogItem::Sink(sink) => sink.global_id,
             CatalogItem::View(view) => view.global_id,
             CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
+            CatalogItem::StandingQuery(sq) => sq.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
@@ -1828,6 +1876,7 @@ impl CatalogItem {
             CatalogItem::Index(idx) => idx.optimized_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.optimized_plan.as_ref(),
             CatalogItem::MetricSink(ms) => ms.optimized_plan.as_ref(),
+            CatalogItem::StandingQuery(sq) => sq.optimized_plan.as_ref(),
             _ => None,
         }
     }
@@ -1838,6 +1887,7 @@ impl CatalogItem {
             CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
             CatalogItem::MetricSink(ms) => ms.physical_plan.as_ref(),
+            CatalogItem::StandingQuery(sq) => sq.physical_plan.as_ref(),
             _ => None,
         }
     }
@@ -1848,6 +1898,7 @@ impl CatalogItem {
             CatalogItem::Index(idx) => idx.dataflow_metainfo.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_ref(),
             CatalogItem::MetricSink(ms) => ms.dataflow_metainfo.as_ref(),
+            CatalogItem::StandingQuery(sq) => sq.dataflow_metainfo.as_ref(),
             _ => None,
         }
     }
@@ -1858,6 +1909,7 @@ impl CatalogItem {
             CatalogItem::Index(idx) => idx.dataflow_metainfo.as_mut(),
             CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_mut(),
             CatalogItem::MetricSink(ms) => ms.dataflow_metainfo.as_mut(),
+            CatalogItem::StandingQuery(sq) => sq.dataflow_metainfo.as_mut(),
             _ => None,
         }
     }
@@ -1889,6 +1941,11 @@ impl CatalogItem {
                 &mut ms.physical_plan,
                 &mut ms.dataflow_metainfo,
             )),
+            CatalogItem::StandingQuery(sq) => Some((
+                &mut sq.optimized_plan,
+                &mut sq.physical_plan,
+                &mut sq.dataflow_metainfo,
+            )),
             _ => None,
         }
     }
@@ -1899,7 +1956,8 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_) => true,
+            | CatalogItem::Sink(_)
+            | CatalogItem::StandingQuery(_) => true,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
@@ -1928,6 +1986,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 Some(Cow::Owned(mview.desc.at_version(version)))
             }
+            CatalogItem::StandingQuery(sq) => Some(Cow::Borrowed(&sq.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -2002,6 +2061,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
             CatalogItem::MetricSink(metric_sink) => &metric_sink.resolved_ids,
+            CatalogItem::StandingQuery(sq) => &sq.resolved_ids,
         }
     }
 
@@ -2026,6 +2086,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 uses.extend(mview.dependencies.0.iter().copied())
             }
+            CatalogItem::StandingQuery(sq) => uses.extend(sq.dependencies.0.iter().copied()),
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
             CatalogItem::MetricSink(_) => {}
@@ -2056,7 +2117,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => BTreeSet::new(),
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => BTreeSet::new(),
         }
     }
 
@@ -2075,7 +2137,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -2094,7 +2157,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => (),
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => (),
         }
     }
 
@@ -2119,7 +2183,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => {
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => {
                 unreachable!("only views, indexes, and tables can be temporary")
             }
         }
@@ -2206,6 +2271,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::MetricSink(i))
             }
+            CatalogItem::StandingQuery(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::StandingQuery(i))
+            }
         }
     }
 
@@ -2281,6 +2351,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::MetricSink(i))
             }
+            CatalogItem::StandingQuery(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::StandingQuery(i))
+            }
         }
     }
 
@@ -2347,6 +2422,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::MetricSink(i)
+            }
+            CatalogItem::StandingQuery(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::StandingQuery(i)
             }
         }
     }
@@ -2526,7 +2606,8 @@ impl CatalogItem {
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
             | CatalogItem::Connection(Connection { create_sql, .. })
-            | CatalogItem::MetricSink(MetricSink { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::MetricSink(MetricSink { create_sql, .. })
+            | CatalogItem::StandingQuery(StandingQuery { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2562,7 +2643,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -2580,7 +2662,8 @@ impl CatalogItem {
             CatalogItem::Index(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::MetricSink(_) => true,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => true,
             CatalogItem::Source(source) => matches!(
                 source.data_source,
                 DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
@@ -2613,6 +2696,7 @@ impl CatalogItem {
                 | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
+            CatalogItem::StandingQuery(sq) => Some(sq.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -2638,7 +2722,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -2660,7 +2745,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => return None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => return None,
         };
         Some(cw)
     }
@@ -2677,7 +2763,8 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
-            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::StandingQuery(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -2706,7 +2793,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => false,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => false,
         }
     }
 
@@ -2764,6 +2852,9 @@ impl CatalogItem {
             ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::MetricSink(ms) => (ms.create_sql.clone(), ms.global_id, BTreeMap::new()),
+            CatalogItem::StandingQuery(sq) => {
+                (sq.create_sql.clone(), sq.global_id, BTreeMap::new())
+            }
         }
     }
 
@@ -2810,6 +2901,7 @@ impl CatalogItem {
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::MetricSink(ms) => (ms.create_sql, ms.global_id, BTreeMap::new()),
+            CatalogItem::StandingQuery(sq) => (sq.create_sql, sq.global_id, BTreeMap::new()),
         }
     }
 
@@ -2829,6 +2921,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
             CatalogItem::MetricSink(metric_sink) => return Some(metric_sink.global_id),
+            CatalogItem::StandingQuery(sq) => return Some(sq.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -3034,7 +3127,8 @@ impl CatalogEntry {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::MetricSink(_) => None,
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::StandingQuery(_) => None,
         }
     }
 
@@ -3169,6 +3263,7 @@ impl CatalogEntry {
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
             MetricSink => CommentObjectId::MetricSink(self.id),
+            StandingQuery => CommentObjectId::StandingQuery(self.id),
         }
     }
 }
@@ -4171,6 +4266,17 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.connection()?.details.to_connection())
     }
 
+    fn standing_query_params(&self) -> Result<&[(String, SqlScalarType)], SqlCatalogError> {
+        match self.item() {
+            CatalogItem::StandingQuery(sq) => Ok(&sq.params),
+            _ => Err(SqlCatalogError::UnexpectedType {
+                name: self.name().item.clone(),
+                actual_type: self.item_type(),
+                expected_type: CatalogItemType::StandingQuery,
+            }),
+        }
+    }
+
     fn create_sql(&self) -> &str {
         match self.item() {
             CatalogItem::Table(Table { create_sql, .. }) => {
@@ -4191,6 +4297,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::MetricSink(MetricSink { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
+            CatalogItem::StandingQuery(StandingQuery { create_sql, .. }) => create_sql,
         }
     }
 

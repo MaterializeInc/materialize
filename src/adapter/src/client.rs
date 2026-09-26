@@ -334,6 +334,7 @@ impl Client {
             segment_client: self.segment_client.clone(),
             peek_client,
             enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
+            standing_query_clients: BTreeMap::new(),
         };
 
         let session = client.session();
@@ -579,6 +580,16 @@ Issue a SQL query to get started. Need help?
         response
     }
 
+    /// Get a client handle for executing a standing query off the coordinator loop.
+    pub async fn get_standing_query_client(
+        &self,
+        item_id: mz_repr::CatalogItemId,
+    ) -> Option<crate::standing_query_client::StandingQueryExecuteClient> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GetStandingQueryClient { item_id, tx });
+        rx.await.expect("coordinator unexpectedly gone")
+    }
+
     /// Gets the current value of all system variables.
     pub async fn get_system_vars(&self) -> SystemVars {
         let (tx, rx) = oneshot::channel();
@@ -662,6 +673,9 @@ pub struct SessionClient {
     // check the actual feature flag value at every peek (without a Coordinator call) once we'll
     // always have a catalog snapshot at hand.
     pub enable_frontend_peek_sequencing: bool,
+    /// Cached standing query execute clients, keyed by CatalogItemId.
+    standing_query_clients:
+        BTreeMap<mz_repr::CatalogItemId, crate::standing_query_client::StandingQueryExecuteClient>,
 }
 
 impl SessionClient {
@@ -829,9 +843,9 @@ impl SessionClient {
         result.map(|response| (response, execute_started))
     }
 
-    /// Runs the execution paths in order of preference: frontend peek
-    /// sequencing, frontend read-then-write sequencing, and finally the
-    /// coordinator via `Command::Execute`.
+    /// Runs the execution paths in order of preference: frontend standing query
+    /// execution, frontend peek sequencing, frontend read-then-write
+    /// sequencing, and finally the coordinator via `Command::Execute`.
     async fn execute_attempts(
         &mut self,
         portal_name: String,
@@ -851,6 +865,14 @@ impl SessionClient {
         // `mz_statement_execution_history` records `EXECUTE foo (...)`
         // rather than the inner SQL.
         let portal_name = self.unroll_sql_execute(portal_name, logging).await?;
+
+        // Attempt standing query execution off the coordinator loop.
+        let standing_query_result = self
+            .try_frontend_standing_query_execute(&portal_name)
+            .await?;
+        if let Some(resp) = standing_query_result {
+            return Ok(resp);
+        }
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
@@ -1376,6 +1398,7 @@ impl SessionClient {
                 | Command::RegisterConnectionCancelWatch { .. }
                 | Command::CreateInternalSubscribe { .. }
                 | Command::AttemptWrite { .. }
+                | Command::GetStandingQueryClient { .. }
                 | Command::DropInternalSubscribe { .. } => {}
             };
             cmd
@@ -1447,6 +1470,89 @@ impl SessionClient {
     /// channel.
     pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
         self.timeouts.recv().await
+    }
+
+    /// Execute a standing query entirely off the coordinator loop.
+    ///
+    /// Returns `Ok(Some(response))` if the portal is an EXECUTE STANDING QUERY
+    /// and was handled, or `Ok(None)` to fall through to other paths.
+    async fn try_frontend_standing_query_execute(
+        &mut self,
+        portal_name: &str,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        // Check if this is an EXECUTE STANDING QUERY statement.
+        let session = self.session.as_ref().expect("session invariant");
+        let is_execute_standing_query = session
+            .get_portal_unverified(portal_name)
+            .and_then(|portal| portal.stmt.as_deref())
+            .is_some_and(|stmt| matches!(stmt, mz_sql::ast::Statement::ExecuteStandingQuery(_)));
+        if !is_execute_standing_query {
+            return Ok(None);
+        }
+
+        // Resolve and plan using a catalog snapshot (no coordinator needed).
+        // NOTE: `catalog_snapshot` borrows `self` mutably, so take it before
+        // borrowing the session and portal.
+        let catalog = self.catalog_snapshot("standing_query_execute").await;
+        let session = self.session.as_ref().expect("session invariant");
+        let Some(portal) = session.get_portal_unverified(portal_name) else {
+            return Ok(None);
+        };
+        let Some(stmt) = portal.stmt.as_ref() else {
+            return Ok(None);
+        };
+        let conn_catalog = catalog.for_session(session);
+        let (resolved_stmt, resolved_ids) =
+            mz_sql::names::resolve(&conn_catalog, (**stmt).clone())?;
+        let pcx = session.pcx();
+        let (plan, _resolved_ids) = mz_sql::plan::plan(
+            Some(pcx),
+            &conn_catalog,
+            resolved_stmt,
+            &portal.parameters,
+            &resolved_ids,
+        )?;
+
+        let mz_sql::plan::Plan::ExecuteStandingQuery(plan) = plan else {
+            return Ok(None);
+        };
+
+        let item_id = plan.id;
+
+        // Get or cache the standing query client.
+        if !self.standing_query_clients.contains_key(&item_id) {
+            let inner = self.inner().clone();
+            if let Some(client) = inner.get_standing_query_client(item_id).await {
+                self.standing_query_clients.insert(item_id, client);
+            } else {
+                return Ok(None);
+            }
+        }
+        let sq_client = self
+            .standing_query_clients
+            .get(&item_id)
+            .expect("just inserted");
+
+        match sq_client.execute(&plan.params).await {
+            Ok(rows) => {
+                use mz_repr::IntoRowIterator;
+                // TODO(mh): Should we use `SendingRowsStreaming` instead?
+                Ok(Some(ExecuteResponse::SendingRowsImmediate {
+                    rows: Box::new(rows.into_row_iter()),
+                }))
+            }
+            Err(crate::standing_query_client::StandingQueryExecuteError::ResultChannelClosed) => {
+                // Standing query may have been dropped. Clear cache and fall through.
+                self.standing_query_clients.remove(&item_id);
+                Ok(None)
+            }
+            // The query failed for this request's parameters only. Report it to this
+            // session as a query error, not as an internal failure of the standing query.
+            Err(crate::standing_query_client::StandingQueryExecuteError::Evaluation(msg)) => {
+                Err(AdapterError::Unstructured(anyhow::anyhow!(msg)))
+            }
+            Err(e) => Err(AdapterError::Internal(e.to_string())),
+        }
     }
 
     /// Attempt to sequence a peek from the session task.

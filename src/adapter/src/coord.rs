@@ -250,6 +250,8 @@ mod message_handler;
 mod metric_sink;
 mod privatelink_status;
 mod sql;
+mod standing_query_handler;
+pub(crate) mod standing_query_state;
 mod validity;
 
 /// The oldest leader version against which a replacement-migrated builtin materialized view may
@@ -494,6 +496,7 @@ impl Message {
                 Command::CancelRequest { .. } => "command-cancel_request",
                 Command::PrivilegedCancelRequest { .. } => "command-privileged_cancel_request",
                 Command::GetWebhook { .. } => "command-get_webhook",
+                Command::GetStandingQueryClient { .. } => "command-get_standing_query_client",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
                 Command::UpdateScopedSystemParameters { .. } => {
@@ -2141,6 +2144,8 @@ pub struct Coordinator {
     /// Curated metric-sink plans, cached per definition so each is planned once rather than once
     /// per replica. See [`Coordinator::plan_metric_sink`].
     metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
+    /// Active standing queries, keyed by the SUBSCRIBE sink GlobalId.
+    active_standing_queries: BTreeMap<GlobalId, standing_query_state::ActiveStandingQuery>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -2952,6 +2957,109 @@ impl Coordinator {
                         );
                     }
                 }
+                CatalogItem::StandingQuery(sq) => {
+                    // Set the read policy on the param collection (which is a
+                    // storage collection), not on the standing query's own id
+                    // (which is a compute sink export, not a storage collection).
+                    policies_to_set
+                        .entry(policy.expect("standing queries have a compaction window"))
+                        .or_insert_with(Default::default)
+                        .storage_ids
+                        .insert(sq.param_collection_id);
+
+                    let df_desc = self
+                        .catalog()
+                        .try_get_physical_plan(&sq.global_id())
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&sq.global_id())
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    if self.catalog().state().system_config().enable_mz_notices() {
+                        // Collect optimization hint updates.
+                        self.catalog().state().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            Diff::ONE,
+                        );
+                    }
+
+                    // Build the input bundle for upper tracking.
+                    use crate::optimize::dataflows::dataflow_import_id_bundle;
+                    let mut input_bundle = dataflow_import_id_bundle(&df_desc, sq.cluster_id);
+                    // Remove the standing query sink and param collection.
+                    input_bundle.storage_ids.remove(&sq.global_id());
+                    input_bundle.storage_ids.remove(&sq.param_collection_id);
+
+                    // Compute initial upper target from the as_of.
+                    let initial_upper_target = df_desc
+                        .as_of
+                        .as_ref()
+                        .and_then(|a| a.as_option().copied())
+                        .map(|ts| mz_repr::TimestampManipulation::step_forward(&ts))
+                        .unwrap_or_else(Timestamp::minimum);
+
+                    self.ship_dataflow(df_desc, sq.cluster_id, None).await;
+                    self.allow_writes(sq.cluster_id, sq.global_id());
+
+                    // Open our own WriteHandle for the param collection shard.
+                    let param_metadata = self
+                        .controller
+                        .storage
+                        .collection_metadata(sq.param_collection_id)
+                        .expect("param collection must exist");
+                    let param_desc = Self::build_param_collection_desc(&sq.params);
+                    let param_write_handle = self
+                        .persist_client
+                        .open_writer(
+                            param_metadata.data_shard,
+                            std::sync::Arc::new(param_desc),
+                            std::sync::Arc::new(mz_persist_types::codec_impls::UnitSchema),
+                            mz_persist_client::Diagnostics {
+                                shard_name: sq.param_collection_id.to_string(),
+                                handle_purpose: format!(
+                                    "standing query param writer for {}",
+                                    sq.param_collection_id
+                                ),
+                            },
+                        )
+                        .await
+                        .expect("valid persist usage");
+                    let (subscribe_tx, subscribe_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let (flush_tx, flush_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let (advance_upper_tx, advance_upper_rx) =
+                        tokio::sync::watch::channel(initial_upper_target);
+                    let sq_client = crate::standing_query_client::StandingQueryExecuteClient::new(
+                        entry.id(),
+                        sq.global_id(),
+                        param_write_handle,
+                        flush_tx,
+                        advance_upper_rx,
+                    );
+
+                    crate::coord::standing_query_handler::spawn_standing_query_handler(
+                        sq.global_id(),
+                        sq_client.clone(),
+                        subscribe_rx,
+                        flush_rx,
+                    );
+                    use crate::coord::standing_query_state::ActiveStandingQuery;
+                    self.active_standing_queries.insert(
+                        sq.global_id(),
+                        ActiveStandingQuery {
+                            item_id: entry.id(),
+                            cluster_id: sq.cluster_id,
+                            input_ids: input_bundle,
+                            client: sq_client,
+                            subscribe_tx,
+                            advance_upper_tx,
+                            initial_upper: initial_upper_target,
+                        },
+                    );
+                }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
@@ -3494,6 +3602,23 @@ impl Coordinator {
 
                     collections.extend(collection_descs);
                     compute_collections.push((mv.global_id_writes(), mv.desc.latest()));
+                }
+                CatalogItem::StandingQuery(sq) => {
+                    // Register the param collection with DataSource::Other so it
+                    // is NOT managed by the collection manager's append-only write
+                    // task. We hold our own WriteHandle and do compare_and_append
+                    // directly.
+                    let param_desc = Self::build_param_collection_desc(&sq.params);
+                    collections.push((
+                        sq.param_collection_id,
+                        CollectionDescription {
+                            desc: param_desc,
+                            data_source: DataSource::Other,
+                            since: None,
+                            timeline: Some(Timeline::EpochMilliseconds),
+                            primary: None,
+                        },
+                    ));
                 }
                 CatalogItem::Sink(sink) => {
                     let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
@@ -4040,6 +4165,85 @@ impl Coordinator {
                     // metrics registry rather than to a readable collection, so no later dataflow
                     // can import it.
                 }
+                CatalogItem::StandingQuery(sq) => {
+                    let compute_instance =
+                        instance_snapshots.entry(sq.cluster_id).or_insert_with(|| {
+                            self.instance_snapshot(sq.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let global_id = sq.global_id();
+
+                    let optimizer_config = optimizer_config(&self.catalog, sq.cluster_id);
+
+                    let (optimized_plan, physical_plan, metainfo) = match cached_global_exprs
+                        .remove(&global_id)
+                    {
+                        Some(global_expressions)
+                            if global_expressions.optimizer_features
+                                == optimizer_config.features =>
+                        {
+                            debug!("global expression cache hit for {global_id:?}");
+                            (
+                                global_expressions.global_mir,
+                                global_expressions.physical_plan,
+                                global_expressions.dataflow_metainfos,
+                            )
+                        }
+                        Some(_) | None => {
+                            // Rebuild param type and rewrite HIR for re-optimization.
+                            let param_desc = Self::build_param_collection_desc(&sq.params);
+                            let param_typ = param_desc.typ().clone();
+                            let column_names: Vec<_> = sq.desc.iter_names().cloned().collect();
+                            let (rewritten_expr, rewritten_column_names) =
+                                Self::rewrite_standing_query_hir(
+                                    &sq.raw_expr,
+                                    &column_names,
+                                    sq.param_collection_id,
+                                    &param_typ,
+                                    &sq.params,
+                                );
+                            let extra_source_imports =
+                                BTreeMap::from([(sq.param_collection_id, param_typ)]);
+
+                            let (optimized_plan, physical_plan, metainfo, optimizer_features) =
+                                self.optimize_create_standing_query(
+                                    &rewritten_expr,
+                                    &rewritten_column_names,
+                                    global_id,
+                                    sq.cluster_id,
+                                    extra_source_imports,
+                                )?;
+
+                            let metainfo = {
+                                let notice_ids =
+                                    std::iter::repeat_with(|| self.allocate_transient_id())
+                                        .map(|(_item_id, gid)| gid)
+                                        .take(metainfo.optimizer_notices.len())
+                                        .collect::<Vec<_>>();
+                                self.catalog()
+                                    .render_notices(metainfo, notice_ids, Some(global_id))
+                            };
+                            uncached_expressions.insert(
+                                global_id,
+                                GlobalExpressions {
+                                    global_mir: optimized_plan.clone(),
+                                    physical_plan: physical_plan.clone(),
+                                    dataflow_metainfos: metainfo.clone(),
+                                    optimizer_features,
+                                    item_version: RelationVersion::root(),
+                                },
+                            );
+                            (optimized_plan, physical_plan, metainfo)
+                        }
+                    };
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(sq.global_id(), optimized_plan);
+                    catalog.set_physical_plan(sq.global_id(), physical_plan);
+                    catalog.set_dataflow_metainfo(sq.global_id(), metainfo);
+
+                    compute_instance.insert_collection(sq.global_id());
+                }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -4073,6 +4277,7 @@ impl Coordinator {
                 CatalogItem::Index(idx) => idx.global_id(),
                 CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
                 CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
+                CatalogItem::StandingQuery(sq) => sq.global_id(),
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -4420,6 +4625,11 @@ impl Coordinator {
                         );
                     }
                 }
+
+                // Standing query param writes now happen off the coordinator
+                // via StandingQueryExecuteClient. The coordinator learns about
+                // writes through flush notifications drained in the subscribe
+                // handler.
             }
 
             // The sweep can own timestamp-oracle senders through its background
@@ -5448,6 +5658,7 @@ pub fn serve(
                     hydration_history_sweep: None,
                     metric_sinks: BTreeMap::new(),
                     metric_sink_plans: BTreeMap::new(),
+                    active_standing_queries: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),

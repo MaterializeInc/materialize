@@ -189,6 +189,10 @@ impl CatalogState {
             // from the persisted create_sql by materialized views over
             // mz_catalog_raw, so connections need no special packing here.
             CatalogItem::Connection(_) => vec![],
+            CatalogItem::StandingQuery(_) => {
+                // TODO: Add dedicated builtin table updates for standing queries.
+                vec![]
+            }
         };
 
         // Always report the latest for an objects columns.

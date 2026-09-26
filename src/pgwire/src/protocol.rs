@@ -2458,6 +2458,7 @@ where
             | ExecuteResponse::CreatedMetricSink { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
+            | ExecuteResponse::CreatedStandingQuery
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }
             | ExecuteResponse::CreatedSecret { .. }

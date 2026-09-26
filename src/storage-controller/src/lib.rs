@@ -2532,7 +2532,7 @@ impl StorageController for Controller {
         type_: IntrospectionType,
     ) -> mpsc::UnboundedSender<(
         Vec<AppendOnlyUpdate>,
-        oneshot::Sender<Result<(), StorageError>>,
+        oneshot::Sender<Result<Timestamp, StorageError>>,
     )> {
         let id = self.introspection_ids[&type_];
         self.collection_manager.append_only_write_sender(id)

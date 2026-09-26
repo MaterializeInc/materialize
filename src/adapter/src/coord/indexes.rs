@@ -64,6 +64,9 @@ impl DataflowBuilder<'_> {
                         // Record that we are missing at least one index.
                         id_bundle.storage_ids.insert(id);
                     }
+                    CatalogItem::StandingQuery(_) => {
+                        id_bundle.storage_ids.insert(id);
+                    }
                     CatalogItem::Log(_) => {
                         // Log sources should always have an index.
                         panic!("log source {id} is missing index");

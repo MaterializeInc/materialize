@@ -499,9 +499,17 @@ impl<'a> Parser<'a> {
                     Ok(self.parse_close().map_parser_err(StatementKind::Close)?)
                 }
                 Token::Keyword(PREPARE) => Ok(self.parse_prepare()?),
-                Token::Keyword(EXECUTE) => Ok(self
-                    .parse_execute()
-                    .map_parser_err(StatementKind::Execute)?),
+                Token::Keyword(EXECUTE) => {
+                    if self.peek_keywords(&[STANDING, QUERY]) {
+                        Ok(self
+                            .parse_execute_standing_query()
+                            .map_parser_err(StatementKind::ExecuteStandingQuery)?)
+                    } else {
+                        Ok(self
+                            .parse_execute()
+                            .map_parser_err(StatementKind::Execute)?)
+                    }
+                }
                 Token::Keyword(DEALLOCATE) => Ok(self
                     .parse_deallocate()
                     .map_parser_err(StatementKind::Deallocate)?),
@@ -2116,6 +2124,9 @@ impl<'a> Parser<'a> {
         {
             self.parse_create_materialized_view()
                 .map_parser_err(StatementKind::CreateMaterializedView)
+        } else if self.peek_keywords(&[STANDING, QUERY]) {
+            self.parse_create_standing_query()
+                .map_parser_err(StatementKind::CreateStandingQuery)
         } else if self.peek_keywords(&[USER]) {
             parser_err!(
                 self,
@@ -4252,6 +4263,35 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    fn parse_create_standing_query(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[STANDING, QUERY])?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+
+        // Parse parameter list: (param_name type, ...)
+        self.expect_token(&Token::LParen)?;
+        let params = self.parse_comma_separated(|parser| {
+            let name = parser.parse_identifier()?;
+            let data_type = parser.parse_data_type()?;
+            Ok(StandingQueryParam { name, data_type })
+        })?;
+        self.expect_token(&Token::RParen)?;
+
+        let in_cluster = self.parse_optional_in_cluster()?;
+        self.expect_keyword(AS)?;
+        let query = self.parse_query()?;
+
+        Ok(Statement::CreateStandingQuery(
+            CreateStandingQueryStatement {
+                name,
+                params,
+                in_cluster,
+                query,
+                if_not_exists,
+            },
+        ))
+    }
+
     fn parse_materialized_view_option_name(
         &mut self,
     ) -> Result<MaterializedViewOptionName, ParserError> {
@@ -5099,7 +5139,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection => {
+            | ObjectType::Connection
+            | ObjectType::StandingQuery => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
@@ -5993,7 +6034,10 @@ impl<'a> Parser<'a> {
             // Metric sinks are adapter-created and not a user surface, so they deliberately
             // support no ALTER at all, `RENAME TO` and `OWNER TO` included. REASSIGN OWNED
             // works off object ids and is unaffected.
-            ObjectType::Func | ObjectType::Subsource | ObjectType::MetricSink => parser_err!(
+            ObjectType::Func
+            | ObjectType::Subsource
+            | ObjectType::MetricSink
+            | ObjectType::StandingQuery => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
@@ -6754,7 +6798,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Schema
             | ObjectType::Func
             | ObjectType::Subsource
-            | ObjectType::NetworkPolicy => {
+            | ObjectType::NetworkPolicy
+            | ObjectType::StandingQuery => {
                 unreachable!("parse_alter_views called with unsupported object type: {object_type}")
             }
         };
@@ -7594,7 +7639,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
+            | ObjectType::Func
+            | ObjectType::StandingQuery => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
@@ -8396,6 +8442,10 @@ impl<'a> Parser<'a> {
                 ObjectType::MaterializedView => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
+                }
+                ObjectType::StandingQuery => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::StandingQuery { in_cluster }
                 }
                 ObjectType::Index => {
                     let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
@@ -9302,6 +9352,22 @@ impl<'a> Parser<'a> {
                 };
 
                 Explainee::CreateIndex(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[CREATE, STANDING, QUERY]) {
+                // Parse: `BROKEN? CREATE STANDING QUERY ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_standing_query()? {
+                    Statement::CreateStandingQuery(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::CreateStandingQuery(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[EXECUTE, STANDING, QUERY]) {
+                // Parse: `BROKEN? EXECUTE STANDING QUERY ...`
+                let _ = self.parse_keyword(EXECUTE); // consume EXECUTE token
+                let stmt = match self.parse_execute_standing_query()? {
+                    Statement::ExecuteStandingQuery(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::ExecuteStandingQuery(Box::new(stmt), broken)
             } else if self.peek_keyword(SUBSCRIBE) {
                 // Parse: `BROKEN? SUBSCRIBE ...`
                 let _ = self.parse_keyword(SUBSCRIBE); // consume SUBSCRIBE token
@@ -9757,6 +9823,23 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse an `EXECUTE STANDING QUERY` statement, assuming that the `EXECUTE`
+    /// token has already been consumed.
+    fn parse_execute_standing_query(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[STANDING, QUERY])?;
+        let name = self.parse_raw_name()?;
+        let params = if self.consume_token(&Token::LParen) {
+            let params = self.parse_comma_separated(Parser::parse_expr)?;
+            self.expect_token(&Token::RParen)?;
+            params
+        } else {
+            Vec::new()
+        };
+        Ok(Statement::ExecuteStandingQuery(
+            ExecuteStandingQueryStatement { name, params },
+        ))
+    }
+
     /// Parse a `DEALLOCATE` statement, assuming that the `DEALLOCATE` token
     /// has already been consumed.
     fn parse_deallocate(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -9997,7 +10080,10 @@ impl<'a> Parser<'a> {
         object_type: ObjectType,
     ) -> Result<ObjectType, ParserError> {
         match object_type {
-            ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::StandingQuery => {
                 parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -10051,6 +10137,7 @@ impl<'a> Parser<'a> {
                 SCHEMA,
                 FUNCTION,
                 NETWORK,
+                STANDING,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -10091,6 +10178,13 @@ impl<'a> Parser<'a> {
                         return Err(e);
                     }
                     ObjectType::NetworkPolicy
+                }
+                STANDING => {
+                    if let Err(e) = self.expect_keyword(QUERY) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::StandingQuery
                 }
                 _ => unreachable!(),
             },
@@ -10242,6 +10336,7 @@ impl<'a> Parser<'a> {
                 SCHEMAS,
                 SUBSOURCES,
                 NETWORK,
+                STANDING,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -10283,6 +10378,14 @@ impl<'a> Parser<'a> {
                 NETWORK => {
                     if self.parse_keyword(POLICIES) {
                         ObjectType::NetworkPolicy
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
+                STANDING => {
+                    if self.parse_keyword(QUERIES) {
+                        ObjectType::StandingQuery
                     } else {
                         self.prev_token();
                         return None;

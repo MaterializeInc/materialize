@@ -35,7 +35,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
-    MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    MetricSink, Secret, Sink, Source, StandingQuery, StateDiff, Table, TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
@@ -541,6 +541,27 @@ impl Coordinator {
                     view_gids_to_drop.push(view.global_id());
                     dropped_item_names.insert(view.global_id(), full_name);
                 }
+                CatalogImplication::StandingQuery(CatalogImplicationKind::Added(sq)) => {
+                    tracing::debug!(?sq, "not handling AddStandingQuery in here yet");
+                }
+                CatalogImplication::StandingQuery(CatalogImplicationKind::Altered {
+                    prev: _prev_sq,
+                    new: _new_sq,
+                }) => {
+                    tracing::debug!("not handling AlterStandingQuery in here yet");
+                }
+                CatalogImplication::StandingQuery(CatalogImplicationKind::Dropped(
+                    sq,
+                    _full_name,
+                )) => {
+                    // Drop the subscribe sink (compute) and the param collection (storage).
+                    compute_sinks_to_drop.push((sq.cluster_id, sq.global_id));
+                    sources_to_drop.push((catalog_id, sq.param_collection_id));
+                    // Clean up the active standing query state.
+                    // Dropping the ActiveStandingQuery drops the client,
+                    // which causes pending oneshot receivers to get RecvError.
+                    self.active_standing_queries.remove(&sq.global_id);
+                }
                 CatalogImplication::Secret(CatalogImplicationKind::Added(_secret)) => {
                     // No action needed: the secret payload is stored in
                     // secrets_controller.ensure() BEFORE the catalog transaction.
@@ -619,6 +640,7 @@ impl Coordinator {
                 | CatalogImplication::MetricSink(CatalogImplicationKind::None)
                 | CatalogImplication::MaterializedView(CatalogImplicationKind::None)
                 | CatalogImplication::View(CatalogImplicationKind::None)
+                | CatalogImplication::StandingQuery(CatalogImplicationKind::None)
                 | CatalogImplication::Secret(CatalogImplicationKind::None)
                 | CatalogImplication::Connection(CatalogImplicationKind::None) => {
                     unreachable!("will never leave None in place");
@@ -1697,7 +1719,8 @@ impl Coordinator {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::MetricSink(_) => {
+                    | CatalogItem::MetricSink(_)
+                    | CatalogItem::StandingQuery(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
                     }
@@ -1757,6 +1780,7 @@ enum CatalogImplication {
     MetricSink(CatalogImplicationKind<MetricSink>),
     MaterializedView(CatalogImplicationKind<MaterializedView>),
     View(CatalogImplicationKind<View>),
+    StandingQuery(CatalogImplicationKind<StandingQuery>),
     Secret(CatalogImplicationKind<Secret>),
     Connection(CatalogImplicationKind<Connection>),
     Cluster(CatalogImplicationKind<Cluster>),
@@ -1915,6 +1939,9 @@ impl CatalogImplication {
                         catalog_update.diff,
                     );
                 }
+                CatalogItem::StandingQuery(sq) => {
+                    self.absorb_standing_query(sq, Some(parsed_full_name), catalog_update.diff);
+                }
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
@@ -1968,6 +1995,7 @@ impl CatalogImplication {
     impl_absorb_method!(absorb_materialized_view, MaterializedView, MaterializedView);
     impl_absorb_method!(absorb_view, View, View);
 
+    impl_absorb_method!(absorb_standing_query, StandingQuery, StandingQuery);
     impl_absorb_method!(absorb_secret, Secret, Secret);
     impl_absorb_method!(absorb_connection, Connection, Connection);
 

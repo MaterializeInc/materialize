@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{Diff, Row};
+use mz_repr::{Diff, Row, Timestamp};
 use mz_storage_client::client::AppendOnlyUpdate;
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_types::controller::StorageError;
@@ -35,7 +35,10 @@ pub fn spawn_introspection_sink(
 }
 
 type Notifier = oneshot::Sender<Result<(), StorageError>>;
-type AppendOnlySender = mpsc::UnboundedSender<(Vec<AppendOnlyUpdate>, Notifier)>;
+type AppendOnlySender = mpsc::UnboundedSender<(
+    Vec<AppendOnlyUpdate>,
+    oneshot::Sender<Result<Timestamp, StorageError>>,
+)>;
 type DifferentialSender = mpsc::UnboundedSender<(StorageWriteOp, Notifier)>;
 
 /// A sink for introspection updates produced by the compute controller.
