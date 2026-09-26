@@ -148,14 +148,17 @@ use mz_timely_util::operator::StreamExt;
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
-use timely::container::CapacityContainerBuilder;
+use timely::container::{CapacityContainerBuilder, NoopBuilder};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
+use timely::dataflow::operators::generic::OutputBuilder;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::vec::Filter;
 use timely::dataflow::operators::vec::ToStream;
-use timely::dataflow::operators::{Capability, Operator, Probe, probe};
+use timely::dataflow::operators::{Capability, CapabilitySet, Operator, Probe, probe};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
+use timely::progress::operate::FrontierInterest;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
@@ -1640,7 +1643,24 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         }
 
         let name = format!("LogOperatorHydration ({lir_id})");
-        stream.unary_frontier(Pipeline, &name, |_cap, _info| {
+        let mut builder = OperatorBuilder::new(name, stream.scope());
+        let (output, output_stream) = builder.new_output();
+        let mut output = OutputBuilder::<_, NoopBuilder<D>>::from(output);
+        let mut input = builder.new_input(stream, Pipeline);
+        // The operator only needs frontier changes until it is hydrated. It holds capabilities
+        // exactly until then, so `IfCapability` stops frontier-driven activations afterwards,
+        // leaving only activations for data to pass through.
+        builder.set_notify_for(0, FrontierInterest::IfCapability);
+        builder.build(move |capabilities| {
+            // NOTE: The capabilities sit at the hydration frontier. Anything earlier, such as the
+            // as-of or the current input frontier, livelocks inside an iterative scope: the
+            // capability feeds back around the loop and keeps the input frontier one iteration
+            // ahead of itself, so it never reaches the hydration frontier. The hydration frontier
+            // is past every iteration at the as-of, so the loop is never held back, and outside
+            // loops the input frontier is behind it until hydration, so the output frontier is
+            // unaffected.
+            let mut capabilities = CapabilitySet::from(capabilities);
+            capabilities.downgrade(hydration_frontier.iter());
             let mut hydrated = false;
 
             for &export_id in &export_ids {
@@ -1651,18 +1671,21 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 }));
             }
 
-            move |(input, frontier), output| {
+            move |frontiers| {
+                let mut output = output.activate();
                 // Pass through inputs.
                 input.for_each(|cap, data| {
-                    output.session(&cap).give_container(data);
+                    output.session_with_builder(&cap).give_container(data);
                 });
 
                 if hydrated {
                     return;
                 }
 
-                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier.frontier()) {
+                let frontier = frontiers[0].frontier();
+                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier) {
                     hydrated = true;
+                    capabilities.downgrade(std::iter::empty::<&T>());
 
                     for &export_id in &export_ids {
                         logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
@@ -1673,7 +1696,8 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     }
                 }
             }
-        })
+        });
+        output_stream
     }
 }
 
