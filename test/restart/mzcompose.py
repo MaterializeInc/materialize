@@ -1625,11 +1625,13 @@ def workflow_catalog_read_protection(c: Composition) -> None:
         def await_state(
             description: str,
             ready: Callable[[], bool],
-            timeout: float = 120,
+            timeout: float = 420,
             advance: Callable[[], None] | None = None,
         ) -> None:
             # INSPECT is not composable SQL. Native testdrive Retry waits for each
             # publication advance, then we inspect without acquiring input read holds.
+            # A crashed client's grant can pin even the control clock. Allow the
+            # five-minute reclamation grace plus publication and compaction time.
             deadline = time.monotonic() + timeout
             while True:
                 control_bound = record(bound_kind, ids["protected_control"])["frontier"]
@@ -3991,7 +3993,12 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
 
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
-        if name in ("default", "catalog-publication-measurement"):
+        # The protection and publication workflows have dedicated CI jobs.
+        if name in (
+            "default",
+            "catalog-read-protection",
+            "catalog-publication-measurement",
+        ):
             return
 
         with c.test_case(name):
