@@ -48,6 +48,8 @@ pub struct PreflightOutput {
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub read_only: bool,
     pub caught_up_trigger: Option<trigger::Trigger>,
+    /// Signal successful adapter bootstrap, including orphaned replica cleanup.
+    pub bootstrap_complete: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 /// Perform a 0dt preflight check.
@@ -77,6 +79,7 @@ pub async fn preflight_0dt(
             openable_adapter_storage,
             read_only: false,
             caught_up_trigger: None,
+            bootstrap_complete: None,
         });
     }
 
@@ -86,6 +89,7 @@ pub async fn preflight_0dt(
         info!("this deployment is a new generation; booting in read only mode");
 
         let (caught_up_trigger, mut caught_up_receiver) = trigger::channel();
+        let (bootstrap_complete, mut bootstrap_receiver) = tokio::sync::oneshot::channel();
 
         // Spawn a background task to handle promotion to leader.
         mz_ore::task::spawn(|| "preflight_0dt", async move {
@@ -117,6 +121,7 @@ pub async fn preflight_0dt(
                 .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             let mut should_skip_catchup = false;
+            let mut bootstrapped = false;
             loop {
                 tokio::select! {
                     biased;
@@ -137,7 +142,13 @@ pub async fn preflight_0dt(
                         info!("not caught up within {:?}, proceeding now", caught_up_max_wait);
                         break;
                     }
-                    _ = check_ddl_changes_interval.tick() => {
+                    result = &mut bootstrap_receiver, if !bootstrapped => {
+                        if result.is_err() {
+                            return;
+                        }
+                        bootstrapped = true;
+                    }
+                    _ = check_ddl_changes_interval.tick(), if bootstrapped => {
                         check_ddl_changes(
                             boot_ts,
                             persist_client.clone(),
@@ -149,6 +160,20 @@ pub async fn preflight_0dt(
                             initial_next_replica_id,
                         )
                         .await;
+                    }
+                }
+            }
+
+            // DDL restarts must let bootstrap finish its orphan cleanup, even
+            // when the maximum catch-up wait expires. Keep the administrator's
+            // escape hatch available while waiting for bootstrap.
+            if !should_skip_catchup && !bootstrapped {
+                tokio::select! {
+                    () = &mut skip_catchup => should_skip_catchup = true,
+                    result = bootstrap_receiver => {
+                        if result.is_err() {
+                            return;
+                        }
                     }
                 }
             }
@@ -213,6 +238,7 @@ pub async fn preflight_0dt(
             openable_adapter_storage,
             read_only: true,
             caught_up_trigger: Some(caught_up_trigger),
+            bootstrap_complete: Some(bootstrap_complete),
         })
     } else if catalog_generation == deploy_generation {
         info!("this deployment is the current generation; booting with writes allowed");
@@ -220,6 +246,7 @@ pub async fn preflight_0dt(
             openable_adapter_storage,
             read_only: false,
             caught_up_trigger: None,
+            bootstrap_complete: None,
         })
     } else {
         exit!(0, "this deployment has been fenced out");
@@ -381,4 +408,78 @@ async fn get_next_ids(
     ));
 
     (next_user_item_id, next_replica_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
+    use mz_orchestratord::controller::materialize::generation::DeploymentStatus;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist_client::PersistLocation;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
+
+    #[mz_ore::test(tokio::test)]
+    async fn ddl_checks_wait_for_bootstrap() {
+        let mut config = PersistConfig::new_for_tests();
+        config.build_version = BUILD_INFO.semver_version();
+        let cache = PersistClientCache::new(config, &MetricsRegistry::new(), |_, _| {
+            PubSubClientConnection::noop()
+        });
+        let persist_client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        let environment_id = EnvironmentId::for_tests();
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let builder = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(environment_id.organization_id())
+            .with_version(BUILD_INFO.semver_version())
+            .with_metrics(Arc::clone(&metrics))
+            .with_deploy_generation(0);
+        let boot_ts = SYSTEM_TIME().into();
+        let catalog = builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(boot_ts, &test_bootstrap_args())
+            .await
+            .unwrap();
+        catalog.expire().await;
+
+        let (deployment_state, handle) = DeploymentState::new();
+        let output = preflight_0dt(PreflightInput {
+            boot_ts,
+            environment_id,
+            persist_client,
+            deploy_generation: 1,
+            deployment_state,
+            openable_adapter_storage: builder.with_deploy_generation(1).unwrap_build().await,
+            catalog_metrics: Arc::clone(&metrics),
+            caught_up_max_wait: Duration::from_secs(1),
+            ddl_check_interval: Duration::from_millis(10),
+            panic_after_timeout: false,
+            bootstrap_args: test_bootstrap_args(),
+        })
+        .await
+        .unwrap();
+
+        // Even a timeout must not run the final DDL check before bootstrap.
+        // Each read starts two transactions: opening the savepoint and reading
+        // its IDs. Only the baseline read may run before bootstrap completes.
+        let before = metrics.transactions_started.get();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(metrics.transactions_started.get(), before + 2);
+        assert_eq!(handle.status(), DeploymentStatus::Initializing);
+
+        output.bootstrap_complete.unwrap().send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while handle.status() != DeploymentStatus::ReadyToPromote {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(metrics.transactions_started.get(), before + 4);
+    }
 }
