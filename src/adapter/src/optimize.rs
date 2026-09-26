@@ -57,6 +57,7 @@ pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
 pub mod metric_sink;
+pub(crate) mod offload;
 pub mod peek;
 pub mod subscribe;
 pub mod view;

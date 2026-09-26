@@ -290,7 +290,7 @@ impl Coordinator {
         let catalog = self.owned_catalog();
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
+        Ok(StageResult::Handle(crate::optimize::offload::spawn(
             || "optimize metric sink",
             move || {
                 span.in_scope(|| {

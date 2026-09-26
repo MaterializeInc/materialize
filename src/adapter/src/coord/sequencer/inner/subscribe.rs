@@ -304,7 +304,7 @@ impl Coordinator {
         let catalog = self.owned_catalog();
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
+        Ok(StageResult::Handle(crate::optimize::offload::spawn(
             || "optimize subscribe (mir)",
             move || {
                 span.in_scope(|| {
@@ -428,7 +428,7 @@ impl Coordinator {
 
         // Optimize LIR
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
+        Ok(StageResult::Handle(crate::optimize::offload::spawn(
             || "optimize subscribe (lir)",
             move || {
                 span.in_scope(|| {

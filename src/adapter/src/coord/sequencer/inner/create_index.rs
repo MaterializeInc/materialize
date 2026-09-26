@@ -344,7 +344,7 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
+        Ok(StageResult::Handle(crate::optimize::offload::spawn(
             || "optimize create index",
             move || {
                 span.in_scope(|| {

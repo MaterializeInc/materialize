@@ -142,7 +142,7 @@ impl Coordinator {
         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
+        Ok(StageResult::Handle(crate::optimize::offload::spawn(
             || "optimize explain timestamp",
             move || {
                 span.in_scope(|| {

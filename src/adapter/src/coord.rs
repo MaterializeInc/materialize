@@ -5298,6 +5298,7 @@ pub fn serve(
             &metrics_registry,
             catalog.system_config().optimizer_e2e_latency_warning_threshold(),
         );
+        crate::optimize::offload::register_metrics(&metrics_registry);
         let segment_client_clone = segment_client.clone();
         let coord_now = now.clone();
         let advance_timelines_interval =

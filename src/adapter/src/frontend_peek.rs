@@ -859,7 +859,7 @@ impl PeekClient {
                     self.optimizer_metrics.clone(),
                 );
 
-                mz_ore::task::spawn_blocking(
+                crate::optimize::offload::spawn(
                     || "optimize copy-to",
                     move || {
                         span.in_scope(|| {
@@ -900,7 +900,7 @@ impl PeekClient {
                     self.optimizer_metrics.clone(),
                 );
 
-                mz_ore::task::spawn_blocking(
+                crate::optimize::offload::spawn(
                     || "optimize peek",
                     move || {
                         span.in_scope(|| {
@@ -1068,7 +1068,7 @@ impl PeekClient {
                     optimizer_config,
                     self.optimizer_metrics.clone(),
                 );
-                mz_ore::task::spawn_blocking(
+                crate::optimize::offload::spawn(
                     || "optimize subscribe",
                     move || {
                         span.in_scope(|| {
