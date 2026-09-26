@@ -8,174 +8,83 @@ Bookmark: decoupled-coordination
 Remote: origin, pointing to the contributor fork, not upstream
 
 Read the design and the latest handoff in
-doc/developer/design/20260903_decoupled_coordination_log.md, consulting earlier
-entries for relevant decisions. Inspect the current code, worktree, and remote
-bookmark. Preserve existing work and account for progress from other sessions.
-Use the handoff and code to identify the active milestone in the design's
-Implementation and verification section. Choose the next coherent piece toward
-its observable outcome, briefly explain that choice, then implement and verify it.
-Historical proposals and next steps are context, not a cumulative task list.
+doc/developer/design/20260903_decoupled_coordination_log.md, then inspect the
+code, worktree and remote bookmark. Preserve other sessions' work. Where
+instructions differ, the current design and steering supersede historical
+proposals. The log is context, not a cumulative task list.
 
 Current steering
 
-Recheck these priorities against the code and latest handoff. Flag resolved
-steering for removal rather than accumulating a checklist.
+Milestone 2 includes native deployment coexistence and compatible-version warm
+handover. Keep native ownership enabled, with no second adapter-side installer.
 
-Milestone 2 is active. The ownership cutover is enabled: clusterd replicas
-enact compute and storage from the committed catalog. Keep native ownership
-enabled. Adapter inventory and observations are passive, not a second
-installer. Table/WAL work, webhook ticking, introspection writers and shard
-finalization remain adapter-owned and may pause during adapter absence.
+The next end-to-end outcome is same-version native prewarming and warm
+promotion: a second deployment uses its own catalog-described replicas and
+durable read-only/output-write authority, warms while the first serves, then
+retains that execution through externally authorized promotion. Catalog
+membership must not imply output-write authority. Preserve protection and
+fencing across the transition. No borrowed deployment identity or
+controller-to-native cold bridge.
 
-The native outage, targeted DDL and bounded-throughput acceptance proofs are
-closed. Preserve their assertions and existing CI coverage without adding
-another acceptance campaign. Remaining work is compatibility and integration,
-plus the native deployment handover and writer compatibility now included in
-milestone 2.
+Use that outcome to establish the deployment model, then complete
+catalog/Persist writer coexistence and handover between compatible versions.
+Same-version success is an intermediate proof, not completion of M2. Do not
+design a same-version-only shortcut that needs another ownership model for
+version overlap.
 
-Restore catalog-authoritative index candidates and transaction eligibility.
-Observed installation must not change the logical time domain without DDL.
-Repair the handoff to real read protection and execution readiness, not the
-transaction check or fixture timing. Removing the observed-index filter alone
-is insufficient while read preparation rejects pending indexes. Never invent a
-readable frontier. Keep existing behavior for intervening DDL and fixed
-timestamps.
+Close the known serving-compatibility gaps at their owning boundaries:
+- Index candidates and transaction eligibility come from the catalog. Repair
+  the handoff to justified read protection and import readiness, rather than
+  hiding pending indexes or weakening the transaction check. Preserve fixed
+  timestamps and existing concurrent-DDL semantics.
+- Restore statement-specific timeout scope at admission, retaining freshness,
+  explicit cancellation and definitive completion for submitted writes. No
+  universal deadline or SET-only workaround.
+- Remove obsolete controller accounting. Keep meaningful public lag, frontier,
+  hydration, cleanup and autonomous-metric observations at their native owners,
+  without recreating controller state for parity or inventing missing values.
 
-Map existing statement-specific timeout semantics onto the new admission waits.
-Keep freshness and explicit cancellation without a universal deadline or a
-SET-only exception. Submitted writes retain definitive completion. Reuse the
-existing configuration, transaction and cancellation regressions at these
-boundaries.
+The outage, targeted DDL and bounded-throughput proofs are closed. Keep their
+assertions and regular CI coverage, not another acceptance campaign. Fix
+concrete integration failures alongside the work above, but do not make
+unrelated fixture cleanup a prerequisite for progressing the deployment model.
+Batch corrections to shared fixture setup instead of rediscovering the same
+prerequisite per test.
 
-Remove metric accounting that no longer describes the architecture. Preserve
-meaningful public lag, frontier, hydration and cleanup observations, and
-autonomous curated metrics, at their owning boundaries. No controller
-reconstruction for metric parity, synthetic zeroes, or general observability
-project.
+Scope and working rules
 
-Prewarming and serving must use the same native lifecycle model. Each
-deployment has catalog-owned replicas and durable read-only/output-write
-authority. Promotion retains warmed execution rather than replacing private
-controller-driven replicas with cold native ones. Implement the design's
-membership, protection, output fencing and common-format writer compatibility
-together. Do not preserve the single-active-generation catalog restriction
-through borrowed deployment identity. Keep build-owned plans and live
-deployments' state isolated. Existing-environment conversion and compatibility
-with pre-feature binaries remain separate rollout work, not an excuse to defer
-the participating-version contract.
+The design owns the contracts. Mechanisms and factoring within them are yours
+to choose. Build coherent production paths, not speculative scaffolding. Bring
+consequential behavior changes or disproportionate cost to Aljoscha and pause
+the affected work. Routine implementation decisions need no renewed approval.
 
-Use focused boundary checks and existing promotion coverage for the added
-handover scope. Fix demonstrated CI regressions at their owners, compare
-disputed semantics against the baseline, and batch related fixture startup
-corrections. Do not change scheduling, grace periods or assertions to
-compensate for an unexplained timeout. The agreed five-minute reclamation
-grace, Persist leases, Kafka fencing and Iceberg guarded commits remain
-constraints, not test knobs.
+Existing-environment conversion, pre-feature binary compatibility and arbitrary
+concurrent serving adapters remain outside M2. Independent query-client
+isolation remains M3. Add durable records only for required information that
+cannot be derived. Production test-only APIs need approval. Do not tune grace
+periods or leases, weaken read/output fencing, or invent scheduling guarantees
+to turn an unexplained failure green.
 
-The bounded performance scope remains 100 and 1,000 generated objects with the
-shared-view topology. Larger-scale work and known quadratic notice/dependency
-costs remain deferred. Keep payload, Persist metadata and current-state
-footprint distinct, and do not equate observer timings with isolated subscriber
-latency.
+Follow repository instructions and skills. Use regular draft-PR CI as the
+default integration loop, including mzcompose and performance workloads. Run
+cheap local formatting/checks and targeted tests where useful. Verify changed
+contracts at their boundaries and use existing regressions where they suffice.
+Compare disputed behavior against the baseline. Seek independent review when
+warranted. Report failed, pending and unverified results explicitly.
 
-Keep the draft PR description accurate about what is implemented and what remains,
-with validation status in the PR rather than the design log.
+Keep implementation and validation status in the PR description. Append only
+consequential decisions, unresolved questions and the next useful step to the
+design log, not CI results or tool status. Preserve earlier entries. Design and
+prompt bodies are designer-owned unless documentation work is explicitly
+assigned. Flag resolved steering for removal. Re-read this prompt after
+compaction.
 
-Standing rules
+Commit coherent changes with jj and continue beyond intermediate commits. You
+may commit and push to the bookmark above without asking. Before finishing,
+fold your own fixups and log updates into a straight implementation history
+while preserving useful review boundaries. Check remote changes before pushing.
+Ask before rewriting others' commits or commits others have built on.
 
-- No production trait methods, coordinator commands, or system-variable semantics
-  whose only consumer is a test harness. Bring the need to Aljoscha first.
-- A durable record is added only when it carries information that cannot be
-  derived from existing catalog state or durable progress. A record whose value
-  is constant at birth is a signal to look again.
-- Milestone 2 includes active/prewarming deployment overlap. Arbitrary
-  concurrent serving adapters remain out of scope, and independent query-client
-  isolation remains milestone 3. Do not build a bridge the design will replace.
-
-Prefer changes that remove a dependency on the originating adapter and demonstrate
-that through a production path. Preparatory work is appropriate when it unblocks
-that path. Temporary interfaces may be replaced as integration clarifies the
-boundary. Do not add parallel machinery merely to preserve them or keep milestone
-boundaries tidy. Keep maintained recovery and retention requirements object-owned,
-and additional client and execution protection incarnation-scoped, without durable
-per-query or per-SQL-session bookkeeping.
-
-Treat the design as the agreed boundaries, not a prescribed mechanism. Prefer
-the smallest coherent solution that preserves the full capability. Incremental
-progress is fine, but do not mistake an intermediate step for completion.
-Implementation choices within the agreed boundaries do not require renewed
-design approval. Writer-owned planning and replica-side enactment are decided.
-Internal factoring and mechanisms not fixed by the agreed decisions are yours
-to choose.
-
-Bring discoveries, consequential tradeoffs, and scope growth to me, Aljoscha.
-Pause affected work when guidance is needed rather than silently narrowing
-scope, adding machinery, or changing an agreed boundary. Bring disproportionate
-implementation cost to me even when the implementation conforms to the design.
-
-Follow repository instructions and skills. Verify at the changed boundaries,
-and seek independent review when the risk warrants it.
-
-Use the draft PR's CI as the default test loop instead of running test suites
-locally. You may push changes and iterate on CI failures. Keep cheap local
-formatting and checks, and run targeted local tests when useful, not as a
-prerequisite for pushing. Follow the mz-debug-ci skill when investigating CI.
-Report pending or failed checks explicitly rather than treating a push as
-successful validation.
-
-Use draft PR CI for Docker/mzcompose demos and performance workloads. Avoid
-running them locally when CI can run them. Local verification should focus on
-formatting, compilation, and targeted Rust tests.
-
-Locally, `bin/fmt`, `cargo check`, and the Rust parts of `bin/lint`
-(check-cargo, check-formatting, check-python-docs) work. `bin/lint` also runs
-checks whose tools are not installed here (npm, helm-docs, trufflehog, zizmor);
-CI is the authority for those. Do not record local tooling gaps anywhere.
-
-Focus on regular PR CI for now. Nightly intentionally does not run on this
-draft PR, so do not treat its absence as a blocker or try to enable it. We will
-start nightly validation once we have a working implementation.
-
-Land coherent, reviewable changes. Separate commits are appropriate for distinct
-implementation or review boundaries, especially mechanical relocation versus
-behavior changes. An intermediate commit is not a reason to stop the work. Commit
-messages and change descriptions explain the outcome, rationale, and validation,
-not the chronology of attempts. If blocked, report the blocker.
-
-Append only a minimal dated handoff to
-doc/developer/design/20260903_decoupled_coordination_log.md: consequential findings
-or decisions, unresolved questions, and the next useful step. Do not record
-validation status there at all: CI results, pending checks, formatting or
-compile checks, tool availability, and review outcomes are reconstructible from
-the PR and are noise in the log. Distinguish proposals from decisions we
-reviewed together. Do not rewrite earlier entries. Design and prompt bodies are
-designer-owned. Propose changes rather than editing them unless Aljoscha explicitly
-assigns documentation work.
-
-You may commit and push progress to this bookmark without asking again.
-Prefer jj. In-progress commits and pushes are allowed while iterating. Before
-finishing, fold fixups and log updates into the relevant coherent commits without
-collapsing useful review boundaries merely because they share a session.
-You may rewrite and repush your own session's work-in-progress commits for
-this purpose. Check for remote changes before pushing. Do not overwrite
-others' work, and ask before rewriting other sessions' commits or commits
-that others have built on. Report validation failures honestly.
-
-Keep the existing PR as a draft. Do not merge, mark it ready, or push to
-upstream or other branches without asking.
+Keep the PR as a draft. Do not enable nightly validation, merge, mark ready, or
+push to upstream or other branches without asking.
 ```
-
-## Code navigation
-
-- [Catalog implications](../../../src/adapter/src/coord/catalog_implications.rs)
-  derive effects from committed changes, including maintained compute installation
-  and sink alteration.
-- [Compute protocol](../../../src/compute-client/src/protocol/command.rs)
-  separates replica-owned lifecycle commands from client query execution through
-  [transport](../../../src/service/src/transport.rs).
-- [StorageCollections](../../../src/storage-client/src/storage_collections.rs)
-  owns storage capability accounting and critical since handles. Protected
-  handles follow committed bounds. Unprotected handles retain local capability
-  accounting and epoch fencing.
-
-Re-read this prompt when compaction happens!
