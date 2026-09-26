@@ -976,7 +976,11 @@ fn test_pgtest_mz_desc() {
 
 #[mz_ore::test]
 fn test_pgtest_mz_notice() {
-    pg_test_inner(Path::new("../../test/pgtest-mz/notice.pt"), true);
+    pg_test_harness(Path::new("../../test/pgtest-mz/notice.pt"), true, || {
+        test_util::TestHarness::default()
+            .with_system_parameter_default("enable_index_options".into(), "true".into())
+            .with_system_parameter_default("enable_logical_compaction_window".into(), "true".into())
+    });
 }
 
 #[mz_ore::test]

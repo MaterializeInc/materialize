@@ -16,10 +16,12 @@ ReadyForQuery {"status":"I"}
 
 # Assert notice severity and SQLSTATE. Rewritten object lists can depend on
 # which access paths remain in use.
+# Keep the indexes needed by MVs readable at their logical-input timestamps,
+# not just at the current time when the readiness check completes.
 
 send
 Query {"query": "create table t(a int, b int)"}
-Query {"query": "create index t_idx_a on t(a)"}
+Query {"query": "create index t_idx_a on t(a) with (retain history = for '1h')"}
 ----
 
 until err_field_typs=SC
@@ -71,7 +73,7 @@ Query {"query": "create index v1_idx_a on v1(a)"}
 Query {"query": "create materialized view mv2 as select * from t where a=5"}
 Query {"query": "drop index v1_idx_a"}
 Query {"query": "drop materialized view mv2"}
-Query {"query": "create index t_idx_a on t(a)"}
+Query {"query": "create index t_idx_a on t(a) with (retain history = for '1h')"}
 ----
 
 until err_field_typs=SC
