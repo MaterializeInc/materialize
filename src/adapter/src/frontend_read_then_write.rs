@@ -987,8 +987,12 @@ impl PeekClient {
         if session.vars().emit_timestamp_notice() {
             let conn_id = session.conn_id().clone();
             let session_wall_time = session.pcx().wall_time;
-            let explanation = self
-                .call_coordinator(|tx| Command::ExplainTimestamp {
+            let explanation = if let Some(client) = &self.query_client {
+                client
+                    .explain_timestamp(catalog, &conn_id, session_wall_time, &bundle, determination)
+                    .await
+            } else {
+                self.call_coordinator(|tx| Command::ExplainTimestamp {
                     conn_id,
                     session_wall_time,
                     cluster_id,
@@ -996,7 +1000,8 @@ impl PeekClient {
                     determination,
                     tx,
                 })
-                .await?;
+                .await?
+            };
             session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
         }
 
@@ -1256,7 +1261,14 @@ impl PeekClient {
         };
         expr.try_visit_scalars_mut(&mut |s| style.prep_scalar_expr(s))?;
 
-        let compute_instance = ComputeInstanceSnapshot::new_without_collections(cluster_id);
+        // Native CREATE INDEX commits before its trace is installed. Offer only
+        // observed indexes, as for frontend SELECTs, so a mutation can read
+        // storage instead of requiring an unavailable access path.
+        let compute_instance = self
+            .query_client
+            .as_ref()
+            .map(|client| client.instance_snapshot(catalog, cluster_id))
+            .unwrap_or_else(|| ComputeInstanceSnapshot::new_without_collections(cluster_id));
         let (_, view_id) = self.transient_id_gen.allocate_id();
         let (_, sink_id) = self.transient_id_gen.allocate_id();
         let debug_name = format!("frontend-read-then-write-subscribe-{}", sink_id);

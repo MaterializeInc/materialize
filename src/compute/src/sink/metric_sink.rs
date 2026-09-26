@@ -67,12 +67,14 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         let worker_id = scope.index();
         // The registry is process-local, so every row must land on the same worker or the
         // series would be split across processes. Which worker is chosen doesn't matter, only
-        // that all workers agree, so hash the sink's own id.
+        // that all workers agree. Hash the collector label so replacements with
+        // different export IDs still register on the same worker. Its ordered
+        // DROP then CREATE releases the old collector before registration.
         //
         // Routing by metric key instead would spread the fold across workers, but each process
         // has its own registry, so one metric family could then be split across processes' scrape
         // outputs. Partition-by-key is a possible future refinement.
-        let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
+        let active_worker_id = usize::cast_from(self.label.hashed()) % scope.peers();
 
         let ok_stream = sinked_collection
             .inner

@@ -20,7 +20,7 @@ use std::time::Duration;
 use crate::collection_mgmt::{
     AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
 };
-use crate::instance::{Instance, ReplicaConfig};
+use crate::instance::{Instance, LegacyInstance, ReplicaConfig};
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use derivative::Derivative;
@@ -44,7 +44,6 @@ use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::critical::Opaque;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
@@ -54,27 +53,24 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
 use mz_storage_client::client::{
     AppendOnlyUpdate, RunIngestionCommand, RunOneshotIngestion, RunSinkCommand, Status,
-    StatusUpdate, StorageCommand, StorageResponse, TableData,
+    StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
-    IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
-    WallclockLagHistogramPeriod,
+    IntrospectionType, Response, StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
+    WallclockLag, WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
     MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_STATUS_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_client::statistics::{
-    ControllerSinkStatistics, ControllerSourceStatistics, WebhookStatistics,
-};
+use mz_storage_client::statistics::{ControllerSinkStatistics, ControllerSourceStatistics};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
-use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
+use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
@@ -89,7 +85,6 @@ use mz_storage_types::sources::{
 use mz_storage_types::{AlterCompatible, StorageDiff, dyncfgs};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
-use mz_txn_wal::txns::TxnsHandle;
 use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch};
@@ -99,11 +94,11 @@ use tokio::time::MissedTickBehavior;
 use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
 
+pub mod adapter_storage;
 mod collection_mgmt;
 mod history;
 mod instance;
-mod persist_handles;
-mod rtr;
+pub mod rtr;
 mod statistics;
 
 #[derive(Derivative)]
@@ -140,6 +135,8 @@ pub struct Controller {
     /// controlled by it are allowed to affect changes to external systems
     /// (largely persist).
     read_only: bool,
+    /// Maintained execution belongs to catalog-following replicas.
+    replica_owned: bool,
 
     /// Collections maintained by the storage controller.
     ///
@@ -157,18 +154,10 @@ pub struct Controller {
     /// messages from the replica.
     dropped_objects: BTreeMap<GlobalId, BTreeSet<ReplicaId>>,
 
-    /// Write handle for table shards.
-    pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker,
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<Timestamp>,
     txns_metrics: Arc<TxnMetrics>,
     stashed_responses: Vec<(Option<ReplicaId>, StorageResponse)>,
-    /// Channel for sending table handle drops.
-    #[derivative(Debug = "ignore")]
-    pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
-    /// Channel for receiving table handle drops.
-    #[derivative(Debug = "ignore")]
-    pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
     /// Closures that can be used to send responses from oneshot ingestions.
     #[derivative(Debug = "ignore")]
     pending_oneshot_ingestions: BTreeMap<uuid::Uuid, PendingOneshotIngestion>,
@@ -186,9 +175,9 @@ pub struct Controller {
 
     // The following two fields must always be locked in order.
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
-    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s, as well
-    /// as webhook statistics.
-    source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
+    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`.
+    source_statistics:
+        Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSourceStatistics>>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics: Arc<Mutex<BTreeMap<(GlobalId, Option<ReplicaId>), ControllerSinkStatistics>>>,
@@ -307,7 +296,11 @@ impl StorageController for Controller {
         self.reconcile_dangling_statistics();
         self.initialized = true;
 
-        for instance in self.instances.values_mut() {
+        for instance in self
+            .instances
+            .values_mut()
+            .filter_map(|i| i.legacy.as_mut())
+        {
             instance.send(StorageCommand::InitializationComplete);
         }
     }
@@ -320,7 +313,11 @@ impl StorageController for Controller {
         // persist separately.
         self.persist.cfg().apply_from(&config_params.dyncfg_updates);
 
-        for instance in self.instances.values_mut() {
+        for instance in self
+            .instances
+            .values_mut()
+            .filter_map(|i| i.legacy.as_mut())
+        {
             let params = Box::new(config_params.clone());
             instance.send(StorageCommand::UpdateConfiguration(params));
         }
@@ -340,7 +337,9 @@ impl StorageController for Controller {
     ) {
         for (id, instance) in self.instances.iter_mut() {
             let instance_overrides = overrides.remove(id).unwrap_or_default();
-            instance.update_replica_dyncfg_overrides(instance_overrides);
+            if let Some(legacy) = &mut instance.legacy {
+                legacy.update_replica_dyncfg_overrides(instance_overrides);
+            }
         }
     }
 
@@ -356,20 +355,14 @@ impl StorageController for Controller {
     fn collection_hydrated(&self, collection_id: GlobalId) -> Result<bool, StorageError> {
         let collection = self.collection(collection_id)?;
 
-        let instance_id = match &collection.data_source {
-            DataSource::Ingestion(ingestion_description) => ingestion_description.instance_id,
-            DataSource::IngestionExport { ingestion_id, .. } => {
-                let ingestion_state = self.collections.get(ingestion_id).expect("known to exist");
-
-                let instance_id = match &ingestion_state.data_source {
-                    DataSource::Ingestion(ingestion_desc) => ingestion_desc.instance_id,
-                    _ => unreachable!("SourceExport must only refer to primary source"),
-                };
-
-                instance_id
-            }
+        match &collection.data_source {
+            DataSource::Ingestion(_) | DataSource::IngestionExport { .. } => (),
             _ => return Ok(true),
         };
+        let instance_id = collection
+            .extra_state
+            .instance_id()
+            .expect("source cluster");
 
         let instance = self.instances.get(&instance_id).ok_or_else(|| {
             StorageError::IngestionInstanceMissing {
@@ -384,25 +377,17 @@ impl StorageController for Controller {
             return Ok(true);
         }
 
-        match &collection.extra_state {
-            CollectionStateExtra::Ingestion(ingestion_state) => {
-                // An ingestion is hydrated if it is hydrated on at least one replica.
-                Ok(ingestion_state.hydrated_on.len() >= 1)
-            }
-            CollectionStateExtra::Export(_) => {
-                // For now, sinks are always considered hydrated. We rely on
-                // them starting up "instantly" and don't wait for them when
-                // checking hydration status of a replica.  TODO(sinks): base
-                // this off of the sink shard's frontier?
-                Ok(true)
-            }
-            CollectionStateExtra::None => {
-                // For now, objects that are not ingestions are always
-                // considered hydrated. This is tables and webhooks, as of
-                // today.
-                Ok(true)
-            }
+        if !self.replica_owned {
+            return Ok(collection
+                .extra_state
+                .hydrated_on()
+                .is_some_and(|hydrated| !hydrated.is_empty()));
         }
+        let scheduled = self.source_replicas(collection_id);
+        Ok(collection
+            .extra_state
+            .hydrated_on()
+            .is_some_and(|hydrated| !hydrated.is_disjoint(&scheduled)))
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -423,62 +408,44 @@ impl StorageController for Controller {
         let target_replicas: Option<BTreeSet<ReplicaId>> =
             target_replica_ids.map(|ids| ids.into_iter().collect());
 
-        let instance = self.instances.get(target_cluster_id);
-
         let mut all_hydrated = true;
-        for (collection_id, collection_state) in self.collections.iter() {
-            if collection_id.is_transient() || exclude_collections.contains(collection_id) {
+        for (collection_id, collection_state) in &self.collections {
+            if collection_id.is_transient()
+                || exclude_collections.contains(collection_id)
+                || collection_state.extra_state.instance_id().as_ref() != Some(target_cluster_id)
+                || !matches!(
+                    collection_state.data_source,
+                    DataSource::Ingestion(_) | DataSource::IngestionExport { .. }
+                )
+            {
                 continue;
             }
-            let hydrated = match &collection_state.extra_state {
-                CollectionStateExtra::Ingestion(state) => {
-                    if &state.instance_id != target_cluster_id {
-                        continue;
+            let scheduled = self.source_replicas(*collection_id);
+            let hydrated_on = collection_state
+                .extra_state
+                .hydrated_on()
+                .expect("source hydration state");
+            let hydrated = if self.replica_owned {
+                let targets: BTreeSet<_> = scheduled
+                    .into_iter()
+                    .filter(|id| {
+                        target_replicas
+                            .as_ref()
+                            .is_none_or(|targets| targets.contains(id))
+                    })
+                    .collect();
+                targets.is_empty() || !hydrated_on.is_disjoint(&targets)
+            } else {
+                match &target_replicas {
+                    Some(targets) => {
+                        scheduled.is_disjoint(targets) || !hydrated_on.is_disjoint(targets)
                     }
-                    match &target_replicas {
-                        Some(target_replicas) => {
-                            // Not scheduled on any target replica means it can
-                            // never hydrate there, so it does not count (see
-                            // the trait docs). If the instance is unknown (the
-                            // cluster is being dropped concurrently) the
-                            // scheduled set is empty and every ingestion is
-                            // skipped. Readiness callers gate on replica health
-                            // separately, which covers that window.
-                            let scheduled_on = instance
-                                .map(|i| i.get_active_replicas_for_object(collection_id))
-                                .unwrap_or_default();
-                            if scheduled_on.is_disjoint(target_replicas) {
-                                true
-                            } else {
-                                !state.hydrated_on.is_disjoint(target_replicas)
-                            }
-                        }
-                        None => {
-                            // Not target replicas, so check that it's hydrated
-                            // on at least one replica.
-                            state.hydrated_on.len() >= 1
-                        }
-                    }
-                }
-                CollectionStateExtra::Export(_) => {
-                    // For now, sinks are always considered hydrated. We rely on
-                    // them starting up "instantly" and don't wait for them when
-                    // checking hydration status of a replica.  TODO(sinks):
-                    // base this off of the sink shard's frontier?
-                    true
-                }
-                CollectionStateExtra::None => {
-                    // For now, objects that are not ingestions are always
-                    // considered hydrated. This is tables and webhooks, as of
-                    // today.
-                    true
+                    None => !hydrated_on.is_empty(),
                 }
             };
             if !hydrated {
                 tracing::info!(%collection_id, "collection is not hydrated on any replica");
                 all_hydrated = false;
-                // We continue with our loop instead of breaking out early, so
-                // that we log all non-hydrated replicas.
             }
         }
         Ok(all_hydrated)
@@ -544,20 +511,30 @@ impl StorageController for Controller {
             .map(|c| (c.id, c))
             .collect();
 
-        let active_exports = self.instances[&instance_id]
-            .active_ingestion_exports()
-            .filter(move |id| {
-                let frontiers = active_storage_collections.get(id);
-                match frontiers {
-                    Some(frontiers) => !frontiers.write_frontier.is_empty(),
-                    None => {
-                        // Not "active", so we don't care here.
-                        false
-                    }
-                }
-            });
-
-        Box::new(active_exports)
+        let exports: Box<dyn Iterator<Item = &GlobalId> + '_> = if self.replica_owned {
+            Box::new(self.collections.iter().filter_map(move |(id, collection)| {
+                (collection.extra_state.instance_id() == Some(instance_id)
+                    && matches!(
+                        collection.data_source,
+                        DataSource::Ingestion(_) | DataSource::IngestionExport { .. }
+                    )
+                    && !self.source_replicas(*id).is_empty())
+                .then_some(id)
+            }))
+        } else {
+            Box::new(
+                self.instances[&instance_id]
+                    .legacy
+                    .as_ref()
+                    .expect("legacy execution")
+                    .active_ingestion_exports(),
+            )
+        };
+        Box::new(exports.filter(move |id| {
+            active_storage_collections
+                .get(id)
+                .is_some_and(|frontiers| !frontiers.write_frontier.is_empty())
+        }))
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError> {
@@ -565,22 +542,24 @@ impl StorageController for Controller {
     }
 
     fn create_instance(&mut self, id: StorageInstanceId, workload_class: Option<String>) {
-        let metrics = self.metrics.for_instance(id);
-        let mut instance = Instance::new(
-            workload_class,
-            metrics,
-            self.now.clone(),
-            self.instance_response_tx.clone(),
-        );
-        if self.initialized {
-            instance.send(StorageCommand::InitializationComplete);
-        }
-        if !self.read_only {
-            instance.send(StorageCommand::AllowWrites);
-        }
-
-        let params = Box::new(self.config.parameters.clone());
-        instance.send(StorageCommand::UpdateConfiguration(params));
+        let legacy = if self.replica_owned {
+            None
+        } else {
+            let metrics = self.metrics.for_instance(id);
+            let mut legacy =
+                LegacyInstance::new(metrics, self.now.clone(), self.instance_response_tx.clone());
+            if self.initialized {
+                legacy.send(StorageCommand::InitializationComplete);
+            }
+            if !self.read_only {
+                legacy.send(StorageCommand::AllowWrites);
+            }
+            legacy.send(StorageCommand::UpdateConfiguration(Box::new(
+                self.config.parameters.clone(),
+            )));
+            Some(legacy)
+        };
+        let instance = Instance::new(workload_class, legacy);
 
         let old_instance = self.instances.insert(id, instance);
         assert_none!(old_instance, "storage instance {id} already exists");
@@ -610,6 +589,10 @@ impl StorageController for Controller {
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
     ) {
+        assert!(
+            !self.replica_owned,
+            "native replicas must be registered without transport"
+        );
         let instance = self
             .instances
             .get_mut(&instance_id)
@@ -620,10 +603,60 @@ impl StorageController for Controller {
             location,
             grpc_client: self.config.parameters.grpc_client.clone(),
         };
-        instance.add_replica(replica_id, config);
+        instance.register_replica(replica_id);
+        instance
+            .legacy
+            .as_mut()
+            .expect("legacy transport requires controller-owned execution")
+            .add_replica(replica_id, config);
+    }
+
+    fn register_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId) {
+        assert!(
+            self.replica_owned,
+            "passive membership requires replica-owned execution"
+        );
+        self.instances
+            .get_mut(&instance_id)
+            .expect("instance exists")
+            .register_replica(replica_id);
+    }
+
+    fn replica_observations(&self) -> mz_storage_client::controller::ReplicaObservationSender {
+        mz_storage_client::controller::ReplicaObservationSender::new(
+            self.instance_response_tx.clone(),
+        )
     }
 
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId) {
+        let instance = &self.instances[&instance_id];
+        let (ingestions, exports): (Vec<_>, Vec<_>) = if let Some(legacy) = &instance.legacy {
+            (
+                legacy.active_ingestions().copied().collect(),
+                legacy.active_exports().copied().collect(),
+            )
+        } else {
+            let mut ingestions = Vec::new();
+            let mut exports = Vec::new();
+            for (id, collection) in &self.collections {
+                if collection.extra_state.instance_id() != Some(instance_id) {
+                    continue;
+                }
+                match collection.data_source {
+                    DataSource::Ingestion(_) => ingestions.push(*id),
+                    DataSource::Sink { .. } => exports.push(*id),
+                    _ => (),
+                }
+            }
+            (ingestions, exports)
+        };
+        for collection in self.collections.values_mut() {
+            if collection.extra_state.instance_id() == Some(instance_id) {
+                if let Some(hydrated) = collection.extra_state.hydrated_on_mut() {
+                    hydrated.remove(&replica_id);
+                }
+            }
+        }
         let instance = self
             .instances
             .get_mut(&instance_id)
@@ -647,7 +680,7 @@ impl StorageController for Controller {
             replica_id: Some(replica_id),
         };
 
-        for ingestion_id in instance.active_ingestions() {
+        for ingestion_id in &ingestions {
             if let Some(active_replicas) = self.dropped_objects.get_mut(ingestion_id) {
                 active_replicas.remove(&replica_id);
                 if active_replicas.is_empty() {
@@ -683,7 +716,7 @@ impl StorageController for Controller {
             }
         }
 
-        for id in instance.active_exports() {
+        for id in &exports {
             if let Some(active_replicas) = self.dropped_objects.get_mut(id) {
                 active_replicas.remove(&replica_id);
                 if active_replicas.is_empty() {
@@ -695,6 +728,16 @@ impl StorageController for Controller {
         }
 
         instance.drop_replica(replica_id);
+        if self.replica_owned {
+            let ids = self
+                .collections
+                .iter()
+                .filter_map(|(id, c)| {
+                    (c.extra_state.instance_id() == Some(instance_id)).then_some(*id)
+                })
+                .collect::<Vec<_>>();
+            self.queue_native_paused_statuses(ids);
+        }
 
         if !self.read_only {
             if !source_status_updates.is_empty() {
@@ -952,24 +995,25 @@ impl StorageController for Controller {
             .rev()
             .chain(collections_to_register.into_iter());
 
-        // Statistics need a level of indirection so we can mutably borrow
-        // `self` when registering collections and when we are inserting
-        // statistics.
-        let mut new_webhook_statistic_entries = BTreeSet::new();
-
         for (id, description, write, metadata) in to_register {
             let is_in_txns = |id, metadata: &CollectionMetadata| {
                 metadata.txns_shard.is_some()
                     && !(self.read_only && migrated_storage_collections.contains(&id))
             };
 
-            to_execute.insert(id);
+            if !self.replica_owned {
+                to_execute.insert(id);
+            }
             new_collections.insert(id);
 
             let write_frontier = write.upper();
 
             // Determine if this collection has another dependency.
-            let storage_dependencies = self.determine_collection_dependencies(id, &description)?;
+            let storage_dependencies = if self.replica_owned {
+                Vec::new()
+            } else {
+                self.determine_collection_dependencies(id, &description)?
+            };
 
             let dependency_read_holds = self
                 .storage_collections
@@ -1054,7 +1098,7 @@ impl StorageController for Controller {
             let mut extra_state = CollectionStateExtra::None;
             let mut maybe_instance_id = None;
             match &data_source {
-                DataSource::Introspection(typ) => {
+                DataSource::Introspection(typ) if !typ.is_statement_history() => {
                     debug!(
                         ?data_source, meta = ?metadata,
                         "registering {id} with persist monotonic worker",
@@ -1071,26 +1115,7 @@ impl StorageController for Controller {
                         persist_client.clone(),
                     )?;
                 }
-                DataSource::Webhook => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "registering {id} with persist monotonic worker",
-                    );
-                    // This collection of statistics is periodically aggregated into
-                    // `source_statistics`.
-                    new_webhook_statistic_entries.insert(id);
-                    // Register the collection so our manager knows about it.
-                    //
-                    // NOTE: Maybe this shouldn't be in the collection manager,
-                    // and collection manager should only be responsible for
-                    // built-in introspection collections?
-                    self.collection_manager.register_append_only_collection(
-                        id,
-                        write.expect_handle("webhook collections are not tables"),
-                        false,
-                        None,
-                    );
-                }
+                DataSource::Webhook | DataSource::Introspection(_) => {}
                 DataSource::IngestionExport {
                     ingestion_id,
                     details,
@@ -1130,19 +1155,28 @@ impl StorageController for Controller {
 
                     // Executing the source export doesn't do anything, ensure we execute the source instead.
                     to_execute.remove(&id);
-                    to_execute.insert(*ingestion_id);
+                    if !self.replica_owned {
+                        to_execute.insert(*ingestion_id);
+                    }
 
-                    let ingestion_state = IngestionState {
-                        read_capabilities: MutableAntichain::from(dependency_since.clone()),
-                        dependency_read_holds,
-                        derived_since: dependency_since,
-                        write_frontier: Antichain::from_elem(Timestamp::MIN),
-                        hold_policy: ReadPolicy::step_back(),
-                        instance_id,
-                        hydrated_on: BTreeSet::new(),
-                    };
+                    if self.replica_owned {
+                        extra_state = CollectionStateExtra::Native {
+                            instance_id,
+                            hydrated_on: BTreeSet::new(),
+                        };
+                    } else {
+                        let ingestion_state = IngestionState {
+                            read_capabilities: MutableAntichain::from(dependency_since.clone()),
+                            dependency_read_holds,
+                            derived_since: dependency_since,
+                            write_frontier: Antichain::from_elem(Timestamp::MIN),
+                            hold_policy: ReadPolicy::step_back(),
+                            instance_id,
+                            hydrated_on: BTreeSet::new(),
+                        };
 
-                    extra_state = CollectionStateExtra::Ingestion(ingestion_state);
+                        extra_state = CollectionStateExtra::Ingestion(ingestion_state);
+                    }
                     maybe_instance_id = Some(instance_id);
                 }
                 DataSource::Table => {
@@ -1169,18 +1203,32 @@ impl StorageController for Controller {
                         dependency_since.join_assign(read_hold.since());
                     }
 
-                    let ingestion_state = IngestionState {
-                        read_capabilities: MutableAntichain::from(dependency_since.clone()),
-                        dependency_read_holds,
-                        derived_since: dependency_since,
-                        write_frontier: Antichain::from_elem(Timestamp::MIN),
-                        hold_policy: ReadPolicy::step_back(),
-                        instance_id: ingestion_desc.instance_id,
+                    if self.replica_owned {
+                        extra_state = CollectionStateExtra::Native {
+                            instance_id: ingestion_desc.instance_id,
+                            hydrated_on: BTreeSet::new(),
+                        };
+                    } else {
+                        let ingestion_state = IngestionState {
+                            read_capabilities: MutableAntichain::from(dependency_since.clone()),
+                            dependency_read_holds,
+                            derived_since: dependency_since,
+                            write_frontier: Antichain::from_elem(Timestamp::MIN),
+                            hold_policy: ReadPolicy::step_back(),
+                            instance_id: ingestion_desc.instance_id,
+                            hydrated_on: BTreeSet::new(),
+                        };
+
+                        extra_state = CollectionStateExtra::Ingestion(ingestion_state);
+                    }
+                    maybe_instance_id = Some(ingestion_desc.instance_id);
+                }
+                DataSource::Sink { desc } if self.replica_owned => {
+                    maybe_instance_id = Some(desc.instance_id);
+                    extra_state = CollectionStateExtra::Native {
+                        instance_id: desc.instance_id,
                         hydrated_on: BTreeSet::new(),
                     };
-
-                    extra_state = CollectionStateExtra::Ingestion(ingestion_state);
-                    maybe_instance_id = Some(ingestion_desc.instance_id);
                 }
                 DataSource::Sink { desc } => {
                     let mut dependency_since = Antichain::from_elem(Timestamp::MIN);
@@ -1210,20 +1258,9 @@ impl StorageController for Controller {
             self.collections.insert(id, collection_state);
         }
 
-        {
-            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-
-            // Webhooks don't run on clusters/replicas, so we initialize their
-            // statistics collection here.
-            for id in new_webhook_statistic_entries {
-                source_statistics.webhook_statistics.entry(id).or_default();
-            }
-
-            // Sources and sinks only have statistics in the collection when
-            // there is a replica that is reporting them. No need to initialize
-            // here.
+        if self.replica_owned {
+            self.queue_native_paused_statuses(new_collections.iter().copied());
         }
-
         self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
 
         // TODO(guswynn): perform the io in this final section concurrently.
@@ -1251,31 +1288,6 @@ impl StorageController for Controller {
                     }
                 }
             };
-        }
-
-        Ok(())
-    }
-
-    fn check_alter_ingestion_source_desc(
-        &mut self,
-        ingestion_id: GlobalId,
-        source_desc: &SourceDesc,
-    ) -> Result<(), StorageError> {
-        let source_collection = self.collection(ingestion_id)?;
-        let data_source = &source_collection.data_source;
-        match &data_source {
-            DataSource::Ingestion(cur_ingestion) => {
-                cur_ingestion
-                    .desc
-                    .alter_compatible(ingestion_id, source_desc)?;
-            }
-            o => {
-                tracing::info!(
-                    "{ingestion_id} inalterable because its data source is {:?} and not an ingestion",
-                    o
-                );
-                Err(AlterError { id: ingestion_id })?
-            }
         }
 
         Ok(())
@@ -1312,8 +1324,10 @@ impl StorageController for Controller {
             }
         }
 
-        for id in ingestions_to_run {
-            self.run_ingestion(id)?;
+        if !self.replica_owned {
+            for id in ingestions_to_run {
+                self.run_ingestion(id)?;
+            }
         }
         Ok(())
     }
@@ -1352,8 +1366,10 @@ impl StorageController for Controller {
             }
         }
 
-        for id in ingestions_to_run {
-            self.run_ingestion(id)?;
+        if !self.replica_owned {
+            for id in ingestions_to_run {
+                self.run_ingestion(id)?;
+            }
         }
         Ok(())
     }
@@ -1421,14 +1437,17 @@ impl StorageController for Controller {
             }
         }
 
-        for id in ingestions_to_run {
-            self.run_ingestion(id)?;
+        if !self.replica_owned {
+            for id in ingestions_to_run {
+                self.run_ingestion(id)?;
+            }
         }
         Ok(())
     }
 
     async fn alter_table_desc(
         &mut self,
+        storage_metadata: &StorageMetadata,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
@@ -1451,6 +1470,7 @@ impl StorageController for Controller {
             // Let StorageCollections know!
             storage_collections
                 .alter_table_desc(
+                    storage_metadata,
                     existing_collection,
                     new_collection,
                     new_desc.clone(),
@@ -1486,62 +1506,6 @@ impl StorageController for Controller {
         Ok(())
     }
 
-    async fn register_table_collections(
-        &mut self,
-        register_ts: Timestamp,
-        ids: Vec<GlobalId>,
-    ) -> Result<(), StorageError> {
-        let mut tables = self.table_registrations(ids)?;
-
-        // A read-only deployment only writes its migrated builtin tables.
-        if self.read_only {
-            tables.retain(|table| self.migrated_storage_collections.contains(&table.id));
-        }
-        if tables.is_empty() {
-            return Ok(());
-        }
-
-        match self
-            .persist_table_worker
-            .register(register_ts, tables)
-            .await
-        {
-            Ok(res) => res,
-            Err(_recv) => Err(StorageError::ShuttingDown("persist_table_worker")),
-        }
-    }
-
-    fn table_registrations(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Result<Vec<TableRegistration>, StorageError> {
-        // The storage data source decides which table catalog items use txn-wal.
-        let mut tables = Vec::with_capacity(ids.len());
-        for id in ids {
-            let collection = self.collection(id)?;
-            if matches!(collection.data_source, DataSource::Table) {
-                let metadata = &collection.collection_metadata;
-                tables.push(TableRegistration {
-                    id,
-                    data_shard: metadata.data_shard,
-                    relation_desc: metadata.relation_desc.clone(),
-                });
-            }
-        }
-        Ok(tables)
-    }
-
-    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError> {
-        let mut tables = Vec::with_capacity(ids.len());
-        for id in ids {
-            let collection = self.collection(id)?;
-            if matches!(collection.data_source, DataSource::Table) {
-                tables.push(id);
-            }
-        }
-        Ok(tables)
-    }
-
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError> {
         self.collections
             .get(&id)
@@ -1571,6 +1535,11 @@ impl StorageController for Controller {
         request: OneshotIngestionRequest,
         result_tx: OneshotResultCallback<ProtoBatch>,
     ) -> Result<(), StorageError> {
+        if self.replica_owned {
+            return Err(StorageError::Generic(anyhow::anyhow!(
+                "native COPY must use the query client"
+            )));
+        }
         let collection_meta = self
             .collections
             .get(&collection_id)
@@ -1589,7 +1558,11 @@ impl StorageController for Controller {
         };
 
         if !self.read_only {
-            instance.send(StorageCommand::RunOneshotIngestion(Box::new(oneshot_cmd)));
+            instance
+                .legacy
+                .as_mut()
+                .expect("legacy execution required")
+                .send(StorageCommand::RunOneshotIngestion(Box::new(oneshot_cmd)));
             let pending = PendingOneshotIngestion {
                 result_tx,
                 cluster_id: instance_id,
@@ -1605,6 +1578,11 @@ impl StorageController for Controller {
     }
 
     fn cancel_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) -> Result<(), StorageError> {
+        if self.replica_owned {
+            return Err(StorageError::Generic(anyhow::anyhow!(
+                "native COPY must use the query client"
+            )));
+        }
         if self.read_only {
             return Err(StorageError::ReadOnly);
         }
@@ -1619,7 +1597,11 @@ impl StorageController for Controller {
 
         match self.instances.get_mut(&pending.cluster_id) {
             Some(instance) => {
-                instance.send(StorageCommand::CancelOneshotIngestion(ingestion_id));
+                instance
+                    .legacy
+                    .as_mut()
+                    .expect("legacy execution required")
+                    .send(StorageCommand::CancelOneshotIngestion(ingestion_id));
             }
             None => {
                 mz_ore::soft_panic_or_log!(
@@ -1640,6 +1622,23 @@ impl StorageController for Controller {
         id: GlobalId,
         new_description: ExportDescription,
     ) -> Result<(), StorageError> {
+        if self.replica_owned {
+            let collection = self
+                .collections
+                .get_mut(&id)
+                .ok_or(StorageError::IdentifierMissing(id))?;
+            let DataSource::Sink { desc } = &mut collection.data_source else {
+                return Err(StorageError::IdentifierInvalid(id));
+            };
+            let CollectionStateExtra::Native { instance_id, .. } = &mut collection.extra_state
+            else {
+                unreachable!("native sink has observation state");
+            };
+            *instance_id = new_description.instance_id;
+            *desc = new_description;
+            self.queue_native_paused_statuses([id]);
+            return Ok(());
+        }
         let from_id = new_description.sink.from;
 
         // Acquire read holds at StorageCollections to ensure that the
@@ -1654,17 +1653,33 @@ impl StorageController for Controller {
         let from_storage_metadata = self.storage_collections.collection_metadata(from_id)?;
         let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
-        // Check whether the sink's write frontier is beyond the read hold we got
-        let cur_export = self.export_mut(id)?;
-        let input_readable = cur_export
-            .write_frontier
+        // External output commits before the sink advances its Persist upper.
+        // DDL can observe that upper before we process the worker's frontier report,
+        // so a cached controller frontier cannot disprove the committed overlap.
+        let persist = self
+            .persist
+            .open(to_storage_metadata.persist_location.clone())
+            .await
+            .expect("persist location is valid");
+        let durable_upper = persist
+            .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                to_storage_metadata.data_shard,
+                Diagnostics {
+                    shard_name: id.to_string(),
+                    handle_purpose: "sink alteration progress".into(),
+                },
+            )
+            .await
+            .expect("invalid persist usage");
+        let input_readable = durable_upper
             .iter()
             .all(|t| input_hold.since().less_than(t));
         if !input_readable {
             return Err(StorageError::ReadBeforeSince(from_id));
         }
 
-        let new_export = ExportState {
+        let cur_export = self.export_mut(id)?;
+        let mut new_export = ExportState {
             read_capabilities: cur_export.read_capabilities.clone(),
             cluster_id: new_description.instance_id,
             derived_since: cur_export.derived_since.clone(),
@@ -1672,6 +1687,19 @@ impl StorageController for Controller {
             read_policy: cur_export.read_policy.clone(),
             write_frontier: cur_export.write_frontier.clone(),
         };
+        // The new input can be readable only beyond our last native report.
+        // Raise the accounting floor with the acquired holds so delayed reports
+        // cannot ask those holds to move backward. Reported progress stays unchanged.
+        let mut since = new_export.derived_since.clone();
+        for hold in &new_export.read_holds {
+            since.join_assign(hold.since());
+        }
+        let mut changes = swap_updates(&mut new_export.derived_since, since.clone());
+        new_export.read_capabilities.update_iter(changes.drain());
+        for hold in &mut new_export.read_holds {
+            hold.try_downgrade(since.clone())
+                .expect("joined held readability");
+        }
         *cur_export = new_export;
 
         // For `ALTER SINK`, the snapshot should only occur if the sink has not made any progress.
@@ -1681,7 +1709,7 @@ impl StorageController for Controller {
         // to replay from the beginning.
         // TODO(STG-26): unify this with run_export, if possible
         let with_snapshot = new_description.sink.with_snapshot
-            && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
+            && !PartialOrder::less_than(&new_description.sink.as_of, &durable_upper);
 
         let cmd = RunSinkCommand {
             id,
@@ -1708,7 +1736,11 @@ impl StorageController for Controller {
                 export_id: id,
             })?;
 
-        instance.send(StorageCommand::RunSink(Box::new(cmd)));
+        instance
+            .legacy
+            .as_mut()
+            .expect("legacy execution required")
+            .send(StorageCommand::RunSink(Box::new(cmd)));
         Ok(())
     }
 
@@ -1717,6 +1749,25 @@ impl StorageController for Controller {
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
     ) -> Result<(), StorageError> {
+        if self.replica_owned {
+            let mut descriptions = Vec::new();
+            for (id, connection) in exports {
+                let DataSource::Sink { desc } = &self.collection(id)?.data_source else {
+                    return Err(StorageError::IdentifierInvalid(id));
+                };
+                let mut updated = desc.clone();
+                updated.sink.connection = connection;
+                desc.sink.alter_compatible(id, &updated.sink)?;
+                descriptions.push((id, updated));
+            }
+            for (id, desc) in descriptions {
+                self.collections
+                    .get_mut(&id)
+                    .expect("validated")
+                    .data_source = DataSource::Sink { desc };
+            }
+            return Ok(());
+        }
         let mut updates_by_instance =
             BTreeMap::<StorageInstanceId, Vec<(RunSinkCommand, ExportDescription)>>::new();
 
@@ -1806,7 +1857,11 @@ impl StorageController for Controller {
             })?;
 
             for cmd in cmds {
-                instance.send(StorageCommand::RunSink(Box::new(cmd)));
+                instance
+                    .legacy
+                    .as_mut()
+                    .expect("legacy execution required")
+                    .send(StorageCommand::RunSink(Box::new(cmd)));
             }
 
             // Update state only after all possible errors have occurred.
@@ -1829,24 +1884,17 @@ impl StorageController for Controller {
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError> {
-        let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
-            .into_iter()
-            .partition(|id| match self.collections[id].data_source {
-                DataSource::Table => true,
-                DataSource::IngestionExport { .. } | DataSource::Webhook => false,
+        for id in &identifiers {
+            match self.collection(*id)?.data_source {
+                DataSource::Table | DataSource::IngestionExport { .. } | DataSource::Webhook => {}
                 _ => panic!("identifier is not a table: {}", id),
-            });
-
-        if table_write_ids.len() > 0 {
-            let tx = self.pending_table_handle_drops_tx.clone();
-            for identifier in table_write_ids {
-                let _ = tx.send(identifier);
             }
         }
 
-        if data_source_ids.len() > 0 {
-            self.validate_collection_ids(data_source_ids.iter().cloned())?;
-            self.drop_sources_unvalidated(storage_metadata, data_source_ids)?;
+        // The adapter completes table writer forgetting before calling us. Read
+        // accounting may already be retired, but execution cleanup is ours.
+        if !identifiers.is_empty() {
+            self.drop_sources_unvalidated(storage_metadata, identifiers)?;
         }
 
         Ok(())
@@ -1883,11 +1931,6 @@ impl StorageController for Controller {
             if let Some(collection_state) = collection_state {
                 match collection_state.data_source {
                     DataSource::Webhook => {
-                        // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                        // could probably use some love and maybe get merged together?
-                        let fut = self.collection_manager.unregister_collection(*id);
-                        mz_ore::task::spawn(|| format!("storage-webhook-cleanup-{id}"), fut);
-
                         collections_to_drop.push(*id);
                         source_statistics_to_drop.push(*id);
                     }
@@ -1952,8 +1995,10 @@ impl StorageController for Controller {
 
         // Do not bother re-executing ingestions we know we plan to drop.
         ingestions_to_execute.retain(|id| !ingestions_to_drop.contains(id));
-        for ingestion_id in ingestions_to_execute {
-            self.run_ingestion(ingestion_id)?;
+        if !self.replica_owned {
+            for ingestion_id in ingestions_to_execute {
+                self.run_ingestion(ingestion_id)?;
+            }
         }
 
         // For ingestions, we fabricate a new hold that will propagate through
@@ -1971,7 +2016,9 @@ impl StorageController for Controller {
             ?ingestion_policies,
             "dropping sources by setting read hold policies"
         );
-        self.set_hold_policies(ingestion_policies);
+        if !self.replica_owned {
+            self.set_hold_policies(ingestion_policies);
+        }
 
         // Delete all collection->shard mappings
         let shards_to_update: BTreeSet<_> = ingestions_to_drop
@@ -1997,12 +2044,7 @@ impl StorageController for Controller {
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
             for id in source_statistics_to_drop {
-                source_statistics
-                    .source_statistics
-                    .retain(|(stats_id, _), _| stats_id != &id);
-                source_statistics
-                    .webhook_statistics
-                    .retain(|stats_id, _| stats_id != &id);
+                source_statistics.retain(|(stats_id, _), _| stats_id != &id);
             }
         }
 
@@ -2014,17 +2056,15 @@ impl StorageController for Controller {
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
 
-            let instance = match &collection.extra_state {
-                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
-                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
-                CollectionStateExtra::None => None,
-            }
-            .and_then(|i| self.instances.get(&i));
+            let instance = collection
+                .extra_state
+                .instance_id()
+                .and_then(|i| self.instances.get(&i));
 
             // Record which replicas were running a collection, so that we can
             // match DroppedId messages against them and eventually remove state
             // from self.dropped_objects
-            if let Some(instance) = instance {
+            if let Some(instance) = instance.and_then(|i| i.legacy.as_ref()) {
                 let active_replicas = instance.get_active_replicas_for_object(id);
                 if !active_replicas.is_empty() {
                     // The remap collection of an ingestion doesn't have extra
@@ -2074,7 +2114,10 @@ impl StorageController for Controller {
         mut sinks_to_drop: Vec<GlobalId>,
     ) {
         // Ignore exports that have already been removed.
-        sinks_to_drop.retain(|id| self.export(*id).is_ok());
+        sinks_to_drop.retain(|id| self.is_sink(*id));
+        if self.replica_owned {
+            self.append_shard_mappings(sinks_to_drop.iter().copied(), Diff::MINUS_ONE);
+        }
 
         // TODO: ideally we'd advance the write frontier ourselves here, but this function's
         // not yet marked async.
@@ -2091,7 +2134,9 @@ impl StorageController for Controller {
             ?drop_policy,
             "dropping sources by setting read hold policies"
         );
-        self.set_hold_policies(drop_policy);
+        if !self.replica_owned {
+            self.set_hold_policies(drop_policy);
+        }
 
         // Record the drop status for all sink drops.
         //
@@ -2126,17 +2171,15 @@ impl StorageController for Controller {
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
 
-            let instance = match &collection.extra_state {
-                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
-                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
-                CollectionStateExtra::None => None,
-            }
-            .and_then(|i| self.instances.get(&i));
+            let instance = collection
+                .extra_state
+                .instance_id()
+                .and_then(|i| self.instances.get(&i));
 
             // Record how many replicas were running an export, so that we can
             // match `DroppedId` messages against it and eventually remove state
             // from `self.dropped_objects`.
-            if let Some(instance) = instance {
+            if let Some(instance) = instance.and_then(|i| i.legacy.as_ref()) {
                 let active_replicas = instance.get_active_replicas_for_object(id);
                 if !active_replicas.is_empty() {
                     self.dropped_objects.insert(*id, active_replicas);
@@ -2149,64 +2192,8 @@ impl StorageController for Controller {
             .drop_collections_unvalidated(storage_metadata, sinks_to_drop);
     }
 
-    #[instrument(level = "debug")]
-    fn append_table(
-        &mut self,
-        write_ts: Timestamp,
-        advance_to: Timestamp,
-        commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
-        if self.read_only {
-            // While in read only mode, ONLY collections that have been migrated
-            // and need to be re-hydrated in read only mode can be written to.
-            if !commands
-                .iter()
-                .all(|(id, _)| id.is_system() && self.migrated_storage_collections.contains(id))
-            {
-                return Err(StorageError::ReadOnly);
-            }
-        }
-
-        // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
-        for (id, updates) in commands.iter() {
-            if !updates.is_empty() {
-                if !write_ts.less_than(&advance_to) {
-                    return Err(StorageError::UpdateBeyondUpper(*id));
-                }
-            }
-        }
-
-        Ok(self
-            .persist_table_worker
-            .append(write_ts, advance_to, commands))
-    }
-
-    fn table_write_handle(&self) -> Arc<dyn mz_storage_client::controller::TableWriteHandle> {
-        Arc::new(persist_handles::TableWriteWorkerHandle(
-            self.persist_table_worker.clone(),
-        ))
-    }
-
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
-        self.collection_manager.monotonic_appender(id)
-    }
-
-    fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError> {
-        // Call to this method are usually cached so the lock is not in the critical path.
-        let source_statistics = self.source_statistics.lock().expect("poisoned");
-        source_statistics
-            .webhook_statistics
-            .get(&id)
-            .cloned()
-            .ok_or(StorageError::IdentifierMissing(id))
-    }
-
     async fn ready(&mut self) {
-        if self.maintenance_scheduled {
-            return;
-        }
-
-        if !self.pending_table_handle_drops_rx.is_empty() {
+        if self.maintenance_scheduled || !self.stashed_responses.is_empty() {
             return;
         }
 
@@ -2224,17 +2211,18 @@ impl StorageController for Controller {
     }
 
     #[instrument(level = "debug")]
-    fn process(
-        &mut self,
-        storage_metadata: &StorageMetadata,
-    ) -> Result<Option<Response>, anyhow::Error> {
+    fn process(&mut self) -> Result<Option<Response>, anyhow::Error> {
         // Perform periodic maintenance work.
         if self.maintenance_scheduled {
             self.maintain();
             self.maintenance_scheduled = false;
         }
 
-        for instance in self.instances.values_mut() {
+        for instance in self
+            .instances
+            .values_mut()
+            .filter_map(|i| i.legacy.as_mut())
+        {
             instance.rehydrate_failed_replicas();
         }
 
@@ -2284,15 +2272,16 @@ impl StorageController for Controller {
                         for stat in source_stats {
                             let collection_id = stat.id.clone();
 
-                            if self.collection(collection_id).is_err() {
+                            if self.collection(collection_id).is_err()
+                                || (self.replica_owned
+                                    && !self.accepts_observation(collection_id, Some(replica_id)))
+                            {
                                 // We can get updates for collections that have
                                 // already been deleted, ignore those.
                                 continue;
                             }
 
-                            let entry = shared_stats
-                                .source_statistics
-                                .entry((stat.id, Some(replica_id)));
+                            let entry = shared_stats.entry((stat.id, Some(replica_id)));
 
                             match entry {
                                 btree_map::Entry::Vacant(vacant_entry) => {
@@ -2336,7 +2325,10 @@ impl StorageController for Controller {
                         for stat in sink_stats {
                             let collection_id = stat.id.clone();
 
-                            if self.collection(collection_id).is_err() {
+                            if self.collection(collection_id).is_err()
+                                || (self.replica_owned
+                                    && !self.accepts_observation(collection_id, Some(replica_id)))
+                            {
                                 // We can get updates for collections that have
                                 // already been deleted, ignore those.
                                 continue;
@@ -2374,64 +2366,35 @@ impl StorageController for Controller {
                     //
                     // I wouldn't say it's ideal, but it's workable until we
                     // find something better.
-                    match status_update.status {
-                        Status::Running => {
-                            let collection = self.collections.get_mut(&status_update.id);
-                            match collection {
-                                Some(collection) => {
-                                    match collection.extra_state {
-                                        CollectionStateExtra::Ingestion(
-                                            ref mut ingestion_state,
-                                        ) => {
-                                            if ingestion_state.hydrated_on.is_empty() {
-                                                tracing::debug!(ingestion_id = %status_update.id, "ingestion is hydrated");
-                                            }
-                                            ingestion_state.hydrated_on.insert(replica_id.expect(
-                                                "replica id should be present for status running",
-                                            ));
-                                        }
-                                        CollectionStateExtra::Export(_) => {
-                                            // TODO(sinks): track sink hydration?
-                                        }
-                                        CollectionStateExtra::None => {
-                                            // Nothing to do
-                                        }
-                                    }
+                    let observation_replica = replica_id.or(status_update.replica_id);
+                    // Native observations can race a committed drop or replica removal.
+                    // Ignore those rather than resurrecting status or hydration metadata.
+                    if self.replica_owned
+                        && !self.accepts_observation(status_update.id, observation_replica)
+                    {
+                        continue;
+                    }
+                    if let Some(collection) = self.collections.get_mut(&status_update.id) {
+                        if let Some(hydrated) = collection.extra_state.hydrated_on_mut() {
+                            // A health stall does not undo hydration. A new
+                            // attempt's Starting status must establish it anew.
+                            if status_update.status == Status::Running {
+                                hydrated.insert(
+                                    observation_replica
+                                        .expect("replica id should be present for status running"),
+                                );
+                            } else if self.replica_owned && status_update.status != Status::Stalled
+                            {
+                                if let Some(replica) = observation_replica {
+                                    hydrated.remove(&replica);
+                                } else {
+                                    hydrated.clear();
                                 }
-                                None => (), // no collection, let's say that's fine
-                                            // here
+                            } else if !self.replica_owned && status_update.status == Status::Paused
+                            {
+                                hydrated.clear();
                             }
                         }
-                        Status::Paused => {
-                            let collection = self.collections.get_mut(&status_update.id);
-                            match collection {
-                                Some(collection) => {
-                                    match collection.extra_state {
-                                        CollectionStateExtra::Ingestion(
-                                            ref mut ingestion_state,
-                                        ) => {
-                                            // TODO: Paused gets send when there
-                                            // are no active replicas. We should
-                                            // change this to send a targeted
-                                            // Pause for each replica, and do
-                                            // more fine-grained hydration
-                                            // tracking here.
-                                            tracing::debug!(ingestion_id = %status_update.id, "ingestion is now paused");
-                                            ingestion_state.hydrated_on.clear();
-                                        }
-                                        CollectionStateExtra::Export(_) => {
-                                            // TODO(sinks): track sink hydration?
-                                        }
-                                        CollectionStateExtra::None => {
-                                            // Nothing to do
-                                        }
-                                    }
-                                }
-                                None => (), // no collection, let's say that's fine
-                                            // here
-                            }
-                        }
-                        _ => (),
                     }
 
                     // Set replica_id in the status update if available
@@ -2439,6 +2402,18 @@ impl StorageController for Controller {
                         status_update.replica_id = Some(id);
                     }
                     status_updates.push(status_update);
+                }
+                (Some(replica), StorageResponse::QueryReady) if self.replica_owned => {
+                    // A connection's fresh snapshot, not a cached status from
+                    // its predecessor, must establish hydration after recovery.
+                    for collection in self.collections.values_mut() {
+                        if let Some(hydrated) = collection.extra_state.hydrated_on_mut() {
+                            hydrated.remove(&replica);
+                        }
+                    }
+                }
+                (_, StorageResponse::QueryReady) => {
+                    panic!("query response on lifecycle connection")
                 }
                 (_replica_id, StorageResponse::StagedBatches(batches)) => {
                     for (ingestion_id, batches) in batches {
@@ -2449,6 +2424,9 @@ impl StorageController for Controller {
                                 if let Some(instance) = self.instances.get_mut(&pending.cluster_id)
                                 {
                                     instance
+                                        .legacy
+                                        .as_mut()
+                                        .expect("legacy execution required")
                                         .send(StorageCommand::CancelOneshotIngestion(ingestion_id));
                                 }
                                 // Send the results down our channel.
@@ -2466,15 +2444,6 @@ impl StorageController for Controller {
 
         self.record_status_updates(status_updates);
 
-        // Process dropped tables in a single batch.
-        let mut dropped_table_ids = Vec::new();
-        while let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
-            dropped_table_ids.push(dropped_id);
-        }
-        if !dropped_table_ids.is_empty() {
-            self.drop_sources(storage_metadata, dropped_table_ids)?;
-        }
-
         if updated_frontiers.is_empty() {
             Ok(None)
         } else {
@@ -2482,22 +2451,6 @@ impl StorageController for Controller {
                 updated_frontiers.into_iter().collect(),
             )))
         }
-    }
-
-    async fn inspect_persist_state(
-        &self,
-        id: GlobalId,
-    ) -> Result<serde_json::Value, anyhow::Error> {
-        let collection = &self.storage_collections.collection_metadata(id)?;
-        let client = self
-            .persist
-            .open(collection.persist_location.clone())
-            .await?;
-        let shard_state = client
-            .inspect_shard::<Timestamp>(&collection.data_shard)
-            .await?;
-        let json_state = serde_json::to_value(shard_state)?;
-        Ok(json_state)
     }
 
     fn append_introspection_updates(
@@ -2543,7 +2496,9 @@ impl StorageController for Controller {
         type_: IntrospectionType,
     ) -> mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)> {
         let id = self.introspection_ids[&type_];
-        self.collection_manager.differential_write_sender(id)
+        self.collection_manager
+            .differential_write_sender(id)
+            .expect("introspection collection is registered")
     }
 
     async fn real_time_recent_timestamp(
@@ -2668,14 +2623,12 @@ impl StorageController for Controller {
             build_info: _,
             now: _,
             read_only,
+            replica_owned,
             collections,
             dropped_objects,
-            persist_table_worker: _,
             txns_read: _,
             txns_metrics: _,
             stashed_responses,
-            pending_table_handle_drops_tx: _,
-            pending_table_handle_drops_rx: _,
             pending_oneshot_ingestions,
             collection_manager: _,
             introspection_ids,
@@ -2739,6 +2692,7 @@ impl StorageController for Controller {
 
         Ok(serde_json::json!({
             "read_only": read_only,
+            "replica_owned": replica_owned,
             "collections": collections,
             "dropped_objects": dropped_objects,
             "stashed_responses": stashed_responses,
@@ -2757,21 +2711,6 @@ impl StorageController for Controller {
     }
 }
 
-/// Seed [`StorageTxn`] with any state required to instantiate a
-/// [`StorageController`].
-///
-/// This cannot be a member of [`StorageController`] because it cannot take a
-/// `self` parameter.
-///
-pub fn prepare_initialization(txn: &mut dyn StorageTxn) -> Result<(), StorageError> {
-    if txn.get_txn_wal_shard().is_none() {
-        let txns_id = ShardId::new();
-        txn.write_txn_wal_shard(txns_id)?;
-    }
-
-    Ok(())
-}
-
 impl Controller
 where
     Self: StorageController,
@@ -2781,8 +2720,12 @@ where
     /// Note that when creating a new storage controller, you must also
     /// reconcile it with the previous state.
     ///
+    /// `replica_owned` selects passive inventory instead of legacy execution.
+    /// The caller must enable it only for protected, writable native environments.
+    /// Read-only prewarming uses legacy execution.
+    ///
     /// # Panics
-    /// If this function is called before [`prepare_initialization`].
+    /// If `txn` is missing the durably initialized transaction WAL identity.
     pub async fn new(
         build_info: &'static BuildInfo,
         persist_location: PersistLocation,
@@ -2791,12 +2734,17 @@ where
         wallclock_lag: WallclockLagFn<Timestamp>,
         txns_metrics: Arc<TxnMetrics>,
         read_only: bool,
+        replica_owned: bool,
         metrics_registry: &MetricsRegistry,
         controller_metrics: ControllerMetrics,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn,
         storage_collections: Arc<dyn StorageCollections + Send + Sync>,
     ) -> Self {
+        assert!(
+            !replica_owned || !read_only,
+            "read-only prewarming requires legacy execution"
+        );
         let txns_client = persist_clients
             .open(persist_location.clone())
             .await
@@ -2813,38 +2761,8 @@ where
         // state.
         let txns_id = txn
             .get_txn_wal_shard()
-            .expect("must call prepare initialization before creating storage controller");
+            .expect("catalog bootstrap must initialize the transaction WAL identity");
 
-        let persist_table_worker = if read_only {
-            let txns_write = txns_client
-                .open_writer(
-                    txns_id,
-                    Arc::new(TxnsCodecRow::desc()),
-                    Arc::new(UnitSchema),
-                    Diagnostics {
-                        shard_name: "txns".to_owned(),
-                        handle_purpose: "follow txns upper".to_owned(),
-                    },
-                )
-                .await
-                .expect("txns schema shouldn't change");
-            persist_handles::PersistTableWriteWorker::new_read_only_mode(
-                txns_write,
-                txns_client.clone(),
-            )
-        } else {
-            let mut txns = TxnsHandle::open(
-                Timestamp::MIN,
-                txns_client.clone(),
-                txns_client.dyncfgs().clone(),
-                Arc::clone(&txns_metrics),
-                txns_id,
-                Opaque::encode(&PersistEpoch::default()),
-            )
-            .await;
-            txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns, txns_client.clone())
-        };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
@@ -2854,9 +2772,6 @@ where
 
         let (statistics_interval_sender, _) =
             channel(mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT);
-
-        let (pending_table_handle_drops_tx, pending_table_handle_drops_rx) =
-            tokio::sync::mpsc::unbounded_channel();
 
         let mut maintenance_ticker = tokio::time::interval(Duration::from_secs(1));
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -2871,22 +2786,17 @@ where
             build_info,
             collections: BTreeMap::default(),
             dropped_objects: Default::default(),
-            persist_table_worker,
             txns_read,
             txns_metrics,
             stashed_responses: vec![],
-            pending_table_handle_drops_tx,
-            pending_table_handle_drops_rx,
             pending_oneshot_ingestions: BTreeMap::default(),
             collection_manager,
             introspection_ids,
             introspection_tokens,
             now,
             read_only,
-            source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
-                source_statistics: BTreeMap::new(),
-                webhook_statistics: BTreeMap::new(),
-            })),
+            replica_owned,
+            source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             statistics_interval_sender,
             instances: BTreeMap::new(),
@@ -2929,6 +2839,9 @@ where
                         &mut ingestion.derived_since,
                         &mut ingestion.hold_policy,
                     ),
+                    CollectionStateExtra::Native { .. } => {
+                        unreachable!("native collections have no legacy capabilities")
+                    }
                     CollectionStateExtra::None => {
                         unreachable!("set_hold_policies is only called for ingestions");
                     }
@@ -2956,6 +2869,7 @@ where
 
     #[instrument(level = "debug", fields(updates))]
     fn update_write_frontier(&mut self, id: GlobalId, new_upper: &Antichain<Timestamp>) {
+        assert!(!self.replica_owned, "native progress is read from Persist");
         let mut read_capability_changes = BTreeMap::default();
 
         if let Some(collection) = self.collections.get_mut(&id) {
@@ -2965,6 +2879,9 @@ where
                     &mut ingestion.derived_since,
                     &ingestion.hold_policy,
                 ),
+                CollectionStateExtra::Native { .. } => {
+                    unreachable!("native collections have no legacy capabilities")
+                }
                 CollectionStateExtra::None => {
                     if matches!(collection.data_source, DataSource::Progress) {
                         // We do get these, but can't do anything with it!
@@ -3045,6 +2962,9 @@ where
                         changes.extend(update.drain());
                         *frontier = ingestion.read_capabilities.frontier().to_owned();
                     }
+                    CollectionStateExtra::Native { .. } => {
+                        unreachable!("native collections have no legacy capabilities")
+                    }
                     CollectionStateExtra::None => {
                         // WIP: See if this ever panics in ci.
                         soft_panic_or_log!(
@@ -3090,6 +3010,9 @@ where
                         ingestion.dependency_read_holds.as_mut_slice()
                     }
                     CollectionStateExtra::Export(export) => export.read_holds.as_mut_slice(),
+                    CollectionStateExtra::Native { .. } => {
+                        unreachable!("native collections have no legacy capabilities")
+                    }
                     CollectionStateExtra::None => {
                         soft_panic_or_log!(
                             "trying to downgrade read holds for collection which is not an \
@@ -3107,7 +3030,11 @@ where
 
                 // Send AllowCompaction command directly to the instance
                 if let Some(instance) = self.instances.get_mut(&cluster_id) {
-                    instance.send(StorageCommand::AllowCompaction(key, frontier.clone()));
+                    instance
+                        .legacy
+                        .as_mut()
+                        .expect("legacy execution required")
+                        .send(StorageCommand::AllowCompaction(key, frontier.clone()));
                 } else {
                     soft_panic_or_log!(
                         "missing instance client for cluster {cluster_id} while we still have outstanding AllowCompaction command {frontier:?} for {key}"
@@ -3117,13 +3044,14 @@ where
         }
     }
 
-    /// Validate that a collection exists for all identifiers, and error if any do not.
+    /// Validate that this controller owns execution state for all identifiers.
+    /// StorageCollections read accounting may be retired before execution cleanup.
     fn validate_collection_ids(
         &self,
         ids: impl Iterator<Item = GlobalId>,
     ) -> Result<(), StorageError> {
         for id in ids {
-            self.storage_collections.check_exists(id)?;
+            self.collection(id)?;
         }
         Ok(())
     }
@@ -3131,7 +3059,9 @@ where
     /// Validate that a collection exists for all identifiers, and error if any do not.
     fn validate_export_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), StorageError> {
         for id in ids {
-            self.export(id)?;
+            if !self.is_sink(id) {
+                return Err(StorageError::IdentifierMissing(id));
+            }
         }
         Ok(())
     }
@@ -3288,13 +3218,12 @@ where
         self.source_statistics
             .lock()
             .expect("poisoned")
-            .source_statistics
             // collections should also contain subsources.
             .retain(|(k, _replica_id), _| self.storage_collections.check_exists(*k).is_ok());
         self.sink_statistics
             .lock()
             .expect("poisoned")
-            .retain(|(k, _replica_id), _| self.export(*k).is_ok());
+            .retain(|(k, _replica_id), _| self.is_sink(*k));
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.
@@ -3417,7 +3346,7 @@ where
 
         for update in updates {
             let id = update.id;
-            if self.export(id).is_ok() {
+            if self.is_sink(id) {
                 sink_status_updates.push(update);
             } else if self.storage_collections.check_exists(id).is_ok() {
                 source_status_updates.push(update);
@@ -3434,6 +3363,89 @@ where
         );
     }
 
+    fn is_sink(&self, id: GlobalId) -> bool {
+        self.collections
+            .get(&id)
+            .is_some_and(|c| matches!(c.data_source, DataSource::Sink { .. }))
+    }
+
+    /// Source placement follows the committed definition and current membership.
+    /// Sink writer eligibility is incarnation-based and is not inferred here.
+    fn source_replicas(&self, id: GlobalId) -> BTreeSet<ReplicaId> {
+        let Some(collection) = self.collections.get(&id) else {
+            return BTreeSet::new();
+        };
+        let Some(instance) = collection
+            .extra_state
+            .instance_id()
+            .and_then(|id| self.instances.get(&id))
+        else {
+            return BTreeSet::new();
+        };
+        if let Some(legacy) = &instance.legacy {
+            return legacy.get_active_replicas_for_object(&id);
+        }
+        let ingestion = match &collection.data_source {
+            DataSource::Ingestion(desc) => Some(desc),
+            DataSource::IngestionExport { ingestion_id, .. } => self
+                .collections
+                .get(ingestion_id)
+                .and_then(|c| match &c.data_source {
+                    DataSource::Ingestion(desc) => Some(desc),
+                    _ => None,
+                }),
+            _ => None,
+        };
+        let Some(ingestion) = ingestion else {
+            return BTreeSet::new();
+        };
+        let replicas = instance.replica_ids();
+        if ingestion.desc.connection.prefers_single_replica() {
+            replicas.take(1).collect()
+        } else {
+            replicas.collect()
+        }
+    }
+
+    fn accepts_observation(&self, id: GlobalId, replica: Option<ReplicaId>) -> bool {
+        let Some(collection) = self.collections.get(&id) else {
+            return false;
+        };
+        let Some(instance) = collection
+            .extra_state
+            .instance_id()
+            .and_then(|id| self.instances.get(&id))
+        else {
+            return false;
+        };
+        match replica {
+            Some(replica) => instance.replica_ids().any(|id| id == replica),
+            None => instance.replica_ids().next().is_none(),
+        }
+    }
+
+    /// Zero-replica status comes from inventory, never an installation command history.
+    fn queue_native_paused_statuses(&mut self, ids: impl IntoIterator<Item = GlobalId>) {
+        let now = mz_ore::now::to_datetime((self.now)());
+        for id in ids {
+            if !self.accepts_observation(id, None) {
+                continue;
+            }
+            let collection = &self.collections[&id];
+            let object_type = match &collection.data_source {
+                DataSource::Ingestion(_) | DataSource::IngestionExport { .. } => "source",
+                DataSource::Sink { .. } => "sink",
+                _ => continue,
+            };
+            let mut update = StatusUpdate::new(id, now, Status::Paused);
+            update.hints.insert(format!(
+                "There is currently no replica running this {object_type}"
+            ));
+            self.stashed_responses
+                .push((None, StorageResponse::StatusUpdate(update)));
+        }
+    }
+
     fn collection(&self, id: GlobalId) -> Result<&CollectionState, StorageError> {
         self.collections
             .get(&id)
@@ -3443,6 +3455,7 @@ where
     /// Runs the identified ingestion using the current definition of the
     /// ingestion in-memory.
     fn run_ingestion(&mut self, id: GlobalId) -> Result<(), StorageError> {
+        assert!(!self.replica_owned, "native execution is replica-owned");
         tracing::info!(%id, "starting ingestion");
 
         let collection = self.collection(id)?;
@@ -3480,6 +3493,9 @@ where
         };
 
         let storage_instance_id = description.instance_id;
+        let remap_compaction_bound = self
+            .storage_collections
+            .compaction_bound(description.remap_collection_id)?;
         // Fetch the client for this ingestion's instance.
         let instance = self
             .instances
@@ -3489,8 +3505,16 @@ where
                 ingestion_id: id,
             })?;
 
-        let augmented_ingestion = Box::new(RunIngestionCommand { id, description });
-        instance.send(StorageCommand::RunIngestion(augmented_ingestion));
+        let augmented_ingestion = Box::new(RunIngestionCommand {
+            id,
+            description,
+            remap_compaction_bound,
+        });
+        instance
+            .legacy
+            .as_mut()
+            .expect("legacy execution required")
+            .send(StorageCommand::RunIngestion(augmented_ingestion));
 
         Ok(())
     }
@@ -3498,6 +3522,7 @@ where
     /// Runs the identified export using the current definition of the export
     /// that we have in memory.
     fn run_export(&mut self, id: GlobalId) -> Result<(), StorageError> {
+        assert!(!self.replica_owned, "native execution is replica-owned");
         let DataSource::Sink { desc: description } = &self.collections[&id].data_source else {
             return Err(StorageError::IdentifierMissing(id));
         };
@@ -3512,7 +3537,14 @@ where
         // reading it; otherwise assume we may have to replay from the beginning.
         let export_state = self.storage_collections.collection_frontiers(id)?;
         let mut as_of = description.sink.as_of.clone();
-        as_of.join_assign(&export_state.implied_capability);
+        // Policy permission alone does not prove recovery can skip history.
+        // The descriptor carries the recovery frontier, while actual readability
+        // also accounts for leases opened against a stale read-only snapshot.
+        as_of.join_assign(&export_state.read_capabilities);
+        let input_state = self
+            .storage_collections
+            .collection_frontiers(description.sink.from)?;
+        as_of.join_assign(&input_state.read_capabilities);
         let with_snapshot = description.sink.with_snapshot
             && !PartialOrder::less_than(&as_of, &export_state.write_frontier);
 
@@ -3551,7 +3583,11 @@ where
                 export_id: id,
             })?;
 
-        instance.send(StorageCommand::RunSink(Box::new(cmd)));
+        instance
+            .legacy
+            .as_mut()
+            .expect("legacy execution required")
+            .send(StorageCommand::RunSink(Box::new(cmd)));
 
         Ok(())
     }
@@ -3566,17 +3602,18 @@ where
 
         for collection_frontiers in self.storage_collections.active_collection_frontiers() {
             let id = collection_frontiers.id;
+            // Native read protection can retain physical history beyond the
+            // object's controller lifetime, but not its public frontier row.
+            if self.replica_owned && !self.collections.contains_key(&id) {
+                continue;
+            }
             let since = collection_frontiers.read_capabilities;
             let upper = collection_frontiers.write_frontier;
 
             let instance = self
                 .collections
                 .get(&id)
-                .and_then(|collection_state| match &collection_state.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
-                    CollectionStateExtra::Export(export) => Some(export.cluster_id()),
-                    CollectionStateExtra::None => None,
-                })
+                .and_then(|collection_state| collection_state.extra_state.instance_id())
                 .and_then(|i| self.instances.get(&i));
 
             if let Some(instance) = instance {
@@ -3710,11 +3747,7 @@ where
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
                 let bucket = lag.map_seconds(|secs| secs.next_power_of_two());
 
-                let instance_id = match &collection.extra_state {
-                    CollectionStateExtra::Ingestion(i) => Some(i.instance_id),
-                    CollectionStateExtra::Export(e) => Some(e.cluster_id()),
-                    CollectionStateExtra::None => None,
-                };
+                let instance_id = collection.extra_state.instance_id();
                 let workload_class = instance_id
                     .and_then(|id| self.instances.get(&id))
                     .and_then(|i| i.workload_class.clone());
@@ -3824,7 +3857,11 @@ where
         self.refresh_wallclock_lag();
 
         // Perform instance maintenance work.
-        for instance in self.instances.values_mut() {
+        for instance in self
+            .instances
+            .values_mut()
+            .filter_map(|i| i.legacy.as_mut())
+        {
             instance.refresh_state_metrics();
         }
     }
@@ -3985,7 +4022,39 @@ impl CollectionState {
 enum CollectionStateExtra {
     Ingestion(IngestionState),
     Export(ExportState),
+    /// Observation state only, without installation holds or capability policy.
+    Native {
+        instance_id: StorageInstanceId,
+        hydrated_on: BTreeSet<ReplicaId>,
+    },
     None,
+}
+
+impl CollectionStateExtra {
+    fn instance_id(&self) -> Option<StorageInstanceId> {
+        match self {
+            Self::Ingestion(i) => Some(i.instance_id),
+            Self::Export(e) => Some(e.cluster_id()),
+            Self::Native { instance_id, .. } => Some(*instance_id),
+            Self::None => None,
+        }
+    }
+
+    fn hydrated_on(&self) -> Option<&BTreeSet<ReplicaId>> {
+        match self {
+            Self::Ingestion(i) => Some(&i.hydrated_on),
+            Self::Native { hydrated_on, .. } => Some(hydrated_on),
+            _ => None,
+        }
+    }
+
+    fn hydrated_on_mut(&mut self) -> Option<&mut BTreeSet<ReplicaId>> {
+        match self {
+            Self::Ingestion(i) => Some(&mut i.hydrated_on),
+            Self::Native { hydrated_on, .. } => Some(hydrated_on),
+            _ => None,
+        }
+    }
 }
 
 /// State maintained about ingestions and ingestion exports
@@ -4141,4 +4210,535 @@ fn swap_updates(
         update.extend(replace_with.iter().map(|time| (*time, -1)));
     }
     update
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
+    use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
+    use mz_storage_client::storage_collections::StorageCollectionsImpl;
+    use mz_storage_types::connections::{KafkaConnection, Tunnel};
+    use mz_storage_types::sinks::{
+        KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
+        KafkaSinkFormatType, SinkEnvelope,
+    };
+
+    use super::*;
+
+    struct TestTxn(ShardId);
+
+    #[async_trait]
+    impl StorageTxn for TestTxn {
+        fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
+            BTreeMap::new()
+        }
+        fn insert_collection_metadata(
+            &mut self,
+            _: BTreeMap<GlobalId, ShardId>,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        fn delete_collection_metadata(
+            &mut self,
+            _: BTreeSet<GlobalId>,
+        ) -> Vec<(GlobalId, ShardId)> {
+            unimplemented!()
+        }
+        fn get_unfinalized_shards(&self) -> BTreeSet<ShardId> {
+            BTreeSet::new()
+        }
+        fn insert_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        fn remove_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) {
+            unimplemented!()
+        }
+        fn get_txn_wal_shard(&self) -> Option<ShardId> {
+            Some(self.0)
+        }
+        fn write_txn_wal_shard(&mut self, _: ShardId) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+    }
+
+    fn frontier(ts: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(ts.into())
+    }
+
+    mod native;
+
+    async fn export_test_controller() -> (Controller, Arc<StorageCollectionsImpl>, PersistClient) {
+        test_controller(false, false).await
+    }
+
+    async fn test_controller(
+        replica_owned: bool,
+        read_only: bool,
+    ) -> (Controller, Arc<StorageCollectionsImpl>, PersistClient) {
+        let registry = MetricsRegistry::new();
+        let location = PersistLocation {
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
+        };
+        let mut config = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        config.critical_downgrade_interval = Duration::ZERO;
+        let cache = Arc::new(PersistClientCache::new(config, &registry, |_, _| {
+            PubSubClientConnection::noop()
+        }));
+        let persist = cache.open(location.clone()).await.unwrap();
+        // No replica connects and the sink has no secrets, so this reader performs no file I/O.
+        let secrets_reader = SecretsReaderCliArgs {
+            secrets_reader: SecretsControllerKind::LocalFile,
+            secrets_reader_local_file_dir: Some("/dev/null".into()),
+            secrets_reader_kubernetes_context: None,
+            secrets_reader_aws_prefix: None,
+            secrets_reader_name_prefix: None,
+        }
+        .load()
+        .await
+        .unwrap();
+        let context = ConnectionContext::for_tests(secrets_reader);
+        let txns_metrics = Arc::new(TxnMetrics::new(&registry));
+        let txn = TestTxn(ShardId::new());
+        let collections = Arc::new(
+            StorageCollectionsImpl::new(
+                location.clone(),
+                Arc::clone(&cache),
+                &registry,
+                SYSTEM_TIME.clone(),
+                Arc::clone(&txns_metrics),
+                std::num::NonZeroI64::new(1).unwrap(),
+                read_only,
+                true,
+                context.clone(),
+                &txn,
+            )
+            .await,
+        );
+        let controller = Controller::new(
+            &DUMMY_BUILD_INFO,
+            location,
+            cache,
+            SYSTEM_TIME.clone(),
+            WallclockLagFn::new(SYSTEM_TIME.clone()),
+            txns_metrics,
+            read_only,
+            replica_owned,
+            &registry,
+            ControllerMetrics::new(&registry),
+            context,
+            &txn,
+            Arc::<StorageCollectionsImpl>::clone(&collections),
+        )
+        .await;
+        (controller, collections, persist)
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn drop_tables_after_read_state_retired() {
+        let (mut controller, collections, _) = export_test_controller().await;
+        let table = GlobalId::User(1);
+        let source = GlobalId::User(2);
+        let unknown = GlobalId::User(99);
+        let mut descriptions = vec![
+            (
+                table,
+                CollectionDescription::for_table(RelationDesc::empty()),
+            ),
+            (
+                source,
+                CollectionDescription::for_other(RelationDesc::empty(), None),
+            ),
+        ];
+        for (id, typ, desc) in [
+            (
+                GlobalId::System(1),
+                IntrospectionType::ShardMapping,
+                RelationDesc::builder()
+                    .with_column("object_id", mz_repr::SqlScalarType::String.nullable(false))
+                    .with_column("shard_id", mz_repr::SqlScalarType::String.nullable(false))
+                    .finish(),
+            ),
+            (
+                GlobalId::System(2),
+                IntrospectionType::SourceStatusHistory,
+                MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
+            ),
+            (
+                GlobalId::System(3),
+                IntrospectionType::SinkStatusHistory,
+                MZ_SINK_STATUS_HISTORY_DESC.clone(),
+            ),
+        ] {
+            let mut description = CollectionDescription::for_other(desc, None);
+            description.data_source = DataSource::Introspection(typ);
+            descriptions.push((id, description));
+        }
+        let mut metadata = StorageMetadata {
+            collection_metadata: descriptions
+                .iter()
+                .map(|(id, _)| (*id, ShardId::new()))
+                .collect(),
+            compaction_bounds: descriptions
+                .iter()
+                .map(|(id, _)| (*id, frontier(0)))
+                .collect(),
+            ..Default::default()
+        };
+        controller
+            .create_collections_for_bootstrap(&metadata, None, descriptions, &BTreeSet::new())
+            .await
+            .unwrap();
+
+        // Committed catalog removal and table forgetting can retire read accounting
+        // before the controller is asked to clean up execution state.
+        for id in [table, source] {
+            metadata.collection_metadata.remove(&id);
+            metadata.compaction_bounds.remove(&id);
+        }
+        collections.drop_collections_unvalidated(&metadata, vec![table, source]);
+        for retired in [table, source] {
+            assert!(matches!(
+                collections.check_exists(retired),
+                Err(StorageError::IdentifierMissing(id)) if id == retired
+            ));
+            assert!(controller.collection(retired).is_ok());
+        }
+        assert!(matches!(
+            controller.collection(table).unwrap().data_source,
+            DataSource::Table
+        ));
+
+        // Validate the whole batch before performing any execution cleanup.
+        assert!(matches!(
+            controller.drop_tables(&metadata, vec![table, unknown]),
+            Err(StorageError::IdentifierMissing(id)) if id == unknown
+        ));
+        assert!(matches!(
+            controller.drop_sources(&metadata, vec![source, unknown]),
+            Err(StorageError::IdentifierMissing(id)) if id == unknown
+        ));
+        assert!(controller.collection(table).is_ok());
+        assert!(controller.collection(source).is_ok());
+
+        controller.drop_tables(&metadata, vec![table]).unwrap();
+        assert!(matches!(
+            controller.collection(table),
+            Err(StorageError::IdentifierMissing(id)) if id == table
+        ));
+        controller.drop_sources(&metadata, vec![source]).unwrap();
+        assert!(matches!(
+            controller.collection(source),
+            Err(StorageError::IdentifierMissing(id)) if id == source
+        ));
+        controller.process().unwrap();
+    }
+
+    fn export_description(from: GlobalId) -> ExportDescription {
+        ExportDescription {
+            sink: StorageSinkDesc {
+                from,
+                from_desc: RelationDesc::empty(),
+                connection: StorageSinkConnection::Kafka(KafkaSinkConnection {
+                    connection_id: mz_repr::CatalogItemId::System(1),
+                    connection: KafkaConnection {
+                        brokers: Default::default(),
+                        default_tunnel: Tunnel::Direct,
+                        progress_topic: Default::default(),
+                        progress_topic_options: Default::default(),
+                        options: Default::default(),
+                        tls: Default::default(),
+                        sasl: Default::default(),
+                    },
+                    format: KafkaSinkFormat {
+                        key_format: None,
+                        value_format: KafkaSinkFormatType::Text,
+                    },
+                    relation_key_indices: None,
+                    key_desc_and_indices: None,
+                    headers_index: None,
+                    value_desc: RelationDesc::empty(),
+                    partition_by: Default::default(),
+                    topic: Default::default(),
+                    topic_options: Default::default(),
+                    compression_type: KafkaSinkCompressionType::None,
+                    progress_group_id: KafkaIdStyle::Legacy,
+                    transactional_id: KafkaIdStyle::Legacy,
+                    topic_metadata_refresh_interval: Default::default(),
+                }),
+                with_snapshot: true,
+                version: 0,
+                envelope: SinkEnvelope::Upsert,
+                as_of: frontier(5),
+                from_storage_metadata: (),
+                to_storage_metadata: (),
+                commit_interval: Default::default(),
+            },
+            instance_id: StorageInstanceId::system(1).unwrap(),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn alter_export_uses_durable_progress_before_frontier_report() {
+        let (mut controller, collections, persist) = export_test_controller().await;
+        let input = GlobalId::User(1);
+        let sink = GlobalId::User(2);
+        let old_input = GlobalId::User(3);
+        let description = export_description(input);
+        let instance = description.instance_id;
+        let mut previous = export_description(old_input);
+        previous.sink.as_of = frontier(0);
+        let data_source = DataSource::Sink { desc: previous };
+        let metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([
+                (input, ShardId::new()),
+                (sink, ShardId::new()),
+                (old_input, ShardId::new()),
+            ]),
+            compaction_bounds: BTreeMap::from([
+                (input, frontier(5)),
+                (sink, frontier(0)),
+                (old_input, frontier(0)),
+            ]),
+            ..Default::default()
+        };
+        let mut sink_collection = CollectionDescription::for_other(RelationDesc::empty(), None);
+        sink_collection.data_source = data_source.clone();
+        collections
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                vec![
+                    (
+                        input,
+                        CollectionDescription::for_other(RelationDesc::empty(), Some(frontier(5))),
+                    ),
+                    (sink, sink_collection),
+                    (
+                        old_input,
+                        CollectionDescription::for_other(RelationDesc::empty(), Some(frontier(0))),
+                    ),
+                ],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        let [input_hold, self_hold] = collections
+            .acquire_read_holds(vec![old_input, sink])
+            .unwrap()
+            .try_into()
+            .expect("two holds");
+        controller.create_instance(instance, None);
+        controller.collections.insert(
+            sink,
+            CollectionState::new(
+                data_source,
+                collections.collection_metadata(sink).unwrap(),
+                CollectionStateExtra::Export(ExportState::new(
+                    instance,
+                    input_hold,
+                    self_hold,
+                    frontier(0),
+                    ReadPolicy::step_back(),
+                )),
+                controller.metrics.wallclock_lag_metrics(sink, None),
+            ),
+        );
+        let mut writer = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                metadata.collection_metadata[&sink],
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        // Equality is not sufficient: the input's snapshot must be complete in
+        // the sink before switching inputs. No native frontier report is delivered.
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(0),
+                frontier(5),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            controller.alter_export(sink, description.clone()).await,
+            Err(StorageError::ReadBeforeSince(id)) if id == input
+        ));
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(5),
+                frontier(6),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        controller.alter_export(sink, description).await.unwrap();
+        let command = controller.instances[&instance]
+            .legacy
+            .as_ref()
+            .unwrap()
+            .get_export_description(&sink)
+            .unwrap();
+        assert_eq!(command.as_of, frontier(5));
+        assert!(!command.with_snapshot);
+        assert_eq!(controller.export(sink).unwrap().write_frontier, frontier(0));
+        // Reports already in flight may precede the new input's readability.
+        controller.update_write_frontier(sink, &frontier(3));
+        assert_eq!(
+            controller.export(sink).unwrap().input_hold().since(),
+            &frontier(5)
+        );
+        controller.update_write_frontier(sink, &frontier(6));
+        assert_eq!(
+            controller.export(sink).unwrap().input_hold().since(),
+            &frontier(5)
+        );
+        writer
+            .compare_and_append(
+                Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                frontier(6),
+                frontier(7),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        controller.update_write_frontier(sink, &frontier(7));
+        for hold in &controller.export(sink).unwrap().read_holds {
+            assert_eq!(hold.since(), &frontier(6));
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn run_export_uses_held_readability() {
+        let (mut controller, collections, persist) = export_test_controller().await;
+        let input = GlobalId::User(1);
+        let sink = GlobalId::User(2);
+        let description = export_description(input);
+        let instance = description.instance_id;
+        let data_source = DataSource::Sink { desc: description };
+        let metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([(input, ShardId::new()), (sink, ShardId::new())]),
+            compaction_bounds: BTreeMap::from([(input, frontier(5)), (sink, frontier(5))]),
+            ..Default::default()
+        };
+        let mut sink_collection = CollectionDescription::for_other(RelationDesc::empty(), None);
+        sink_collection.data_source = data_source.clone();
+        collections
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                vec![
+                    (
+                        input,
+                        CollectionDescription::for_other(RelationDesc::empty(), Some(frontier(5))),
+                    ),
+                    (sink, sink_collection),
+                ],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        let [read_hold, self_hold] = collections
+            .acquire_read_holds(vec![input, sink])
+            .unwrap()
+            .try_into()
+            .expect("two holds");
+        collections
+            .apply_compaction_bounds(BTreeMap::from([
+                (input, frontier(20)),
+                (sink, frontier(20)),
+            ]))
+            .unwrap();
+        collections.set_read_policies(vec![
+            (input, ReadPolicy::ValidFrom(frontier(20))),
+            (sink, ReadPolicy::ValidFrom(frontier(20))),
+        ]);
+        for id in [input, sink] {
+            let state = collections.collection_frontiers(id).unwrap();
+            assert_eq!(state.implied_capability, frontier(20));
+            assert_eq!(state.read_capabilities, frontier(5));
+            assert_eq!(
+                collections.compaction_bound(id).unwrap(),
+                Some(frontier(20))
+            );
+        }
+        controller.create_instance(instance, None);
+        controller.collections.insert(
+            sink,
+            CollectionState::new(
+                data_source,
+                collections.collection_metadata(sink).unwrap(),
+                CollectionStateExtra::Export(ExportState::new(
+                    instance,
+                    read_hold,
+                    self_hold,
+                    frontier(0),
+                    ReadPolicy::step_back(),
+                )),
+                controller.metrics.wallclock_lag_metrics(sink, None),
+            ),
+        );
+        let mut writer = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                metadata.collection_metadata[&sink],
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        for (upper, since, snapshot) in [(0, 5, true), (5, 5, true), (6, 5, false), (21, 20, false)]
+        {
+            if writer.upper() != &frontier(upper) {
+                writer
+                    .compare_and_append(
+                        Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),
+                        writer.upper().clone(),
+                        frontier(upper),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            controller.update_write_frontier(sink, &frontier(upper));
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let state = collections.collection_frontiers(sink).unwrap();
+                    if state.write_frontier == frontier(upper)
+                        && state.read_capabilities == frontier(since)
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            controller.run_export(sink).unwrap();
+            let command = controller.instances[&instance]
+                .legacy
+                .as_ref()
+                .unwrap()
+                .get_export_description(&sink)
+                .unwrap();
+            assert_eq!(command.as_of, frontier(since), "upper={upper}");
+            assert_eq!(command.with_snapshot, snapshot);
+            assert_eq!(
+                command.from_storage_metadata,
+                collections.collection_metadata(input).unwrap()
+            );
+            assert_eq!(
+                command.to_storage_metadata,
+                collections.collection_metadata(sink).unwrap()
+            );
+        }
+    }
 }

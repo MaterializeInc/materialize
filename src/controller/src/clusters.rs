@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::num::NonZero;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -23,7 +22,10 @@ use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
 use mz_compute_client::logging::LogVariant;
-use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
+pub use mz_controller_types::clusters::{
+    ClusterRole, ClusterStatus, ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig,
+    ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
+};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
     ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER,
@@ -32,16 +34,14 @@ use mz_controller_types::dyncfgs::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::{
-    CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
+    DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
-use mz_ore::cast::CastInto;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
-use mz_repr::adt::numeric::Numeric;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::time;
 use tracing::{error, info, warn};
 
@@ -58,337 +58,6 @@ pub struct ClusterConfig {
     /// this cluster is running (e.g., `production` or `staging`).
     pub workload_class: Option<String>,
 }
-
-/// The status of a cluster.
-pub type ClusterStatus = mz_orchestrator::ServiceStatus;
-
-/// Configures a cluster replica.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct ReplicaConfig {
-    /// The location of the replica.
-    pub location: ReplicaLocation,
-    /// Configuration for the compute half of the replica.
-    pub compute: ComputeReplicaConfig,
-}
-
-/// Configures the resource allocation for a cluster replica.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ReplicaAllocation {
-    /// The memory limit for each process in the replica.
-    pub memory_limit: Option<MemoryLimit>,
-    /// The CPU limit for each process in the replica.
-    pub cpu_limit: Option<CpuLimit>,
-    /// The CPU limit for each process in the replica.
-    pub cpu_request: Option<CpuLimit>,
-    /// The disk limit for each process in the replica.
-    pub disk_limit: Option<DiskLimit>,
-    /// The number of processes in the replica.
-    pub scale: NonZero<u16>,
-    /// The number of worker threads in the replica.
-    pub workers: NonZero<usize>,
-    /// The number of credits per hour that the replica consumes.
-    #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
-    pub credits_per_hour: Numeric,
-    /// Whether each process has exclusive access to its CPU cores.
-    #[serde(default)]
-    pub cpu_exclusive: bool,
-    /// Whether this size represents a modern "cc" size rather than a legacy
-    /// T-shirt size.
-    #[serde(default = "default_true")]
-    pub is_cc: bool,
-    /// The size *family* this size belongs to, e.g. the size `D.1-xsmall`
-    /// belongs to family `D` and the legacy t-shirt sizes belong to family
-    /// `legacy`. The family is the coarse axis and is *not* a prefix of the size
-    /// name in general. Used as the
-    /// `replica_size_family` attribute when evaluating replica-local scoped
-    /// feature flags (see the scoped feature flags design). When unset, the
-    /// family falls back to a value derived from [`Self::is_cc`] via
-    /// [`ReplicaAllocation::family`].
-    #[serde(default)]
-    pub family: Option<String>,
-    /// Whether instances of this type use swap as the spill-to-disk mechanism.
-    #[serde(default)]
-    pub swap_enabled: bool,
-    /// Whether instances of this type can be created.
-    #[serde(default)]
-    pub disabled: bool,
-    /// Additional node selectors.
-    #[serde(default)]
-    pub selectors: BTreeMap<String, String>,
-}
-
-impl ReplicaAllocation {
-    /// The name of the size family this allocation belongs to, used as the
-    /// `replica_size_family` attribute when evaluating replica-local scoped
-    /// feature flags.
-    ///
-    /// Falls back to a value derived from [`Self::is_cc`] when [`Self::family`]
-    /// is unset: `"cc"` for modern sizes and `"legacy"` for the legacy t-shirt
-    /// sizes. This keeps the legacy family targetable even before every size
-    /// gains an explicit `family` in the size configuration.
-    pub fn family(&self) -> &str {
-        match &self.family {
-            Some(family) => family.as_str(),
-            None if self.is_cc => "cc",
-            None => "legacy",
-        }
-    }
-}
-
-fn default_true() -> bool {
-    true
-}
-
-#[mz_ore::test]
-// We test this particularly because we deserialize values from strings.
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-fn test_replica_allocation_deserialization() {
-    use bytesize::ByteSize;
-    use mz_ore::{assert_err, assert_ok};
-
-    let data = r#"
-        {
-            "cpu_limit": 1.0,
-            "memory_limit": "10GiB",
-            "disk_limit": "100MiB",
-            "scale": 16,
-            "workers": 1,
-            "credits_per_hour": "16",
-            "swap_enabled": true,
-            "selectors": {
-                "key1": "value1",
-                "key2": "value2"
-            }
-        }"#;
-
-    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
-        .expect("deserialization from JSON succeeds for ReplicaAllocation");
-
-    assert_eq!(
-        replica_allocation,
-        ReplicaAllocation {
-            credits_per_hour: 16.into(),
-            disk_limit: Some(DiskLimit(ByteSize::mib(100))),
-            disabled: false,
-            memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
-            cpu_limit: Some(CpuLimit::from_millicpus(1000)),
-            cpu_request: None,
-            cpu_exclusive: false,
-            is_cc: true,
-            family: None,
-            swap_enabled: true,
-            scale: NonZero::new(16).unwrap(),
-            workers: NonZero::new(1).unwrap(),
-            selectors: BTreeMap::from([
-                ("key1".to_string(), "value1".to_string()),
-                ("key2".to_string(), "value2".to_string())
-            ]),
-        }
-    );
-
-    let data = r#"
-        {
-            "cpu_limit": 0,
-            "memory_limit": "0GiB",
-            "disk_limit": "0MiB",
-            "scale": 1,
-            "workers": 1,
-            "credits_per_hour": "0",
-            "cpu_exclusive": true,
-            "disabled": true
-        }"#;
-
-    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
-        .expect("deserialization from JSON succeeds for ReplicaAllocation");
-
-    assert_eq!(
-        replica_allocation,
-        ReplicaAllocation {
-            credits_per_hour: 0.into(),
-            disk_limit: Some(DiskLimit(ByteSize::mib(0))),
-            disabled: true,
-            memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
-            cpu_limit: Some(CpuLimit::from_millicpus(0)),
-            cpu_request: None,
-            cpu_exclusive: true,
-            is_cc: true,
-            family: None,
-            swap_enabled: false,
-            scale: NonZero::new(1).unwrap(),
-            workers: NonZero::new(1).unwrap(),
-            selectors: Default::default(),
-        }
-    );
-
-    // `scale` and `workers` must be non-zero.
-    let data = r#"{"scale": 0, "workers": 1, "credits_per_hour": "0"}"#;
-    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
-    let data = r#"{"scale": 1, "workers": 0, "credits_per_hour": "0"}"#;
-    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
-    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
-    assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
-}
-
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-fn test_replica_allocation_family() {
-    let parse = |json: &str| -> ReplicaAllocation {
-        serde_json::from_str(json).expect("deserialization from JSON succeeds")
-    };
-
-    // An explicit `family` is used verbatim.
-    assert_eq!(
-        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "family": "D"}"#).family(),
-        "D"
-    );
-    // Without an explicit `family`, modern (`is_cc`) sizes fall back to "cc".
-    // `is_cc` defaults to true.
-    assert_eq!(
-        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#).family(),
-        "cc"
-    );
-    // Without an explicit `family`, legacy (non-`is_cc`) sizes fall back to
-    // "legacy".
-    assert_eq!(
-        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "is_cc": false}"#).family(),
-        "legacy"
-    );
-    // An explicit family wins even for a legacy size.
-    assert_eq!(
-        parse(
-            r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "is_cc": false, "family": "legacy-special"}"#
-        )
-        .family(),
-        "legacy-special"
-    );
-}
-
-/// Configures the location of a cluster replica.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-pub enum ReplicaLocation {
-    /// An unmanaged replica.
-    Unmanaged(UnmanagedReplicaLocation),
-    /// A managed replica.
-    Managed(ManagedReplicaLocation),
-}
-
-impl ReplicaLocation {
-    /// Returns the number of processes specified by this replica location.
-    pub fn num_processes(&self) -> usize {
-        match self {
-            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                computectl_addrs, ..
-            }) => computectl_addrs.len(),
-            ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                allocation.scale.cast_into()
-            }
-        }
-    }
-
-    pub fn billed_as(&self) -> Option<&str> {
-        match self {
-            ReplicaLocation::Managed(ManagedReplicaLocation { billed_as, .. }) => {
-                billed_as.as_deref()
-            }
-            ReplicaLocation::Unmanaged(_) => None,
-        }
-    }
-
-    pub fn internal(&self) -> bool {
-        match self {
-            ReplicaLocation::Managed(ManagedReplicaLocation { internal, .. }) => *internal,
-            ReplicaLocation::Unmanaged(_) => false,
-        }
-    }
-
-    /// Returns the number of workers specified by this replica location.
-    ///
-    /// `None` for unmanaged replicas, whose worker count we don't know.
-    pub fn workers(&self) -> Option<usize> {
-        match self {
-            ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                Some(allocation.workers.get() * self.num_processes())
-            }
-            ReplicaLocation::Unmanaged(_) => None,
-        }
-    }
-
-    /// Whether the replica is durably marked `pending`.
-    ///
-    /// Vestigial: no path creates one anymore. A crash on a version that still
-    /// staged reconfigurations through overlap replicas could have left one
-    /// behind, and the catalog-open migration reaps those.
-    pub fn pending(&self) -> bool {
-        match self {
-            ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
-            ReplicaLocation::Unmanaged(_) => false,
-        }
-    }
-}
-
-/// The "role" of a cluster, which is currently used to determine the
-/// severity of alerts for problems with its replicas.
-#[derive(Debug, Clone)]
-pub enum ClusterRole {
-    /// The existence and proper functioning of the cluster's replicas is
-    /// business-critical for Materialize.
-    SystemCritical,
-    /// Assuming no bugs, the cluster's replicas should always exist and function
-    /// properly. If it doesn't, however, that is less urgent than
-    /// would be the case for a `SystemCritical` replica.
-    System,
-    /// The cluster is controlled by the user, and might go down for
-    /// reasons outside our control (e.g., OOMs).
-    User,
-}
-
-/// The location of an unmanaged replica.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UnmanagedReplicaLocation {
-    /// The network addresses of the storagectl endpoints for each process in
-    /// the replica.
-    pub storagectl_addrs: Vec<String>,
-    /// The network addresses of the computectl endpoints for each process in
-    /// the replica.
-    pub computectl_addrs: Vec<String>,
-}
-
-/// The location of a managed replica.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct ManagedReplicaLocation {
-    /// The resource allocation for the replica.
-    pub allocation: ReplicaAllocation,
-    /// SQL size parameter used for allocation
-    pub size: String,
-    /// If `true`, Materialize support owns this replica.
-    pub internal: bool,
-    /// Optional SQL size parameter used for billing.
-    pub billed_as: Option<String>,
-    /// The availability zones the replica may be placed in; empty means
-    /// unconstrained.
-    ///
-    /// For a replica of a managed cluster this is the cluster's
-    /// `AVAILABILITY ZONES` pool; for a replica of an unmanaged cluster it is
-    /// the single user-pinned `AVAILABILITY ZONE`, as a zero- or one-element
-    /// list.
-    ///
-    /// Not serialized: this is re-derived from the cluster config at
-    /// concretization, not read back from a durable record.
-    #[serde(skip)]
-    pub availability_zones: Vec<String>,
-    /// See [`ReplicaLocation::pending`].
-    pub pending: bool,
-}
-
-impl ManagedReplicaLocation {
-    /// Return the size which should be used to determine billing-related information.
-    pub fn size_for_billing(&self) -> &str {
-        self.billed_as.as_deref().unwrap_or(&self.size)
-    }
-}
-
-/// Configures logging for a cluster replica.
-pub type ReplicaLogging = ComputeReplicaLogging;
 
 /// Identifier of a process within a replica.
 pub type ProcessId = u64;
@@ -419,8 +88,10 @@ impl Controller {
     ) -> Result<(), anyhow::Error> {
         self.storage
             .create_instance(id, config.workload_class.clone());
-        self.compute
-            .create_instance(id, config.arranged_logs, config.workload_class)?;
+        if !self.replica_owned_compute() {
+            self.compute
+                .create_instance(id, config.arranged_logs, config.workload_class)?;
+        }
         Ok(())
     }
 
@@ -432,9 +103,11 @@ impl Controller {
     pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
-        self.compute
-            .update_instance_workload_class(id, workload_class)
-            .expect("instance exists");
+        if !self.replica_owned_compute() {
+            self.compute
+                .update_instance_workload_class(id, workload_class)
+                .expect("instance exists");
+        }
     }
 
     /// Drops the specified cluster.
@@ -444,7 +117,9 @@ impl Controller {
     /// Panics if the cluster still has replicas.
     pub fn drop_cluster(&mut self, id: ClusterId) {
         self.storage.drop_instance(id);
-        self.compute.drop_instance(id);
+        if !self.replica_owned_compute() {
+            self.compute.drop_instance(id);
+        }
     }
 
     /// Creates a replica of the specified cluster with the specified identifier
@@ -501,14 +176,18 @@ impl Controller {
             }
         }
 
-        self.storage
-            .connect_replica(cluster_id, replica_id, storage_location);
-        self.compute.add_replica_to_instance(
-            cluster_id,
-            replica_id,
-            compute_location,
-            config.compute,
-        )?;
+        if self.replica_owned_compute() {
+            self.storage.register_replica(cluster_id, replica_id);
+        } else {
+            self.storage
+                .connect_replica(cluster_id, replica_id, storage_location);
+            self.compute.add_replica_to_instance(
+                cluster_id,
+                replica_id,
+                compute_location,
+                config.compute,
+            )?;
+        }
 
         if let Some(task) = metrics_task {
             self.metrics_tasks.insert(replica_id, task);
@@ -539,7 +218,9 @@ impl Controller {
         // otherwise be retained until the next such change.
         self.replica_dyncfg_overrides.remove(&replica_id);
 
-        self.compute.drop_replica(cluster_id, replica_id)?;
+        if !self.replica_owned_compute() {
+            self.compute.drop_replica(cluster_id, replica_id)?;
+        }
         self.storage.drop_replica(cluster_id, replica_id);
         Ok(())
     }
@@ -574,7 +255,39 @@ impl Controller {
         );
     }
 
-    /// Remove replicas that are orphaned in the current generation.
+    /// Lists actual replica services across all generations.
+    ///
+    /// For snapshot-based orphan cleanup, await this list before reading
+    /// authoritative durable catalog replica membership.
+    pub async fn list_replica_services(&self) -> Result<Vec<ReplicaServiceName>, anyhow::Error> {
+        self.orchestrator
+            .list_services()
+            .await?
+            .iter()
+            .map(|s| s.parse())
+            .collect()
+    }
+
+    /// Removes only observed, current-generation services absent from `live`.
+    ///
+    /// The caller must obtain `observed` from `list_replica_services` BEFORE
+    /// fetching `live` from the authoritative durable catalog, not a bootstrap
+    /// or controller-local snapshot. Service creation must follow catalog commit
+    /// and replica IDs must never be reused. Thus an observed service absent from
+    /// the later catalog snapshot cannot belong to an in-flight allocation.
+    /// Services created after the list are left for a subsequent cleanup pass.
+    pub fn remove_orphaned_replicas_from_snapshot(
+        &self,
+        observed: Vec<ReplicaServiceName>,
+        live: BTreeSet<(ClusterId, ReplicaId)>,
+    ) -> Result<(), anyhow::Error> {
+        remove_orphaned_replica_services(observed, &live, self.deploy_generation, |name| {
+            self.deprovision_replica(name.cluster_id, name.replica_id, name.generation)
+        })
+    }
+
+    /// Remove replicas that are orphaned in the current generation using local
+    /// inventory and allocator bounds, for unprotected upgrade/prewarming.
     #[instrument]
     pub async fn remove_orphaned_replicas(
         &mut self,
@@ -700,6 +413,12 @@ impl Controller {
         let aws_external_id_prefix = self.connection_context().aws_external_id_prefix.clone();
         let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let catalog_persist_location = self.catalog_persist_location.clone();
+        let catalog_follower_config = self.catalog_follower_config.clone();
+        if catalog_persist_location.is_some() && catalog_follower_config.is_none() {
+            anyhow::bail!("catalog follower config must be set before provisioning replicas");
+        }
+        let deploy_generation = self.deploy_generation;
         let secrets_args = self.secrets_args.to_flags();
 
         // These configure the replica's process rather than environmentd's, so
@@ -790,6 +509,27 @@ impl Controller {
                             compute_timely_config.to_string(),
                         ),
                     ];
+                    if let Some(location) = &catalog_persist_location {
+                        args.extend([
+                            format!("--catalog-cluster-id={cluster_id}"),
+                            format!("--catalog-replica-id={replica_id}"),
+                            format!("--catalog-deploy-generation={deploy_generation}"),
+                            format!(
+                                "--catalog-config={}",
+                                catalog_follower_config
+                                    .as_ref()
+                                    .expect("checked before provisioning")
+                            ),
+                            format!(
+                                "--catalog-persist-blob-url={}",
+                                location.blob_uri.to_string_unredacted()
+                            ),
+                            format!(
+                                "--catalog-persist-consensus-url={}",
+                                location.consensus_uri.to_string_unredacted()
+                            ),
+                        ]);
+                    }
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(
                             "--aws-external-id-prefix={}",
@@ -993,6 +733,22 @@ impl Controller {
     }
 }
 
+fn remove_orphaned_replica_services(
+    observed: Vec<ReplicaServiceName>,
+    live: &BTreeSet<(ClusterId, ReplicaId)>,
+    deploy_generation: u64,
+    mut drop_service: impl FnMut(ReplicaServiceName) -> Result<(), anyhow::Error>,
+) -> Result<(), anyhow::Error> {
+    for name in observed {
+        if name.generation == deploy_generation
+            && !live.contains(&(name.cluster_id, name.replica_id))
+        {
+            drop_service(name)?;
+        }
+    }
+    Ok(())
+}
+
 /// Remove all replicas from past generations.
 async fn try_remove_past_generation_replicas(
     orchestrator: &dyn NamespacedOrchestrator,
@@ -1054,5 +810,64 @@ impl FromStr for ReplicaServiceName {
             // TODO: remove this in the next version of Materialize.
             generation: caps.get(3).map_or("0", |m| m.as_str()).parse().unwrap(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn snapshot_orphan_cleanup() {
+        // The actuator inventory includes a committed replica missing from the
+        // caller's bootstrap inventory, an orphan, and other generations.
+        let mut services: BTreeSet<String> = [
+            "u1-replica-u1-gen-2",
+            "u1-replica-u2-gen-2",
+            "u1-replica-u3-gen-1",
+            "u1-replica-u4-gen-3",
+            "s1-replica-s1-gen-2",
+        ]
+        .map(String::from)
+        .into_iter()
+        .collect();
+        let observed = services.iter().map(|s| s.parse().unwrap()).collect();
+
+        // Read authoritative membership after listing, including the newly
+        // committed replica. A service arriving after the list is out of scope,
+        // even if it is absent from this catalog snapshot.
+        let live = BTreeSet::from([
+            (ClusterId::User(1), ReplicaId::User(1)),
+            (ClusterId::System(1), ReplicaId::System(1)),
+        ]);
+        services.insert("u1-replica-u5-gen-2".into());
+        remove_orphaned_replica_services(observed, &live, 2, |name| {
+            assert!(services.remove(&name.to_string()));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            services,
+            [
+                "u1-replica-u1-gen-2",
+                "u1-replica-u3-gen-1",
+                "u1-replica-u4-gen-3",
+                "u1-replica-u5-gen-2",
+                "s1-replica-s1-gen-2",
+            ]
+            .map(String::from)
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[mz_ore::test]
+    fn snapshot_orphan_cleanup_propagates_drop_failure() {
+        let observed = vec!["u1-replica-u1-gen-2".parse().unwrap()];
+        let result = remove_orphaned_replica_services(observed, &BTreeSet::new(), 2, |_| {
+            Err(anyhow!("drop failed"))
+        });
+        assert_eq!(result.unwrap_err().to_string(), "drop failed");
     }
 }

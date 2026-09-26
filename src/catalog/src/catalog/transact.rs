@@ -1,0 +1,6848 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Logic related to executing catalog transactions.
+
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::sync::atomic;
+use std::time::Duration;
+
+use crate::SYSTEM_CONN_ID;
+use crate::builtin::BuiltinLog;
+use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
+use crate::durable::{
+    CatalogError as DurableError, DryRunTransaction, DurableCatalogError, NetworkPolicy, Snapshot,
+    Transaction,
+};
+use crate::expr_cache::{LocalExpressions, latest_item_version};
+use crate::memory::error::{AmbiguousRename, Error, ErrorKind};
+use crate::memory::objects::{
+    CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
+    MaterializedView, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
+    SourceReferences, StateDiff, StateUpdateKind, TableDataSource,
+};
+use itertools::Itertools;
+use mz_adapter_types::cluster_state::{
+    BurstAudit, BurstFinishCause, ExpectedClusterState, ReconfigurationAudit,
+};
+use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
+    WITH_0DT_DEPLOYMENT_MAX_WAIT,
+};
+use mz_audit_log::{
+    AlterClusterReconfigurationV1, BurstFinishCauseV1, ClusterHydrationBurstV1,
+    ClusterReplicaLoggingV1, CreateOrDropClusterReplicaReasonV1, EventDetails, EventType,
+    HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1, ObjectType, ReconfigurationLifecycleV1,
+    RefreshDecisionWithReasonV2, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV2,
+    VersionedEvent,
+};
+use mz_cluster_controller::ctx::RefreshWindowDecision;
+use mz_controller_types::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
+use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::CollectionPlan;
+use mz_ore::collections::HashSet;
+use mz_ore::{instrument, soft_assert_or_log};
+use mz_persist_types::ShardId;
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
+use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::role_id::RoleId;
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationVersion, SqlColumnType, strconv};
+use mz_sql::ast::RawDataType;
+use mz_sql::catalog::{
+    AutoProvisionSource, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, PasswordAction, PasswordConfig, RoleAttributesRaw, RoleMembership,
+    RoleVars,
+};
+use mz_sql::names::{
+    CommentObjectId, DatabaseId, FullItemName, ObjectId, QualifiedItemName,
+    ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
+};
+use mz_sql::plan::{NetworkPolicyRule, PlanError};
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_sql::session::vars::{OwnedVarInput, SystemVars};
+use mz_sql::session::vars::{Value as VarValue, VarInput};
+use mz_sql::{DEFAULT_SCHEMA, rbac};
+use mz_sql_parser::ast::{QualifiedReplica, Value};
+use mz_storage_client::controller::StorageTxn;
+use mz_storage_client::storage_collections::{StorageCollections, prepare_collection_state};
+use mz_storage_types::sources::envelope::SourceEnvelope;
+use serde::{Deserialize, Serialize};
+use tracing::{info, trace};
+use uuid::Uuid;
+
+use crate::catalog::CatalogError;
+use crate::catalog::ResultExt;
+use crate::catalog::state::LocalExpressionCache;
+use crate::catalog::transaction_context::TransactionContext;
+use crate::catalog::{
+    BuiltinTableUpdate, Catalog, CatalogState, UpdatePrivilegeVariant,
+    catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
+    is_reserved_role_name, object_type_to_audit_object_type,
+    system_object_type_to_audit_object_type,
+};
+use crate::config::{ScopedParameters, ScopedParametersScope};
+use crate::memory::implications::ParsedStateUpdate;
+
+fn add_to_audit_log(
+    system_configuration: &SystemVars,
+    oracle_write_ts: mz_repr::Timestamp,
+    session: Option<&TransactionContext<'_>>,
+    tx: &mut crate::durable::Transaction,
+    audit_events: &mut Vec<VersionedEvent>,
+    event_type: EventType,
+    object_type: ObjectType,
+    details: EventDetails,
+) -> Result<(), Error> {
+    let user = session.map(|session| session.user().name.to_string());
+
+    // unsafe_mock_audit_event_timestamp can only be set to Some when running in unsafe mode.
+
+    let occurred_at = match system_configuration.unsafe_mock_audit_event_timestamp() {
+        Some(ts) => ts.into(),
+        _ => oracle_write_ts.into(),
+    };
+    let id = tx.allocate_audit_log_id()?;
+    let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
+    audit_events.push(event.clone());
+    tx.insert_audit_log_event(event);
+    Ok(())
+}
+
+/// A manually injected audit event.
+///
+/// Matches [`mz_audit_log::EventV1`], but without the `id` and `occurred_at` fields -- both are
+/// filled in automatically.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectedAuditEvent {
+    pub event_type: EventType,
+    pub object_type: ObjectType,
+    pub details: EventDetails,
+    pub user: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Op {
+    /// Select immutable bytes written by this build. The expected selection and imports
+    /// are checked in the same transaction as the accompanying DDL.
+    SetWrittenPlan {
+        id: GlobalId,
+        build_version: String,
+        expected_revision: Option<uuid::Uuid>,
+        revision: Option<uuid::Uuid>,
+        imports: BTreeSet<GlobalId>,
+        replica_owner: Option<crate::durable::objects::ReplicaPlanOwner>,
+    },
+    AlterRetainHistory {
+        id: CatalogItemId,
+        value: Option<Value>,
+        window: CompactionWindow,
+    },
+    AlterSourceTimestampInterval {
+        id: CatalogItemId,
+        value: Option<Value>,
+        interval: Duration,
+    },
+    AlterRole {
+        id: RoleId,
+        name: String,
+        attributes: RoleAttributesRaw,
+        nopassword: bool,
+        vars: RoleVars,
+    },
+    AlterNetworkPolicy {
+        id: NetworkPolicyId,
+        rules: Vec<NetworkPolicyRule>,
+        name: String,
+        owner_id: RoleId,
+    },
+    AlterAddColumn {
+        id: CatalogItemId,
+        new_global_id: GlobalId,
+        name: ColumnName,
+        typ: SqlColumnType,
+        sql: RawDataType,
+    },
+    AlterMaterializedViewApplyReplacement {
+        id: CatalogItemId,
+        replacement_id: CatalogItemId,
+    },
+    CreateDatabase {
+        name: String,
+        owner_id: RoleId,
+    },
+    CreateSchema {
+        database_id: ResolvedDatabaseSpecifier,
+        schema_name: String,
+        owner_id: RoleId,
+    },
+    CreateRole {
+        name: String,
+        attributes: RoleAttributesRaw,
+    },
+    CreateCluster {
+        id: ClusterId,
+        name: String,
+        introspection_sources: Vec<&'static BuiltinLog>,
+        owner_id: RoleId,
+        config: ClusterConfig,
+    },
+    CreateClusterReplica {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        name: String,
+        config: ReplicaConfig,
+        owner_id: RoleId,
+        reason: ReplicaCreateDropReason,
+    },
+    CreateItem {
+        id: CatalogItemId,
+        name: QualifiedItemName,
+        item: CatalogItem,
+        owner_id: RoleId,
+    },
+    CreateNetworkPolicy {
+        rules: Vec<NetworkPolicyRule>,
+        name: String,
+        owner_id: RoleId,
+    },
+    Comment {
+        object_id: CommentObjectId,
+        sub_component: Option<usize>,
+        comment: Option<String>,
+    },
+    DropObjects(Vec<DropObjectInfo>),
+    GrantRole {
+        role_id: RoleId,
+        member_id: RoleId,
+        grantor_id: RoleId,
+    },
+    RenameCluster {
+        id: ClusterId,
+        name: String,
+        to_name: String,
+        check_reserved_names: bool,
+    },
+    RenameClusterReplica {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        name: QualifiedReplica,
+        to_name: String,
+    },
+    RenameItem {
+        id: CatalogItemId,
+        current_full_name: FullItemName,
+        to_name: String,
+    },
+    RenameSchema {
+        database_spec: ResolvedDatabaseSpecifier,
+        schema_spec: SchemaSpecifier,
+        new_name: String,
+        check_reserved_names: bool,
+    },
+    UpdateOwner {
+        id: ObjectId,
+        new_owner: RoleId,
+    },
+    UpdatePrivilege {
+        target_id: SystemObjectId,
+        /// The ACL changes to apply to `target_id`, applied as a single durable write. A bulk
+        /// `GRANT`/`REVOKE` touching one object for many grantees lands here as one op rather
+        /// than one op per grantee.
+        privileges: Vec<MzAclItem>,
+        variant: UpdatePrivilegeVariant,
+    },
+    UpdateDefaultPrivilege {
+        privilege_object: DefaultPrivilegeObject,
+        privilege_acl_item: DefaultPrivilegeAclItem,
+        variant: UpdatePrivilegeVariant,
+    },
+    RevokeRole {
+        role_id: RoleId,
+        member_id: RoleId,
+        grantor_id: RoleId,
+    },
+    UpdateClusterConfig {
+        id: ClusterId,
+        name: String,
+        config: ClusterConfig,
+        /// Writer-declared reconfiguration lifecycle transition to audit for
+        /// this write, alongside the record carried in `config`.
+        reconfiguration_audit: Option<ReconfigurationAudit>,
+        /// Writer-declared hydration-burst lifecycle transition to audit for
+        /// this write, alongside the record carried in `config`.
+        burst_audit: Option<BurstAudit>,
+    },
+    UpdateItem {
+        id: CatalogItemId,
+        name: QualifiedItemName,
+        to_item: CatalogItem,
+    },
+    UpdateSourceReferences {
+        source_id: CatalogItemId,
+        references: SourceReferences,
+    },
+    UpdateSystemConfiguration {
+        name: String,
+        value: OwnedVarInput,
+    },
+    ResetSystemConfiguration {
+        name: String,
+    },
+    ResetAllSystemConfiguration,
+    /// Persists the durable cache of scoped (per-cluster and per-replica)
+    /// system parameters towards `scoped`. The handler diffs against the current
+    /// durable contents: it upserts changed/added entries and removes entries
+    /// the update no longer serves.
+    ///
+    /// `prune_scope` bounds removals to the objects the update was evaluated
+    /// for: a row is removed only when its owning object is in `prune_scope`, so
+    /// an object created after the update's evaluation snapshot, and the override
+    /// it folded into its own create transaction, survives a concurrent
+    /// full-state reconcile.
+    UpdateScopedSystemParameters {
+        scoped: ScopedParameters,
+        prune_scope: ScopedParametersScope,
+    },
+    /// Stages changed read requirements and compaction bounds.
+    ///
+    /// Either vector may be empty. See [`Transaction::set_read_protection`] for
+    /// the readability and recovery contracts. Bound proposals are clipped at
+    /// commit by object-owned retention and may retain more history than requested.
+    SetReadProtection {
+        requirements: Vec<MaintainedReadRequirement>,
+        bounds: Vec<CollectionCompactionBound>,
+    },
+    /// Allocates a fresh query-client incarnation. Returned only after commit.
+    CreateClientIncarnation {
+        replica_id: Option<ReplicaId>,
+    },
+    /// Replaces a client's aggregate requirements and renews its heartbeat atomically.
+    PublishClientReadRequirements {
+        incarnation: u64,
+        requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
+    },
+    /// Closes an unchanged incarnation after the caller's observation window.
+    ReclaimClientIncarnation {
+        incarnation: u64,
+        expected_heartbeat: u64,
+    },
+    /// Injects audit events into the catalog.
+    ///
+    /// This is a nonstandard path used for manually appending audit events at the current time.
+    /// Mainly useful for correcting the audit log in the face of bugs that made us forget to emit
+    /// audit events.
+    InjectAuditEvents {
+        events: Vec<InjectedAuditEvent>,
+    },
+    /// Precondition, not a mutation. Aborts the whole transaction unless
+    /// `cluster_id`'s current managed config still equals `expected`. Running
+    /// the check inside the transaction makes it inseparable from the commit it
+    /// guards, giving a compare-and-append over the cluster's config. A purely
+    /// internal op for conditional cluster-config writes, never emitted by SQL
+    /// DDL.
+    CheckClusterState {
+        cluster_id: ClusterId,
+        expected: ExpectedClusterState,
+    },
+}
+
+/// Almost the same as `ObjectId`, but the `ClusterReplica` case has an extra
+/// `ReplicaCreateDropReason` field. This is forwarded to `mz_audit_events.details` when applying
+/// the `Op::DropObjects`.
+#[derive(Debug, Clone)]
+pub enum DropObjectInfo {
+    Cluster(ClusterId),
+    ClusterReplica((ClusterId, ReplicaId, ReplicaCreateDropReason)),
+    Database(DatabaseId),
+    Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
+    Role(RoleId),
+    Item(CatalogItemId),
+    NetworkPolicy(NetworkPolicyId),
+}
+
+impl DropObjectInfo {
+    /// Creates a `DropObjectInfo` from an `ObjectId`.
+    /// If it is a `ClusterReplica`, the reason will be set to `ReplicaCreateDropReason::Manual`.
+    pub fn manual_drop_from_object_id(id: ObjectId) -> Self {
+        match id {
+            ObjectId::Cluster(cluster_id) => DropObjectInfo::Cluster(cluster_id),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => DropObjectInfo::ClusterReplica((
+                cluster_id,
+                replica_id,
+                ReplicaCreateDropReason::Manual,
+            )),
+            ObjectId::Database(database_id) => DropObjectInfo::Database(database_id),
+            ObjectId::Schema(schema) => DropObjectInfo::Schema(schema),
+            ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
+            ObjectId::Item(item_id) => DropObjectInfo::Item(item_id),
+            ObjectId::NetworkPolicy(policy_id) => DropObjectInfo::NetworkPolicy(policy_id),
+        }
+    }
+
+    /// Creates an `ObjectId` from a `DropObjectInfo`.
+    /// Loses the `ReplicaCreateDropReason` if there is one!
+    fn to_object_id(&self) -> ObjectId {
+        match &self {
+            DropObjectInfo::Cluster(cluster_id) => ObjectId::Cluster(cluster_id.clone()),
+            DropObjectInfo::ClusterReplica((cluster_id, replica_id, _reason)) => {
+                ObjectId::ClusterReplica((cluster_id.clone(), replica_id.clone()))
+            }
+            DropObjectInfo::Database(database_id) => ObjectId::Database(database_id.clone()),
+            DropObjectInfo::Schema(schema) => ObjectId::Schema(schema.clone()),
+            DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
+            DropObjectInfo::Item(item_id) => ObjectId::Item(item_id.clone()),
+            DropObjectInfo::NetworkPolicy(network_policy_id) => {
+                ObjectId::NetworkPolicy(network_policy_id.clone())
+            }
+        }
+    }
+}
+
+/// The reason for creating or dropping a replica.
+#[derive(Debug, Clone)]
+pub enum ReplicaCreateDropReason {
+    /// The user initiated the replica create or drop, e.g., by
+    /// - creating/dropping a cluster,
+    /// - ALTERing various options on a managed cluster,
+    /// - CREATE/DROP CLUSTER REPLICA on an unmanaged cluster.
+    Manual,
+    /// The cluster controller's graceful-reconfiguration strategy created the replica while
+    /// converging a cluster onto an in-flight `reconfiguration` target (a background
+    /// `ALTER CLUSTER`).
+    GracefulReconfiguration,
+    /// The cluster controller's hydration-burst strategy created the transient burst replica
+    /// it runs while a cluster's objects are not yet hydrated.
+    HydrationBurst,
+    /// The cluster controller's on-refresh strategy created the replica for a refresh window on
+    /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
+    /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
+    /// estimate) as the `scheduling_policies` detail.
+    OnRefresh(RefreshWindowDecision),
+    /// The cluster controller dropped the replica because the cluster's configuration no longer
+    /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
+    /// replication-factor decrease).
+    Retired,
+}
+
+impl ReplicaCreateDropReason {
+    pub fn into_audit_log(
+        self,
+    ) -> (
+        CreateOrDropClusterReplicaReasonV1,
+        Option<SchedulingDecisionsWithReasonsV2>,
+    ) {
+        match self {
+            ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
+            ReplicaCreateDropReason::GracefulReconfiguration => {
+                (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
+            }
+            ReplicaCreateDropReason::HydrationBurst => {
+                (CreateOrDropClusterReplicaReasonV1::HydrationBurst, None)
+            }
+            ReplicaCreateDropReason::OnRefresh(decision) => (
+                CreateOrDropClusterReplicaReasonV1::Schedule,
+                Some(refresh_window_decision_to_audit_log(decision)),
+            ),
+            ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
+        }
+    }
+}
+
+/// Convert the controller's on-refresh window decision into the audit log's
+/// `scheduling_policies` detail: ids as strings and the hydration-time estimate
+/// as an interval string.
+fn refresh_window_decision_to_audit_log(
+    decision: RefreshWindowDecision,
+) -> SchedulingDecisionsWithReasonsV2 {
+    let mut hydration_time_estimate_str = String::new();
+    strconv::format_interval(
+        &mut hydration_time_estimate_str,
+        Interval::from_duration(&decision.hydration_time_estimate)
+            .expect("the estimate originated as a planned Interval"),
+    );
+    SchedulingDecisionsWithReasonsV2 {
+        on_refresh: RefreshDecisionWithReasonV2 {
+            // The controller produces a create (and so this detail) only for
+            // an open window; there is no "off" decision to record (a
+            // window-close is a `retired` drop with no detail).
+            decision: SchedulingDecisionV1::On,
+            objects_needing_refresh: decision
+                .objects_needing_refresh
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            objects_needing_compaction: decision
+                .objects_needing_compaction
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            hydration_time_estimate: hydration_time_estimate_str,
+        },
+    }
+}
+
+pub struct TransactionResult {
+    pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    /// Parsed catalog updates from which we will derive catalog implications.
+    pub catalog_updates: Vec<ParsedStateUpdate>,
+    pub audit_events: Vec<VersionedEvent>,
+    pub created_client_incarnations: Vec<u64>,
+}
+
+struct TransactInnerResult {
+    state: CatalogState,
+    planning_changed: bool,
+    created_client_incarnations: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TransactInnerMode {
+    /// Prepare storage state and return a commit-ready transaction state.
+    ///
+    /// This mode is used by durable catalog transactions.
+    Commit,
+    /// Execute a dry run against a durable transaction that will not be
+    /// committed.
+    ///
+    /// This mode still validates and applies updates to an in-memory
+    /// `CatalogState`, but it must not acknowledge physical finalization or stage
+    /// shards for finalization.
+    DryRun,
+}
+
+impl Catalog {
+    fn should_audit_log_item(item: &CatalogItem) -> bool {
+        !item.is_temporary()
+    }
+
+    /// The cluster config's `reconfiguration` record, if any.
+    fn reconfiguration_record_of(
+        config: &ClusterConfig,
+    ) -> Option<&crate::memory::objects::ReconfigurationState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.reconfiguration.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// The cluster config's `burst` record, if any.
+    fn burst_record_of(config: &ClusterConfig) -> Option<&crate::memory::objects::BurstState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.burst.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// Whether a cluster config write moves the burst lifecycle: a record
+    /// appears or disappears. Unlike reconfiguration there is no status field,
+    /// so presence transitions are the whole lifecycle. Bookkeeping rewrites of
+    /// an existing record (the hydration stamp and its reset) move nothing.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent.
+    fn burst_lifecycle_moved(old_config: &ClusterConfig, new_config: &ClusterConfig) -> bool {
+        matches!(
+            (
+                Self::burst_record_of(old_config),
+                Self::burst_record_of(new_config),
+            ),
+            (None, Some(_)) | (Some(_), None)
+        )
+    }
+
+    /// Whether a cluster config write moves the reconfiguration lifecycle: a
+    /// status change, a fresh record, or the drop of an in-progress record.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent. Status-preserving copies (a write
+    /// carrying a record forward, re-targets that stay in progress with a
+    /// declared `Started`) and drops of already-settled records move nothing.
+    fn reconfiguration_lifecycle_moved(
+        old_config: &ClusterConfig,
+        new_config: &ClusterConfig,
+    ) -> bool {
+        match (
+            Self::reconfiguration_record_of(old_config),
+            Self::reconfiguration_record_of(new_config),
+        ) {
+            (None, Some(_)) => true,
+            (Some(old), Some(new)) => old.status != new.status,
+            (Some(old), None) => old.is_in_progress(),
+            (None, None) => false,
+        }
+    }
+
+    /// Builds a reconfiguration lifecycle audit event from the writer-declared
+    /// audit intent and the record in `config`.
+    ///
+    /// The intent must cohere with the record it rides along with: the durable
+    /// `status` and the audited transition are two views of one decision, so a
+    /// mismatch is a writer bug and fails the transaction rather than commit an
+    /// event that contradicts the state. The valid pairings are tabulated on
+    /// [`crate::memory::objects::ReconfigurationStatus`].
+    fn reconfiguration_audit_details(
+        config: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+        audit: ReconfigurationAudit,
+    ) -> Result<AlterClusterReconfigurationV1, CatalogError> {
+        let record = Self::reconfiguration_record_of(config);
+        let Some(record) = record else {
+            return Err(CatalogError::Internal(format!(
+                "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
+                 without a reconfiguration record"
+            )));
+        };
+        // The one mirror match from the write-side vocabulary to the audit-log
+        // vocabulary. `forced` exists only on the intent: the durable status
+        // reads `Finalized` for both a hydrated and a forced cut-over.
+        let (transition, forced) = match audit {
+            ReconfigurationAudit::Started => (ReconfigurationLifecycleV1::Started, None),
+            ReconfigurationAudit::Cancelled => (ReconfigurationLifecycleV1::Cancelled, None),
+            ReconfigurationAudit::Finalized { forced } => {
+                (ReconfigurationLifecycleV1::Finalized, Some(forced))
+            }
+            ReconfigurationAudit::TimedOut => (ReconfigurationLifecycleV1::TimedOut, None),
+            ReconfigurationAudit::ResourceExhausted => {
+                (ReconfigurationLifecycleV1::ResourceExhausted, None)
+            }
+        };
+        let coherent = matches!(
+            (audit, record.status),
+            (
+                ReconfigurationAudit::Started,
+                ReconfigurationStatus::InProgress
+            ) | (
+                ReconfigurationAudit::Cancelled,
+                ReconfigurationStatus::Cancelled
+            ) | (
+                ReconfigurationAudit::Finalized { .. },
+                ReconfigurationStatus::Finalized
+            ) | (
+                ReconfigurationAudit::TimedOut,
+                ReconfigurationStatus::TimedOut
+            ) | (
+                ReconfigurationAudit::ResourceExhausted,
+                ReconfigurationStatus::ResourceExhausted
+            )
+        );
+        if !coherent {
+            return Err(CatalogError::Internal(format!(
+                "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
+                 contradicts the written record status {:?}",
+                record.status
+            )));
+        }
+        let ReconfigurationState {
+            target,
+            deadline,
+            on_timeout: _,
+            status: _,
+        } = record;
+        let ReconfigurationTarget {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+            // The append-only audit payload records the target shape's size,
+            // replication factor, availability zones, and logging. Arrangement
+            // compression is intentionally not part of it.
+            arrangement_compression: _,
+        } = target;
+        Ok(AlterClusterReconfigurationV1 {
+            cluster_id: cluster_id.to_string(),
+            cluster_name: cluster_name.to_string(),
+            transition,
+            forced,
+            target_size: size.clone(),
+            target_replication_factor: *replication_factor,
+            target_availability_zones: availability_zones.clone(),
+            target_logging: ClusterReplicaLoggingV1 {
+                log_logging: logging.log_logging,
+                interval: logging.interval,
+            },
+            deadline: Some((*deadline).into()),
+        })
+    }
+
+    /// Builds a hydration-burst lifecycle audit event from the writer-declared
+    /// audit intent and the `burst` record it rides along with.
+    ///
+    /// A `started` intent reads the record from the new config (the write that
+    /// armed the burst carries it). A `finished` intent reads it from the old
+    /// config, since the same write cleared it. A missing record on the
+    /// respective side means the intent contradicts the write, a writer bug
+    /// that fails the transaction.
+    fn burst_audit_details(
+        old_config: &ClusterConfig,
+        new_config: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+        audit: BurstAudit,
+    ) -> Result<ClusterHydrationBurstV1, CatalogError> {
+        let (transition, finish_cause, record) = match audit {
+            BurstAudit::Started => (
+                HydrationBurstLifecycleV1::Started,
+                None,
+                Self::burst_record_of(new_config),
+            ),
+            BurstAudit::Finished { cause } => {
+                let cause = match cause {
+                    BurstFinishCause::LingerElapsed => BurstFinishCauseV1::LingerElapsed,
+                    BurstFinishCause::NoLongerWarranted => BurstFinishCauseV1::NoLongerWarranted,
+                };
+                (
+                    HydrationBurstLifecycleV1::Finished,
+                    Some(cause),
+                    Self::burst_record_of(old_config),
+                )
+            }
+        };
+        let Some(record) = record else {
+            return Err(CatalogError::Internal(format!(
+                "burst audit transition {audit:?} for cluster {cluster_name} \
+                 without a burst record on the corresponding side of the write"
+            )));
+        };
+        Ok(ClusterHydrationBurstV1 {
+            cluster_id: cluster_id.to_string(),
+            cluster_name: cluster_name.to_string(),
+            transition,
+            finish_cause,
+            burst_size: record.burst_size.clone(),
+        })
+    }
+
+    /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
+    /// within a connection id against the state being transacted.
+    fn temporary_ids(state: &CatalogState, ops: &[Op]) -> Result<BTreeSet<CatalogItemId>, Error> {
+        let temporary_drops: BTreeSet<_> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::DropObjects(infos) => Some(infos),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|info| match info.to_object_id() {
+                ObjectId::Item(id) => {
+                    // Only pre-existing items can free names in the base namespace.
+                    let entry = state.try_get_entry(&id)?;
+                    entry
+                        .item()
+                        .conn_id()
+                        .map(|conn_id| (conn_id, entry.name().item.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut creating = BTreeSet::new();
+        let mut temporary_ids = BTreeSet::new();
+        for op in ops.iter() {
+            if let Op::CreateItem {
+                id,
+                name,
+                item,
+                owner_id: _,
+            } = op
+            {
+                if let Some(conn_id) = item.conn_id() {
+                    // A namespace need not exist before its first temporary item.
+                    let exists = state
+                        .temporary_namespaces
+                        .schema(conn_id)
+                        .is_some_and(|schema| schema.items.contains_key(&name.item));
+                    if exists && !temporary_drops.contains(&(conn_id, name.item.clone()))
+                        || creating.contains(&(conn_id, &name.item))
+                    {
+                        return Err(
+                            SqlCatalogError::ItemAlreadyExists(*id, name.item.clone()).into()
+                        );
+                    } else {
+                        creating.insert((conn_id, &name.item));
+                        temporary_ids.insert(id.clone());
+                    }
+                }
+            }
+        }
+        Ok(temporary_ids)
+    }
+
+    #[instrument(name = "catalog::transact")]
+    pub async fn transact(
+        &mut self,
+        // n.b. this is an option to prevent us from needing to build out a
+        // dummy impl of `StorageController` for tests.
+        storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
+        oracle_write_ts: mz_repr::Timestamp,
+        session: Option<&TransactionContext<'_>>,
+        ops: Vec<Op>,
+    ) -> Result<TransactionResult, CatalogError> {
+        trace!("transact: {:?}", ops);
+        fail::fail_point!("catalog_transact", |arg| {
+            Err(CatalogError::Unstructured(anyhow::anyhow!(
+                "failpoint: {arg:?}"
+            )))
+        });
+
+        let temporary_ids = Self::temporary_ids(&self.state, &ops)?;
+        let mut builtin_table_updates = vec![];
+        let mut catalog_updates = vec![];
+        let mut audit_events = vec![];
+        let mut storage = self.storage().await;
+        let mut tx = match storage.transaction().await {
+            Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                return Err(error.into());
+            }
+            result => result.unwrap_or_terminate("starting catalog transaction"),
+        };
+        // Empty progress may have overtaken the timestamp chosen before opening the transaction.
+        let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
+
+        let new_state = Self::transact_inner(
+            TransactInnerMode::Commit,
+            &self.diagnostic_config.persist_client,
+            storage_collections,
+            commit_ts,
+            session,
+            ops,
+            temporary_ids,
+            &mut builtin_table_updates,
+            &mut catalog_updates,
+            &mut audit_events,
+            &mut tx,
+            &self.state,
+        )
+        .await?;
+
+        // A definite CAS loss leaves the candidate unpublished. The caller must
+        // refresh its projection and revalidate before retrying. Other failures
+        // can follow a successful append, so they still require recovery.
+        match tx.commit(commit_ts).await {
+            Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                return Err(error.into());
+            }
+            result => {
+                result.unwrap_or_terminate("catalog storage transaction commit must succeed");
+            }
+        }
+
+        // Dropping here keeps the mutable borrow on self, preventing us accidentally
+        // mutating anything until after f is executed.
+        drop(storage);
+        let mut created_clients = Vec::new();
+        if let Some(TransactInnerResult {
+            state,
+            planning_changed,
+            created_client_incarnations,
+        }) = new_state
+        {
+            if planning_changed {
+                self.transient_revision += 1;
+                // Publish before any planning-visible effects (responses,
+                // notices, builtin table writes) can be observed, so sessions
+                // that observe them must refresh their cached catalog snapshot.
+                self.shared_transient_revision
+                    .store(self.transient_revision, atomic::Ordering::SeqCst);
+            }
+            self.state = state;
+            created_clients = created_client_incarnations;
+        }
+
+        Ok(TransactionResult {
+            builtin_table_updates,
+            catalog_updates,
+            audit_events,
+            created_client_incarnations: created_clients,
+        })
+    }
+
+    /// Performs an incremental dry-run catalog transaction: processes only the
+    /// NEW ops against an accumulated `CatalogState` from previous dry runs.
+    /// This avoids the O(N^2) replay cost of replaying all accumulated ops.
+    ///
+    /// The durable transaction is intentionally never committed and no storage
+    /// controller prepare-state side effects are run.
+    ///
+    /// If `prev_snapshot` is `Some`, the transaction is initialized from that
+    /// snapshot (which represents the tx state after the previous dry run),
+    /// ensuring it starts in sync with `base_state`. If `None` (first
+    /// statement), a fresh transaction is loaded from durable storage.
+    ///
+    /// Returns the new accumulated state and a snapshot of the transaction's
+    /// state for use in subsequent incremental dry runs.
+    pub async fn transact_incremental_dry_run(
+        &self,
+        base_state: &CatalogState,
+        ops: Vec<Op>,
+        session: Option<&TransactionContext<'_>>,
+        prev_snapshot: Option<Snapshot>,
+        oracle_write_ts: mz_repr::Timestamp,
+    ) -> Result<(CatalogState, Snapshot), CatalogError> {
+        let temporary_ids = Self::temporary_ids(base_state, &ops)?;
+
+        let mut builtin_table_updates = vec![];
+        let mut catalog_updates = vec![];
+        let mut audit_events = vec![];
+        let mut storage = self.storage().await;
+        let mut tx = if let Some(snapshot) = prev_snapshot {
+            // Restore transaction from saved snapshot so it starts in sync
+            // with the accumulated CatalogState from previous dry runs.
+            storage
+                .transaction_from_snapshot(snapshot)
+                .unwrap_or_terminate("starting catalog transaction from snapshot")
+        } else {
+            // A peer may publish between planning and this first dry run. The
+            // caller must refresh and revalidate, just as for a commit CAS loss.
+            let tx = match storage.transaction().await {
+                Err(
+                    error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. }),
+                ) => {
+                    return Err(error.into());
+                }
+                result => result.unwrap_or_terminate("starting catalog transaction"),
+            };
+            DryRunTransaction::new(tx)
+        };
+
+        // Process only the new ops against the accumulated state in dry-run mode.
+        let new_state = Self::transact_inner(
+            TransactInnerMode::DryRun,
+            &self.diagnostic_config.persist_client,
+            None,
+            oracle_write_ts,
+            session,
+            ops,
+            temporary_ids,
+            &mut builtin_table_updates,
+            &mut catalog_updates,
+            &mut audit_events,
+            tx.transaction_mut(),
+            base_state,
+        )
+        .await?;
+
+        // Save the transaction's current state as a snapshot for the next
+        // incremental dry run.
+        let new_snapshot = tx.current_snapshot();
+
+        // Transaction is NOT committed — drop it.
+        drop(storage);
+
+        let state = new_state
+            .map(|result| result.state)
+            .unwrap_or_else(|| base_state.clone());
+        Ok((state, new_snapshot))
+    }
+
+    /// Extracts optimized expressions from `Op::CreateItem` operations for views
+    /// and materialized views. These can be used to populate a `LocalExpressionCache`
+    /// to avoid re-optimization during `apply_updates`.
+    fn extract_expressions_from_ops(
+        ops: &[Op],
+        optimizer_features: &OptimizerFeatures,
+    ) -> BTreeMap<GlobalId, LocalExpressions> {
+        let mut exprs = BTreeMap::new();
+
+        for op in ops {
+            if let Op::CreateItem { item, .. } = op {
+                match item {
+                    CatalogItem::View(view) => {
+                        exprs.insert(
+                            view.global_id,
+                            LocalExpressions {
+                                local_mir: (*view.locally_optimized_expr).clone(),
+                                optimizer_features: optimizer_features.clone(),
+                                item_version: RelationVersion::root(),
+                            },
+                        );
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        exprs.insert(
+                            mv.global_id_writes(),
+                            LocalExpressions {
+                                local_mir: (*mv.locally_optimized_expr).clone(),
+                                optimizer_features: optimizer_features.clone(),
+                                item_version: latest_item_version(&mv.collections),
+                            },
+                        );
+                    }
+                    CatalogItem::Table(_)
+                    | CatalogItem::Source(_)
+                    | CatalogItem::Log(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::MetricSink(_) => {}
+                }
+            }
+        }
+
+        exprs
+    }
+
+    /// Performs the transaction described by `ops` and returns the new state of the catalog, if
+    /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
+    /// The result indicates which catalog revisions must advance on commit.
+    ///
+    /// `mode` controls whether storage prepare-state side effects are allowed.
+    /// In `DryRun` mode, this method may update the in-memory state returned to
+    /// the caller, but it must not trigger controller side effects.
+    ///
+    #[instrument(name = "catalog::transact_inner")]
+    async fn transact_inner(
+        mode: TransactInnerMode,
+        persist_client: &mz_persist_client::PersistClient,
+        storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
+        oracle_write_ts: mz_repr::Timestamp,
+        session: Option<&TransactionContext<'_>>,
+        ops: Vec<Op>,
+        temporary_ids: BTreeSet<CatalogItemId>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
+        audit_events: &mut Vec<VersionedEvent>,
+        tx: &mut Transaction<'_>,
+        state: &CatalogState,
+    ) -> Result<Option<TransactInnerResult>, CatalogError> {
+        // We come up with new catalog state, builtin state updates, and parsed
+        // catalog updates (for deriving catalog implications) in two phases:
+        //
+        // 1. We (cow)-clone catalog state as `preliminary_state` and apply ops
+        //    one-by-one. This will give us the full list of updates to apply to
+        //    the catalog, which will allow us to apply it in one batch, which
+        //    in turn will allow the apply machinery to consolidate the updates.
+        // 2. We do one final apply call with all updates, which gives us the
+        //    final builtin table updates and parsed catalog updates.
+        //
+        // The reason is that the loop that is working off ops first does a
+        // transact_op to derive the state updates for that op, and then calls
+        // apply_updates on the catalog state. And successive ops might expect
+        // the catalog state to reflect the modified state _after_ applying
+        // previous ops.
+        //
+        // We want to, however, have one final apply_state that takes all the
+        // accumulated updates to derive the required controller updates and the
+        // builtin table updates.
+        //
+        // We won't win any DDL throughput benchmarks, but so far that's not
+        // what we're optimizing for and there would probably be other
+        // bottlenecks before we hit this one as a bottleneck.
+        //
+        // We could work around this by refactoring how the interplay of
+        // transact_op and apply_updates works, but that's a larger undertaking.
+        let mut preliminary_state = Cow::Borrowed(state);
+
+        // The final state that we will return, if modified.
+        let mut state = Cow::Borrowed(state);
+
+        if ops.is_empty() {
+            return Ok(None);
+        }
+
+        // Extract optimized expressions from CreateItem ops to avoid re-optimization
+        // during apply_updates. We extract before the loop since `ops` is moved there.
+        let optimizer_features = OptimizerFeatures::from(state.system_config());
+        let cached_exprs = Self::extract_expressions_from_ops(&ops, &optimizer_features);
+
+        let mut storage_collections_to_create = BTreeSet::new();
+        let mut storage_collections_to_drop = BTreeSet::new();
+        let mut storage_collections_to_register = BTreeMap::new();
+
+        let mut updates = Vec::new();
+        let mut born_mvs = BTreeSet::new();
+        let mut updated_requirements = BTreeSet::new();
+        let mut created_client_incarnations = Vec::new();
+        let mut selected_plans = BTreeMap::new();
+
+        for op in ops {
+            if let Op::SetWrittenPlan {
+                id,
+                build_version,
+                revision,
+                imports,
+                ..
+            } = &op
+            {
+                selected_plans.insert((*id, build_version.clone()), (*revision, imports.clone()));
+            }
+            if preliminary_state.catalog_read_protection_enabled() {
+                match &op {
+                    Op::CreateItem {
+                        item: CatalogItem::MaterializedView(mv),
+                        ..
+                    } => {
+                        born_mvs.insert(mv.global_id_writes());
+                        updated_requirements.insert(mv.global_id_writes());
+                    }
+                    Op::SetReadProtection { requirements, .. } => {
+                        updated_requirements.extend(requirements.iter().map(|r| r.id));
+                    }
+                    _ => (),
+                }
+            }
+            Self::transact_op(
+                oracle_write_ts,
+                session,
+                op,
+                &temporary_ids,
+                audit_events,
+                tx,
+                &*preliminary_state,
+                &mut storage_collections_to_create,
+                &mut storage_collections_to_drop,
+                &mut storage_collections_to_register,
+                &mut created_client_incarnations,
+            )
+            .await?;
+
+            let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
+            if !op_updates.is_empty() {
+                // Clone the cache so each apply_updates call has access to cached expressions.
+                // The cache uses `remove` semantics, so we need a fresh clone for each call.
+                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                let (_op_builtin_table_updates, _op_catalog_updates) = preliminary_state
+                    .to_mut()
+                    .apply_updates(op_updates.clone(), &mut local_expr_cache)
+                    .await;
+            }
+            updates.append(&mut op_updates);
+        }
+
+        // Later operations can remove an import or supersede a selection. Validate
+        // the surviving selections against the complete candidate, not an op prefix.
+        for ((id, build_version), (revision, imports)) in selected_plans {
+            if let Some(revision) = revision
+                && preliminary_state.written_plan(id, &build_version) == Some(revision)
+            {
+                let valid = if let Some(owner) =
+                    preliminary_state.written_plan_replica_owner(id, &build_version)
+                {
+                    // Replica-local observers read only this cluster's logs. Their
+                    // selection, rather than a SQL item or connection, owns them.
+                    id.is_transient()
+                        && !owner.name.is_empty()
+                        && preliminary_state.try_get_entry_by_global_id(&id).is_none()
+                        && preliminary_state.clusters_by_id.values().any(|cluster| {
+                            cluster.replica(owner.replica_id).is_some()
+                                && imports
+                                    .iter()
+                                    .all(|input| cluster.log_indexes.values().any(|id| id == input))
+                        })
+                } else {
+                    preliminary_state.try_get_entry_by_global_id(&id).is_some()
+                        && imports.iter().all(|input| {
+                            preliminary_state
+                                .try_get_entry_by_global_id(input)
+                                .is_some()
+                        })
+                };
+                if !valid {
+                    return Err(CatalogError::DDLTransactionRace);
+                }
+            }
+        }
+
+        // Validate the final requirement, including a creator's optional frontier
+        // selection. Dropped owners need no protection. Publications may advance
+        // recovery, but may not change the logical inputs that define it.
+        for id in updated_requirements {
+            let Some(entry) = preliminary_state.try_get_entry_by_global_id(&id) else {
+                continue;
+            };
+            let CatalogItem::MaterializedView(mv) = entry.item() else {
+                continue;
+            };
+            let requirement = &preliminary_state.maintained_read_requirements()[&id];
+            // Applying a replacement can retain aliases of the retired writer.
+            // Their completed requirements describe the retired definition.
+            if id != mv.global_id_writes() {
+                if requirement.frontier.is_some() {
+                    return Err(CatalogError::internal(
+                        "materialized view read protection",
+                        format!("retired writer {id} has an active recovery requirement"),
+                    ));
+                }
+                continue;
+            }
+            if requirement.inputs != materialized_view_recovery_inputs(&preliminary_state, mv) {
+                return Err(CatalogError::internal(
+                    "materialized view read protection",
+                    format!("incomplete logical inputs for {id}"),
+                ));
+            }
+            if born_mvs.contains(&id) {
+                validate_materialized_view_birth(mv, requirement.frontier)?;
+            }
+        }
+
+        // The last client release can retire metadata after its SQL object is gone.
+        // Visit changed requirement targets, not every collection on each heartbeat.
+        for update in &updates {
+            if let StateUpdateKind::ClientReadRequirement(requirement) = &update.kind
+                && update.diff == StateDiff::Retraction
+                && preliminary_state
+                    .client_read_frontier(requirement.id)
+                    .is_none()
+                && !preliminary_state.contains_live_collection(&requirement.id)
+                && preliminary_state
+                    .storage_metadata()
+                    .collection_metadata
+                    .contains_key(&requirement.id)
+            {
+                storage_collections_to_drop.insert(requirement.id);
+            }
+        }
+
+        match mode {
+            TransactInnerMode::Commit => {
+                let mut live_collection_ids: BTreeSet<_> = if storage_collections_to_drop.is_empty()
+                {
+                    BTreeSet::new()
+                } else {
+                    preliminary_state
+                        .get_entries()
+                        .map(|(_, entry)| entry)
+                        .filter(|entry| entry.item().is_storage_collection())
+                        .flat_map(|entry| entry.global_ids())
+                        .chain(preliminary_state.durable_item_ids.keys().copied())
+                        .collect()
+                };
+                if !storage_collections_to_drop.is_empty() {
+                    live_collection_ids.extend(preliminary_state.client_required_collections());
+                }
+                prepare_collection_state(
+                    tx,
+                    storage_collections_to_create,
+                    storage_collections_to_drop,
+                    storage_collections_to_register,
+                    &live_collection_ids,
+                )?;
+                if let Some(c) = storage_collections {
+                    c.acknowledge_finalized_shards(tx);
+                }
+            }
+            TransactInnerMode::DryRun => {
+                mz_ore::soft_assert_no_log!(
+                    storage_collections.is_none(),
+                    "dry-run mode must not prepare storage state"
+                );
+                // Model collection lifetimes for admission without controller
+                // effects. These shard IDs stay in the noncommittable snapshot.
+                tx.insert_collection_metadata(
+                    storage_collections_to_create
+                        .into_iter()
+                        .map(|id| (id, ShardId::new()))
+                        .collect(),
+                )?;
+                tx.insert_collection_metadata(storage_collections_to_register)?;
+                tx.delete_collection_metadata(storage_collections_to_drop);
+            }
+        }
+
+        // Admission failures must return before entering the fatal commit path.
+        // Batch extraction repeats this check for other durable callers.
+        tx.finalize_index_compaction_bounds();
+        if matches!(mode, TransactInnerMode::Commit) {
+            // A dry run has synthetic storage identities and grants no compaction
+            // permission. Observe durable progress only at the commit boundary.
+            let changed = tx.changed_compaction_bounds().collect();
+            super::retention::constrain_index_retention(
+                persist_client,
+                tx,
+                &state,
+                &preliminary_state,
+                &changed,
+            )
+            .await?;
+        }
+        tx.validate_read_protection()?;
+
+        // Storage preparation can retract permission staged by an earlier op
+        // when it deletes metadata. Derive implications from the consolidated
+        // final batch, never from such intermediate permission.
+        updates.extend(tx.get_and_commit_op_updates());
+        // Classify raw updates, not parsed implications, which omit
+        // planning-visible changes.
+        let planning_changed = updates
+            .iter()
+            .any(|update| Self::update_affects_planning(&state, update));
+        if !updates.is_empty() {
+            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+            let (op_builtin_table_updates, op_catalog_updates) = state
+                .to_mut()
+                .apply_updates(updates.clone(), &mut local_expr_cache)
+                .await;
+            let op_builtin_table_updates = state
+                .to_mut()
+                .resolve_builtin_table_updates(op_builtin_table_updates);
+            builtin_table_updates.extend(op_builtin_table_updates);
+            parsed_catalog_updates.extend(op_catalog_updates);
+        }
+
+        match state {
+            Cow::Owned(state) => Ok(Some(TransactInnerResult {
+                state,
+                planning_changed,
+                created_client_incarnations,
+            })),
+            Cow::Borrowed(_) => Ok(None),
+        }
+    }
+
+    /// Performs the transaction operation described by `op`. This function prepares the changes in
+    /// `tx`, but does not update `state`. `state` will be updated when applying the durable
+    /// changes.
+    #[instrument]
+    async fn transact_op(
+        oracle_write_ts: mz_repr::Timestamp,
+        session: Option<&TransactionContext<'_>>,
+        op: Op,
+        temporary_ids: &BTreeSet<CatalogItemId>,
+        audit_events: &mut Vec<VersionedEvent>,
+        tx: &mut Transaction<'_>,
+        state: &CatalogState,
+        storage_collections_to_create: &mut BTreeSet<GlobalId>,
+        storage_collections_to_drop: &mut BTreeSet<GlobalId>,
+        storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
+        created_client_incarnations: &mut Vec<u64>,
+    ) -> Result<(), CatalogError> {
+        match op {
+            Op::SetWrittenPlan {
+                id,
+                build_version,
+                expected_revision,
+                revision,
+                imports: _,
+                replica_owner,
+            } => {
+                if tx.get_written_plan(id, &build_version) != expected_revision {
+                    return Err(CatalogError::DDLTransactionRace);
+                }
+                tx.set_written_plan_with_owner(id, &build_version, revision, replica_owner)?;
+            }
+            Op::CreateClientIncarnation { replica_id } => {
+                if !state.catalog_read_protection_enabled() {
+                    return Err(CatalogError::internal(
+                        "create query client",
+                        "catalog read protection is not enabled",
+                    ));
+                }
+                created_client_incarnations.push(tx.create_client_incarnation(replica_id)?);
+            }
+            Op::PublishClientReadRequirements {
+                incarnation,
+                requirements,
+            } => {
+                let requirements =
+                    state.expand_client_read_requirements(incarnation, requirements)?;
+                tx.publish_client_read_requirements(incarnation, requirements)?;
+            }
+            Op::ReclaimClientIncarnation {
+                incarnation,
+                expected_heartbeat,
+            } => {
+                tx.reclaim_client_incarnation(incarnation, expected_heartbeat)?;
+            }
+            Op::CheckClusterState {
+                cluster_id,
+                expected,
+            } => {
+                // Precondition only. Returning `Err` here aborts `transact_inner`
+                // before `tx.commit`, so the compare-and-append holds atomically
+                // with the write it guards.
+                if !crate::catalog::cluster_state::cluster_matches_expected(
+                    state, cluster_id, &expected,
+                ) {
+                    return Err(CatalogError::ClusterStateChanged { cluster_id });
+                }
+            }
+            Op::AlterRetainHistory { id, value, window } => {
+                let entry = state.get_entry(&id);
+                if id.is_system() {
+                    let name = entry.name();
+                    let full_name =
+                        state.resolve_full_name(name, session.map(|session| session.conn_id()));
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                        full_name.to_string(),
+                    ))));
+                }
+
+                let mut new_entry = entry.clone();
+                let previous = new_entry
+                    .item
+                    .update_retain_history(value.clone(), window)
+                    .map_err(|_| {
+                        CatalogError::Catalog(Error::new(ErrorKind::Internal(
+                            "planner should have rejected invalid alter retain history item type"
+                                .to_string(),
+                        )))
+                    })?;
+
+                if Self::should_audit_log_item(new_entry.item()) {
+                    let details =
+                        EventDetails::AlterRetainHistoryV1(mz_audit_log::AlterRetainHistoryV1 {
+                            id: id.to_string(),
+                            old_history: previous.map(|previous| previous.to_string()),
+                            new_history: value.map(|v| v.to_string()),
+                        });
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        catalog_type_to_audit_object_type(new_entry.item().typ()),
+                        details,
+                    )?;
+                }
+
+                tx.update_item(id, state.durable_item(new_entry)?)?;
+
+                Self::log_update(state, &id);
+            }
+            Op::AlterSourceTimestampInterval {
+                id,
+                value,
+                interval,
+            } => {
+                let entry = state.get_entry(&id);
+                if id.is_system() {
+                    let name = entry.name();
+                    let full_name =
+                        state.resolve_full_name(name, session.map(|session| session.conn_id()));
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                        full_name.to_string(),
+                    ))));
+                }
+
+                let mut new_entry = entry.clone();
+                let previous = new_entry
+                    .item
+                    .update_timestamp_interval(value.clone(), interval)
+                    .map_err(|_| {
+                        CatalogError::Catalog(Error::new(ErrorKind::Internal(
+                            "planner should have rejected invalid alter timestamp interval item type"
+                                .to_string(),
+                        )))
+                    })?;
+
+                if Self::should_audit_log_item(new_entry.item()) {
+                    let details = EventDetails::AlterSourceTimestampIntervalV1(
+                        mz_audit_log::AlterSourceTimestampIntervalV1 {
+                            id: id.to_string(),
+                            old_interval: previous.map(|previous| previous.to_string()),
+                            new_interval: value.map(|v| v.to_string()),
+                        },
+                    );
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        catalog_type_to_audit_object_type(new_entry.item().typ()),
+                        details,
+                    )?;
+                }
+
+                tx.update_item(id, state.durable_item(new_entry)?)?;
+
+                Self::log_update(state, &id);
+            }
+            Op::AlterRole {
+                id,
+                name,
+                attributes,
+                nopassword,
+                vars,
+            } => {
+                state.ensure_not_reserved_role(&id)?;
+
+                let mut existing_role = state.get_role(&id).clone();
+                let password = attributes.password.clone();
+                let scram_iterations = attributes
+                    .scram_iterations
+                    .unwrap_or_else(|| state.system_config().scram_iterations());
+                existing_role.attributes = attributes.into();
+                existing_role.vars = vars;
+                let password_action = if nopassword {
+                    PasswordAction::Clear
+                } else if let Some(password) = password {
+                    PasswordAction::Set(PasswordConfig {
+                        password,
+                        scram_iterations,
+                    })
+                } else {
+                    PasswordAction::NoChange
+                };
+                tx.update_role(id, existing_role.into(), password_action)?;
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::Role,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+
+                info!("update role {name} ({id})");
+            }
+            Op::AlterNetworkPolicy {
+                id,
+                rules,
+                name,
+                owner_id: _owner_id,
+            } => {
+                let existing_policy = state.get_network_policy(&id).clone();
+                let mut policy: NetworkPolicy = existing_policy.into();
+                policy.rules = rules;
+                if is_reserved_name(&name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedNetworkPolicyName(name),
+                    )));
+                }
+                tx.update_network_policy(id, policy.clone())?;
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::NetworkPolicy,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+
+                info!("update network policy {name} ({id})");
+            }
+            Op::AlterAddColumn {
+                id,
+                new_global_id,
+                name,
+                typ,
+                sql,
+            } => {
+                let column_name = name.to_string();
+                let column_type = typ.to_string();
+                let nullable = typ.nullable;
+                let mut new_entry = state.get_entry(&id).clone();
+                let version = new_entry.item.add_column(name, typ, sql)?;
+                // All versions of a table share the same shard, so it shouldn't matter what
+                // GlobalId we use here.
+                let shard_id = state
+                    .storage_metadata()
+                    .get_collection_shard(new_entry.latest_global_id())?;
+                if state.catalog_read_protection_enabled() {
+                    let bound =
+                        &state.storage_metadata().compaction_bounds[&new_entry.latest_global_id()];
+                    tx.set_collection_compaction_bound(new_global_id, bound.as_option().copied())?;
+                }
+
+                // TODO(alter_table): Support adding columns to sources.
+                let CatalogItem::Table(table) = &mut new_entry.item else {
+                    return Err(CatalogError::Unsupported("adding columns to non-Table"));
+                };
+                table.collections.insert(version, new_global_id);
+
+                if Self::should_audit_log_item(new_entry.item()) {
+                    let details = EventDetails::AlterAddColumnV1(mz_audit_log::AlterAddColumnV1 {
+                        id: id.to_string(),
+                        column: column_name,
+                        column_type,
+                        nullable,
+                    });
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        catalog_type_to_audit_object_type(new_entry.item().typ()),
+                        details,
+                    )?;
+                }
+
+                tx.update_item(id, state.durable_item(new_entry)?)?;
+                storage_collections_to_register.insert(new_global_id, shard_id);
+            }
+            Op::AlterMaterializedViewApplyReplacement { id, replacement_id } => {
+                let mut new_entry = state.get_entry(&id).clone();
+                let replacement = state.get_entry(&replacement_id);
+
+                let new_audit_events =
+                    apply_replacement_audit_events(state, &new_entry, replacement);
+
+                let CatalogItem::MaterializedView(mv) = &mut new_entry.item else {
+                    return Err(CatalogError::internal(
+                        "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
+                        "id must refer to a materialized view",
+                    ));
+                };
+                let CatalogItem::MaterializedView(replacement_mv) = &replacement.item else {
+                    return Err(CatalogError::internal(
+                        "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
+                        "replacement_id must refer to a materialized view",
+                    ));
+                };
+
+                if state.catalog_read_protection_enabled() {
+                    let old_writer = mv.global_id_writes();
+                    let requirement = &state.maintained_read_requirements()[&old_writer];
+                    // Retained collection aliases still serve readers, but this writer
+                    // no longer needs its inputs for recovery.
+                    tx.set_maintained_read_requirement(
+                        old_writer,
+                        requirement.inputs.clone(),
+                        None,
+                    )?;
+                }
+                mv.apply_replacement(replacement_mv.clone());
+
+                tx.remove_item(replacement_id)?;
+
+                new_entry.id = replacement_id;
+                tx_replace_item(tx, state, id, new_entry)?;
+
+                let comment_id = CommentObjectId::MaterializedView(replacement_id);
+                tx.drop_comments(&[comment_id].into())?;
+
+                for (event_type, details) in new_audit_events {
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        event_type,
+                        ObjectType::MaterializedView,
+                        details,
+                    )?;
+                }
+            }
+            Op::CreateDatabase { name, owner_id } => {
+                let database_owner_privileges = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Database,
+                    owner_id,
+                )];
+                let database_default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(
+                        owner_id,
+                        None,
+                        None,
+                        mz_sql::catalog::ObjectType::Database,
+                    )
+                    .map(|item| item.mz_acl_item(owner_id));
+                let database_privileges: Vec<_> = merge_mz_acl_items(
+                    database_owner_privileges
+                        .into_iter()
+                        .chain(database_default_privileges),
+                )
+                .collect();
+
+                let schema_owner_privileges = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Schema,
+                    owner_id,
+                )];
+                let schema_default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(
+                        owner_id,
+                        None,
+                        None,
+                        mz_sql::catalog::ObjectType::Schema,
+                    )
+                    .map(|item| item.mz_acl_item(owner_id))
+                    // Special default privilege on public schemas.
+                    .chain(std::iter::once(MzAclItem {
+                        grantee: RoleId::Public,
+                        grantor: owner_id,
+                        acl_mode: AclMode::USAGE,
+                    }));
+                let schema_privileges: Vec<_> = merge_mz_acl_items(
+                    schema_owner_privileges
+                        .into_iter()
+                        .chain(schema_default_privileges),
+                )
+                .collect();
+
+                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                let (database_id, _) = tx.insert_user_database(
+                    &name,
+                    owner_id,
+                    database_privileges.clone(),
+                    &temporary_oids,
+                )?;
+                let (schema_id, _) = tx.insert_user_schema(
+                    database_id,
+                    DEFAULT_SCHEMA,
+                    owner_id,
+                    schema_privileges.clone(),
+                    &temporary_oids,
+                )?;
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::Database,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: database_id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+                info!("create database {}", name);
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::Schema,
+                    EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
+                        id: schema_id.to_string(),
+                        name: DEFAULT_SCHEMA.to_string(),
+                        database_name: Some(name),
+                    }),
+                )?;
+            }
+            Op::CreateSchema {
+                database_id,
+                schema_name,
+                owner_id,
+            } => {
+                if is_reserved_name(&schema_name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedSchemaName(schema_name),
+                    )));
+                }
+                let database_id = match database_id {
+                    ResolvedDatabaseSpecifier::Id(id) => id,
+                    ResolvedDatabaseSpecifier::Ambient => {
+                        return Err(CatalogError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
+                        )));
+                    }
+                };
+                let owner_privileges = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Schema,
+                    owner_id,
+                )];
+                let default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(
+                        owner_id,
+                        Some(database_id),
+                        None,
+                        mz_sql::catalog::ObjectType::Schema,
+                    )
+                    .map(|item| item.mz_acl_item(owner_id));
+                let privileges: Vec<_> =
+                    merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
+                        .collect();
+                let (schema_id, _) = tx.insert_user_schema(
+                    database_id,
+                    &schema_name,
+                    owner_id,
+                    privileges.clone(),
+                    &state.get_temporary_oids().collect(),
+                )?;
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::Schema,
+                    EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
+                        id: schema_id.to_string(),
+                        name: schema_name.clone(),
+                        database_name: Some(state.database_by_id[&database_id].name.clone()),
+                    }),
+                )?;
+            }
+            Op::CreateRole { name, attributes } => {
+                if is_reserved_role_name(&name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedRoleName(name),
+                    )));
+                }
+                let membership = RoleMembership::new();
+                let vars = RoleVars::default();
+                let (id, _) = tx.insert_user_role(
+                    name.clone(),
+                    attributes.clone(),
+                    membership.clone(),
+                    vars.clone(),
+                    &state.get_temporary_oids().collect(),
+                )?;
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::Role,
+                    EventDetails::CreateRoleV1(mz_audit_log::CreateRoleV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                        auto_provision_source: attributes.auto_provision_source.map(|s| match s {
+                            AutoProvisionSource::Oidc => "oidc".to_string(),
+                            AutoProvisionSource::Frontegg => "frontegg".to_string(),
+                            AutoProvisionSource::None => "none".to_string(),
+                        }),
+                    }),
+                )?;
+                info!("create role {}", name);
+            }
+            Op::CreateCluster {
+                id,
+                name,
+                introspection_sources,
+                owner_id,
+                config,
+            } => {
+                if is_reserved_name(&name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedClusterName(name),
+                    )));
+                }
+                let owner_privileges = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Cluster,
+                    owner_id,
+                )];
+                let default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(
+                        owner_id,
+                        None,
+                        None,
+                        mz_sql::catalog::ObjectType::Cluster,
+                    )
+                    .map(|item| item.mz_acl_item(owner_id));
+                let privileges: Vec<_> =
+                    merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
+                        .collect();
+                let introspection_source_ids: Vec<_> = introspection_sources
+                    .iter()
+                    .map(|introspection_source| {
+                        Transaction::allocate_introspection_source_index_id(
+                            &id,
+                            introspection_source.variant,
+                        )
+                    })
+                    .collect();
+
+                let introspection_sources = introspection_sources
+                    .into_iter()
+                    .zip_eq(introspection_source_ids)
+                    .map(|(log, (item_id, gid))| (log, item_id, gid))
+                    .collect();
+
+                tx.insert_user_cluster(
+                    id,
+                    &name,
+                    introspection_sources,
+                    owner_id,
+                    privileges.clone(),
+                    config.clone().into(),
+                    &state.get_temporary_oids().collect(),
+                )?;
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::Cluster,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+                info!("create cluster {}", name);
+            }
+            Op::CreateClusterReplica {
+                cluster_id,
+                replica_id,
+                name,
+                config,
+                owner_id,
+                reason,
+            } => {
+                if is_reserved_name(&name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedReplicaName(name),
+                    )));
+                }
+                let cluster = state.get_cluster(cluster_id);
+                // The replica id is allocated out-of-band by the durable
+                // allocator before the transaction, mirroring cluster and item
+                // ids. Nothing allocates a replica id in-apply.
+                tx.insert_cluster_replica_with_id(
+                    cluster_id,
+                    replica_id,
+                    &name,
+                    config.clone().into(),
+                    owner_id,
+                )?;
+                if let ReplicaLocation::Managed(ManagedReplicaLocation {
+                    size,
+                    billed_as,
+                    internal,
+                    ..
+                }) = &config.location
+                {
+                    let (reason, scheduling_policies) = reason.into_audit_log();
+                    let details = EventDetails::CreateClusterReplicaV4(
+                        mz_audit_log::CreateClusterReplicaV4 {
+                            cluster_id: cluster_id.to_string(),
+                            cluster_name: cluster.name.clone(),
+                            replica_id: Some(replica_id.to_string()),
+                            replica_name: name.clone(),
+                            logical_size: size.clone(),
+                            billed_as: billed_as.clone(),
+                            internal: *internal,
+                            reason,
+                            scheduling_policies,
+                        },
+                    );
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Create,
+                        ObjectType::ClusterReplica,
+                        details,
+                    )?;
+                }
+            }
+            Op::CreateItem {
+                id,
+                name,
+                item,
+                owner_id,
+            } => {
+                state.check_unstable_dependencies(&item)?;
+
+                match &item {
+                    CatalogItem::Table(table) => {
+                        let gids: Vec<_> = table.global_ids().collect();
+                        assert_eq!(gids.len(), 1);
+                        if state.catalog_read_protection_enabled() {
+                            let bound = match &table.data_source {
+                                TableDataSource::TableWrites { .. } => Some(oracle_write_ts),
+                                TableDataSource::DataSource { desc, .. } => {
+                                    source_initial_compaction_bound(state, desc)?
+                                }
+                            };
+                            tx.set_collection_compaction_bound(gids[0], bound)?;
+                            if let Some((id, inputs)) = storage_recovery_inputs(state, &item)?
+                            {
+                                tx.set_maintained_read_requirement(id, inputs, bound)?;
+                            }
+                        }
+                        storage_collections_to_create.extend(gids);
+                    }
+                    CatalogItem::Source(source) => {
+                        if state.catalog_read_protection_enabled() {
+                            let bound =
+                                source_initial_compaction_bound(state, &source.data_source)?;
+                            tx.set_collection_compaction_bound(source.global_id(), bound)?;
+                            if let Some((id, inputs)) = storage_recovery_inputs(state, &item)?
+                            {
+                                tx.set_maintained_read_requirement(id, inputs, bound)?;
+                            }
+                        }
+                        storage_collections_to_create.insert(source.global_id());
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        let mv_gid = mv.global_id_writes();
+                        if state.catalog_read_protection_enabled() {
+                            let inputs = materialized_view_recovery_inputs(state, mv);
+                            // Join logical-input permission, not physical sinces.
+                            // None is the empty frontier, above every timestamp.
+                            let mut frontier = Some(mz_repr::Timestamp::MIN);
+                            for input in &inputs {
+                                let permission = dependency_compaction_bound(state, *input)?;
+                                frontier = match (frontier, permission) {
+                                    (Some(a), Some(b)) => Some(a.max(b)),
+                                    _ => None,
+                                };
+                            }
+                            tx.set_maintained_read_requirement(mv_gid, inputs, frontier)?;
+                        }
+                        if let Some(target_id) = mv.replacement_target {
+                            let target_gid = state.get_entry(&target_id).latest_global_id();
+                            let shard_id =
+                                state.storage_metadata().get_collection_shard(target_gid)?;
+                            if state.catalog_read_protection_enabled() {
+                                let metadata = state.storage_metadata();
+                                let bound = &metadata.compaction_bounds[&target_gid];
+                                tx.set_collection_compaction_bound(
+                                    mv_gid,
+                                    bound.as_option().copied(),
+                                )?;
+                            }
+                            storage_collections_to_register.insert(mv_gid, shard_id);
+                        } else {
+                            if state.catalog_read_protection_enabled() {
+                                let initial_as_of = mv.initial_as_of.as_ref().ok_or_else(|| {
+                                    CatalogError::internal(
+                                        "create materialized view",
+                                        "missing initial storage frontier",
+                                    )
+                                })?;
+                                tx.set_collection_compaction_bound(
+                                    mv_gid,
+                                    initial_as_of.as_option().copied(),
+                                )?;
+                            }
+                            storage_collections_to_create.insert(mv_gid);
+                        }
+                    }
+                    CatalogItem::Sink(sink) => {
+                        if state.catalog_read_protection_enabled() {
+                            let bound = dependency_compaction_bound(state, sink.from)?;
+                            tx.set_collection_compaction_bound(sink.global_id(), bound)?;
+                            tx.set_maintained_read_requirement(
+                                sink.global_id(),
+                                BTreeSet::from([sink.global_id(), sink.from]),
+                                bound,
+                            )?;
+                        }
+                        storage_collections_to_create.insert(sink.global_id());
+                    }
+                    CatalogItem::Log(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_)
+                    // Metric sinks write to the replica's metrics registry, never to persist,
+                    // so there is no storage collection to create.
+                    | CatalogItem::MetricSink(_) => (),
+                }
+
+                let system_user = session.map_or(false, |s| s.user().is_system_user());
+                if !system_user {
+                    if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
+                        let cluster_name = state.clusters_by_id[&id].name.clone();
+                        return Err(CatalogError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyCluster(cluster_name),
+                        )));
+                    }
+                }
+
+                let owner_privileges = vec![rbac::owner_privilege(item.typ().into(), owner_id)];
+                let default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(
+                        owner_id,
+                        name.qualifiers.database_spec.id(),
+                        Some(name.qualifiers.schema_spec.into()),
+                        item.typ().into(),
+                    )
+                    .map(|item| item.mz_acl_item(owner_id));
+                // mz_support can read all progress sources.
+                let progress_source_privilege = if item.is_progress_source() {
+                    Some(MzAclItem {
+                        grantee: MZ_SUPPORT_ROLE_ID,
+                        grantor: owner_id,
+                        acl_mode: AclMode::SELECT,
+                    })
+                } else {
+                    None
+                };
+                let privileges: Vec<_> = merge_mz_acl_items(
+                    owner_privileges
+                        .into_iter()
+                        .chain(default_privileges)
+                        .chain(progress_source_privilege),
+                )
+                .collect();
+
+                let temporary_oids = state.get_temporary_oids().collect();
+
+                if item.is_temporary() {
+                    if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
+                        || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
+                    {
+                        return Err(CatalogError::Catalog(Error::new(
+                            ErrorKind::InvalidTemporarySchema,
+                        )));
+                    }
+                    let owner_session =
+                        temporary_item_owner_session(state, session, &item, &name.item)?;
+
+                    let schema_id = name.qualifiers.schema_spec.clone().into();
+                    let item_type = item.typ();
+                    let (create_sql, global_id, versions) = item.to_serialized();
+                    tx.insert_user_item(
+                        id,
+                        global_id,
+                        schema_id,
+                        &name.item,
+                        create_sql,
+                        owner_id,
+                        privileges.clone(),
+                        &temporary_oids,
+                        versions,
+                        Some(owner_session),
+                    )?;
+
+                    info!(
+                        "create temporary {} {} ({})",
+                        item_type,
+                        state.resolve_full_name(&name, None),
+                        id
+                    );
+                } else {
+                    if let Some(temp_id) =
+                        item.uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
+                    {
+                        let temp_item = state.get_entry(temp_id);
+                        return Err(CatalogError::Catalog(Error::new(
+                            ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
+                        )));
+                    }
+                    if name.qualifiers.database_spec == ResolvedDatabaseSpecifier::Ambient
+                        && !system_user
+                    {
+                        let schema_name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                            .schema;
+                        return Err(CatalogError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
+                        )));
+                    }
+                    let schema_id = name.qualifiers.schema_spec.clone().into();
+                    let item_type = item.typ();
+                    let (create_sql, global_id, versions) = item.to_serialized();
+                    tx.insert_user_item(
+                        id,
+                        global_id,
+                        schema_id,
+                        &name.item,
+                        create_sql,
+                        owner_id,
+                        privileges.clone(),
+                        &temporary_oids,
+                        versions,
+                        None,
+                    )?;
+                    info!(
+                        "create {} {} ({})",
+                        item_type,
+                        state.resolve_full_name(&name, None),
+                        id
+                    );
+                }
+
+                if Self::should_audit_log_item(&item) {
+                    let name = Self::full_name_detail(
+                        &state.resolve_full_name(&name, session.map(|session| session.conn_id())),
+                    );
+                    let details = match &item {
+                        CatalogItem::Source(s) => {
+                            let cluster_id = match s.data_source {
+                                // Ingestion exports don't have their own cluster, but
+                                // run on their ingestion's cluster.
+                                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                                    match state.get_entry(&ingestion_id).cluster_id() {
+                                        Some(cluster_id) => Some(cluster_id.to_string()),
+                                        None => None,
+                                    }
+                                }
+                                _ => match item.cluster_id() {
+                                    Some(cluster_id) => Some(cluster_id.to_string()),
+                                    None => None,
+                                },
+                            };
+
+                            EventDetails::CreateSourceSinkV4(mz_audit_log::CreateSourceSinkV4 {
+                                id: id.to_string(),
+                                cluster_id,
+                                name,
+                                external_type: s.source_type().to_string(),
+                            })
+                        }
+                        CatalogItem::Sink(s) => {
+                            EventDetails::CreateSourceSinkV4(mz_audit_log::CreateSourceSinkV4 {
+                                id: id.to_string(),
+                                cluster_id: Some(s.cluster_id.to_string()),
+                                name,
+                                external_type: s.sink_type().to_string(),
+                            })
+                        }
+                        CatalogItem::Index(i) => {
+                            EventDetails::CreateIndexV1(mz_audit_log::CreateIndexV1 {
+                                id: id.to_string(),
+                                name,
+                                cluster_id: i.cluster_id.to_string(),
+                            })
+                        }
+                        CatalogItem::MaterializedView(mv) => {
+                            EventDetails::CreateMaterializedViewV1(
+                                mz_audit_log::CreateMaterializedViewV1 {
+                                    id: id.to_string(),
+                                    name,
+                                    cluster_id: mv.cluster_id.to_string(),
+                                    replacement_target_id: mv
+                                        .replacement_target
+                                        .map(|id| id.to_string()),
+                                },
+                            )
+                        }
+                        CatalogItem::Table(_)
+                        | CatalogItem::Log(_)
+                        | CatalogItem::View(_)
+                        | CatalogItem::Type(_)
+                        | CatalogItem::Func(_)
+                        | CatalogItem::Secret(_)
+                        | CatalogItem::Connection(_)
+                        | CatalogItem::MetricSink(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
+                            id: id.to_string(),
+                            name,
+                        }),
+                    };
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Create,
+                        catalog_type_to_audit_object_type(item.typ()),
+                        details,
+                    )?;
+                }
+            }
+            Op::CreateNetworkPolicy {
+                rules,
+                name,
+                owner_id,
+            } => {
+                if state.network_policies_by_name.contains_key(&name) {
+                    return Err(CatalogError::PlanError(PlanError::Catalog(
+                        SqlCatalogError::NetworkPolicyAlreadyExists(name),
+                    )));
+                }
+                if is_reserved_name(&name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedNetworkPolicyName(name),
+                    )));
+                }
+
+                let owner_privileges = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::NetworkPolicy,
+                    owner_id,
+                )];
+                let default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(
+                        owner_id,
+                        None,
+                        None,
+                        mz_sql::catalog::ObjectType::NetworkPolicy,
+                    )
+                    .map(|item| item.mz_acl_item(owner_id));
+                let privileges: Vec<_> =
+                    merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
+                        .collect();
+
+                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                let id = tx.insert_user_network_policy(
+                    name.clone(),
+                    rules,
+                    privileges,
+                    owner_id,
+                    &temporary_oids,
+                )?;
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::NetworkPolicy,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+
+                info!("created network policy {name} ({id})");
+            }
+            Op::Comment {
+                object_id,
+                sub_component,
+                comment,
+            } => {
+                tx.update_comment(object_id, sub_component, comment)?;
+                let entry = state.get_comment_id_entry(&object_id);
+                let should_log = entry
+                    .map(|entry| Self::should_audit_log_item(entry.item()))
+                    // Things that aren't catalog entries can't be temp, so should be logged.
+                    .unwrap_or(true);
+                // TODO: We need a conn_id to resolve schema names. This means that system-initiated
+                // comments won't be logged for now.
+                if let (Some(conn_id), true) =
+                    (session.map(|session| session.conn_id()), should_log)
+                {
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Comment,
+                        comment_id_to_audit_object_type(object_id),
+                        EventDetails::IdNameV1(IdNameV1 {
+                            // CommentObjectIds don't have a great string representation, but debug will do for now.
+                            id: format!("{object_id:?}"),
+                            name: state.comment_id_to_audit_log_name(object_id, conn_id),
+                        }),
+                    )?;
+                }
+            }
+            Op::UpdateSourceReferences {
+                source_id,
+                references,
+            } => {
+                tx.update_source_references(
+                    source_id,
+                    references
+                        .references
+                        .into_iter()
+                        .map(|reference| reference.into())
+                        .collect(),
+                    references.updated_at,
+                )?;
+            }
+            Op::DropObjects(drop_object_infos) => {
+                // Generate all of the objects that need to get dropped.
+                let delta = ObjectsToDrop::generate(drop_object_infos, state, session)?;
+
+                // Drop any associated comments.
+                tx.drop_comments(&delta.comments)?;
+
+                // Drop any items.
+                let items_to_drop: BTreeSet<_> = delta.items.iter().copied().collect();
+                tx.remove_items(&items_to_drop)?;
+
+                for item_id in delta.items {
+                    let entry = state.get_entry(&item_id);
+
+                    let build =
+                        Self::expression_build_version(state.config().build_info).to_string();
+                    for id in entry.global_ids() {
+                        if tx.get_written_plan(id, &build).is_some() {
+                            tx.set_written_plan(id, &build, None)?;
+                        }
+                    }
+
+                    if entry.item().is_storage_collection() {
+                        storage_collections_to_drop.extend(entry.global_ids());
+                    }
+
+                    if state.source_references.contains_key(&item_id) {
+                        tx.remove_source_references(item_id)?;
+                    }
+
+                    if Self::should_audit_log_item(entry.item()) {
+                        add_to_audit_log(
+                            &state.system_configuration,
+                            oracle_write_ts,
+                            session,
+                            tx,
+                            audit_events,
+                            EventType::Drop,
+                            catalog_type_to_audit_object_type(entry.item().typ()),
+                            EventDetails::IdFullNameV1(IdFullNameV1 {
+                                id: item_id.to_string(),
+                                name: Self::full_name_detail(&state.resolve_full_name(
+                                    entry.name(),
+                                    session.map(|session| session.conn_id()),
+                                )),
+                            }),
+                        )?;
+                    }
+                    info!(
+                        "drop {} {} ({})",
+                        entry.item_type(),
+                        state.resolve_full_name(entry.name(), entry.conn_id()),
+                        item_id
+                    );
+                }
+
+                // Drop any schemas.
+                let schemas = delta
+                    .schemas
+                    .iter()
+                    .map(|(schema_spec, database_spec)| {
+                        (SchemaId::from(schema_spec), *database_spec)
+                    })
+                    .collect();
+                tx.remove_schemas(&schemas)?;
+
+                for (schema_spec, database_spec) in delta.schemas {
+                    let schema = state.get_schema(
+                        &database_spec,
+                        &schema_spec,
+                        session
+                            .map(|session| session.conn_id())
+                            .unwrap_or(&SYSTEM_CONN_ID),
+                    );
+
+                    let schema_id = SchemaId::from(schema_spec);
+                    let database_id = match database_spec {
+                        ResolvedDatabaseSpecifier::Ambient => None,
+                        ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
+                    };
+
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::Schema,
+                        EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
+                            id: schema_id.to_string(),
+                            name: schema.name.schema.to_string(),
+                            database_name: database_id
+                                .map(|database_id| state.database_by_id[&database_id].name.clone()),
+                        }),
+                    )?;
+                }
+
+                // Drop any databases.
+                tx.remove_databases(&delta.databases)?;
+
+                for database_id in delta.databases {
+                    let database = state.get_database(&database_id).clone();
+
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::Database,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: database_id.to_string(),
+                            name: database.name.clone(),
+                        }),
+                    )?;
+                }
+
+                // Drop any roles.
+                tx.remove_user_roles(&delta.roles)?;
+
+                for role_id in delta.roles {
+                    let role = state
+                        .roles_by_id
+                        .get(&role_id)
+                        .expect("catalog out of sync");
+
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::Role,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: role.id.to_string(),
+                            name: role.name.clone(),
+                        }),
+                    )?;
+                    info!("drop role {}", role.name());
+                }
+
+                // Drop any network policies.
+                tx.remove_network_policies(&delta.network_policies)?;
+
+                for network_policy_id in delta.network_policies {
+                    let policy = state
+                        .network_policies_by_id
+                        .get(&network_policy_id)
+                        .expect("catalog out of sync");
+
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::NetworkPolicy,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: policy.id.to_string(),
+                            name: policy.name.clone(),
+                        }),
+                    )?;
+                    info!("drop network policy {}", policy.name.clone());
+                }
+
+                // Drop any replicas.
+                let replicas: BTreeSet<_> = delta.replicas.keys().copied().collect();
+                if !replicas.is_empty() {
+                    let build =
+                        Self::expression_build_version(state.config().build_info).to_string();
+                    let observer_plans: Vec<_> = tx
+                        .get_written_plans()
+                        .filter(|plan| {
+                            plan.build_version == build
+                                && plan
+                                    .replica_owner
+                                    .as_ref()
+                                    .is_some_and(|owner| replicas.contains(&owner.replica_id))
+                        })
+                        .map(|plan| plan.id)
+                        .collect();
+                    for id in observer_plans {
+                        tx.set_written_plan(id, &build, None)?;
+                    }
+                }
+                tx.remove_cluster_replicas(&replicas)?;
+
+                for (replica_id, (cluster_id, reason)) in delta.replicas {
+                    let cluster = state.get_cluster(cluster_id);
+                    let replica = cluster.replica(replica_id).expect("Must exist");
+
+                    let (reason, scheduling_policies) = reason.into_audit_log();
+                    let details =
+                        EventDetails::DropClusterReplicaV3(mz_audit_log::DropClusterReplicaV3 {
+                            cluster_id: cluster_id.to_string(),
+                            cluster_name: cluster.name.clone(),
+                            replica_id: Some(replica_id.to_string()),
+                            replica_name: replica.name.clone(),
+                            reason,
+                            scheduling_policies,
+                        });
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::ClusterReplica,
+                        details,
+                    )?;
+                }
+
+                // Drop any clusters.
+                tx.remove_clusters(&delta.clusters)?;
+
+                for cluster_id in delta.clusters {
+                    let cluster = state.get_cluster(cluster_id);
+
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::Cluster,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: cluster.id.to_string(),
+                            name: cluster.name.clone(),
+                        }),
+                    )?;
+                }
+            }
+            Op::GrantRole {
+                role_id,
+                member_id,
+                grantor_id,
+            } => {
+                state.ensure_not_reserved_role(&member_id)?;
+                state.ensure_grantable_role(&role_id)?;
+                if state.collect_role_membership(&role_id).contains(&member_id) {
+                    let group_role = state.get_role(&role_id);
+                    let member_role = state.get_role(&member_id);
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::CircularRoleMembership {
+                            role_name: group_role.name().to_string(),
+                            member_name: member_role.name().to_string(),
+                        },
+                    )));
+                }
+                let mut member_role = state.get_role(&member_id).clone();
+                member_role.membership.map.insert(role_id, grantor_id);
+                tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Grant,
+                    ObjectType::Role,
+                    EventDetails::GrantRoleV2(mz_audit_log::GrantRoleV2 {
+                        role_id: role_id.to_string(),
+                        member_id: member_id.to_string(),
+                        grantor_id: grantor_id.to_string(),
+                        executed_by: session
+                            .map(|session| session.authenticated_role_id())
+                            .unwrap_or(&MZ_SYSTEM_ROLE_ID)
+                            .to_string(),
+                    }),
+                )?;
+            }
+            Op::RevokeRole {
+                role_id,
+                member_id,
+                grantor_id,
+            } => {
+                state.ensure_not_reserved_role(&member_id)?;
+                state.ensure_grantable_role(&role_id)?;
+                let mut member_role = state.get_role(&member_id).clone();
+                member_role.membership.map.remove(&role_id);
+                tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Revoke,
+                    ObjectType::Role,
+                    EventDetails::RevokeRoleV2(mz_audit_log::RevokeRoleV2 {
+                        role_id: role_id.to_string(),
+                        member_id: member_id.to_string(),
+                        grantor_id: grantor_id.to_string(),
+                        executed_by: session
+                            .map(|session| session.authenticated_role_id())
+                            .unwrap_or(&MZ_SYSTEM_ROLE_ID)
+                            .to_string(),
+                    }),
+                )?;
+            }
+            Op::UpdatePrivilege {
+                target_id,
+                privileges,
+                variant,
+            } => {
+                let update_privilege_fn = |target_privileges: &mut PrivilegeMap| {
+                    for privilege in &privileges {
+                        match variant {
+                            UpdatePrivilegeVariant::Grant => {
+                                target_privileges.grant(privilege.clone());
+                            }
+                            UpdatePrivilegeVariant::Revoke => {
+                                target_privileges.revoke(privilege);
+                            }
+                        }
+                    }
+                };
+                match &target_id {
+                    SystemObjectId::Object(object_id) => match object_id {
+                        ObjectId::Cluster(id) => {
+                            let mut cluster = state.get_cluster(*id).clone();
+                            update_privilege_fn(&mut cluster.privileges);
+                            tx.update_cluster(*id, cluster.into())?;
+                        }
+                        ObjectId::Database(id) => {
+                            let mut database = state.get_database(id).clone();
+                            update_privilege_fn(&mut database.privileges);
+                            tx.update_database(*id, database.into())?;
+                        }
+                        ObjectId::NetworkPolicy(id) => {
+                            let mut policy = state.get_network_policy(id).clone();
+                            update_privilege_fn(&mut policy.privileges);
+                            tx.update_network_policy(*id, policy.into())?;
+                        }
+                        ObjectId::Schema((database_spec, schema_spec)) => {
+                            let schema_id = schema_spec.clone().into();
+                            let mut schema = state
+                                .get_schema(
+                                    database_spec,
+                                    schema_spec,
+                                    session
+                                        .map(|session| session.conn_id())
+                                        .unwrap_or(&SYSTEM_CONN_ID),
+                                )
+                                .clone();
+                            update_privilege_fn(&mut schema.privileges);
+                            tx.update_schema(schema_id, schema.into())?;
+                        }
+                        ObjectId::Item(id) => {
+                            let entry = state.get_entry(id);
+                            let mut new_entry = entry.clone();
+                            update_privilege_fn(&mut new_entry.privileges);
+                            tx.update_item(*id, state.durable_item(new_entry)?)?;
+                        }
+                        ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
+                    },
+                    SystemObjectId::System => {
+                        let mut system_privileges = PrivilegeMap::clone(&state.system_privileges);
+                        update_privilege_fn(&mut system_privileges);
+                        for privilege in &privileges {
+                            let new_privilege = system_privileges
+                                .get_acl_item(&privilege.grantee, &privilege.grantor);
+                            tx.set_system_privilege(
+                                privilege.grantee,
+                                privilege.grantor,
+                                new_privilege.map(|new_privilege| new_privilege.acl_mode),
+                            )?;
+                        }
+                    }
+                }
+                let object_type = state.get_system_object_type(&target_id);
+                let object_id_str = match &target_id {
+                    SystemObjectId::System => "SYSTEM".to_string(),
+                    SystemObjectId::Object(id) => id.to_string(),
+                };
+                // One audit event per grantee, even though the batch is a single durable write.
+                for privilege in &privileges {
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        variant.into(),
+                        system_object_type_to_audit_object_type(&object_type),
+                        EventDetails::UpdatePrivilegeV1(mz_audit_log::UpdatePrivilegeV1 {
+                            object_id: object_id_str.clone(),
+                            grantee_id: privilege.grantee.to_string(),
+                            grantor_id: privilege.grantor.to_string(),
+                            privileges: privilege.acl_mode.to_string(),
+                        }),
+                    )?;
+                }
+            }
+            Op::UpdateDefaultPrivilege {
+                privilege_object,
+                privilege_acl_item,
+                variant,
+            } => {
+                let mut default_privileges = DefaultPrivileges::clone(&state.default_privileges);
+                match variant {
+                    UpdatePrivilegeVariant::Grant => default_privileges
+                        .grant(privilege_object.clone(), privilege_acl_item.clone()),
+                    UpdatePrivilegeVariant::Revoke => {
+                        default_privileges.revoke(&privilege_object, &privilege_acl_item)
+                    }
+                }
+                let new_acl_mode = default_privileges
+                    .get_privileges_for_grantee(&privilege_object, &privilege_acl_item.grantee);
+                tx.set_default_privilege(
+                    privilege_object.role_id,
+                    privilege_object.database_id,
+                    privilege_object.schema_id,
+                    privilege_object.object_type,
+                    privilege_acl_item.grantee,
+                    new_acl_mode.cloned(),
+                )?;
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    variant.into(),
+                    object_type_to_audit_object_type(privilege_object.object_type),
+                    EventDetails::AlterDefaultPrivilegeV1(mz_audit_log::AlterDefaultPrivilegeV1 {
+                        role_id: privilege_object.role_id.to_string(),
+                        database_id: privilege_object.database_id.map(|id| id.to_string()),
+                        schema_id: privilege_object.schema_id.map(|id| id.to_string()),
+                        grantee_id: privilege_acl_item.grantee.to_string(),
+                        privileges: privilege_acl_item.acl_mode.to_string(),
+                    }),
+                )?;
+            }
+            Op::RenameCluster {
+                id,
+                name,
+                to_name,
+                check_reserved_names,
+            } => {
+                if id.is_system() {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyCluster(name.clone()),
+                    )));
+                }
+                if check_reserved_names && is_reserved_name(&to_name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedClusterName(to_name),
+                    )));
+                }
+                tx.rename_cluster(id, &name, &to_name)?;
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::Cluster,
+                    EventDetails::RenameClusterV1(mz_audit_log::RenameClusterV1 {
+                        id: id.to_string(),
+                        old_name: name.clone(),
+                        new_name: to_name.clone(),
+                    }),
+                )?;
+                info!("rename cluster {name} to {to_name}");
+            }
+            Op::RenameClusterReplica {
+                cluster_id,
+                replica_id,
+                name,
+                to_name,
+            } => {
+                if is_reserved_name(&to_name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedReplicaName(to_name),
+                    )));
+                }
+                tx.rename_cluster_replica(replica_id, &name, &to_name)?;
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::ClusterReplica,
+                    EventDetails::RenameClusterReplicaV1(mz_audit_log::RenameClusterReplicaV1 {
+                        cluster_id: cluster_id.to_string(),
+                        replica_id: replica_id.to_string(),
+                        old_name: name.replica.as_str().to_string(),
+                        new_name: to_name.clone(),
+                    }),
+                )?;
+                info!("rename cluster replica {name} to {to_name}");
+            }
+            Op::RenameItem {
+                id,
+                to_name,
+                current_full_name,
+            } => {
+                let mut updates = Vec::new();
+
+                let entry = state.get_entry(&id);
+                if let CatalogItem::Type(_) = entry.item() {
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::TypeRename(
+                        current_full_name.to_string(),
+                    ))));
+                }
+
+                if entry.id().is_system() {
+                    let name = state
+                        .resolve_full_name(entry.name(), session.map(|session| session.conn_id()));
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                        name.to_string(),
+                    ))));
+                }
+
+                let mut to_full_name = current_full_name.clone();
+                to_full_name.item.clone_from(&to_name);
+
+                let mut to_qualified_name = entry.name().clone();
+                to_qualified_name.item.clone_from(&to_name);
+
+                let details = EventDetails::RenameItemV1(mz_audit_log::RenameItemV1 {
+                    id: id.to_string(),
+                    old_name: Self::full_name_detail(&current_full_name),
+                    new_name: Self::full_name_detail(&to_full_name),
+                });
+                if Self::should_audit_log_item(entry.item()) {
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        catalog_type_to_audit_object_type(entry.item().typ()),
+                        details,
+                    )?;
+                }
+
+                // Rename item itself.
+                let mut new_entry = entry.clone();
+                new_entry.name.item.clone_from(&to_name);
+                new_entry.item = entry
+                    .item()
+                    .rename_item_refs(current_full_name.clone(), to_full_name.item.clone(), true)
+                    .map_err(|e| {
+                        Error::new(ErrorKind::from(AmbiguousRename {
+                            depender: state
+                                .resolve_full_name(entry.name(), entry.conn_id())
+                                .to_string(),
+                            dependee: state
+                                .resolve_full_name(entry.name(), entry.conn_id())
+                                .to_string(),
+                            message: e,
+                        }))
+                    })?;
+
+                for id in entry.referenced_by() {
+                    let dependent_item = state.get_entry(id);
+                    let mut to_entry = dependent_item.clone();
+                    to_entry.item = dependent_item
+                        .item()
+                        .rename_item_refs(
+                            current_full_name.clone(),
+                            to_full_name.item.clone(),
+                            false,
+                        )
+                        .map_err(|e| {
+                            Error::new(ErrorKind::from(AmbiguousRename {
+                                depender: state
+                                    .resolve_full_name(
+                                        dependent_item.name(),
+                                        dependent_item.conn_id(),
+                                    )
+                                    .to_string(),
+                                dependee: state
+                                    .resolve_full_name(entry.name(), entry.conn_id())
+                                    .to_string(),
+                                message: e,
+                            }))
+                        })?;
+
+                    tx.update_item(*id, state.durable_item(to_entry)?)?;
+                    updates.push(*id);
+                }
+                tx.update_item(id, state.durable_item(new_entry)?)?;
+
+                updates.push(id);
+                for id in updates {
+                    Self::log_update(state, &id);
+                }
+            }
+            Op::RenameSchema {
+                database_spec,
+                schema_spec,
+                new_name,
+                check_reserved_names,
+            } => {
+                if check_reserved_names && is_reserved_name(&new_name) {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedSchemaName(new_name),
+                    )));
+                }
+
+                let conn_id = session
+                    .map(|session| session.conn_id())
+                    .unwrap_or(&SYSTEM_CONN_ID);
+
+                let schema = state.get_schema(&database_spec, &schema_spec, conn_id);
+                let cur_name = schema.name().schema.clone();
+
+                let ResolvedDatabaseSpecifier::Id(database_id) = database_spec else {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::AmbientSchemaRename(cur_name),
+                    )));
+                };
+                let database = state.get_database(&database_id);
+                let database_name = &database.name;
+
+                let mut updates: Vec<CatalogItemId> = Vec::new();
+                let mut items_to_update = BTreeMap::new();
+                // An item can be reached more than once: once as a member of
+                // the schema and again for each object in the schema it
+                // depends on. Skip items that were already rewritten.
+                let mut seen: BTreeSet<CatalogItemId> = BTreeSet::new();
+
+                let mut update_item = |id: &CatalogItemId| {
+                    if !seen.insert(*id) {
+                        return Ok(());
+                    }
+
+                    let entry = state.get_entry(id);
+
+                    // Update our item.
+                    let mut new_entry = entry.clone();
+                    new_entry.item = entry
+                        .item
+                        .rename_schema_refs(database_name, &cur_name, &new_name)
+                        .map_err(|(s, _i)| {
+                            Error::new(ErrorKind::from(AmbiguousRename {
+                                depender: state
+                                    .resolve_full_name(entry.name(), entry.conn_id())
+                                    .to_string(),
+                                dependee: format!("{database_name}.{cur_name}"),
+                                message: format!("ambiguous reference to schema named {s}"),
+                            }))
+                        })?;
+
+                    // Queue updates for Catalog storage and Builtin Tables.
+                    items_to_update.insert(*id, state.durable_item(new_entry)?);
+                    updates.push(*id);
+
+                    Ok::<_, CatalogError>(())
+                };
+
+                // Update all of the items in the schema. A schema holds items,
+                // types, and functions in separate maps, and any of them may be
+                // referenced by another object's create_sql via a schema-qualified
+                // name, so all three must be rewritten.
+                for (_name, item_id) in schema
+                    .items
+                    .iter()
+                    .chain(schema.types.iter())
+                    .chain(schema.functions.iter())
+                {
+                    // Update the item itself.
+                    update_item(item_id)?;
+
+                    // Update everything that depends on this item.
+                    for id in state.get_entry(item_id).referenced_by() {
+                        update_item(id)?;
+                    }
+                }
+                // Note: When updating the transaction it's very important that we update the
+                // items as a whole group, otherwise we exhibit quadratic behavior.
+                tx.update_items(items_to_update)?;
+
+                // Renaming temporary schemas is not supported.
+                let SchemaSpecifier::Id(schema_id) = *schema.id() else {
+                    let schema_name = schema.name().schema.clone();
+                    return Err(CatalogError::Catalog(crate::catalog::Error::new(
+                        crate::catalog::ErrorKind::ReadOnlySystemSchema(schema_name),
+                    )));
+                };
+
+                // Add an entry to the audit log.
+                let database_name = database_spec
+                    .id()
+                    .map(|id| state.get_database(&id).name.clone());
+                let details = EventDetails::RenameSchemaV1(mz_audit_log::RenameSchemaV1 {
+                    id: schema_id.to_string(),
+                    old_name: schema.name().schema.clone(),
+                    new_name: new_name.clone(),
+                    database_name,
+                });
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    mz_audit_log::ObjectType::Schema,
+                    details,
+                )?;
+
+                // Update the schema itself.
+                let mut new_schema = schema.clone();
+                new_schema.name.schema.clone_from(&new_name);
+                tx.update_schema(schema_id, new_schema.into())?;
+
+                for id in updates {
+                    Self::log_update(state, &id);
+                }
+            }
+            Op::UpdateOwner { id, new_owner } => {
+                let conn_id = session
+                    .map(|session| session.conn_id())
+                    .unwrap_or(&SYSTEM_CONN_ID);
+                let old_owner = state
+                    .get_owner_id(&id, conn_id)
+                    .expect("cannot update the owner of an object without an owner");
+                match &id {
+                    ObjectId::Cluster(id) => {
+                        let mut cluster = state.get_cluster(*id).clone();
+                        if id.is_system() {
+                            return Err(CatalogError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyCluster(cluster.name),
+                            )));
+                        }
+                        Self::update_privilege_owners(
+                            &mut cluster.privileges,
+                            cluster.owner_id,
+                            new_owner,
+                        );
+                        cluster.owner_id = new_owner;
+                        tx.update_cluster(*id, cluster.into())?;
+                    }
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                        let cluster = state.get_cluster(*cluster_id);
+                        let mut replica = cluster
+                            .replica(*replica_id)
+                            .expect("catalog out of sync")
+                            .clone();
+                        if replica_id.is_system() {
+                            return Err(CatalogError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyClusterReplica(replica.name),
+                            )));
+                        }
+                        replica.owner_id = new_owner;
+                        tx.update_cluster_replica(*replica_id, replica.into())?;
+                    }
+                    ObjectId::Database(id) => {
+                        let mut database = state.get_database(id).clone();
+                        if id.is_system() {
+                            return Err(CatalogError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyDatabase(database.name),
+                            )));
+                        }
+                        Self::update_privilege_owners(
+                            &mut database.privileges,
+                            database.owner_id,
+                            new_owner,
+                        );
+                        database.owner_id = new_owner;
+                        tx.update_database(*id, database.clone().into())?;
+                    }
+                    ObjectId::Schema((database_spec, schema_spec)) => {
+                        let schema_id: SchemaId = schema_spec.clone().into();
+                        let mut schema = state
+                            .get_schema(database_spec, schema_spec, conn_id)
+                            .clone();
+                        if schema_id.is_system() {
+                            let name = schema.name();
+                            let full_name = state.resolve_full_schema_name(name);
+                            return Err(CatalogError::Catalog(Error::new(
+                                ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
+                            )));
+                        }
+                        Self::update_privilege_owners(
+                            &mut schema.privileges,
+                            schema.owner_id,
+                            new_owner,
+                        );
+                        schema.owner_id = new_owner;
+                        tx.update_schema(schema_id, schema.into())?;
+                    }
+                    ObjectId::Item(id) => {
+                        let entry = state.get_entry(id);
+                        let mut new_entry = entry.clone();
+                        if id.is_system() {
+                            let full_name = state.resolve_full_name(
+                                new_entry.name(),
+                                session.map(|session| session.conn_id()),
+                            );
+                            return Err(CatalogError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyItem(full_name.to_string()),
+                            )));
+                        }
+                        Self::update_privilege_owners(
+                            &mut new_entry.privileges,
+                            new_entry.owner_id,
+                            new_owner,
+                        );
+                        new_entry.owner_id = new_owner;
+                        tx.update_item(*id, state.durable_item(new_entry)?)?;
+                    }
+                    ObjectId::NetworkPolicy(id) => {
+                        let mut policy = state.get_network_policy(id).clone();
+                        if id.is_system() {
+                            return Err(CatalogError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyNetworkPolicy(policy.name),
+                            )));
+                        }
+                        Self::update_privilege_owners(
+                            &mut policy.privileges,
+                            policy.owner_id,
+                            new_owner,
+                        );
+                        policy.owner_id = new_owner;
+                        tx.update_network_policy(*id, policy.into())?;
+                    }
+                    ObjectId::Role(_) => unreachable!("roles have no owner"),
+                }
+                let object_type = state.get_object_type(&id);
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    object_type_to_audit_object_type(object_type),
+                    EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
+                        object_id: id.to_string(),
+                        old_owner_id: old_owner.to_string(),
+                        new_owner_id: new_owner.to_string(),
+                    }),
+                )?;
+            }
+            Op::UpdateClusterConfig {
+                id,
+                name,
+                mut config,
+                reconfiguration_audit,
+                mut burst_audit,
+            } => {
+                let mut cluster = state.get_cluster(id).clone();
+                // A write that invalidates the in-flight burst (policy removed
+                // or re-sized, cluster turned off) retires the record here, in
+                // the same transaction. Retiring at this chokepoint rather
+                // than in each sequencer path means no writer can forget, so a
+                // committed config never carries a record it does not warrant.
+                // Writes that declare a burst intent manage the record
+                // themselves.
+                if burst_audit.is_none() {
+                    if let ClusterVariant::Managed(managed) = &mut config.variant {
+                        if managed.has_unwarranted_burst_record() {
+                            managed.burst = None;
+                            burst_audit = Some(BurstAudit::Finished {
+                                cause: BurstFinishCause::NoLongerWarranted,
+                            });
+                        }
+                    }
+                }
+                // Writes that declare no reconfiguration intent must not move
+                // the reconfiguration lifecycle, or the audit log would
+                // silently lose the transition. Writer bug, fails the
+                // transaction.
+                if reconfiguration_audit.is_none()
+                    && Self::reconfiguration_lifecycle_moved(&cluster.config, &config)
+                {
+                    return Err(CatalogError::Internal(format!(
+                        "cluster {name} reconfiguration record moved without a declared \
+                         audit intent"
+                    )));
+                }
+                // The same contract for the burst lifecycle: a record appearing
+                // or disappearing without a declared intent would silently lose
+                // the started/finished audit transition.
+                if burst_audit.is_none() && Self::burst_lifecycle_moved(&cluster.config, &config) {
+                    return Err(CatalogError::Internal(format!(
+                        "cluster {name} burst record moved without a declared audit intent"
+                    )));
+                }
+                let reconfiguration_event = reconfiguration_audit
+                    .map(|audit| Self::reconfiguration_audit_details(&config, id, &name, audit))
+                    .transpose()?;
+                let burst_event = burst_audit
+                    .map(|audit| {
+                        Self::burst_audit_details(&cluster.config, &config, id, &name, audit)
+                    })
+                    .transpose()?;
+                cluster.config = config;
+                tx.update_cluster(id, cluster.into())?;
+                info!("update cluster {}", name);
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::Cluster,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name,
+                    }),
+                )?;
+
+                if let Some(details) = reconfiguration_event {
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::AlterClusterReconfigurationV1(details),
+                    )?;
+                }
+
+                if let Some(details) = burst_event {
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::ClusterHydrationBurstV1(details),
+                    )?;
+                }
+            }
+            Op::UpdateItem { id, name, to_item } => {
+                // A non-temporary item must not depend on a temporary one.
+                // Temporary objects are session-scoped and disappear with
+                // their session, so a longer-lived item referencing one would
+                // be left with a dangling reference. `Op::CreateItem` enforces
+                // it; mirror it here so ALTER paths (e.g. ALTER SINK ... SET
+                // FROM) cannot repoint a persistent item at a temporary one.
+                if !to_item.is_temporary() {
+                    if let Some(temp_id) =
+                        to_item
+                            .uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
+                    {
+                        let temp_item = state.get_entry(temp_id);
+                        return Err(CatalogError::Catalog(Error::new(
+                            ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
+                        )));
+                    }
+                }
+
+                let mut entry = state.get_entry(&id).clone();
+                entry.name = name.clone();
+                entry.item = to_item.clone();
+                tx.update_item(id, state.durable_item(entry)?)?;
+                if state.catalog_read_protection_enabled()
+                    && let Some((owner, inputs)) = storage_recovery_inputs(state, &to_item)?
+                {
+                    // Preliminary state includes explicit progress ops preceding this update.
+                    // Changing inputs alone cannot release history still needed for recovery.
+                    let requirement = state
+                        .maintained_read_requirements()
+                        .get(&owner)
+                        .ok_or_else(|| {
+                            CatalogError::internal(
+                                "update storage item",
+                                format!("missing read requirement for {owner}"),
+                            )
+                        })?;
+                    tx.set_maintained_read_requirement(owner, inputs, requirement.frontier)?;
+                }
+
+                if Self::should_audit_log_item(&to_item) {
+                    let mut full_name = Self::full_name_detail(
+                        &state.resolve_full_name(&name, session.map(|session| session.conn_id())),
+                    );
+                    full_name.item = name.item;
+
+                    add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        catalog_type_to_audit_object_type(to_item.typ()),
+                        EventDetails::UpdateItemV1(mz_audit_log::UpdateItemV1 {
+                            id: id.to_string(),
+                            name: full_name,
+                        }),
+                    )?;
+                }
+
+                Self::log_update(state, &id);
+            }
+            Op::UpdateSystemConfiguration { name, value } => {
+                let parsed_value = state.parse_system_configuration(&name, value.borrow())?;
+                tx.upsert_system_config(&name, parsed_value.clone())?;
+                // This mirrors some "system vars" into the catalog storage
+                // "config" collection so that we can toggle the flag with
+                // Launch Darkly, but use it in boot before Launch Darkly is
+                // available.
+                if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
+                    let with_0dt_deployment_max_wait =
+                        Duration::parse(VarInput::Flat(&parsed_value))
+                            .expect("parsing succeeded above");
+                    tx.set_0dt_deployment_max_wait(with_0dt_deployment_max_wait)?;
+                } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                    let with_0dt_deployment_ddl_check_interval =
+                        Duration::parse(VarInput::Flat(&parsed_value))
+                            .expect("parsing succeeded above");
+                    tx.set_0dt_deployment_ddl_check_interval(
+                        with_0dt_deployment_ddl_check_interval,
+                    )?;
+                } else if name == ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name() {
+                    let panic_after_timeout =
+                        strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
+                    tx.set_enable_0dt_deployment_panic_after_timeout(panic_after_timeout)?;
+                }
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::SetV1(mz_audit_log::SetV1 {
+                        name,
+                        value: Some(value.borrow().to_vec().join(", ")),
+                    }),
+                )?;
+            }
+            Op::ResetSystemConfiguration { name } => {
+                tx.remove_system_config(&name);
+                // This mirrors some "system vars" into the catalog storage
+                // "config" collection so that we can toggle the flag with
+                // Launch Darkly, but use it in boot before Launch Darkly is
+                // available.
+                if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
+                    tx.reset_0dt_deployment_max_wait()?;
+                } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                    tx.reset_0dt_deployment_ddl_check_interval()?;
+                } else if name == ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name() {
+                    tx.reset_enable_0dt_deployment_panic_after_timeout()?;
+                }
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::SetV1(mz_audit_log::SetV1 { name, value: None }),
+                )?;
+            }
+            Op::ResetAllSystemConfiguration => {
+                tx.clear_system_configs();
+                tx.reset_0dt_deployment_max_wait()?;
+                tx.reset_0dt_deployment_ddl_check_interval()?;
+                tx.reset_enable_0dt_deployment_panic_after_timeout()?;
+
+                add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::System,
+                    EventDetails::ResetAllV1,
+                )?;
+            }
+            Op::UpdateScopedSystemParameters {
+                scoped,
+                prune_scope,
+            } => {
+                // Diff `scoped` against the durable cache and persist only the
+                // delta: upsert changed/added entries, then remove entries the
+                // update no longer serves. A removal for a still-live object is
+                // bounded by `prune_scope` so this update does not delete a row
+                // for an object it was not evaluated for (e.g. one created after
+                // the update's snapshot, whose override rode its own create
+                // transaction). Rows whose owning object is no longer live are
+                // always pruned regardless of `prune_scope`, because nothing else
+                // garbage collects them and ids are never reused, so this lazily
+                // reclaims orphans left by dropped objects.
+                let live_clusters: BTreeSet<ClusterId> =
+                    tx.get_clusters().map(|cluster| cluster.id).collect();
+                let live_replicas: BTreeSet<ReplicaId> = tx
+                    .get_cluster_replicas()
+                    .map(|replica| replica.replica_id)
+                    .collect();
+
+                // Cluster-coherent scope.
+                let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
+                    .get_cluster_system_configurations()
+                    .map(|c| ((c.cluster_id, c.name), c.value))
+                    .collect();
+                let mut desired_cluster: BTreeSet<(ClusterId, String)> = BTreeSet::new();
+                for (cluster_id, values) in &scoped.cluster {
+                    if !live_clusters.contains(cluster_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_cluster.insert((*cluster_id, name.clone()));
+                        if existing_cluster.get(&(*cluster_id, name.clone())) != Some(value) {
+                            tx.upsert_cluster_system_config(*cluster_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (cluster_id, name) in existing_cluster.into_keys() {
+                    if (!live_clusters.contains(&cluster_id)
+                        || prune_scope.clusters.contains(&cluster_id))
+                        && !desired_cluster.contains(&(cluster_id, name.clone()))
+                    {
+                        tx.remove_cluster_system_config(cluster_id, &name);
+                    }
+                }
+
+                // Replica-local scope.
+                let existing_replica: BTreeMap<(ReplicaId, String), String> = tx
+                    .get_replica_system_configurations()
+                    .map(|r| ((r.replica_id, r.name), r.value))
+                    .collect();
+                let mut desired_replica: BTreeSet<(ReplicaId, String)> = BTreeSet::new();
+                for (replica_id, values) in &scoped.replica {
+                    if !live_replicas.contains(replica_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_replica.insert((*replica_id, name.clone()));
+                        if existing_replica.get(&(*replica_id, name.clone())) != Some(value) {
+                            tx.upsert_replica_system_config(*replica_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (replica_id, name) in existing_replica.into_keys() {
+                    if (!live_replicas.contains(&replica_id)
+                        || prune_scope.replicas.contains(&replica_id))
+                        && !desired_replica.contains(&(replica_id, name.clone()))
+                    {
+                        tx.remove_replica_system_config(replica_id, &name);
+                    }
+                }
+            }
+            Op::SetReadProtection {
+                requirements,
+                bounds,
+            } => {
+                tx.set_read_protection(requirements, bounds)?;
+            }
+            Op::InjectAuditEvents { events } => {
+                for event in events {
+                    let id = tx.allocate_audit_log_id()?;
+                    let ev = VersionedEvent::new(
+                        id,
+                        event.event_type,
+                        event.object_type,
+                        event.details,
+                        event.user,
+                        oracle_write_ts.into(),
+                    );
+                    audit_events.push(ev.clone());
+                    tx.insert_audit_log_event(ev);
+                }
+            }
+        };
+        Ok(())
+    }
+
+    fn log_update(state: &CatalogState, id: &CatalogItemId) {
+        let entry = state.get_entry(id);
+        info!(
+            "update {} {} ({})",
+            entry.item_type(),
+            state.resolve_full_name(entry.name(), entry.conn_id()),
+            id
+        );
+    }
+
+    /// Update privileges to reflect the new owner. Based off of PostgreSQL's
+    /// implementation:
+    /// <https://github.com/postgres/postgres/blob/43a33ef54e503b61f269d088f2623ba3b9484ad7/src/backend/utils/adt/acl.c#L1078-L1177>
+    fn update_privilege_owners(
+        privileges: &mut PrivilegeMap,
+        old_owner: RoleId,
+        new_owner: RoleId,
+    ) {
+        // TODO(jkosh44) Would be nice not to clone every privilege.
+        let mut flat_privileges: Vec<_> = privileges.all_values_owned().collect();
+
+        let mut new_present = false;
+        for privilege in flat_privileges.iter_mut() {
+            // Old owner's granted privilege are updated to be granted by the new
+            // owner.
+            if privilege.grantor == old_owner {
+                privilege.grantor = new_owner;
+            } else if privilege.grantor == new_owner {
+                new_present = true;
+            }
+            // Old owner's privileges is given to the new owner.
+            if privilege.grantee == old_owner {
+                privilege.grantee = new_owner;
+            } else if privilege.grantee == new_owner {
+                new_present = true;
+            }
+        }
+
+        // If the old privilege list contained references to the new owner, we may
+        // have created duplicate entries. Here we try and consolidate them. This
+        // is inspired by PostgreSQL's algorithm but not identical.
+        if new_present {
+            // Group privileges by (grantee, grantor).
+            let privilege_map: BTreeMap<_, Vec<_>> =
+                flat_privileges
+                    .into_iter()
+                    .fold(BTreeMap::new(), |mut accum, privilege| {
+                        accum
+                            .entry((privilege.grantee, privilege.grantor))
+                            .or_default()
+                            .push(privilege);
+                        accum
+                    });
+
+            // Consolidate and update all privileges.
+            flat_privileges = privilege_map
+                .into_iter()
+                .map(|((grantee, grantor), values)|
+                    // Combine the acl_mode of all mz_aclitems with the same grantee and grantor.
+                    values.into_iter().fold(
+                        MzAclItem::empty(grantee, grantor),
+                        |mut accum, mz_aclitem| {
+                            accum.acl_mode =
+                                accum.acl_mode.union(mz_aclitem.acl_mode);
+                            accum
+                        },
+                    ))
+                .collect();
+        }
+
+        *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
+    }
+}
+
+impl CatalogState {
+    /// Includes persisted recovery inputs for every protected index.
+    ///
+    /// Inputs are independent collection requirements, not bindings stored on an
+    /// index grant. They retain their metadata and history if the index is dropped.
+    /// A retired identity can retain or advance an existing grant, but
+    /// cannot be used to introduce protection for a new reader.
+    pub fn expand_client_read_requirements(
+        &self,
+        incarnation: u64,
+        mut requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
+    ) -> Result<BTreeMap<GlobalId, mz_repr::Timestamp>, CatalogError> {
+        if !self.client_incarnations().contains_key(&incarnation) {
+            return Err(CatalogError::internal(
+                "publish client read protection",
+                format!("client incarnation {incarnation} is closed"),
+            ));
+        }
+        let requested = requirements.clone();
+        for (id, frontier) in requested {
+            let Some(entry) = self.try_get_entry_by_global_id(&id) else {
+                // An index can be gone while its local tokens still retain their
+                // independent storage requirements. This does not recreate it or
+                // authorize a new or stronger grant on its retired identity.
+                let retained = self
+                    .client_read_requirements()
+                    .get(&(incarnation, id))
+                    .is_some_and(|held| *held <= frontier);
+                if retained {
+                    continue;
+                }
+                return Err(CatalogError::internal(
+                    "publish client read protection",
+                    format!("collection {id} is not available"),
+                ));
+            };
+            if let CatalogItem::Index(index) = entry.item() {
+                for input in self.logical_collection_inputs([index.on]) {
+                    // Logging inputs are compute-local. Their index's permission
+                    // protects its trace, not a nonexistent Persist collection.
+                    if matches!(
+                        self.get_entry_by_global_id(&input).item(),
+                        CatalogItem::Log(_)
+                    ) {
+                        continue;
+                    }
+                    requirements
+                        .entry(input)
+                        .and_modify(|held| *held = (*held).min(frontier))
+                        .or_insert(frontier);
+                }
+            } else if !entry.item().is_storage_collection() {
+                return Err(CatalogError::internal(
+                    "publish client read protection",
+                    format!("collection {id} is not readable"),
+                ));
+            }
+        }
+        Ok(requirements)
+    }
+}
+
+fn materialized_view_recovery_inputs(
+    state: &CatalogState,
+    mv: &MaterializedView,
+) -> BTreeSet<GlobalId> {
+    state.logical_collection_inputs(
+        mv.query_ids
+            .collections()
+            .copied()
+            .chain(mv.raw_expr.depends_on())
+            .filter(|id| state.get_entry_by_global_id(id).is_relation()),
+    )
+}
+
+/// Birth protection must retain every result promised by the stored definition.
+/// The output shard's permission is separate, especially for replacement MVs.
+fn validate_materialized_view_birth(
+    mv: &MaterializedView,
+    frontier: Option<mz_repr::Timestamp>,
+) -> Result<(), CatalogError> {
+    let initial_as_of = mv.initial_as_of.as_ref().and_then(|f| f.as_option());
+    let (Some(frontier), Some(initial_as_of)) = (frontier, initial_as_of) else {
+        return Err(CatalogError::internal(
+            "create materialized view",
+            "missing readable birth or initial storage frontier",
+        ));
+    };
+    if frontier > *initial_as_of {
+        return Err(CatalogError::internal(
+            "create materialized view",
+            "input protection exceeds initial storage visibility",
+        ));
+    }
+    if let Some(schedule) = &mv.refresh_schedule {
+        for refresh_at in &schedule.ats {
+            if frontier > *refresh_at {
+                return Err(CatalogError::InputNotReadableAtRefreshAtTime(
+                    *refresh_at,
+                    timely::progress::Antichain::from_elem(frontier),
+                ));
+            }
+            if initial_as_of > refresh_at {
+                return Err(CatalogError::internal(
+                    "create materialized view",
+                    "initial storage visibility skips an explicit refresh",
+                ));
+            }
+        }
+        if schedule.round_up_timestamp(*initial_as_of) != Some(*initial_as_of) {
+            return Err(CatalogError::internal(
+                "create materialized view",
+                "initial storage visibility is not a refresh timestamp",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns birth permission compatible with a source's storage initialization dependency.
+fn source_initial_compaction_bound(
+    state: &CatalogState,
+    desc: &DataSourceDesc,
+) -> Result<Option<mz_repr::Timestamp>, CatalogError> {
+    match source_initialization_dependency(state, desc)? {
+        Some(id) => dependency_compaction_bound(state, id),
+        None => Ok(Some(mz_repr::Timestamp::MIN)),
+    }
+}
+
+fn source_initialization_dependency(
+    state: &CatalogState,
+    desc: &DataSourceDesc,
+) -> Result<Option<GlobalId>, CatalogError> {
+    let dependency = match desc {
+        DataSourceDesc::IngestionExport {
+            ingestion_id,
+            data_config,
+            ..
+        } => {
+            if matches!(data_config.envelope, SourceEnvelope::CdcV2) {
+                None
+            } else {
+                Some(state.get_entry(ingestion_id).progress_id().ok_or_else(|| {
+                    CatalogError::internal(
+                        "source birth permission",
+                        "ingestion export must refer to an ingestion with a remap collection",
+                    )
+                })?)
+            }
+        }
+        DataSourceDesc::OldSyntaxIngestion {
+            progress_subsource, ..
+        } => Some(*progress_subsource),
+        DataSourceDesc::Ingestion { .. }
+        | DataSourceDesc::Introspection(_)
+        | DataSourceDesc::Progress
+        | DataSourceDesc::Webhook { .. }
+        | DataSourceDesc::Catalog => None,
+    };
+    Ok(dependency.map(|id| state.get_entry(&id).latest_global_id()))
+}
+
+/// Returns the exact storage versions whose history a source or sink needs for recovery.
+fn storage_recovery_inputs(
+    state: &CatalogState,
+    item: &CatalogItem,
+) -> Result<Option<(GlobalId, BTreeSet<GlobalId>)>, CatalogError> {
+    let (id, desc) = match item {
+        CatalogItem::Source(source) => (source.global_id(), &source.data_source),
+        CatalogItem::Table(table) => match &table.data_source {
+            TableDataSource::DataSource { desc, .. } => (table.global_id_writes(), desc),
+            TableDataSource::TableWrites { .. } => return Ok(None),
+        },
+        CatalogItem::Sink(sink) => {
+            return Ok(Some((
+                sink.global_id(),
+                BTreeSet::from([sink.global_id(), sink.from]),
+            )));
+        }
+        _ => return Ok(None),
+    };
+    match desc {
+        DataSourceDesc::Ingestion { .. }
+        | DataSourceDesc::OldSyntaxIngestion { .. }
+        | DataSourceDesc::IngestionExport { .. } => {
+            let mut inputs = BTreeSet::from([id]);
+            inputs.extend(source_initialization_dependency(state, desc)?);
+            Ok(Some((id, inputs)))
+        }
+        DataSourceDesc::Introspection(_)
+        | DataSourceDesc::Progress
+        | DataSourceDesc::Webhook { .. }
+        | DataSourceDesc::Catalog => Ok(None),
+    }
+}
+
+/// Returns the compaction permission of a governed storage dependency.
+fn dependency_compaction_bound(
+    state: &CatalogState,
+    id: GlobalId,
+) -> Result<Option<mz_repr::Timestamp>, CatalogError> {
+    // Storage initializes a dependent at least as far as its dependency's since.
+    // Governance proves since <= bound without making physical readability the
+    // authority. The preliminary state includes permissions from preceding ops,
+    // even before their shard metadata is allocated.
+    state
+        .collection_compaction_bounds()
+        .get(&id)
+        .map(|bound| bound.as_option().copied())
+        .ok_or_else(|| {
+            CatalogError::internal(
+                "storage birth permission",
+                format!("missing compaction permission for dependency {id}"),
+            )
+        })
+}
+
+/// Resolves the session UUID that durably owns a temporary item being
+/// created. The durable owner is the session that created the item.
+///
+/// The connection -> session mapping is registered lazily in
+/// `catalog_transact_inner`, so we defensively verify that the registered
+/// mapping matches the creating session.
+fn temporary_item_owner_session(
+    state: &CatalogState,
+    session: Option<&TransactionContext<'_>>,
+    item: &CatalogItem,
+    item_name: &str,
+) -> Result<Uuid, CatalogError> {
+    let session = session.ok_or_else(|| {
+        CatalogError::Internal("temporary items must have an owner session".to_string())
+    })?;
+    let owner_session = session.uuid();
+    soft_assert_or_log!(
+        Some(session.conn_id()) == item.conn_id(),
+        "temporary item connection must match the creating session"
+    );
+    if state.temporary_namespaces.uuid_for_conn(session.conn_id()) != Some(owner_session) {
+        return Err(CatalogError::Internal(format!(
+            "connection {} has no temporary namespace while creating temporary item {}",
+            session.conn_id(),
+            item_name,
+        )));
+    }
+    Ok(owner_session)
+}
+
+/// Prepare the given transaction for replacing a catalog item with a new version.
+///
+/// The new version gets a new `CatalogItemId`, which requires rewriting the `create_sql` of all
+/// dependent objects to refer to that new ID (at a previous version).
+///
+/// Note that here is where we break the assumption that the `CatalogItemId` is a stable identifier
+/// for catalog items. We currently think that there are no use cases that require this assumption,
+/// but no way to know for sure.
+fn tx_replace_item(
+    tx: &mut Transaction<'_>,
+    state: &CatalogState,
+    id: CatalogItemId,
+    new_entry: CatalogEntry,
+) -> Result<(), CatalogError> {
+    let new_id = new_entry.id;
+
+    // Rewrite dependent objects to point to the new ID.
+    for use_id in new_entry.referenced_by() {
+        let dependent = state.get_entry(use_id);
+
+        // The dependent might be dropped in the same tx, so check.
+        if tx.get_item(use_id).is_none() {
+            continue;
+        }
+
+        let mut dependent = dependent.clone();
+        dependent.item = dependent.item.replace_item_refs(id, new_id);
+        tx.update_item(*use_id, state.durable_item(dependent)?)?;
+    }
+
+    // Move comments to the new ID.
+    let old_comment_id = state.get_comment_id(ObjectId::Item(id));
+    let new_comment_id = new_entry.comment_object_id();
+    if let Some(comments) = state.comments.get_object_comments(old_comment_id) {
+        tx.drop_comments(&[old_comment_id].into())?;
+        for (sub, comment) in comments {
+            tx.update_comment(new_comment_id, *sub, Some(comment.clone()))?;
+        }
+    }
+
+    let crate::durable::Item {
+        id: _,
+        oid,
+        global_id,
+        schema_id,
+        name,
+        create_sql,
+        owner_id,
+        privileges,
+        extra_versions,
+        ephemeral_owner_session,
+    } = state.durable_item(new_entry)?;
+
+    tx.remove_item(id)?;
+    tx.insert_item(
+        new_id,
+        oid,
+        global_id,
+        schema_id,
+        &name,
+        create_sql,
+        owner_id,
+        privileges,
+        extra_versions,
+        ephemeral_owner_session,
+    )?;
+
+    Ok(())
+}
+
+/// Generate audit events for a replacement apply operation.
+fn apply_replacement_audit_events(
+    state: &CatalogState,
+    target: &CatalogEntry,
+    replacement: &CatalogEntry,
+) -> Vec<(EventType, EventDetails)> {
+    let mut events = Vec::new();
+
+    let target_name = state.resolve_full_name(target.name(), target.conn_id());
+    let target_id_name = IdFullNameV1 {
+        id: target.id().to_string(),
+        name: Catalog::full_name_detail(&target_name),
+    };
+    let replacement_name = state.resolve_full_name(replacement.name(), replacement.conn_id());
+    let replacement_id_name = IdFullNameV1 {
+        id: replacement.id().to_string(),
+        name: Catalog::full_name_detail(&replacement_name),
+    };
+
+    if Catalog::should_audit_log_item(&replacement.item) {
+        events.push((
+            EventType::Drop,
+            EventDetails::IdFullNameV1(replacement_id_name.clone()),
+        ));
+    }
+
+    if Catalog::should_audit_log_item(&target.item) {
+        events.push((
+            EventType::Alter,
+            EventDetails::AlterApplyReplacementV1(mz_audit_log::AlterApplyReplacementV1 {
+                target: target_id_name.clone(),
+                replacement: replacement_id_name,
+            }),
+        ));
+
+        if let Some(old_cluster_id) = target.cluster_id()
+            && let Some(new_cluster_id) = replacement.cluster_id()
+            && old_cluster_id != new_cluster_id
+        {
+            // When the replacement is applied, the target takes on the ID of the replacement, so
+            // we should use that ID for subsequent events.
+            events.push((
+                EventType::Alter,
+                EventDetails::AlterSetClusterV1(mz_audit_log::AlterSetClusterV1 {
+                    id: replacement.id().to_string(),
+                    name: target_id_name.name,
+                    old_cluster_id: old_cluster_id.to_string(),
+                    new_cluster_id: new_cluster_id.to_string(),
+                }),
+            ));
+        }
+    }
+
+    events
+}
+
+/// All of the objects that need to be removed in response to an [`Op::DropObjects`].
+///
+/// Note: Previously we used to omit a single `Op::DropObject` for every object
+/// we needed to drop. But removing a batch of objects from a durable Catalog
+/// Transaction is O(n) where `n` is the number of objects that exist in the
+/// Catalog. This resulted in an unacceptable `O(m * n)` performance for a
+/// `DROP ... CASCADE` statement.
+#[derive(Debug, Default)]
+pub(crate) struct ObjectsToDrop {
+    pub comments: BTreeSet<CommentObjectId>,
+    pub databases: BTreeSet<DatabaseId>,
+    pub schemas: BTreeMap<SchemaSpecifier, ResolvedDatabaseSpecifier>,
+    pub clusters: BTreeSet<ClusterId>,
+    pub replicas: BTreeMap<ReplicaId, (ClusterId, ReplicaCreateDropReason)>,
+    pub roles: BTreeSet<RoleId>,
+    pub items: Vec<CatalogItemId>,
+    pub network_policies: BTreeSet<NetworkPolicyId>,
+}
+
+impl ObjectsToDrop {
+    pub fn generate(
+        drop_object_infos: impl IntoIterator<Item = DropObjectInfo>,
+        state: &CatalogState,
+        session: Option<&TransactionContext<'_>>,
+    ) -> Result<Self, CatalogError> {
+        let mut delta = ObjectsToDrop::default();
+
+        for drop_object_info in drop_object_infos {
+            delta.add_item(drop_object_info, state, session)?;
+        }
+
+        Ok(delta)
+    }
+
+    fn add_item(
+        &mut self,
+        drop_object_info: DropObjectInfo,
+        state: &CatalogState,
+        session: Option<&TransactionContext<'_>>,
+    ) -> Result<(), CatalogError> {
+        self.comments
+            .insert(state.get_comment_id(drop_object_info.to_object_id()));
+
+        match drop_object_info {
+            DropObjectInfo::Database(database_id) => {
+                let database = &state.database_by_id[&database_id];
+                if database_id.is_system() {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyDatabase(database.name().to_string()),
+                    )));
+                }
+
+                self.databases.insert(database_id);
+            }
+            DropObjectInfo::Schema((database_spec, schema_spec)) => {
+                let schema = state.get_schema(
+                    &database_spec,
+                    &schema_spec,
+                    session
+                        .map(|session| session.conn_id())
+                        .unwrap_or(&SYSTEM_CONN_ID),
+                );
+                let schema_id: SchemaId = schema_spec.into();
+                if schema_id.is_system() {
+                    let name = schema.name();
+                    let full_name = state.resolve_full_schema_name(name);
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
+                    )));
+                }
+
+                self.schemas.insert(schema_spec, database_spec);
+            }
+            DropObjectInfo::Role(role_id) => {
+                let name = state.get_role(&role_id).name().to_string();
+                if role_id.is_system() || role_id.is_predefined() {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReservedRoleName(name.clone()),
+                    )));
+                }
+                state.ensure_not_reserved_role(&role_id)?;
+
+                self.roles.insert(role_id);
+            }
+            DropObjectInfo::Cluster(cluster_id) => {
+                let cluster = state.get_cluster(cluster_id);
+                let name = &cluster.name;
+                if cluster_id.is_system() {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyCluster(name.clone()),
+                    )));
+                }
+
+                self.clusters.insert(cluster_id);
+            }
+            DropObjectInfo::ClusterReplica((cluster_id, replica_id, reason)) => {
+                let cluster = state.get_cluster(cluster_id);
+                let replica = cluster.replica(replica_id).expect("Must exist");
+
+                self.replicas
+                    .insert(replica.replica_id, (cluster.id, reason));
+
+                // Implicitly drop materialized views that target this replica.
+                // When the target replica is gone, no replica advances the
+                // persist shard's upper frontier, causing reads to hang. Cascade
+                // to anything depending on the implicitly-dropped MV so we don't
+                // leave dangling references in the catalog.
+                //
+                // Plan-driven drops already include these dependents as their
+                // own `DropObjectInfo::Item` entries (the plan stage expands
+                // them via `cluster_replica_dependents`), so each one's comment
+                // is recorded by the top-of-function `self.comments` insert.
+                // This branch handles internal callers that build
+                // `Op::DropObjects` directly with only the replica, so we expand
+                // the dependents and record their comments ourselves.
+                //
+                // `seen` is seeded from the items already collected so that the
+                // plan-driven path (where the dependents are processed before
+                // the replica, in reverse-dependency order) does not re-add them
+                // here.
+                let mut seen: BTreeSet<ObjectId> =
+                    self.items.iter().copied().map(ObjectId::Item).collect();
+                for dep in state.cluster_replica_dependents(cluster_id, replica_id, &mut seen) {
+                    if let ObjectId::Item(dep_id) = dep {
+                        info!(
+                            "implicitly dropping {} because target replica was dropped",
+                            state.get_entry(&dep_id).name().item,
+                        );
+                        self.comments
+                            .insert(state.get_comment_id(ObjectId::Item(dep_id)));
+                        self.items.push(dep_id);
+                    }
+                }
+            }
+            DropObjectInfo::Item(item_id) => {
+                let entry = state.get_entry(&item_id);
+                if item_id.is_system() {
+                    let name = entry.name();
+                    let full_name =
+                        state.resolve_full_name(name, session.map(|session| session.conn_id()));
+                    return Err(CatalogError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                        full_name.to_string(),
+                    ))));
+                }
+
+                self.items.push(item_id);
+            }
+            DropObjectInfo::NetworkPolicy(network_policy_id) => {
+                let policy = state.get_network_policy(&network_policy_id);
+                let name = &policy.name;
+                if network_policy_id.is_system() {
+                    return Err(CatalogError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyNetworkPolicy(name.clone()),
+                    )));
+                }
+
+                self.network_policies.insert(network_policy_id);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod incarnation_tests;
+#[cfg(test)]
+mod replica_plan_tests;
+#[cfg(test)]
+mod temp_tests;
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use crate::SYSTEM_CONN_ID;
+    use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
+    use crate::memory::error::{Error, ErrorKind};
+    use crate::memory::objects::{CatalogItem, Table, TableDataSource};
+    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+    use mz_repr::role_id::RoleId;
+    use mz_repr::{RelationDesc, RelationVersion, VersionedRelationDesc};
+    use mz_sql::DEFAULT_SCHEMA;
+    use mz_sql::catalog::CatalogDatabase;
+    use mz_sql::names::{
+        ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    };
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql::session::vars::{self, MAX_CONNECTIONS, OwnedVarInput, SystemVars};
+
+    use crate::catalog::CatalogError;
+    use crate::catalog::{Catalog, Op};
+    use mz_sql::session::vars::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test(tokio::test)]
+    async fn written_plan_selection_validates_transaction_state() {
+        use std::collections::BTreeSet;
+
+        use mz_repr::GlobalId;
+        use uuid::Uuid;
+
+        Catalog::with_debug(|catalog| async move {
+            let base = catalog.state().clone();
+            let index_id = base.resolve_builtin_object(&crate::builtin::Builtin::<
+                mz_sql::catalog::IdReference,
+            >::Index(
+                &crate::builtin::MZ_TABLES_IND
+            ));
+            let CatalogItem::Index(index) = base.get_entry(&index_id).item() else {
+                unreachable!("resolved a builtin index");
+            };
+            let id = index.global_id();
+            let revision = Uuid::new_v4();
+            let select = |expected_revision, revision, imports| Op::SetWrittenPlan {
+                id,
+                build_version: "test-build".into(),
+                expected_revision,
+                revision,
+                imports,
+                replica_owner: None,
+            };
+            let (selected, snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &base,
+                    vec![select(None, Some(revision), BTreeSet::new())],
+                    None,
+                    None,
+                    1.into(),
+                )
+                .await
+                .expect("select written revision");
+            assert_eq!(selected.written_plan(id, "test-build"), Some(revision));
+            assert_eq!(base.written_plan(id, "test-build"), None);
+
+            // Validate against the accumulated transaction, not just the writer's
+            // initial snapshot. A stale selector cannot replace its predecessor.
+            let stale = catalog
+                .transact_incremental_dry_run(
+                    &selected,
+                    vec![select(None, Some(Uuid::new_v4()), BTreeSet::new())],
+                    None,
+                    Some(snapshot.clone()),
+                    1.into(),
+                )
+                .await;
+            assert!(matches!(stale, Err(CatalogError::DDLTransactionRace)));
+            let missing_import = catalog
+                .transact_incremental_dry_run(
+                    &selected,
+                    vec![select(
+                        Some(revision),
+                        Some(Uuid::new_v4()),
+                        BTreeSet::from([GlobalId::Transient(u64::MAX)]),
+                    )],
+                    None,
+                    Some(snapshot),
+                    1.into(),
+                )
+                .await;
+            assert!(matches!(
+                missing_import,
+                Err(CatalogError::DDLTransactionRace)
+            ));
+            assert_eq!(catalog.state().written_plan(id, "test-build"), None);
+
+            let entry = base.get_entry_by_global_id(&id);
+            let CatalogItem::Index(mut input) = entry.item().clone() else {
+                unreachable!("selected an index");
+            };
+            let input_id = mz_repr::CatalogItemId::User(1_000_000);
+            let input_gid = GlobalId::User(1_000_000);
+            input.global_id = input_gid;
+            let cluster = catalog.user_clusters().next().expect("user cluster");
+            input.cluster_id = cluster.id;
+            input.create_sql = format!(
+                "CREATE INDEX written_plan_input IN CLUSTER {} ON mz_catalog.mz_tables (schema_id)",
+                mz_sql::ast::Ident::new(cluster.name.clone()).expect("valid cluster name"),
+            );
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema");
+            let create_input = Op::CreateItem {
+                id: input_id,
+                name: QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec,
+                        schema_spec: schema.id.clone(),
+                    },
+                    item: "written_plan_input".into(),
+                },
+                item: CatalogItem::Index(input),
+                owner_id: *entry.owner_id(),
+            };
+            catalog
+                .transact_incremental_dry_run(
+                    &base,
+                    vec![
+                        create_input.clone(),
+                        select(None, Some(revision), BTreeSet::from([input_gid])),
+                    ],
+                    None,
+                    None,
+                    1.into(),
+                )
+                .await
+                .expect("a surviving index import is valid");
+            for selection_first in [true, false] {
+                let selection = select(None, Some(Uuid::new_v4()), BTreeSet::from([input_gid]));
+                let drop_input = Op::DropObjects(vec![super::DropObjectInfo::Item(input_id)]);
+                let mut ops = vec![create_input.clone()];
+                if selection_first {
+                    ops.extend([selection, drop_input]);
+                } else {
+                    ops.extend([drop_input, selection]);
+                }
+                let result = catalog
+                    .transact_incremental_dry_run(&base, ops, None, None, 1.into())
+                    .await;
+                assert!(
+                    matches!(result, Err(CatalogError::DDLTransactionRace)),
+                    "selection_first={selection_first}: {result:?}"
+                );
+            }
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_collection_metadata_without_controller() {
+        use std::collections::BTreeMap;
+
+        use mz_persist_client::PersistClient;
+        use mz_repr::SqlScalarType;
+        use uuid::Uuid;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        let persist = PersistClient::new_for_tests().await;
+        let organization = Uuid::new_v4();
+        let bootstrap = crate::catalog::test_bootstrap_args();
+        let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .expect("open durable catalog");
+        let mut catalog = Catalog::open_debug_catalog_inner(
+            persist.clone(),
+            storage,
+            mz_ore::now::SYSTEM_TIME.clone(),
+            Some(
+                format!("local-az1-{organization}-0")
+                    .parse()
+                    .expect("environment ID"),
+            ),
+            &mz_build_info::DUMMY_BUILD_INFO,
+            BTreeMap::from([("enable_catalog_read_protection".into(), "true".into())]),
+            &bootstrap,
+            None,
+            None,
+        )
+        .await
+        .expect("open protected catalog");
+        let database = catalog
+            .resolve_database(DEFAULT_DATABASE_NAME)
+            .expect("default database");
+        let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+        let schema = catalog
+            .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+            .expect("default schema");
+        let name = QualifiedItemName {
+            qualifiers: ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            },
+            item: "metadata_table".to_string(),
+        };
+        let sql_name = format!("{}.{}.metadata_table", database.name, schema.name.schema);
+        let (id, global_id) = catalog
+            .allocate_user_id_for_test()
+            .await
+            .expect("table IDs");
+        let item = catalog
+            .state
+            .with_enable_for_item_parsing(|state| {
+                state.parse_item(
+                    global_id,
+                    &format!("CREATE TABLE {sql_name} (a bigint)"),
+                    &BTreeMap::new(),
+                    None,
+                    false,
+                    None,
+                    &mut LocalExpressionCache::Closed,
+                    None,
+                )
+            })
+            .expect("valid table definition");
+        let birth = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                birth,
+                None,
+                vec![Op::CreateItem {
+                    id,
+                    name,
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("creation allocates metadata without a controller");
+        let shard = catalog.state().storage_metadata().collection_metadata[&global_id];
+        assert_eq!(
+            catalog.state().collection_compaction_bounds()[&global_id],
+            timely::progress::Antichain::from_elem(birth)
+        );
+
+        let (_, new_global_id) = catalog
+            .allocate_user_id_for_test()
+            .await
+            .expect("version ID");
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::AlterAddColumn {
+                    id,
+                    new_global_id,
+                    name: "b".into(),
+                    typ: SqlScalarType::Int64.nullable(true),
+                    sql: mz_sql_parser::parser::parse_data_type("bigint").expect("valid type"),
+                }],
+            )
+            .await
+            .expect("schema versions register shared metadata without a controller");
+        let metadata = catalog.state().storage_metadata();
+        assert_eq!(metadata.collection_metadata[&global_id], shard);
+        assert_eq!(metadata.collection_metadata[&new_global_id], shard);
+        assert!(!metadata.unfinalized_shards.contains(&shard));
+
+        let ts = catalog.current_upper().await;
+        let incarnation = catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::CreateClientIncarnation { replica_id: None }],
+            )
+            .await
+            .expect("client incarnation")
+            .created_client_incarnations[0];
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements: BTreeMap::from([(global_id, birth)]),
+                }],
+            )
+            .await
+            .expect("client protection");
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::DropObjects(vec![super::DropObjectInfo::Item(id)])],
+            )
+            .await
+            .expect("SQL drop preserves client-required shared metadata");
+        let metadata = catalog.state().storage_metadata();
+        assert_eq!(metadata.collection_metadata[&global_id], shard);
+        assert!(!metadata.collection_metadata.contains_key(&new_global_id));
+        assert!(!metadata.unfinalized_shards.contains(&shard));
+
+        let snapshot = catalog.clone();
+        let revision = catalog.transient_revision();
+        let mut follower = Catalog::open_debug_read_only_catalog(persist, organization, &bootstrap)
+            .await
+            .expect("open follower after SQL drop");
+        assert_eq!(
+            follower.state().storage_metadata().collection_metadata[&global_id],
+            shard
+        );
+        let follower_snapshot = follower.clone();
+        let follower_revision = follower.transient_revision();
+
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements: BTreeMap::new(),
+                }],
+            )
+            .await
+            .expect("last client release stages finalization without a controller");
+        let metadata = catalog.state().storage_metadata();
+        assert!(!metadata.collection_metadata.contains_key(&global_id));
+        assert!(!metadata.collection_metadata.contains_key(&new_global_id));
+        assert!(metadata.unfinalized_shards.contains(&shard));
+        assert_eq!(catalog.transient_revision(), revision);
+        assert!(snapshot.transient_revision_is_current());
+
+        follower
+            .sync_to_current_updates()
+            .await
+            .expect("follow client release");
+        let metadata = follower.state().storage_metadata();
+        assert!(!metadata.collection_metadata.contains_key(&global_id));
+        assert!(!metadata.collection_metadata.contains_key(&new_global_id));
+        assert!(metadata.unfinalized_shards.contains(&shard));
+        assert_eq!(follower.transient_revision(), follower_revision);
+        assert!(follower_snapshot.transient_revision_is_current());
+        follower.expire().await;
+        catalog.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_materialized_view_downstream_publication_after_replacement() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_expr::CollectionPlan;
+        use mz_sql::catalog::SessionCatalog;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        Catalog::with_debug(|catalog| async move {
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database exists");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema exists");
+            let qualifiers = ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let birth = catalog.current_upper().await;
+            let mut state = catalog.state().clone();
+            state.catalog_read_protection_enabled = true;
+            let mut snapshot = None;
+            let mut ids = BTreeMap::new();
+            let mut consumers = Vec::new();
+            // The persisted upstream output is the downstream's recovery boundary.
+            // Consumers created between replacements must pin the latest collection,
+            // even though the relation schema does not change.
+            for (name, sql) in [
+                ("t", format!("CREATE TABLE {prefix}.t (a int, b int)")),
+                ("mv", format!("CREATE MATERIALIZED VIEW {prefix}.mv IN CLUSTER quickstart AS SELECT a, b FROM {prefix}.t AS OF {birth}")),
+                ("mv_downstream", format!("CREATE MATERIALIZED VIEW {prefix}.mv_downstream IN CLUSTER quickstart AS SELECT a + b AS sum FROM {prefix}.mv AS OF {birth}")),
+                ("rp", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.rp FOR {prefix}.mv IN CLUSTER quickstart AS SELECT a * 10 AS a, b FROM {prefix}.t AS OF {birth}")),
+                ("mv_downstream_new", format!("CREATE MATERIALIZED VIEW {prefix}.mv_downstream_new IN CLUSTER quickstart AS SELECT a + b AS sum FROM {prefix}.mv AS OF {birth}")),
+                ("rp2", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.rp2 FOR {prefix}.mv IN CLUSTER quickstart AS SELECT a * 100 AS a, b FROM {prefix}.t AS OF {birth}")),
+            ] {
+                let (id, gid) = catalog
+                    .allocate_user_id_for_test().await.expect("allocate test item identity");
+                let item = state.with_enable_for_item_parsing(|state| state.parse_item(
+                    gid, &sql, &BTreeMap::new(), None, false, None,
+                    &mut LocalExpressionCache::Closed, None,
+                )).unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                let (next_state, next_snapshot) = catalog.transact_incremental_dry_run(
+                    &state,
+                    vec![Op::CreateItem {
+                        id,
+                        name: QualifiedItemName {
+                            qualifiers: qualifiers.clone(),
+                            item: name.into(),
+                        },
+                        item,
+                        owner_id: MZ_SYSTEM_ROLE_ID,
+                    }],
+                    None, snapshot, birth,
+                ).await.unwrap_or_else(|err| panic!("create {name}: {err}"));
+                state = next_state;
+                snapshot = Some(next_snapshot);
+                ids.insert(name, (id, gid));
+                match name {
+                    "mv_downstream" => consumers.push((id, gid, ids["mv"].1)),
+                    "mv_downstream_new" => consumers.push((id, gid, ids["rp"].1)),
+                    "rp" | "rp2" => {
+                        let target_id = if name == "rp" { ids["mv"].0 } else { ids["rp"].0 };
+                        let (next_state, next_snapshot) = catalog.transact_incremental_dry_run(
+                            &state,
+                            vec![Op::AlterMaterializedViewApplyReplacement {
+                                id: target_id,
+                                replacement_id: id,
+                            }],
+                            None, snapshot, birth,
+                        ).await.expect("apply upstream replacement");
+                        state = next_state;
+                        snapshot = Some(next_snapshot);
+                    }
+                    _ => {}
+                }
+
+                let mut requirements = Vec::new();
+                for &(consumer_id, consumer_gid, input_gid) in &consumers {
+                    let inputs = BTreeSet::from([input_gid]);
+                    let CatalogItem::MaterializedView(mv) = state.get_entry(&consumer_id).item()
+                    else {
+                        panic!("expected downstream MV");
+                    };
+                    assert_eq!(mv.raw_expr.depends_on(), inputs, "{name}: downstream reads stay pinned");
+                    let requirement = &state.maintained_read_requirements()[&consumer_gid];
+                    assert_eq!(requirement.inputs, inputs, "{name}: downstream protection stays pinned");
+
+                    let session_catalog = state.for_system_session();
+                    assert_eq!(
+                        session_catalog.get_item_by_global_id(&input_gid).global_id(), input_gid,
+                    );
+                    assert_eq!(session_catalog.try_get_item_by_global_id(&input_gid)
+                        .expect("retained MV collection exists").global_id(), input_gid);
+
+                    let mut publication = requirement.clone();
+                    publication.frontier = Some(birth.step_forward());
+                    requirements.push(publication);
+                }
+                if !requirements.is_empty() {
+                    // Progress publication must accept the same protected storage
+                    // history after the upstream SQL identity changes.
+                    let (next_state, next_snapshot) = catalog.transact_incremental_dry_run(
+                        &state,
+                        vec![Op::SetReadProtection { requirements, bounds: vec![] }],
+                        None, snapshot, birth,
+                    ).await.expect("downstream publication succeeds across replacements");
+                    state = next_state;
+                    snapshot = Some(next_snapshot);
+                }
+            }
+            catalog.expire().await;
+        }).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_materialized_view_birth_admission() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_expr::CollectionPlan;
+        use timely::progress::Antichain;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        Catalog::with_debug(|catalog| async move {
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database exists");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema exists");
+            let qualifiers = ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let birth = catalog.current_upper().await;
+            let permission = birth.step_forward();
+            let visibility = permission.step_forward();
+            let mut base = catalog.state().clone();
+            base.catalog_read_protection_enabled = true;
+            let mut state = base.clone();
+            let mut snapshot = None;
+            let mut ops = Vec::new();
+            let mut ids = BTreeMap::new();
+            for (name, sql) in [
+                ("mv_input", format!("CREATE TABLE {prefix}.mv_input (a int)")),
+                ("mv_hidden", format!("CREATE TABLE {prefix}.mv_hidden (a int)")),
+                ("mv_view", format!("CREATE VIEW {prefix}.mv_view AS SELECT * FROM {prefix}.mv_hidden")),
+                ("mv_birth", format!("CREATE MATERIALIZED VIEW {prefix}.mv_birth IN CLUSTER quickstart AS SELECT * FROM {prefix}.mv_input UNION ALL SELECT * FROM {prefix}.mv_view WHERE false AS OF {visibility}")),
+            ] {
+                let (id, gid) = catalog
+                    .allocate_user_id_for_test().await.expect("allocate test item identity");
+                let item = state.with_enable_for_item_parsing(|state| state.parse_item(
+                    gid, &sql, &BTreeMap::new(), None, false, None,
+                    &mut LocalExpressionCache::Closed, None,
+                )).unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                ids.insert(name, (id, gid));
+                ops.push(Op::CreateItem {
+                    id,
+                    name: QualifiedItemName { qualifiers: qualifiers.clone(), item: name.into() },
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                });
+                if name == "mv_hidden" {
+                    ops.push(Op::SetReadProtection {
+                        requirements: vec![],
+                        bounds: vec![CollectionCompactionBound {
+                            id: gid,
+                            frontier: Some(permission),
+                        }],
+                    });
+                }
+                let (next_state, next_snapshot) = catalog.transact_incremental_dry_run(
+                    &base, ops.clone(), None, None, birth,
+                ).await.unwrap_or_else(|err| panic!("create {name}: {err}"));
+                state = next_state;
+                snapshot = Some(next_snapshot);
+            }
+            let (mv_id, mv_gid) = ids["mv_birth"];
+            let inputs = BTreeSet::from([ids["mv_input"].1, ids["mv_hidden"].1]);
+            let CatalogItem::MaterializedView(mv) = state.get_entry(&mv_id).item() else {
+                panic!("expected MV");
+            };
+            assert!(!mv.locally_optimized_expr.depends_on().contains(&ids["mv_view"].1));
+            assert_eq!(state.maintained_read_requirements()[&mv_gid], MaintainedReadRequirement {
+                id: mv_gid, inputs: inputs.clone(), frontier: Some(permission),
+            });
+            assert_eq!(
+                state.collection_compaction_bounds()[&mv_gid],
+                Antichain::from_elem(visibility),
+            );
+
+            // A selected frontier remains an optional optimization, not authority
+            // to omit a logical input or skip promised output.
+            for (selected_inputs, frontier, succeeds) in [
+                (inputs.clone(), Some(visibility), true),
+                (BTreeSet::from([ids["mv_input"].1]), Some(visibility), false),
+                (inputs.clone(), Some(birth), false),
+                (inputs.clone(), Some(visibility.step_forward()), false),
+                (inputs.clone(), None, false),
+            ] {
+                let mut selected = ops.clone();
+                selected.push(Op::SetReadProtection {
+                    requirements: vec![MaintainedReadRequirement {
+                        id: mv_gid,
+                        inputs: selected_inputs,
+                        frontier,
+                    }],
+                    bounds: vec![],
+                });
+                let result = catalog
+                    .transact_incremental_dry_run(&base, selected, None, None, birth)
+                    .await;
+                assert_eq!(result.is_ok(), succeeds, "{:?}", result.as_ref().err());
+                if let Ok((selected_state, _)) = result {
+                    assert_eq!(
+                        selected_state.maintained_read_requirements()[&mv_gid].frontier,
+                        frontier,
+                    );
+                }
+            }
+
+            // Permission on the optimized-away input still constrains admission.
+            let mut incompatible = ops.clone();
+            incompatible.insert(incompatible.len() - 1, Op::SetReadProtection {
+                requirements: vec![],
+                bounds: vec![CollectionCompactionBound { id: ids["mv_hidden"].1, frontier: Some(visibility.step_forward()) }],
+            });
+            assert!(catalog
+                .transact_incremental_dry_run(&base, incompatible.clone(), None, None, birth)
+                .await.is_err());
+
+            // An intermediate incompatible birth promises no results if the
+            // same transaction removes its owner before committing.
+            incompatible.push(Op::DropObjects(vec![super::DropObjectInfo::Item(mv_id)]));
+            let (without_mv, _) = catalog
+                .transact_incremental_dry_run(&base, incompatible, None, None, birth)
+                .await.expect("dropped birth has no surviving read promise");
+            assert!(!without_mv.maintained_read_requirements().contains_key(&mv_gid));
+
+            for (name, sql, succeeds) in [
+                ("mv_refresh", format!("CREATE MATERIALIZED VIEW {prefix}.mv_refresh IN CLUSTER quickstart WITH (REFRESH AT {visibility}) AS SELECT * FROM {prefix}.mv_hidden AS OF {visibility}"), true),
+                ("mv_refresh_old", format!("CREATE MATERIALIZED VIEW {prefix}.mv_refresh_old IN CLUSTER quickstart WITH (REFRESH AT {birth}) AS SELECT * FROM {prefix}.mv_hidden AS OF {visibility}"), false),
+                ("mv_replacement", format!("CREATE REPLACEMENT MATERIALIZED VIEW {prefix}.mv_replacement FOR {prefix}.mv_birth IN CLUSTER quickstart AS SELECT * FROM {prefix}.mv_hidden AS OF {}", visibility.step_forward()), true),
+            ] {
+                let (id, gid) = catalog
+                    .allocate_user_id_for_test().await.expect("allocate MV test identity");
+                let item = state.with_enable_for_item_parsing(|state| state.parse_item(
+                    gid, &sql, &BTreeMap::new(), None, false, None,
+                    &mut LocalExpressionCache::Closed, None,
+                )).unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                let create = Op::CreateItem {
+                    id,
+                    name: QualifiedItemName { qualifiers: qualifiers.clone(), item: name.into() },
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                };
+                let result = catalog
+                    .transact_incremental_dry_run(
+                        &state, vec![create], None, snapshot.clone(), birth,
+                    )
+                    .await;
+                assert_eq!(result.is_ok(), succeeds, "{name}: {:?}", result.as_ref().err());
+                if let Ok((created, created_snapshot)) = result {
+                    assert_eq!(
+                        created.maintained_read_requirements()[&gid],
+                        MaintainedReadRequirement {
+                            id: gid,
+                            inputs: BTreeSet::from([ids["mv_hidden"].1]),
+                            frontier: Some(permission),
+                        },
+                    );
+                    // A replacement inherits the shared output's permission,
+                    // not its input protection or its own visibility frontier.
+                    assert_eq!(
+                        created.collection_compaction_bounds()[&gid],
+                        Antichain::from_elem(visibility),
+                    );
+                    if name == "mv_replacement" {
+                        let apply = vec![
+                            Op::SetReadProtection {
+                                requirements: vec![
+                                    created.maintained_read_requirements()[&mv_gid].clone(),
+                                ],
+                                bounds: vec![],
+                            },
+                            Op::AlterMaterializedViewApplyReplacement {
+                                id: mv_id,
+                                replacement_id: id,
+                            },
+                        ];
+                        let (applied, applied_snapshot) = catalog.transact_incremental_dry_run(
+                            &created, apply, None, Some(created_snapshot), birth,
+                        ).await.expect("apply replacement after retiring its predecessor");
+                        assert_eq!(applied.maintained_read_requirements()[&mv_gid].frontier, None);
+                        assert_eq!(
+                            applied.maintained_read_requirements()[&gid],
+                            created.maintained_read_requirements()[&gid],
+                        );
+                        for (frontier, succeeds) in [(None, true), (Some(permission), false)] {
+                            let mut retired =
+                                applied.maintained_read_requirements()[&mv_gid].clone();
+                            retired.frontier = frontier;
+                            let result = catalog.transact_incremental_dry_run(
+                                &applied,
+                                vec![Op::SetReadProtection {
+                                    requirements: vec![retired],
+                                    bounds: vec![],
+                                }],
+                                None,
+                                Some(applied_snapshot.clone()),
+                                birth,
+                            ).await;
+                            assert_eq!(result.is_ok(), succeeds, "{:?}", result.as_ref().err());
+                        }
+                    }
+                }
+            }
+
+            // A final drop retires protection, including a same-batch creation.
+            let mut dropped = ops.clone();
+            dropped.push(Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: mv_gid,
+                    inputs: BTreeSet::new(),
+                    frontier: None,
+                }],
+                bounds: vec![],
+            });
+            dropped.push(Op::DropObjects(vec![super::DropObjectInfo::Item(mv_id)]));
+            let (dropped_state, _) = catalog
+                .transact_incremental_dry_run(&base, dropped, None, None, birth)
+                .await.expect("drop retires MV protection");
+            assert!(dropped_state.try_get_entry(&mv_id).is_none());
+            assert!(!dropped_state.maintained_read_requirements().contains_key(&mv_gid));
+
+            // Feature-off catalogs do not acquire a maintained requirement.
+            base.catalog_read_protection_enabled = false;
+            let mut unprotected = ops;
+            unprotected.retain(|op| !matches!(op, Op::SetReadProtection { .. }));
+            let (unprotected_state, _) = catalog
+                .transact_incremental_dry_run(&base, unprotected, None, None, birth)
+                .await.expect("feature-off creation needs no maintained requirement");
+            assert!(!unprotected_state.maintained_read_requirements().contains_key(&mv_gid));
+            catalog.expire().await;
+        }).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_storage_birth_inherits_dependency_permission() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_proto::RustType;
+        use mz_repr::{CatalogItemId, GlobalId};
+        use mz_storage_types::sources::SourceExportStatementDetails;
+        use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
+        use prost::Message;
+        use timely::progress::Antichain;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        Catalog::with_debug(|catalog| async move {
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database exists");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema exists");
+            let qualifiers = ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let details = hex::encode(
+                SourceExportStatementDetails::LoadGenerator {
+                    output: LoadGeneratorOutput::Default,
+                }
+                .into_proto()
+                .encode_to_vec(),
+            );
+            let oracle_write_ts = catalog.current_upper().await;
+            let permission = oracle_write_ts.step_forward();
+            let mut base = catalog.state().clone();
+            base.catalog_read_protection_enabled = true;
+            let mut state = base.clone();
+            let mut ops = Vec::new();
+            let mut identities: BTreeMap<&str, (CatalogItemId, GlobalId)> = BTreeMap::new();
+            for (name, sql) in [
+                (
+                    "birth_source",
+                    format!("CREATE SOURCE {prefix}.birth_source IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER"),
+                ),
+                (
+                    "birth_progress",
+                    format!("CREATE SUBSOURCE {prefix}.birth_progress (\"offset\" uint8) WITH (PROGRESS)"),
+                ),
+                (
+                    "birth_old_source",
+                    format!("CREATE SOURCE {prefix}.birth_old_source IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [__PROGRESS_ID__ AS {prefix}.birth_progress]"),
+                ),
+                (
+                    "birth_old_export",
+                    format!("CREATE SUBSOURCE {prefix}.birth_old_export (counter bigint) OF SOURCE {prefix}.birth_old_source WITH (EXTERNAL REFERENCE counter, DETAILS '{details}')"),
+                ),
+                (
+                    "birth_writable",
+                    format!("CREATE TABLE {prefix}.birth_writable (counter bigint)"),
+                ),
+                (
+                    "birth_connection",
+                    format!("CREATE CONNECTION {prefix}.birth_connection TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT)"),
+                ),
+                (
+                    "birth_table",
+                    format!("CREATE TABLE {prefix}.birth_table FROM SOURCE {prefix}.birth_source (REFERENCE counter) WITH (DETAILS '{details}')"),
+                ),
+                (
+                    "birth_export",
+                    format!("CREATE SUBSOURCE {prefix}.birth_export (counter bigint) OF SOURCE {prefix}.birth_source WITH (EXTERNAL REFERENCE counter, DETAILS '{details}')"),
+                ),
+                (
+                    "birth_sink",
+                    format!("CREATE SINK {prefix}.birth_sink IN CLUSTER quickstart FROM {prefix}.birth_table INTO KAFKA CONNECTION {prefix}.birth_connection (TOPIC 'birth-permission') FORMAT JSON ENVELOPE DEBEZIUM"),
+                ),
+            ] {
+                // Catalog SQL contains the progress ID resolved by purification.
+                let sql = match identities.get("birth_progress") {
+                    Some((id, _)) => sql.replace("__PROGRESS_ID__", &id.to_string()),
+                    None => sql,
+                };
+                let (id, global_id) = catalog
+                    .allocate_user_id_for_test()
+                    .await
+                    .expect("allocate collection identity");
+                identities.insert(name, (id, global_id));
+                let item = state
+                    .with_enable_for_item_parsing(|state| state.parse_item(
+                        global_id,
+                        &sql,
+                        &BTreeMap::new(),
+                        None,
+                        false,
+                        None,
+                        &mut LocalExpressionCache::Closed,
+                        None,
+                    ))
+                    .unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                ops.push(Op::CreateItem {
+                    id,
+                    name: QualifiedItemName {
+                        qualifiers: qualifiers.clone(),
+                        item: name.to_string(),
+                    },
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                });
+                // Replay the whole batch to exercise dependencies that only exist
+                // in preliminary state, without any installed storage collections.
+                (state, _) = catalog
+                    .transact_incremental_dry_run(&base, ops.clone(), None, None, oracle_write_ts)
+                    .await
+                    .unwrap_or_else(|err| panic!("create {name}: {err}"));
+                if matches!(name, "birth_connection" | "birth_writable" | "birth_progress") {
+                    assert!(!state.maintained_read_requirements().contains_key(&global_id));
+                    if name == "birth_progress" {
+                        ops.push(Op::SetReadProtection {
+                            bounds: vec![CollectionCompactionBound {
+                                id: global_id,
+                                frontier: Some(permission),
+                            }],
+                            requirements: vec![],
+                        });
+                    }
+                    continue;
+                }
+                let inputs = match name {
+                    "birth_source" => BTreeSet::from([global_id]),
+                    "birth_table" | "birth_export" => {
+                        BTreeSet::from([global_id, identities["birth_source"].1])
+                    }
+                    "birth_old_source" | "birth_old_export" => {
+                        BTreeSet::from([global_id, identities["birth_progress"].1])
+                    }
+                    "birth_sink" => BTreeSet::from([global_id, identities["birth_table"].1]),
+                    _ => unreachable!(),
+                };
+                let frontier = if name == "birth_source" {
+                    mz_repr::Timestamp::MIN
+                } else {
+                    permission
+                };
+                assert_eq!(
+                    state.maintained_read_requirements()[&global_id],
+                    MaintainedReadRequirement {
+                        id: global_id,
+                        inputs: inputs.clone(),
+                        frontier: Some(frontier),
+                    },
+                );
+                for input in &inputs {
+                    let mut invalid = ops.clone();
+                    for other in state.maintained_read_requirements().values() {
+                        if other.id != global_id {
+                            invalid.push(Op::SetReadProtection {
+                                requirements: vec![MaintainedReadRequirement {
+                                    id: other.id,
+                                    inputs: other.inputs.clone(),
+                                    frontier: Some(frontier.step_forward()),
+                                }],
+                                bounds: vec![],
+                            });
+                        }
+                    }
+                    invalid.push(Op::SetReadProtection {
+                        bounds: vec![CollectionCompactionBound {
+                            id: *input,
+                            frontier: Some(frontier.step_forward()),
+                        }],
+                        requirements: vec![],
+                    });
+                    let err = catalog
+                        .transact_incremental_dry_run(&base, invalid, None, None, oracle_write_ts)
+                        .await
+                        .expect_err("live storage consumers protect every input, including self");
+                    assert!(
+                        err.to_string()
+                            .contains(&format!("read requirement {global_id}")),
+                        "{err}"
+                    );
+                }
+                if name == "birth_source" {
+                    assert_eq!(
+                        state.collection_compaction_bounds()[&global_id],
+                        Antichain::from_elem(mz_repr::Timestamp::MIN),
+                    );
+                    ops.push(Op::SetReadProtection {
+                        requirements: vec![MaintainedReadRequirement {
+                            id: global_id,
+                            inputs,
+                            frontier: Some(permission),
+                        }],
+                        bounds: vec![],
+                    });
+                    ops.push(Op::SetReadProtection {
+                        bounds: vec![CollectionCompactionBound {
+                            id: global_id,
+                            frontier: Some(permission),
+                        }],
+                        requirements: vec![],
+                    });
+                } else {
+                    assert_eq!(
+                        state.collection_compaction_bounds()[&global_id],
+                        Antichain::from_elem(permission),
+                        "{name} must inherit dependency permission, not MIN or oracle time",
+                    );
+                }
+            }
+
+            let (sink_id, sink_gid) = identities["birth_sink"];
+            let export_gid = identities["birth_export"].1;
+            let source_gid = identities["birth_source"].1;
+            let progress = permission.step_forward();
+            ops.extend([
+                Op::SetReadProtection {
+                    requirements: vec![MaintainedReadRequirement {
+                        id: export_gid,
+                        inputs: BTreeSet::from([export_gid, source_gid]),
+                        frontier: Some(progress),
+                    }],
+                    bounds: vec![],
+                },
+                Op::SetReadProtection {
+                    bounds: vec![CollectionCompactionBound {
+                        id: export_gid,
+                        frontier: Some(progress),
+                    }],
+                    requirements: vec![],
+                },
+            ]);
+            let export_sql = format!("CREATE SUBSOURCE {prefix}.birth_export (counter bigint) OF SOURCE {prefix}.birth_old_source WITH (EXTERNAL REFERENCE counter, DETAILS '{details}')");
+            let export = state
+                .with_enable_for_item_parsing(|state| state.parse_item(
+                    export_gid,
+                    &export_sql,
+                    &BTreeMap::new(),
+                    None,
+                    false,
+                    None,
+                    &mut LocalExpressionCache::Closed,
+                    None,
+                ))
+                .expect("parse export with a different remap dependency");
+            ops.push(Op::UpdateItem {
+                id: identities["birth_export"].0,
+                name: QualifiedItemName {
+                    qualifiers: qualifiers.clone(),
+                    item: "birth_export".to_string(),
+                },
+                to_item: export,
+            });
+            let sql = format!("CREATE SINK {prefix}.birth_sink IN CLUSTER quickstart FROM {prefix}.birth_export INTO KAFKA CONNECTION {prefix}.birth_connection (TOPIC 'birth-permission') FORMAT JSON ENVELOPE DEBEZIUM");
+            let CatalogItem::Sink(mut sink) = state.get_entry(&sink_id).item().clone() else {
+                unreachable!();
+            };
+            sink.create_sql = sql;
+            sink.from = export_gid;
+            sink.resolved_ids.remove_item(&identities["birth_table"].0);
+            sink.resolved_ids.add_item(identities["birth_export"].0);
+            let update = Op::UpdateItem {
+                id: sink_id,
+                name: QualifiedItemName {
+                    qualifiers,
+                    item: "birth_sink".to_string(),
+                },
+                to_item: CatalogItem::Sink(sink),
+            };
+            let mut invalid = ops.clone();
+            invalid.push(update.clone());
+            let err = catalog
+                .transact_incremental_dry_run(&base, invalid, None, None, oracle_write_ts)
+                .await
+                .expect_err("changing inputs cannot advance the committed recovery frontier");
+            assert!(err.to_string().contains("read requirement"), "{err}");
+
+            ops.push(Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: sink_gid,
+                    inputs: BTreeSet::from([sink_gid, identities["birth_table"].1]),
+                    frontier: Some(progress),
+                }],
+                bounds: vec![],
+            });
+            ops.push(update.clone());
+            let (state, _) = catalog
+                .transact_incremental_dry_run(&base, ops.clone(), None, None, oracle_write_ts)
+                .await
+                .expect("progress and input change must be admitted atomically");
+            let expected = MaintainedReadRequirement {
+                id: sink_gid,
+                inputs: BTreeSet::from([sink_gid, export_gid]),
+                frontier: Some(progress),
+            };
+            assert_eq!(state.maintained_read_requirements()[&sink_gid], expected);
+            let CatalogItem::Sink(sink) = state.get_entry(&sink_id).item() else {
+                unreachable!();
+            };
+            assert_eq!(sink.from, export_gid);
+            ops.push(update);
+            let (replayed, _) = catalog
+                .transact_incremental_dry_run(&base, ops, None, None, oracle_write_ts)
+                .await
+                .expect("repeated UpdateItem must preserve progress and exact inputs");
+            assert_eq!(replayed.maintained_read_requirements()[&sink_gid], expected);
+            assert_eq!(
+                replayed.maintained_read_requirements()[&export_gid],
+                MaintainedReadRequirement {
+                    id: export_gid,
+                    inputs: BTreeSet::from([export_gid, identities["birth_progress"].1]),
+                    frontier: Some(progress),
+                },
+            );
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_ddl_replay_inherits_fresh_dependency_permission() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_proto::RustType;
+        use mz_repr::Timestamp;
+        use mz_storage_types::sources::SourceExportStatementDetails;
+        use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
+        use prost::Message;
+        use timely::progress::Antichain;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        Catalog::with_debug(|mut catalog| async move {
+            catalog.state.catalog_read_protection_enabled = true;
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database exists");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema exists");
+            let qualifiers = ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let details = hex::encode(
+                SourceExportStatementDetails::LoadGenerator {
+                    output: LoadGeneratorOutput::Default,
+                }
+                .into_proto()
+                .encode_to_vec(),
+            );
+            let mut source_id = None;
+            for (name, sql) in [
+                (
+                    "replay_source",
+                    format!("CREATE SOURCE {prefix}.replay_source IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER"),
+                ),
+                (
+                    "replay_table",
+                    format!("CREATE TABLE {prefix}.replay_table FROM SOURCE {prefix}.replay_source (REFERENCE counter) WITH (DETAILS '{details}')"),
+                ),
+            ] {
+                let (id, global_id) = catalog
+                    .allocate_user_id_for_test()
+                    .await
+                    .expect("allocate collection identity");
+                let item = catalog
+                    .state
+                    .with_enable_for_item_parsing(|state| state.parse_item(
+                        global_id,
+                        &sql,
+                        &BTreeMap::new(),
+                        None,
+                        false,
+                        None,
+                        &mut LocalExpressionCache::Closed,
+                        None,
+                    ))
+                    .unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                let op = Op::CreateItem {
+                    id,
+                    name: QualifiedItemName {
+                        qualifiers: qualifiers.clone(),
+                        item: name.to_string(),
+                    },
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                };
+                if let Some(source_id) = source_id {
+                    let revision = catalog.transient_revision();
+                    let oracle_write_ts = catalog.current_upper().await;
+                    let (dry_run_state, _dry_run_snapshot) = catalog
+                        .transact_incremental_dry_run(
+                            catalog.state(),
+                            vec![op.clone()],
+                            None,
+                            None,
+                            oracle_write_ts,
+                        )
+                        .await
+                        .expect("table birth dry run should succeed");
+                    assert_eq!(
+                        dry_run_state.collection_compaction_bounds()[&global_id],
+                        Antichain::from_elem(Timestamp::MIN)
+                    );
+                    let fresh_bound = Timestamp::new(20);
+                    let oracle_write_ts = catalog.current_upper().await;
+                    catalog
+                        .transact(
+                            None,
+                            oracle_write_ts,
+                            None,
+                            vec![
+                                Op::SetReadProtection {
+                                    requirements: vec![MaintainedReadRequirement {
+                                        id: source_id,
+                                        inputs: BTreeSet::from([source_id]),
+                                        frontier: Some(fresh_bound),
+                                    }],
+                                    bounds: vec![],
+                                },
+                                Op::SetReadProtection {
+                                    bounds: vec![CollectionCompactionBound {
+                                        id: source_id,
+                                        frontier: Some(fresh_bound),
+                                    }],
+                                    requirements: vec![],
+                                },
+                            ],
+                        )
+                        .await
+                        .expect("dependency permission should advance during the DDL transaction");
+                    assert_eq!(catalog.transient_revision(), revision);
+
+                    // Final DDL commit replays ops, not the dry-run state or snapshot.
+                    let oracle_write_ts = catalog.current_upper().await;
+                    catalog
+                        .transact(None, oracle_write_ts, None, vec![op])
+                        .await
+                        .expect("DDL replay should use current birth permission");
+                    assert_eq!(catalog.transient_revision(), revision + 1);
+                    assert_eq!(
+                        catalog.state().collection_compaction_bounds()[&global_id],
+                        Antichain::from_elem(fresh_bound)
+                    );
+                    assert_eq!(
+                        catalog.state().maintained_read_requirements()[&global_id],
+                        MaintainedReadRequirement {
+                            id: global_id,
+                            inputs: BTreeSet::from([global_id, source_id]),
+                            frontier: Some(fresh_bound),
+                        },
+                    );
+                    assert!(catalog.state().try_get_entry(&id).is_some());
+                } else {
+                    let oracle_write_ts = catalog.current_upper().await;
+                    catalog
+                        .transact(None, oracle_write_ts, None, vec![op])
+                        .await
+                        .expect("source birth should commit");
+                    source_id = Some(global_id);
+                }
+            }
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_read_protection_admission_and_committed_updates() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use crate::memory::objects::StateDiff;
+        use mz_persist_client::ShardId;
+        use mz_repr::{GlobalId, Timestamp};
+        use mz_storage_client::controller::StorageTxn;
+        use timely::progress::Antichain;
+
+        use crate::catalog::state::LocalExpressionCache;
+        use crate::memory::implications::ParsedStateUpdateKind;
+
+        Catalog::with_debug(|mut catalog| async move {
+            let input = GlobalId::User(100_000);
+            let output = GlobalId::User(100_001);
+            let completed_input = GlobalId::User(100_002);
+            let completed_output = GlobalId::User(100_003);
+            let ts = |value| Timestamp::new(value);
+            // Seed collection birth through the durable transaction. This harness
+            // uses metadata-only collections without SQL objects or controller implications.
+            let updates = {
+                let mut storage = catalog.storage().await;
+                let mut tx = storage
+                    .transaction()
+                    .await
+                    .expect("collection setup transaction should open");
+                tx.insert_collection_metadata(BTreeMap::from([
+                    (input, ShardId::new()),
+                    (output, ShardId::new()),
+                    (completed_input, ShardId::new()),
+                    (completed_output, ShardId::new()),
+                ]))
+                .expect("input and output collection metadata should be inserted");
+                tx.set_collection_compaction_bound(input, Some(ts(10)))
+                    .expect("initial input compaction bound should be accepted");
+                tx.set_collection_compaction_bound(completed_input, Some(ts(10)))
+                    .expect("initial completion input bound should be accepted");
+                tx.set_maintained_read_requirement(
+                    completed_output,
+                    BTreeSet::from([completed_input]),
+                    Some(ts(10)),
+                )
+                .expect("initial completion requirement should be accepted");
+                let updates = tx.get_and_commit_op_updates();
+                let commit_ts = tx.upper();
+                tx.commit(commit_ts)
+                    .await
+                    .expect("collection setup should commit");
+                updates
+            };
+            let _ = catalog
+                .state
+                .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                .await;
+
+            let requirement = |frontier| Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: output,
+                    inputs: BTreeSet::from([input]),
+                    frontier,
+                }],
+                bounds: vec![],
+            };
+            let bound = |frontier| Op::SetReadProtection {
+                bounds: vec![CollectionCompactionBound {
+                    id: input,
+                    frontier,
+                }],
+                requirements: vec![],
+            };
+            let revision = catalog.transient_revision();
+            let snapshot = catalog.clone();
+            let before = catalog.state().collection_compaction_bounds().clone();
+            let oracle_write_ts = catalog.current_upper().await;
+            let result = catalog
+                .transact(None, oracle_write_ts, None, vec![requirement(Some(ts(9)))])
+                .await;
+            assert!(
+                result.is_err(),
+                "admission must return an error, not terminate"
+            );
+            assert_eq!(catalog.state().collection_compaction_bounds(), &before);
+            let base_state = catalog.state().clone();
+            assert!(
+                catalog
+                    .transact_incremental_dry_run(
+                        &base_state,
+                        vec![requirement(Some(ts(9)))],
+                        None,
+                        None,
+                        oracle_write_ts,
+                    )
+                    .await
+                    .is_err()
+            );
+
+            catalog
+                .transact(None, oracle_write_ts, None, vec![bound(Some(ts(15)))])
+                .await
+                .expect("bound-only publication should commit");
+            assert_eq!(catalog.transient_revision(), revision);
+            assert!(snapshot.transient_revision_is_current());
+            assert_eq!(
+                catalog.state().collection_compaction_bounds()[&input],
+                Antichain::from_elem(ts(15))
+            );
+            assert_eq!(
+                snapshot.state().collection_compaction_bounds()[&input],
+                Antichain::from_elem(ts(10)),
+                "planning-equivalent snapshots need not have identical protection authority"
+            );
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(None, oracle_write_ts, None, vec![requirement(Some(ts(19)))])
+                .await
+                .expect("requirement-only publication should commit");
+            assert_eq!(catalog.transient_revision(), revision);
+            assert!(snapshot.transient_revision_is_current());
+            let committed_requirement = &catalog.state().maintained_read_requirements()[&output];
+            assert_eq!(committed_requirement.inputs, BTreeSet::from([input]));
+            assert_eq!(committed_requirement.frontier, Some(ts(19)));
+
+            let publication = |required| Op::SetReadProtection {
+                requirements: vec![
+                    MaintainedReadRequirement {
+                        id: output,
+                        inputs: BTreeSet::from([input]),
+                        frontier: Some(ts(required)),
+                    },
+                    MaintainedReadRequirement {
+                        id: completed_output,
+                        inputs: BTreeSet::from([completed_input]),
+                        frontier: None,
+                    },
+                ],
+                bounds: vec![
+                    CollectionCompactionBound {
+                        id: input,
+                        frontier: Some(ts(20)),
+                    },
+                    CollectionCompactionBound {
+                        id: completed_input,
+                        frontier: None,
+                    },
+                ],
+            };
+            let oracle_write_ts = catalog.current_upper().await;
+            let before = catalog.state().clone();
+            assert!(
+                catalog
+                    .transact(None, oracle_write_ts, None, vec![publication(19)])
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                catalog.state().collection_compaction_bounds(),
+                before.collection_compaction_bounds(),
+                "an incompatible batch must not advance any bound"
+            );
+            assert_eq!(
+                catalog.state().maintained_read_requirements(),
+                before.maintained_read_requirements(),
+                "an incompatible batch must not complete any requirement"
+            );
+            assert!(
+                catalog
+                    .transact_incremental_dry_run(
+                        &before,
+                        vec![publication(19)],
+                        None,
+                        None,
+                        oracle_write_ts,
+                    )
+                    .await
+                    .is_err()
+            );
+            let (speculative, speculative_snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &before,
+                    vec![publication(20)],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("compatible publication should pass speculative admission");
+            let (replayed, _) = catalog
+                .transact_incremental_dry_run(
+                    &speculative,
+                    vec![publication(20)],
+                    None,
+                    Some(speculative_snapshot),
+                    oracle_write_ts,
+                )
+                .await
+                .expect("publication replay should be idempotent");
+            let result = catalog
+                .transact(None, oracle_write_ts, None, vec![publication(20)])
+                .await
+                .expect("matching compaction bound and read requirement should commit");
+            for state in [&speculative, &replayed] {
+                assert_eq!(
+                    state.collection_compaction_bounds(),
+                    catalog.state().collection_compaction_bounds()
+                );
+                assert_eq!(
+                    state.maintained_read_requirements(),
+                    catalog.state().maintained_read_requirements()
+                );
+            }
+            assert_eq!(
+                catalog.state().collection_compaction_bounds()[&completed_input],
+                Antichain::new()
+            );
+            assert_eq!(
+                catalog.state().maintained_read_requirements()[&completed_output].frontier,
+                None
+            );
+            let mut bound_updates: Vec<_> = result
+                .catalog_updates
+                .iter()
+                .filter_map(|update| match &update.kind {
+                    ParsedStateUpdateKind::CollectionCompactionBound(bound) => {
+                        Some((bound.id, bound.frontier, update.diff))
+                    }
+                    _ => None,
+                })
+                .collect();
+            bound_updates.sort_unstable();
+            assert_eq!(
+                bound_updates,
+                vec![
+                    (input, Some(ts(15)), StateDiff::Retraction),
+                    (input, Some(ts(20)), StateDiff::Addition),
+                    (completed_input, None, StateDiff::Addition),
+                    (completed_input, Some(ts(10)), StateDiff::Retraction),
+                ],
+                "each changed bound has one retraction and one addition for implications"
+            );
+            assert_eq!(catalog.transient_revision(), revision);
+            assert_eq!(
+                catalog.state().collection_compaction_bounds()[&input],
+                Antichain::from_elem(ts(20))
+            );
+
+            let oracle_write_ts = catalog.current_upper().await;
+            let unchanged = catalog
+                .transact(None, oracle_write_ts, None, vec![publication(20)])
+                .await
+                .expect("unchanged publication should commit without implications");
+            assert!(unchanged.catalog_updates.is_empty());
+            assert_eq!(catalog.transient_revision(), revision);
+            let interval = vars::CATALOG_READ_PROTECTION_PUBLISH_INTERVAL.name.as_str();
+            let default_interval = catalog
+                .system_config()
+                .catalog_read_protection_publish_interval();
+            assert!(!default_interval.is_zero());
+            let oracle_write_ts = catalog.current_upper().await;
+            let error = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateSystemConfiguration {
+                        name: interval.into(),
+                        value: OwnedVarInput::Flat("0s".into()),
+                    }],
+                )
+                .await
+                .err()
+                .expect("publication requires a positive cadence");
+            assert!(error.to_string().contains("non-zero durations"), "{error}");
+            assert_eq!(catalog.transient_revision(), revision);
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateSystemConfiguration {
+                        name: interval.into(),
+                        value: OwnedVarInput::Flat("2s".into()),
+                    }],
+                )
+                .await
+                .expect("changing publication cadence should commit");
+            assert_eq!(catalog.transient_revision(), revision + 1);
+            assert!(!snapshot.transient_revision_is_current());
+            let cadence_snapshot = catalog.clone();
+            assert!(cadence_snapshot.transient_revision_is_current());
+            assert_eq!(
+                cadence_snapshot
+                    .system_config()
+                    .catalog_read_protection_publish_interval(),
+                std::time::Duration::from_secs(2),
+            );
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::ResetSystemConfiguration {
+                        name: interval.into(),
+                    }],
+                )
+                .await
+                .expect("resetting publication cadence should commit");
+            assert_eq!(catalog.transient_revision(), revision + 2);
+            assert!(!cadence_snapshot.transient_revision_is_current());
+            let snapshot = catalog.clone();
+            assert!(snapshot.transient_revision_is_current());
+            assert_eq!(
+                snapshot
+                    .system_config()
+                    .catalog_read_protection_publish_interval(),
+                default_interval
+            );
+
+            let oracle_write_ts = catalog.current_upper().await;
+            assert!(
+                catalog
+                    .transact(None, oracle_write_ts, None, vec![bound(Some(ts(21)))])
+                    .await
+                    .is_err()
+            );
+            let database_id = ResolvedDatabaseSpecifier::Id(
+                catalog
+                    .resolve_database(DEFAULT_DATABASE_NAME)
+                    .expect("default database exists")
+                    .id(),
+            );
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        bound(None),
+                        requirement(None),
+                        Op::CreateSchema {
+                            database_id: database_id.clone(),
+                            schema_name: "protection_revision".into(),
+                            owner_id: MZ_SYSTEM_ROLE_ID,
+                        },
+                    ],
+                )
+                .await
+                .expect("schema and protection changes should commit together");
+            assert_eq!(catalog.transient_revision(), revision + 3);
+            assert!(!snapshot.transient_revision_is_current());
+            assert!(catalog.transient_revision_is_current());
+            assert!(
+                catalog
+                    .resolve_schema_in_database(
+                        &database_id,
+                        "protection_revision",
+                        &SYSTEM_CONN_ID,
+                    )
+                    .is_ok()
+            );
+            assert_eq!(
+                catalog.state().maintained_read_requirements()[&output].frontier,
+                None
+            );
+            assert_eq!(
+                catalog.state().collection_compaction_bounds().get(&input),
+                Some(&Antichain::new()),
+                "completed permission remains governed"
+            );
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    #[mz_ore::test]
+    fn test_reconfiguration_audit_details() {
+        use std::time::Duration;
+
+        use crate::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationStatus, ReconfigurationTarget,
+        };
+        use mz_adapter_types::cluster_state::ReconfigurationAudit;
+        use mz_audit_log::ReconfigurationLifecycleV1;
+        use mz_controller_types::ClusterId;
+        use mz_controller_types::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let logging = ReplicaLogging {
+            log_logging: false,
+            interval: None,
+        };
+        let managed = |reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+                arrangement_compression: false,
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration,
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let record = |status| ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: "large".into(),
+                replication_factor: 2,
+                availability_zones: vec!["az1".into(), "az2".into()],
+                logging: ReplicaLogging {
+                    log_logging: true,
+                    interval: Some(Duration::from_secs(5)),
+                },
+                arrangement_compression: false,
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+            status,
+        };
+
+        let details = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Started,
+        )
+        .expect("record supplies audit details");
+        assert_eq!(details.cluster_id, cluster_id.to_string());
+        assert_eq!(details.cluster_name, "c");
+        assert_eq!(details.transition, ReconfigurationLifecycleV1::Started);
+        assert_eq!(details.forced, None);
+        assert_eq!(details.target_size, "large");
+        assert_eq!(details.target_replication_factor, 2);
+        assert_eq!(
+            details.target_availability_zones,
+            vec!["az1".to_string(), "az2".to_string()]
+        );
+        assert_eq!(details.target_logging.log_logging, true);
+        assert_eq!(
+            details.target_logging.interval,
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(details.deadline, Some(400));
+
+        // The `forced` bit exists only on the intent. The durable status reads
+        // `Finalized` for both a hydrated and a forced cut-over, and the event
+        // preserves the distinction.
+        let forced = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::Finalized))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Finalized { forced: true },
+        )
+        .expect("a coherent finalize supplies audit details");
+        assert_eq!(forced.transition, ReconfigurationLifecycleV1::Finalized);
+        assert_eq!(forced.forced, Some(true));
+
+        // A declared transition that contradicts the written record's status is
+        // a writer bug and must fail the transaction.
+        let incoherent = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::TimedOut))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::ResourceExhausted,
+        );
+        assert!(incoherent.is_err());
+
+        let missing = Catalog::reconfiguration_audit_details(
+            &managed(None),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Started,
+        );
+        assert!(missing.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_reconfiguration_lifecycle_moved() {
+        use std::time::Duration;
+
+        use crate::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationStatus, ReconfigurationTarget,
+        };
+        use mz_controller_types::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration,
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |status| ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: "large".into(),
+                replication_factor: 2,
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: Some(Duration::from_secs(1)),
+                },
+                arrangement_compression: false,
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+            status,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+        ));
+        // The status changes.
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &managed(Some(record(ReconfigurationStatus::Finalized))),
+        ));
+        // An in-progress record is dropped, e.g. by converting the cluster to
+        // unmanaged (which the sequencer refuses, and this guard backstops).
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, a status-preserving copy (a write
+        // that carries the record forward), and dropping a settled record.
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(None),
+            &managed(None),
+        ));
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+        ));
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::Cancelled))),
+            &unmanaged,
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_burst_lifecycle_moved() {
+        use std::time::Duration;
+
+        use crate::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller_types::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |steady_hydrated_at| BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(None))),
+        ));
+        // The record is cleared.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(None),
+        ));
+        // The record is dropped by converting the cluster to unmanaged (which
+        // the sequencer refuses, and this guard backstops).
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, and the bookkeeping rewrites (the
+        // hydration stamp and its reset) that keep the record present.
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(None)
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+            &managed(Some(record(None))),
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_has_unwarranted_burst_record() {
+        use std::time::Duration;
+
+        use crate::memory::objects::{BurstState, ClusterVariantManaged};
+        use mz_controller_types::clusters::ReplicaLogging;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+        use mz_sql::plan::{AutoScalingStrategy, OnHydration};
+
+        let managed = |replication_factor: u32,
+                       strategy: Option<AutoScalingStrategy>,
+                       burst: Option<BurstState>| ClusterVariantManaged {
+            size: "small".into(),
+            availability_zones: Vec::new(),
+            logging: ReplicaLogging {
+                log_logging: false,
+                interval: None,
+            },
+            arrangement_compression: false,
+            replication_factor,
+            optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+            schedule: Default::default(),
+            auto_scaling_strategy: strategy,
+            reconfiguration: None,
+            burst,
+        };
+        let policy = |hydration_size: &str| AutoScalingStrategy {
+            on_hydration: Some(OnHydration {
+                hydration_size: hydration_size.into(),
+                linger_duration: None,
+            }),
+        };
+        let record = || BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+
+        // No record: nothing to retire, with or without a policy.
+        assert!(!managed(1, None, None).has_unwarranted_burst_record());
+        assert!(!managed(1, Some(policy("large")), None).has_unwarranted_burst_record());
+
+        // A record backed by a matching, active policy is warranted.
+        assert!(!managed(1, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+
+        // Unwarranted: policy removed, policy re-sized, or cluster turned off.
+        assert!(managed(1, None, Some(record())).has_unwarranted_burst_record());
+        assert!(
+            managed(
+                1,
+                Some(AutoScalingStrategy { on_hydration: None }),
+                Some(record())
+            )
+            .has_unwarranted_burst_record()
+        );
+        assert!(managed(1, Some(policy("xlarge")), Some(record())).has_unwarranted_burst_record());
+        assert!(managed(0, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+    }
+
+    #[mz_ore::test]
+    fn test_replica_create_drop_reason_into_audit_log() {
+        use std::time::Duration;
+
+        use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, SchedulingDecisionV1};
+        use mz_cluster_controller::ctx::RefreshWindowDecision;
+        use mz_repr::GlobalId;
+
+        use crate::catalog::ReplicaCreateDropReason;
+
+        // `OnRefresh` audits the `schedule` word and converts the controller's
+        // window decision into the `scheduling_policies` detail blob: ids as
+        // strings, the hydration-time estimate as an interval string, and the
+        // decision hardcoded `on` (the controller produces a create, and so
+        // this detail, only for an open window).
+        let (reason, scheduling_policies) =
+            ReplicaCreateDropReason::OnRefresh(RefreshWindowDecision {
+                objects_needing_refresh: vec![GlobalId::User(1)],
+                objects_needing_compaction: vec![GlobalId::User(2), GlobalId::User(3)],
+                hydration_time_estimate: Duration::from_secs(995),
+            })
+            .into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Schedule);
+        let blob = scheduling_policies.expect("on-refresh create carries the detail");
+        assert_eq!(blob.on_refresh.decision, SchedulingDecisionV1::On);
+        assert_eq!(blob.on_refresh.objects_needing_refresh, vec!["u1"]);
+        assert_eq!(blob.on_refresh.objects_needing_compaction, vec!["u2", "u3"]);
+        assert_eq!(blob.on_refresh.hydration_time_estimate, "00:16:35");
+
+        // `Retired` is the uniform word for every controller drop, with no
+        // blob.
+        let (reason, scheduling_policies) = ReplicaCreateDropReason::Retired.into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Retired);
+        assert!(scheduling_policies.is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_burst_audit_details() {
+        use std::time::Duration;
+
+        use crate::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_adapter_types::cluster_state::{BurstAudit, BurstFinishCause};
+        use mz_audit_log::{BurstFinishCauseV1, HydrationBurstLifecycleV1};
+        use mz_controller_types::ClusterId;
+        use mz_controller_types::clusters::ReplicaLogging;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        let record = || BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+
+        // A started intent reads the armed record from the new config.
+        let started = Catalog::burst_audit_details(
+            &managed(None),
+            &managed(Some(record())),
+            cluster_id,
+            "c",
+            BurstAudit::Started,
+        )
+        .expect("armed record supplies audit details");
+        assert_eq!(started.transition, HydrationBurstLifecycleV1::Started);
+        assert_eq!(started.finish_cause, None);
+        assert_eq!(started.burst_size, "large");
+
+        // A finished intent reads the cleared record from the old config and
+        // carries the writer-declared cause.
+        let finished = Catalog::burst_audit_details(
+            &managed(Some(record())),
+            &managed(None),
+            cluster_id,
+            "c",
+            BurstAudit::Finished {
+                cause: BurstFinishCause::LingerElapsed,
+            },
+        )
+        .expect("cleared record supplies audit details");
+        assert_eq!(finished.transition, HydrationBurstLifecycleV1::Finished);
+        assert_eq!(
+            finished.finish_cause,
+            Some(BurstFinishCauseV1::LingerElapsed)
+        );
+        assert_eq!(finished.burst_size, "large");
+
+        // An intent without a record on the corresponding side contradicts the
+        // write and must fail the transaction.
+        let incoherent = Catalog::burst_audit_details(
+            &managed(None),
+            &managed(None),
+            cluster_id,
+            "c",
+            BurstAudit::Started,
+        );
+        assert!(incoherent.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_update_privilege_owners() {
+        let old_owner = RoleId::User(1);
+        let new_owner = RoleId::User(2);
+        let other_role = RoleId::User(3);
+
+        // older owner exists as grantor.
+        let mut privileges = PrivilegeMap::from_mz_acl_items(vec![
+            MzAclItem {
+                grantee: other_role,
+                grantor: old_owner,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: other_role,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT,
+            },
+        ]);
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(1, privileges.all_values().count());
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: other_role,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges.all_values_owned().collect::<Vec<_>>()
+        );
+
+        // older owner exists as grantee.
+        let mut privileges = PrivilegeMap::from_mz_acl_items(vec![
+            MzAclItem {
+                grantee: old_owner,
+                grantor: other_role,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: new_owner,
+                grantor: other_role,
+                acl_mode: AclMode::SELECT,
+            },
+        ]);
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(1, privileges.all_values().count());
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: new_owner,
+                grantor: other_role,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges.all_values_owned().collect::<Vec<_>>()
+        );
+
+        // older owner exists as grantee and grantor.
+        let mut privileges = PrivilegeMap::from_mz_acl_items(vec![
+            MzAclItem {
+                grantee: old_owner,
+                grantor: old_owner,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: new_owner,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT,
+            },
+        ]);
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(1, privileges.all_values().count());
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: new_owner,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges.all_values_owned().collect::<Vec<_>>()
+        );
+    }
+
+    /// Staged dry runs carry collection lifetimes and protection across statements.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_transact_incremental_dry_run_processes_only_new_ops() {
+        Catalog::with_debug(|catalog| async move {
+            // Resolve default database and schema.
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database");
+            let database_name = database.name.clone();
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema");
+            let schema_name = schema.name.schema.clone();
+            let schema_spec = schema.id.clone();
+
+            // Allocate IDs for two tables.
+            let (id_t1, global_id_t1) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("allocate id for t1");
+            let (id_t2, global_id_t2) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("allocate id for t2");
+
+            let oracle_write_ts = catalog.current_upper().await;
+
+            // Build two CreateItem ops.
+            let make_table_op = |id, global_id, name: &str| Op::CreateItem {
+                id,
+                name: QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: database_spec.clone(),
+                        schema_spec: schema_spec.clone(),
+                    },
+                    item: name.to_string(),
+                },
+                item: CatalogItem::Table(Table {
+                    create_sql: Some(format!(
+                        "CREATE TABLE {database_name}.{schema_name}.{name} ()"
+                    )),
+                    desc: VersionedRelationDesc::new(RelationDesc::empty()),
+                    collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
+                    conn_id: None,
+                    resolved_ids: ResolvedIds::empty(),
+                    custom_logical_compaction_window: None,
+                    is_retained_metrics_object: false,
+                    data_source: TableDataSource::TableWrites { defaults: vec![] },
+                }),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+            };
+
+            let op_t1 = make_table_op(id_t1, global_id_t1, "t1");
+            let op_t2 = make_table_op(id_t2, global_id_t2, "t2");
+            let bound = Op::SetReadProtection {
+                bounds: vec![CollectionCompactionBound {
+                    id: global_id_t1,
+                    frontier: Some(10.into()),
+                }],
+                requirements: vec![],
+            };
+            let requirement = Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: global_id_t2,
+                    inputs: [global_id_t1].into_iter().collect(),
+                    frontier: Some(10.into()),
+                }],
+                bounds: vec![],
+            };
+
+            let base_state = catalog.state().clone();
+
+            let mut protected_state = base_state.clone();
+            protected_state.catalog_read_protection_enabled = true;
+            let (born_state, born_snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &protected_state,
+                    vec![op_t1.clone()],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("table birth establishes committed permission");
+            assert_eq!(
+                born_state.collection_compaction_bounds()[&global_id_t1],
+                timely::progress::Antichain::from_elem(oracle_write_ts)
+            );
+            let historical_ts = oracle_write_ts.step_back().expect("nonzero catalog upper");
+            let result = catalog
+                .transact_incremental_dry_run(
+                    &born_state,
+                    vec![
+                        op_t2.clone(),
+                        Op::SetReadProtection {
+                            requirements: vec![MaintainedReadRequirement {
+                                id: global_id_t2,
+                                inputs: [global_id_t1].into_iter().collect(),
+                                frontier: Some(historical_ts),
+                            }],
+                            bounds: vec![],
+                        },
+                    ],
+                    None,
+                    Some(born_snapshot),
+                    oracle_write_ts,
+                )
+                .await;
+            assert!(
+                matches!(
+                    result,
+                    Err(CatalogError::Catalog(Error {
+                        kind: ErrorKind::Durable(
+                            crate::durable::DurableCatalogError::InvalidReadProtection(_)
+                        ),
+                    }))
+                ),
+                "admission must reject history preceding birth permission"
+            );
+
+            let (state_after_t1, snapshot_after_t1) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![op_t1.clone(), bound.clone()],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("first dry run");
+
+            // After first dry run: t1 exists, t2 does not.
+            assert!(
+                state_after_t1.try_get_entry(&id_t1).is_some(),
+                "t1 should exist after first dry run"
+            );
+            assert_eq!(
+                state_after_t1
+                    .try_get_entry(&id_t1)
+                    .expect("t1 entry")
+                    .name()
+                    .item,
+                "t1"
+            );
+            assert!(
+                state_after_t1.try_get_entry(&id_t2).is_none(),
+                "t2 should NOT exist after first dry run"
+            );
+
+            let (state_incremental, snapshot_incremental) = catalog
+                .transact_incremental_dry_run(
+                    &state_after_t1,
+                    vec![op_t2.clone(), requirement.clone()],
+                    None,
+                    Some(snapshot_after_t1),
+                    oracle_write_ts,
+                )
+                .await
+                .expect("second dry run");
+
+            // After second dry run: both t1 and t2 exist.
+            assert!(
+                state_incremental.try_get_entry(&id_t1).is_some(),
+                "t1 should exist in incremental result"
+            );
+            assert!(
+                state_incremental.try_get_entry(&id_t2).is_some(),
+                "t2 should exist in incremental result"
+            );
+
+            let (state_all_at_once, _) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![op_t1.clone(), bound, op_t2.clone(), requirement],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("all-at-once dry run");
+
+            assert!(
+                state_all_at_once.try_get_entry(&id_t1).is_some(),
+                "t1 should exist in all-at-once result"
+            );
+            assert!(
+                state_all_at_once.try_get_entry(&id_t2).is_some(),
+                "t2 should exist in all-at-once result"
+            );
+
+            let inc_t1 = state_incremental.try_get_entry(&id_t1).expect("inc t1");
+            let all_t1 = state_all_at_once.try_get_entry(&id_t1).expect("all t1");
+            assert_eq!(inc_t1.name(), all_t1.name());
+            assert_eq!(inc_t1.owner_id, all_t1.owner_id);
+
+            let inc_t2 = state_incremental.try_get_entry(&id_t2).expect("inc t2");
+            let all_t2 = state_all_at_once.try_get_entry(&id_t2).expect("all t2");
+            assert_eq!(inc_t2.name(), all_t2.name());
+            assert_eq!(inc_t2.owner_id, all_t2.owner_id);
+
+            let (dropped_state, dropped_snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &state_incremental,
+                    vec![
+                        Op::DropObjects(vec![crate::catalog::DropObjectInfo::Item(id_t2)]),
+                        Op::SetReadProtection {
+                            bounds: vec![CollectionCompactionBound {
+                                id: global_id_t1,
+                                frontier: Some(20.into()),
+                            }],
+                            requirements: vec![],
+                        },
+                    ],
+                    None,
+                    Some(snapshot_incremental),
+                    oracle_write_ts,
+                )
+                .await
+                .expect("dropping a consumer releases its requirement in the dry run");
+            assert!(dropped_state.try_get_entry(&id_t2).is_none());
+            assert!(dropped_snapshot.maintained_read_requirements.is_empty());
+            assert_eq!(
+                dropped_state.collection_compaction_bounds()[&global_id_t1],
+                timely::progress::Antichain::from_elem(20.into())
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Exercises the diff-and-prune semantics of the
+    /// `Op::UpdateScopedSystemParameters` apply handler over the cluster scope.
+    /// Covers four behaviors: upsert of a desired row, the bounded-prune
+    /// protection that spares a live cluster outside `prune_scope`, removal of a
+    /// stale in-scope row, and the orphan-prune that reclaims a row whose owning
+    /// cluster was dropped even though that id is absent from `prune_scope`.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_transact_update_scoped_system_parameters_prune() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use crate::memory::objects::{ClusterConfig, ClusterVariant};
+        use mz_controller_types::ClusterId;
+
+        use crate::catalog::DropObjectInfo;
+        use crate::config::{ScopedParameters, ScopedParametersScope};
+
+        Catalog::with_debug(|mut catalog| async move {
+            let param = "max_query_result_size".to_string();
+            let value = "1MB".to_string();
+
+            // Allocate and create two live clusters, A and B, the same way
+            // production code does.
+            let commit_ts = catalog.current_upper().await;
+            let cluster_a = catalog
+                .allocate_user_cluster_id(commit_ts)
+                .await
+                .expect("allocate cluster A");
+            let commit_ts = catalog.current_upper().await;
+            let cluster_b = catalog
+                .allocate_user_cluster_id(commit_ts)
+                .await
+                .expect("allocate cluster B");
+
+            let make_cluster_op = |id: ClusterId, name: &str| Op::CreateCluster {
+                id,
+                name: name.to_string(),
+                introspection_sources: Vec::new(),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+                config: ClusterConfig {
+                    variant: ClusterVariant::Unmanaged,
+                    workload_class: None,
+                },
+            };
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        make_cluster_op(cluster_a, "test_cluster_a"),
+                        make_cluster_op(cluster_b, "test_cluster_b"),
+                    ],
+                )
+                .await
+                .expect("create clusters");
+
+            // Reads the durable cluster system configuration rows.
+            async fn rows(catalog: &Catalog) -> BTreeSet<(ClusterId, String, String)> {
+                let mut storage = catalog.storage().await;
+                let tx = storage.transaction().await.expect("open transaction");
+                tx.get_cluster_system_configurations()
+                    .map(|c| (c.cluster_id, c.name, c.value))
+                    .collect()
+            }
+
+            let scope_with = |ids: &[ClusterId]| ScopedParametersScope {
+                clusters: ids.iter().copied().collect(),
+                replicas: BTreeSet::new(),
+            };
+            let cluster_scoped = |id: ClusterId| {
+                let mut cluster = BTreeMap::new();
+                let mut overrides = BTreeMap::new();
+                overrides.insert(param.clone(), value.clone());
+                cluster.insert(id, overrides);
+                ScopedParameters {
+                    cluster,
+                    replica: BTreeMap::new(),
+                }
+            };
+            let empty_scoped = || ScopedParameters {
+                cluster: BTreeMap::new(),
+                replica: BTreeMap::new(),
+            };
+
+            // Behavior 1: upsert. A is live and in scope, so the row is created.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_a),
+                        prune_scope: scope_with(&[cluster_a]),
+                    }],
+                )
+                .await
+                .expect("upsert A");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_a, param.clone(), value.clone())),
+                "upsert must create the row for A"
+            );
+
+            // Set up an additional row for B so the prune cases have something to
+            // act on.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_b),
+                        prune_scope: scope_with(&[cluster_b]),
+                    }],
+                )
+                .await
+                .expect("upsert B");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_b, param.clone(), value.clone())),
+                "setup must create the row for B"
+            );
+
+            // Behavior 2: bounded prune. Running with empty `scoped` and a scope
+            // that excludes the live cluster B must leave B's row intact, because
+            // the update was not authoritative for B.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: empty_scoped(),
+                        prune_scope: scope_with(&[cluster_a]),
+                    }],
+                )
+                .await
+                .expect("bounded prune");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_b, param.clone(), value.clone())),
+                "a live cluster outside prune_scope must keep its row"
+            );
+
+            // Behavior 3: stale in-scope prune. A is live and in scope but not
+            // desired, so its row is removed.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: empty_scoped(),
+                        prune_scope: scope_with(&[cluster_a]),
+                    }],
+                )
+                .await
+                .expect("stale in-scope prune");
+            assert!(
+                !rows(&catalog)
+                    .await
+                    .iter()
+                    .any(|(id, _, _)| *id == cluster_a),
+                "a live in-scope undesired row must be removed"
+            );
+
+            // Behavior 4: orphan prune. Re-create A's row, drop cluster A, then run
+            // the update with a scope that does NOT contain A. The sync loop only
+            // ever places live ids in prune_scope, so the orphan must still be
+            // reclaimed because its owning cluster is no longer live.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_a),
+                        prune_scope: scope_with(&[cluster_a]),
+                    }],
+                )
+                .await
+                .expect("re-create A row");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_a, param.clone(), value.clone())),
+                "re-created row for A must exist"
+            );
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::DropObjects(vec![DropObjectInfo::Cluster(cluster_a)])],
+                )
+                .await
+                .expect("drop cluster A");
+
+            // B is the only live cluster the sync loop would have evaluated, so
+            // only B appears in prune_scope. A's id is deliberately absent.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_b),
+                        prune_scope: scope_with(&[cluster_b]),
+                    }],
+                )
+                .await
+                .expect("orphan prune");
+            assert!(
+                !rows(&catalog)
+                    .await
+                    .iter()
+                    .any(|(id, _, _)| *id == cluster_a),
+                "orphan row for a dropped cluster must be removed even when absent from prune_scope"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Registers a `MAX_CONNECTIONS` callback that records every value it sees.
+    /// The initial fire from `register_callback` is cleared out, so callers
+    /// only observe notifications that happen afterwards.
+    fn record_max_connections(catalog: &mut Catalog) -> Arc<Mutex<Vec<u32>>> {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
+        catalog.system_config_mut().register_callback(
+            &MAX_CONNECTIONS,
+            Arc::new(move |vars: &SystemVars| {
+                recorder
+                    .lock()
+                    .expect("recorder lock")
+                    .push(vars.max_connections())
+            }),
+        );
+        observed.lock().expect("recorder lock").clear();
+        observed
+    }
+
+    fn set_max_connections_op(value: u32) -> Op {
+        Op::UpdateSystemConfiguration {
+            name: MAX_CONNECTIONS.name.to_string(),
+            value: OwnedVarInput::Flat(value.to_string()),
+        }
+    }
+
+    // The commit-boundary firing now lives in
+    // `Coordinator::apply_catalog_implications`, so it is not observable from a
+    // bare `Catalog`. The tests below stay here to guard the speculative path:
+    // `Catalog::transact` itself must never notify.
+
+    /// A dry-run transaction is never committed, so it must not notify.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_dry_run() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            // The clone carries the registered callbacks, so the dry run
+            // genuinely *could* fire them. That's what makes this test worth
+            // anything.
+            let base_state = catalog.state().clone();
+            let oracle_write_ts = catalog.current_upper().await;
+            let (dry_run_state, _snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![set_max_connections_op(before + 1)],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("dry run");
+
+            assert_eq!(dry_run_state.system_config().max_connections(), before + 1);
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "a dry run must not notify callbacks"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// A transaction that fails after applying a system-config op to the
+    /// candidate state must not notify, since nothing ever gets committed.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_rollback() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            let oracle_write_ts = catalog.current_upper().await;
+            let result = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        set_max_connections_op(before + 1),
+                        // `transact_op` rejects this while parsing, after the
+                        // first op already applied to the candidate state.
+                        Op::UpdateSystemConfiguration {
+                            name: MAX_CONNECTIONS.name.to_string(),
+                            value: OwnedVarInput::Flat("not a number".to_string()),
+                        },
+                    ],
+                )
+                .await;
+
+            assert!(result.is_err(), "the second op must abort the transaction");
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "an aborted transaction must not notify callbacks"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+}

@@ -32,7 +32,7 @@ pub enum ExpirationBehavior {
     Disable,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidatedLicenseKey {
     pub id: String,
     pub organization: String,

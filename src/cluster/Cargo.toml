@@ -18,6 +18,7 @@ lgalloc.workspace = true
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
+mz-timely-util = { path = "../timely-util" }
 rand.workspace = true
 regex.workspace = true
 timely.workspace = true

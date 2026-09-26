@@ -1231,7 +1231,8 @@ impl<'a> RunnerInner<'a> {
         let persist_clients = Arc::new(persist_clients);
 
         let secrets_controller = Arc::clone(&orchestrator);
-        let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        connection_context.environment_id = environment_id.to_string();
         let orchestrator = Arc::new(TracingOrchestrator::new(
             orchestrator,
             config.tracing.clone(),
@@ -1376,6 +1377,10 @@ impl<'a> RunnerInner<'a> {
                 params.insert(
                     "log_filter".to_string(),
                     config.tracing.startup_log_filter.to_string(),
+                );
+                params.insert(
+                    "enable_catalog_read_protection".to_string(),
+                    "true".to_string(),
                 );
                 params.extend(config.system_parameter_defaults.clone());
                 params

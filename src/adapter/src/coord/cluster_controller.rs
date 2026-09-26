@@ -504,15 +504,11 @@ impl Coordinator {
     /// Starts per-replica readiness checks for `cluster_id`: hydration, plus
     /// the lag gate against `reference` when `allowed_lag` is `Some`.
     ///
-    /// Returns only checks for replicas whose processes are all online, that
-    /// are already storage-hydrated, and that are known to the compute
-    /// controller. The compute receiver completes off the coordinator loop.
+    /// Returns checks for online, storage-hydrated replicas. Native compute uses
+    /// connection-scoped hydration and output observations. Legacy compute
+    /// completes its check off the coordinator loop.
     ///
-    /// The storage-side check is hydration only. Storage hydration has its own
-    /// definition (see `StorageController::collections_hydrated_on_replicas`),
-    /// and no lag term is applied to it here; a pending replica hosting an
-    /// ingestion can pass this gate with the source's snapshot complete but its
-    /// replay still in progress.
+    /// Storage readiness checks hydration only, not replay lag.
     fn start_readiness_checks(
         &self,
         cluster_id: ClusterId,
@@ -561,17 +557,66 @@ impl Coordinator {
                 .filter(|(target, _)| *target != replica_id)
                 .map(|(_, id)| *id)
                 .collect();
-            let compute_fut = match self.controller.compute.collections_ready_for_replicas(
-                cluster_id,
-                vec![replica_id],
-                exclude.clone(),
-                allowed_lag,
-                reference.clone(),
-            ) {
-                Ok(fut) => fut,
-                // The replica is not known to the compute controller. Treat it
-                // as not ready.
-                Err(_) => continue,
+            let compute_fut = if self.controller.replica_owned_compute() {
+                let Some(client) = &self.query_client else {
+                    continue;
+                };
+                let expected = self
+                    .catalog()
+                    .entries()
+                    .filter_map(|entry| {
+                        if entry.item().cluster_id() != Some(cluster_id) {
+                            return None;
+                        }
+                        let id = match entry.item() {
+                            CatalogItem::Index(index) => index.global_id(),
+                            CatalogItem::MaterializedView(mv) => {
+                                // A completed finite-refresh writer needs no new runtime
+                                // dataflow. Pending replacements cannot borrow completion
+                                // from the target's shared shard.
+                                let complete = mv.replacement_target.is_none()
+                                    && mv
+                                        .refresh_schedule
+                                        .as_ref()
+                                        .and_then(|s| s.last_refresh())
+                                        .is_some_and(|last| {
+                                            self.controller
+                                                .storage_collections
+                                                .collection_frontiers(mv.global_id_writes())
+                                                .is_ok_and(|f| !f.write_frontier.less_equal(&last))
+                                        });
+                                if complete {
+                                    return None;
+                                }
+                                mv.global_id_writes()
+                            }
+                            CatalogItem::MetricSink(sink) => sink.global_id,
+                            _ => return None,
+                        };
+                        (!exclude.contains(&id)).then_some(id)
+                    })
+                    .collect();
+                let (tx, rx) = oneshot::channel();
+                let _ = tx.send(client.collections_ready_on_replica(
+                    self.catalog(),
+                    cluster_id,
+                    replica_id,
+                    &expected,
+                    allowed_lag,
+                    reference,
+                ));
+                rx
+            } else {
+                match self.controller.compute.collections_ready_for_replicas(
+                    cluster_id,
+                    vec![replica_id],
+                    exclude.clone(),
+                    allowed_lag,
+                    reference.clone(),
+                ) {
+                    Ok(fut) => fut,
+                    Err(_) => continue,
+                }
             };
             let storage_hydrated = match self.controller.storage.collections_hydrated_on_replicas(
                 Some(vec![replica_id]),

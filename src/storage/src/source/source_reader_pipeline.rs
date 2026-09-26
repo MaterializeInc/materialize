@@ -452,6 +452,21 @@ where
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
 
+    let input_progress = if active_worker {
+        storage_state.executions.as_ref().map(|executions| {
+            let progress = crate::replica::ReadProgress::new();
+            let frontier = progress.frontier();
+            executions.observe(
+                id,
+                remap_collection_id,
+                Box::new(move || frontier.borrow().clone()),
+            );
+            progress
+        })
+    } else {
+        None
+    };
+
     let operator_name = format!("remap({})", id);
     let mut remap_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
     let (remap_output, remap_stream) = remap_op.new_output::<CapacityContainerBuilder<_>>();
@@ -478,6 +493,7 @@ where
             worker_count,
             remap_relation_desc,
             remap_collection_id,
+            input_progress,
         )
         .await;
 

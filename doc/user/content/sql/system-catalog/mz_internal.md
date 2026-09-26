@@ -432,6 +432,10 @@ The `mz_frontiers` table describes the frontiers of each source, sink, table,
 materialized view, index, and subscription in the system, as observed from the
 coordinator.
 
+An index has no row when its frontiers have not been observed from a connected
+replica, including when its cluster has no replicas. Missing observations are
+distinct from an empty frontier, which is represented by `NULL`.
+
 At this time, we do not make any guarantees about the freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_frontiers -->
@@ -555,6 +559,9 @@ The `mz_materialization_lag` view describes the difference between the input
 frontiers and the output frontier for each materialized view, index, and sink
 in the system. For hydrated dataflows, this lag roughly corresponds to the time
 it takes for updates at the inputs to be reflected in the output.
+
+Indexes without an observed frontier in [`mz_frontiers`](#mz_frontiers) have no
+row in this view. Their absence does not indicate zero lag.
 
 At this time, we do not make any guarantees about the freshness of these numbers.
 

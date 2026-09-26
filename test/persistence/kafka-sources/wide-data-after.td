@@ -29,5 +29,10 @@ $ set schema={
 $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keyschema} schema=${schema} repeat=10 start-iteration=10
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
+# This source reads wide_data_sink output. Allow for the 300s takeover grace after restart.
+$ set-sql-timeout duration=360s force=true
+
 > SELECT COUNT(*), MIN(LENGTH(value)), MAX(LENGTH(value)) FROM wide_data_source_tbl;
 20 524288 524288
+
+$ set-sql-timeout duration=default

@@ -18,9 +18,8 @@
 //! broadcasts them to other workers through the Timely fabric, taking care of the correct
 //! sequencing.
 //!
-//! Commands in the command channel are tagged with a nonce identifying the incarnation of the
-//! compute protocol the command belongs to, allowing workers to recognize client reconnects that
-//! require a reconciliation.
+//! Commands carry a connection nonce and origin. Workers reconcile lifecycle reconnects without
+//! treating query connections or their disconnects as changes to maintained desired state.
 //!
 //! The channel optionally also carries storage-internal commands, for
 //! clusters that host storage objects alongside compute objects. Both command kinds are sequenced
@@ -51,27 +50,40 @@ use timely::scheduling::{Activator, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use uuid::Uuid;
 
+/// Origin carried through worker 0's common command order.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Origin {
+    Lifecycle(Uuid),
+    Query(Uuid),
+    /// Runtime-owned maintained commands, independent of transport connections.
+    Replica,
+}
+
+/// A missing command denotes query disconnect, never lifecycle replacement.
+pub type Envelope = (Option<ComputeCommand>, Origin);
+
 #[cfg(test)]
 mod tests;
 
 /// A command in the unified command lane.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum UnifiedCommand {
-    /// A compute command, tagged with the client nonce.
-    Compute(ComputeCommand, Uuid),
+    /// A compute command or query disconnect, tagged with its owner.
+    Compute(Option<ComputeCommand>, Origin),
     /// A storage-internal command.
     Storage(InternalStorageCommand),
 }
 
 /// A sender pushing compute commands onto the command channel.
+#[derive(Clone)]
 pub struct Sender {
-    tx: mpsc::Sender<(ComputeCommand, Uuid)>,
+    tx: mpsc::Sender<Envelope>,
     activator: Arc<Mutex<Option<SyncActivator>>>,
 }
 
 impl Sender {
     /// Broadcasts the given command to all workers.
-    pub fn send(&self, message: (ComputeCommand, Uuid)) {
+    pub fn send(&self, message: Envelope) {
         if self.tx.send(message).is_err() {
             unreachable!("command channel never shuts down");
         }
@@ -160,19 +172,25 @@ pub fn render(
                     let mut compute_disconnected = false;
                     loop {
                         match input_rx.try_recv() {
-                            Ok((cmd, nonce)) if worker_id == 0 => {
+                            Ok((cmd, origin)) if worker_id == 0 => {
                                 session.give((
                                     worker_id,
                                     cmd_index,
-                                    UnifiedCommand::Compute(cmd, nonce),
+                                    UnifiedCommand::Compute(cmd, origin),
                                 ));
                                 cmd_index += 1;
                             }
-                            Ok((cmd, _nonce)) => {
-                                // Non-leader workers only receive `UpdateConfiguration` commands
-                                // from the controller and must drop them to not sequence
-                                // duplicates.
-                                assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                            Ok((cmd, _origin)) => {
+                                // Handshakes and configuration reach every partition.
+                                // Only worker zero sequences their shared copy.
+                                assert!(matches!(
+                                    cmd,
+                                    Some(
+                                        ComputeCommand::UpdateConfiguration(_)
+                                            | ComputeCommand::HelloQuery { .. }
+                                            | ComputeCommand::SetQueryMaxResultSize { .. }
+                                    )
+                                ));
                             }
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => {
@@ -330,16 +348,38 @@ pub fn render(
 
 /// Split the given command into one part per target worker.
 ///
-/// Compute `CreateDataflow` commands are partitioned among the workers. Every other command is
+/// Compute `CreateDataflow` and `CreateQueryDataflow` commands are partitioned among workers. Every other command is
 /// replicated to all workers.
 fn split_command(
     command: UnifiedCommand,
     parts: usize,
 ) -> impl Iterator<Item = (usize, UnifiedCommand)> {
     use itertools::Either;
+    match command {
+        UnifiedCommand::Compute(Some(command), origin) => Either::Left(
+            split_compute_command(command, parts).map(move |(target, command)| {
+                (target, UnifiedCommand::Compute(Some(command), origin))
+            }),
+        ),
+        command => Either::Right(std::iter::repeat_n(command, parts).enumerate()),
+    }
+}
 
+fn split_compute_command(
+    command: ComputeCommand,
+    parts: usize,
+) -> impl Iterator<Item = (usize, ComputeCommand)> {
+    use itertools::Either;
+
+    let (command, request_id) = match command {
+        ComputeCommand::CreateQueryDataflow {
+            request_id,
+            dataflow,
+        } => (ComputeCommand::CreateDataflow(dataflow), Some(request_id)),
+        command => (command, None),
+    };
     let commands = match command {
-        UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), nonce) => {
+        ComputeCommand::CreateDataflow(dataflow) => {
             let dataflow = *dataflow;
 
             // A list of descriptions of objects for each part to build.
@@ -374,9 +414,7 @@ fn split_command(
                     time_dependence: dataflow.time_dependence.clone(),
                 })
                 .map(Box::new)
-                .map(move |dataflow| {
-                    UnifiedCommand::Compute(ComputeCommand::CreateDataflow(dataflow), nonce)
-                });
+                .map(ComputeCommand::CreateDataflow);
             Either::Left(commands)
         }
         command => {
@@ -385,5 +423,16 @@ fn split_command(
         }
     };
 
-    commands.into_iter().enumerate()
+    commands
+        .into_iter()
+        .map(move |command| match (request_id, command) {
+            (Some(request_id), ComputeCommand::CreateDataflow(dataflow)) => {
+                ComputeCommand::CreateQueryDataflow {
+                    request_id,
+                    dataflow,
+                }
+            }
+            (_, command) => command,
+        })
+        .enumerate()
 }

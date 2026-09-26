@@ -10,8 +10,8 @@
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
-use maplit::btreeset;
-use mz_adapter_types::compaction::CompactionWindow;
+use mz_catalog::durable::objects::MaintainedReadRequirement;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
@@ -21,7 +21,9 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{
+    CatalogItemId, Datum, GlobalId, RelationVersion, Row, Timestamp, VersionedRelationDesc,
+};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -29,8 +31,9 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::controller::CollectionDescription;
-use std::collections::BTreeMap;
+use mz_transform::notice::OptimizerNoticeApi;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -47,11 +50,43 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
+use crate::optimize::dataflows::{ComputeInstanceSnapshot, dataflow_import_id_bundle};
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::util::ResultExt;
 use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider, catalog};
+
+/// Reuses a compatible candidate, or replaces both global plans and their raw
+/// notices using an optimizer restricted to `indexes`. The caller must protect
+/// the final imports at its frozen timestamp before writing the candidate.
+fn ensure_materialized_view_access_paths(
+    indexes: &BTreeSet<GlobalId>,
+    local_mir: &optimize::materialized_view::LocalMirPlan,
+    global_mir: &mut optimize::materialized_view::GlobalMirPlan,
+    global_lir: &mut optimize::materialized_view::GlobalLirPlan,
+    optimizer: impl FnOnce() -> optimize::materialized_view::Optimizer,
+) -> Result<(), AdapterError> {
+    if global_lir
+        .df_desc()
+        .index_imports
+        .keys()
+        .chain(global_mir.df_desc().index_imports.keys())
+        .all(|id| indexes.contains(id))
+    {
+        return Ok(());
+    }
+    let mut optimizer = optimizer();
+    let mir = optimizer.catch_unwind_optimize(local_mir.clone())?;
+    let lir = optimizer.catch_unwind_optimize(mir.clone())?;
+    if lir.desc() != global_lir.desc() {
+        return Err(AdapterError::internal(
+            "create materialized view",
+            "access-path planning changed the output schema",
+        ));
+    }
+    *global_mir = mir;
+    *global_lir = lir;
+    Ok(())
+}
 
 impl Staged for CreateMaterializedViewStage {
     type Ctx = ExecuteContext;
@@ -98,6 +133,59 @@ impl Staged for CreateMaterializedViewStage {
 }
 
 impl Coordinator {
+    /// Returns the committed input permission for MV admission, not a read hold.
+    pub(crate) fn materialized_view_input_permission(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> Result<Antichain<Timestamp>, AdapterError> {
+        let mut permission = Antichain::from_elem(Timestamp::MIN);
+        if self.catalog().state().catalog_read_protection_enabled() {
+            for id in ids {
+                let bound = self
+                    .catalog()
+                    .state()
+                    .storage_metadata()
+                    .compaction_bounds
+                    .get(&id)
+                    .ok_or_else(|| {
+                        AdapterError::internal(
+                            "create materialized view",
+                            format!("logical input {id} has no committed compaction bound"),
+                        )
+                    })?;
+                permission.join_assign(bound);
+            }
+        }
+        Ok(permission)
+    }
+
+    /// Discovers storage inputs required to reconstruct an MV from its definition.
+    pub(crate) fn materialized_view_logical_inputs(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> Result<CollectionIdBundle, AdapterError> {
+        let inputs = self.catalog().state().logical_collection_inputs(
+            ids.into_iter()
+                .filter(|id| self.catalog().get_entry_by_global_id(id).is_relation()),
+        );
+        let log_names: Vec<_> = inputs
+            .iter()
+            .map(|id| self.catalog().get_entry_by_global_id(id))
+            .filter(|entry| matches!(entry.item(), CatalogItem::Log(_)))
+            .map(|entry| entry.name().item.clone())
+            .collect();
+        if !log_names.is_empty() {
+            return Err(AdapterError::InvalidLogDependency {
+                object_type: "materialized view".into(),
+                log_names,
+            });
+        }
+        Ok(CollectionIdBundle {
+            storage_ids: inputs,
+            compute_ids: BTreeMap::new(),
+        })
+    }
+
     #[instrument]
     pub(crate) async fn sequence_create_materialized_view(
         &mut self,
@@ -216,8 +304,8 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) fn explain_materialized_view(
-        &self,
+    pub(super) async fn explain_materialized_view(
+        catalog: &catalog::Catalog,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -229,12 +317,23 @@ impl Coordinator {
         let plan::Explainee::MaterializedView(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::MaterializedView(view) = catalog.get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
         let gid = view.global_id_writes();
 
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&gid) else {
+        let selected = if catalog.state().catalog_read_protection_enabled() {
+            Some(catalog.selected_plan(gid).await?.ok_or_else(|| {
+                AdapterError::internal("explain materialized view", "selected plan is missing")
+            })?)
+        } else {
+            None
+        };
+        let metainfo = match &selected {
+            Some(plan) => Some(&plan.dataflow_metainfos),
+            None => catalog.try_get_dataflow_metainfo(&gid),
+        };
+        let Some(dataflow_metainfo) = metainfo else {
             if !id.is_system() {
                 tracing::error!(
                     "cannot find dataflow metainformation for materialized view {id} in catalog"
@@ -245,11 +344,15 @@ impl Coordinator {
             );
         };
 
-        let target_cluster = self.catalog().get_cluster(view.cluster_id);
+        let target_cluster = catalog.get_cluster(view.cluster_id);
 
-        let features = OptimizerFeatures::from(self.catalog().system_config())
+        let features = OptimizerFeatures::from(catalog.system_config())
             .override_from(&target_cluster.config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(view.cluster_id))
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(view.cluster_id),
+            )
             .override_from(&config.features);
 
         let cardinality_stats = BTreeMap::new();
@@ -260,7 +363,7 @@ impl Coordinator {
                 format,
                 &config,
                 &features,
-                &self.catalog().for_session(ctx.session()),
+                &catalog.for_session(ctx.session()),
                 cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
@@ -269,12 +372,16 @@ impl Coordinator {
                 format,
                 &config,
                 &features,
-                &self.catalog().for_session(ctx.session()),
+                &catalog.for_session(ctx.session()),
                 cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
+                let plan = match &selected {
+                    Some(plan) => Some(plan.global_mir.clone()),
+                    None => catalog.try_get_optimized_plan(&gid).cloned(),
+                };
+                let Some(plan) = plan else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
@@ -283,14 +390,18 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &catalog.for_session(ctx.session()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
+                let plan = match &selected {
+                    Some(plan) => Some(plan.physical_plan.clone()),
+                    None => catalog.try_get_physical_plan(&gid).cloned(),
+                };
+                let Some(plan) = plan else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog",);
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
@@ -299,7 +410,7 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &catalog.for_session(ctx.session()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
@@ -329,6 +440,7 @@ impl Coordinator {
             materialized_view:
                 plan::MaterializedView {
                     expr,
+                    query_ids,
                     cluster_id,
                     target_replica,
                     refresh_schedule,
@@ -392,11 +504,14 @@ impl Coordinator {
                         ));
                     }
                 }
-                // Also check that no new id has appeared in `sufficient_collections` (e.g. a new
-                // index), otherwise we might be missing some read holds.
-                let ids = self
-                    .index_oracle(*cluster_id)
-                    .sufficient_collections(resolved_ids.collections().copied());
+                // Purification must cover the admission inputs. In protected
+                // mode these are logical dependencies, independent of indexes.
+                let ids = if self.catalog().state().catalog_read_protection_enabled() {
+                    self.materialized_view_logical_inputs(query_ids.collections().copied())?
+                } else {
+                    self.index_oracle(*cluster_id)
+                        .sufficient_collections(query_ids.collections().copied())
+                };
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \
@@ -442,7 +557,7 @@ impl Coordinator {
 
         // Collect optimizer parameters.
         let compute_instance = self
-            .instance_snapshot(*cluster_id)
+            .candidate_instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
             self.allocate_user_id().await?
@@ -574,6 +689,7 @@ impl Coordinator {
                     materialized_view:
                         plan::MaterializedView {
                             mut create_sql,
+                            query_ids,
                             expr: raw_expr,
                             column_names,
                             dependencies,
@@ -591,8 +707,8 @@ impl Coordinator {
                 },
             resolved_ids,
             local_mir_plan,
-            global_mir_plan,
-            global_lir_plan,
+            mut global_mir_plan,
+            mut global_lir_plan,
             optimizer_features,
             ..
         } = stage;
@@ -615,22 +731,47 @@ impl Coordinator {
 
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+        let logical_inputs = self.materialized_view_logical_inputs(
+            query_ids
+                .collections()
+                .copied()
+                .chain(raw_expr.depends_on()),
+        )?;
+        // Admission promises logical input history, not the availability of a
+        // candidate index. Physical paths are selected at that timestamp below.
+        let id_bundle = if self.catalog().state().catalog_read_protection_enabled() {
+            logical_inputs.clone()
+        } else {
+            id_bundle
+        };
 
-        let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(ctx.session().conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
             // stages will already have acquired ReadHolds, we can re-use those.
 
-            txn_reads
+            txn_reads.clone()
         } else {
             // No one has acquired holds, make sure we can determine an as_of
-            // and render our dataflow below.
-            read_holds_owned = self.acquire_read_holds(&id_bundle);
-            &read_holds_owned
+            // and commit a readable creation frontier.
+            self.acquire_query_read_holds(&id_bundle).await?
         };
 
-        let (dataflow_as_of, storage_as_of, until) =
-            self.select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)?;
+        // Reuse purification's holds, whose timestamps may already be named by
+        // REFRESH AT. Planning can introduce reads absent from name resolution.
+        let mut additional_inputs = id_bundle.clone();
+        additional_inputs.extend(&logical_inputs);
+        let additional_read_holds = self
+            .acquire_query_read_holds(&additional_inputs.difference(&read_holds.id_bundle()))
+            .await?;
+        let (dataflow_as_of, storage_as_of, until) = self
+            .select_timestamps(
+                id_bundle,
+                refresh_schedule.as_ref(),
+                &read_holds,
+                &additional_read_holds,
+                &logical_inputs,
+            )
+            .await?;
 
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -667,7 +808,7 @@ impl Coordinator {
 
         let local_mir_for_cache = local_mir_plan.expr();
 
-        let ops = vec![
+        let mut ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
                     .into_iter()
@@ -684,6 +825,7 @@ impl Coordinator {
                     desc,
                     collections,
                     resolved_ids,
+                    query_ids,
                     dependencies,
                     replacement_target,
                     cluster_id,
@@ -699,6 +841,148 @@ impl Coordinator {
                 owner_id: *ctx.session().current_role_id(),
             },
         ];
+        if self.catalog().state().catalog_read_protection_enabled() {
+            ops.push(catalog::Op::SetReadProtection {
+                requirements: vec![MaintainedReadRequirement {
+                    id: global_id,
+                    inputs: logical_inputs.storage_ids,
+                    frontier: dataflow_as_of.as_option().copied(),
+                }],
+                bounds: vec![],
+            });
+        }
+
+        // Physical protection bridges writing the candidate and installation's
+        // acquisition of execution holds in catalog implications. Logical holds
+        // alone cannot preserve an index trace at the chosen historical AS OF.
+        let physical_read_holds = if let Some(client) = self.query_client.clone() {
+            let planning_revision = self.catalog().transient_revision();
+            let (candidate, _) = loop {
+                match self
+                    .catalog()
+                    .transact_incremental_dry_run(
+                        self.catalog().state(),
+                        ops.clone(),
+                        None,
+                        None,
+                        initial_as_of.as_option().copied().unwrap_or(Timestamp::MIN),
+                    )
+                    .await
+                {
+                    Ok(candidate) => break candidate,
+                    Err(AdapterError::Catalog(error))
+                        if matches!(
+                            &error.kind,
+                            ErrorKind::Durable(
+                                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                            )
+                        ) =>
+                    {
+                        self.refresh_catalog_after_conflict().await?;
+                        if self.catalog().transient_revision() != planning_revision {
+                            return Err(AdapterError::DDLTransactionRace);
+                        }
+                    }
+                    Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                        kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                    })) if if_not_exists => {
+                        ctx.session()
+                            .add_notice(AdapterNotice::ObjectAlreadyExists {
+                                name: name.item,
+                                ty: "materialized view",
+                            });
+                        return Ok(StageResult::Response(
+                            ExecuteResponse::CreatedMaterializedView,
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            let candidate = Arc::new(candidate);
+            let mv = candidate
+                .get_entry(&item_id)
+                .materialized_view()
+                .expect("created MV");
+            let read_ts = *dataflow_as_of.as_option().expect("readable MV timestamp");
+            let mut indexes =
+                client.maintained_indexes_at(&candidate, cluster_id, target_replica, read_ts);
+            let mut optimizer_config = optimize::OptimizerConfig::from(candidate.system_config());
+            // Keep the features selected for this statement, including session
+            // and cluster overrides, when only its access paths change.
+            optimizer_config.features = optimizer_features.clone();
+            loop {
+                ensure_materialized_view_access_paths(
+                    &indexes,
+                    &local_mir_plan,
+                    &mut global_mir_plan,
+                    &mut global_lir_plan,
+                    || {
+                        let (_, view_id) = self.allocate_transient_id();
+                        optimize::materialized_view::Optimizer::new(
+                            Arc::<CatalogState>::clone(&candidate),
+                            ComputeInstanceSnapshot::new_from_parts(cluster_id, indexes.clone()),
+                            global_id,
+                            view_id,
+                            column_names.clone(),
+                            mv.non_null_assertions.clone(),
+                            refresh_schedule.clone(),
+                            candidate.resolve_full_name(&name, None).to_string(),
+                            optimizer_config.clone(),
+                            self.optimizer_metrics(),
+                        )
+                    },
+                )?;
+                let bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+                let prepared = client
+                    .prepare_read(self.catalog(), &bundle, |_| Ok(Some(read_ts)))
+                    .await?;
+                let incompatible: BTreeSet<_> = prepared
+                    .frontiers
+                    .iter()
+                    .filter_map(|(id, since)| (*since > read_ts).then_some(*id))
+                    .collect();
+                if !incompatible.is_empty() {
+                    if incompatible.iter().any(|id| !indexes.contains(id)) {
+                        return Err(AdapterError::internal(
+                            "create materialized view",
+                            "logical input protection does not cover the written plan",
+                        ));
+                    }
+                    indexes.retain(|id| !incompatible.contains(id));
+                    continue;
+                }
+                let (holds, _) = self
+                    .acquire_client_read_protection(client.protection.incarnation(), bundle, |_| {
+                        Ok(Some(read_ts))
+                    })
+                    .await?;
+                if self.catalog().transient_revision() != planning_revision {
+                    return Err(AdapterError::DDLTransactionRace);
+                }
+                if holds.least_valid_read().less_equal(&read_ts) {
+                    break Some(holds);
+                }
+                // Acquisition resamples native frontiers and permission. If
+                // either advanced, reselect paths without advancing AS OF.
+                if holds
+                    .storage_holds
+                    .values()
+                    .any(|hold| !hold.since().less_equal(&read_ts))
+                {
+                    return Err(AdapterError::internal(
+                        "create materialized view",
+                        "logical input protection does not cover the written plan",
+                    ));
+                }
+                for ((_, id), hold) in &holds.compute_holds {
+                    if !hold.since().less_equal(&read_ts) {
+                        indexes.remove(id);
+                    }
+                }
+            }
+        } else {
+            None
+        };
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -718,8 +1002,7 @@ impl Coordinator {
         // here, so that if the catalog transaction below fails the user
         // isn't shown confusing notices about an item that wasn't actually
         // created.
-        let output_desc = global_lir_plan.desc().clone();
-        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, mut raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
             let full_name = self.catalog().resolve_full_name(&name, None);
@@ -739,12 +1022,10 @@ impl Coordinator {
             )
         };
 
-        // Populate the durable expression cache before the catalog
-        // transaction and await the write. This way any other envd (or a
-        // subsequent bootstrap here) will observe the cached plans +
-        // rendered notices as soon as the item becomes visible.
-        self.catalog()
-            .cache_expressions(
+        // Write the plan before committing the object and its selection together.
+        let selection = self
+            .catalog()
+            .prepare_item_plan(
                 global_id,
                 Some(local_mir_for_cache),
                 global_mir_plan.df_desc().clone(),
@@ -752,74 +1033,13 @@ impl Coordinator {
                 df_meta.clone(),
                 optimizer_features,
             )
-            .await;
+            .await?;
+        ops.extend(selection);
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
-
-                    df_desc.set_as_of(dataflow_as_of.clone());
-                    df_desc.set_initial_as_of(initial_as_of);
-                    df_desc.until = until;
-
-                    let storage_metadata = coord.catalog.state().storage_metadata();
-
-                    let mut collection_desc =
-                        CollectionDescription::for_other(output_desc, Some(storage_as_of));
-                    let mut allow_writes = true;
-
-                    // If this MV is intended to replace another one, we need to start it in
-                    // read-only mode, targeting the shard of the replacement target.
-                    if let Some(target_id) = replacement_target {
-                        let target_gid = coord.catalog.get_entry(&target_id).latest_global_id();
-                        collection_desc.primary = Some(target_gid);
-                        allow_writes = false;
-                    }
-
-                    // Announce the creation of the materialized view source.
-                    coord
-                        .controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(global_id, collection_desc)],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to append");
-
-                    coord
-                        .initialize_storage_read_policies(
-                            btreeset![item_id],
-                            compaction_window.unwrap_or(CompactionWindow::Default),
-                        )
-                        .await;
-
-                    coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                            target_replica,
-                        )
-                        .await;
-
-                    if allow_writes {
-                        coord.allow_writes(cluster_id, global_id);
-                    }
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
+        drop(physical_read_holds);
 
         match transact_result {
             Ok(_) => {
@@ -827,6 +1047,12 @@ impl Coordinator {
                 // catalog transaction has succeeded. If the transaction had
                 // failed, emitting notices would confuse the user with
                 // information about an item that wasn't actually created.
+                // A cache rejection may reflect an optimizer-only dependency dropped in this batch.
+                raw_df_meta.optimizer_notices.retain(|notice| {
+                    notice.dependencies().iter().all(|id| {
+                        self.catalog().try_get_entry_by_global_id(id).is_some()
+                    })
+                });
                 self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -850,11 +1076,13 @@ impl Coordinator {
 
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
     /// materialized view.
-    fn select_timestamps(
+    async fn select_timestamps(
         &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
         read_holds: &ReadHolds,
+        additional_read_holds: &ReadHolds,
+        logical_inputs: &CollectionIdBundle,
     ) -> Result<
         (
             Antichain<mz_repr::Timestamp>,
@@ -864,13 +1092,23 @@ impl Coordinator {
         AdapterError,
     > {
         assert!(
-            id_bundle.difference(&read_holds.id_bundle()).is_empty(),
+            id_bundle
+                .difference(&read_holds.id_bundle())
+                .difference(&additional_read_holds.id_bundle())
+                .is_empty(),
             "we must have read holds for all involved collections"
         );
 
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
-        let least_valid_read = read_holds.least_valid_read();
+        let mut least_valid_read = read_holds
+            .least_valid_read()
+            .join(&additional_read_holds.least_valid_read());
+        // Physical compaction may lag permission. Admission cannot rely on
+        // that extra history, even for inputs eliminated by optimization.
+        least_valid_read.join_assign(
+            &self.materialized_view_input_permission(logical_inputs.storage_ids.iter().copied())?,
+        );
         let mut dataflow_as_of = least_valid_read.clone();
         let mut storage_as_of = least_valid_read.clone();
 
@@ -884,16 +1122,32 @@ impl Coordinator {
         // the first refresh time. Also note that simply moving the `dataflow_as_of` forward to the
         // first refresh time would prevent warmup before the first refresh.
         if let Some(refresh_schedule) = &refresh_schedule {
+            // Planning can introduce logical reads absent from name resolution.
+            // Do not let rounding skip a requested refresh on those inputs.
+            for refresh_at_ts in &refresh_schedule.ats {
+                if !least_valid_read.less_equal(refresh_at_ts) {
+                    return Err(AdapterError::InputNotReadableAtRefreshAtTime(
+                        *refresh_at_ts,
+                        least_valid_read,
+                    ));
+                }
+            }
             if let Some(least_valid_read_ts) = least_valid_read.as_option() {
                 if let Some(first_refresh_ts) =
                     refresh_schedule.round_up_timestamp(*least_valid_read_ts)
                 {
                     storage_as_of = Antichain::from_elem(first_refresh_ts);
-                    dataflow_as_of.join_assign(
-                        &self
-                            .greatest_available_read(&id_bundle)
-                            .meet(&storage_as_of),
-                    );
+                    let greatest_available = if let Some(client) = self.query_client.as_ref() {
+                        client
+                            .write_frontier(self.catalog(), &id_bundle)
+                            .await?
+                            .iter()
+                            .map(|time| time.step_back().unwrap_or(*time))
+                            .collect()
+                    } else {
+                        self.greatest_available_read(&id_bundle)
+                    };
+                    dataflow_as_of.join_assign(&greatest_available.meet(&storage_as_of));
                 } else {
                     let last_refresh = refresh_schedule.last_refresh().expect(
                         "if round_up_timestamp returned None, then there should be a last refresh",
@@ -918,6 +1172,12 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
+        if self.catalog().state().catalog_read_protection_enabled() && storage_as_of.is_empty() {
+            return Err(AdapterError::internal(
+                "create materialized view",
+                "no readable timestamp for materialized view inputs",
+            ));
+        }
         Ok((dataflow_as_of, storage_as_of, until))
     }
 
@@ -988,7 +1248,7 @@ impl Coordinator {
     }
 
     pub(crate) async fn explain_pushdown_materialized_view(
-        &self,
+        &mut self,
         ctx: ExecuteContext,
         item_id: CatalogItemId,
     ) {
@@ -997,6 +1257,38 @@ impl Coordinator {
         };
         let gid = mview.global_id_writes();
         let mview = mview.clone();
+
+        if let Some(client) = self.query_client.clone() {
+            let catalog = self.owned_catalog();
+            let expires = ctx.statement_deadline();
+            let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+            if let Some((_, previous)) = self.connection_cancel_watches.insert(
+                ctx.session().conn_id().clone(),
+                (cancel_tx, cancel_rx.clone()),
+            ) && *previous.borrow()
+            {
+                ctx.retire(Err(AdapterError::Canceled));
+                return;
+            }
+            mz_ore::task::spawn(
+                || "explain written materialized view pushdown",
+                async move {
+                    let canceled = async {
+                        let _ = cancel_rx.wait_for(|canceled| *canceled).await;
+                    };
+                    let result = crate::util::run_diagnostic(
+                        canceled,
+                        expires,
+                        Self::explain_written_materialized_view_pushdown(
+                            &catalog, &client, &ctx, &mview,
+                        ),
+                    )
+                    .await;
+                    ctx.retire(result);
+                },
+            );
+            return;
+        }
 
         let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
             let msg = format!("cannot find plan for materialized view {item_id} in catalog");
@@ -1017,7 +1309,13 @@ impl Coordinator {
             storage_ids: plan.source_imports.keys().copied().collect(),
             compute_ids: BTreeMap::new(),
         };
-        let read_holds = Some(self.acquire_read_holds(&id_bundle));
+        let read_holds = match self.acquire_query_read_holds(&id_bundle).await {
+            Ok(holds) => Some(holds),
+            Err(error) => {
+                ctx.retire(Err(error));
+                return;
+            }
+        };
 
         let frontiers = self
             .controller
@@ -1050,5 +1348,177 @@ impl Coordinator {
                 .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
         )
         .await
+    }
+
+    /// Describe selected source operators at an input snapshot protected by this
+    /// query client. Installation state is not an authority for the selected plan.
+    async fn explain_written_materialized_view_pushdown(
+        catalog: &catalog::Catalog,
+        client: &Arc<crate::query_client::QueryClient>,
+        ctx: &ExecuteContext,
+        mv: &MaterializedView,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan = catalog
+            .selected_plan(mv.global_id_writes())
+            .await?
+            .ok_or_else(|| {
+                AdapterError::internal(
+                    "explain materialized view pushdown",
+                    "selected plan is missing",
+                )
+            })?
+            .physical_plan;
+        let imports = CollectionIdBundle {
+            storage_ids: plan.source_imports.keys().copied().collect(),
+            compute_ids: BTreeMap::new(),
+        };
+        let (holds, _) = client
+            .acquire_read_holds_and_upper(catalog, &imports, |_| Ok(None))
+            .await?;
+        let as_of = holds.least_valid_read();
+        let until = mv
+            .refresh_schedule
+            .as_ref()
+            .and_then(|schedule| schedule.last_refresh())
+            .unwrap_or(Timestamp::MAX);
+        let mz_now = match as_of.as_option() {
+            Some(&as_of) => {
+                ResultSpec::value_between(Datum::MzTimestamp(as_of), Datum::MzTimestamp(until))
+            }
+            None => ResultSpec::value_all(),
+        };
+        let future = crate::coord::sequencer::explain_pushdown_future_inner(
+            ctx.session(),
+            catalog,
+            None,
+            Some(client),
+            as_of,
+            mz_now,
+            plan.source_imports
+                .into_iter()
+                .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
+        )
+        .await;
+        let result = future.await;
+        drop(holds);
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_catalog::SYSTEM_CONN_ID;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_sql::catalog::CatalogDatabase;
+    use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
+    use mz_sql::optimizer_metrics::OptimizerMetrics;
+    use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+
+    #[mz_ore::test(tokio::test)]
+    async fn historical_materialized_view_access_paths() {
+        catalog::Catalog::with_debug(|catalog| async move {
+            let database = catalog.resolve_database(crate::session::DEFAULT_DATABASE_NAME).expect("default database");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog.resolve_schema_in_database(
+                &database_spec, mz_sql::DEFAULT_SCHEMA, &SYSTEM_CONN_ID,
+            ).expect("default schema");
+            let qualifiers = ItemQualifiers { database_spec, schema_spec: schema.id.clone() };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let birth = catalog.current_upper().await;
+            let mut state = catalog.state().clone();
+            let mut snapshot = None;
+            let mut ids = BTreeMap::new();
+            for (name, sql) in [
+                ("input", format!("CREATE TABLE {prefix}.input (a int)")),
+                ("v", format!("CREATE VIEW {prefix}.v AS SELECT * FROM {prefix}.input")),
+                ("early", format!("CREATE INDEX early IN CLUSTER quickstart ON {prefix}.v (a)")),
+                ("late", format!("CREATE INDEX late IN CLUSTER quickstart ON {prefix}.v (a)")),
+                ("mv", format!("CREATE MATERIALIZED VIEW {prefix}.mv IN CLUSTER quickstart AS SELECT * FROM {prefix}.v")),
+            ] {
+                let (id, gid) = catalog.allocate_user_id_for_test().await.expect("allocate fixture IDs");
+                let item = mz_catalog::catalog::test_support::parse_item(
+                    &mut state, gid, &sql, &BTreeMap::new(),
+                ).expect("parse fixture definition");
+                ids.insert(name, (id, gid));
+                let (next, next_snapshot) = catalog.transact_incremental_dry_run(
+                    &state,
+                    vec![catalog::Op::CreateItem {
+                        id,
+                        name: QualifiedItemName {
+                            qualifiers: qualifiers.clone(),
+                            item: name.into(),
+                        },
+                        item, owner_id: MZ_SYSTEM_ROLE_ID,
+                    }],
+                    None, snapshot, birth,
+                ).await.expect("apply fixture definition");
+                state = next;
+                snapshot = Some(next_snapshot);
+            }
+            let state = Arc::new(state);
+            let mv = state.get_entry(&ids["mv"].0).materialized_view().expect("fixture MV");
+            let metrics = OptimizerMetrics::register_into(
+                &MetricsRegistry::new(), std::time::Duration::ZERO,
+            );
+            let optimizer = |indexes: BTreeSet<_>| optimize::materialized_view::Optimizer::new(
+                Arc::<CatalogState>::clone(&state),
+                ComputeInstanceSnapshot::new_from_parts(mv.cluster_id, indexes),
+                ids["mv"].1, GlobalId::Transient(1),
+                mv.desc.latest().iter_names().cloned().collect(),
+                mv.non_null_assertions.clone(), mv.refresh_schedule.clone(),
+                "historical MV".into(), optimize::OptimizerConfig::from(state.system_config()), metrics.clone(),
+            );
+            // The initial optimization chose a trace that will be excluded at
+            // the historical timestamp. Exercise the real global planner, not
+            // hand-constructed MIR/LIR import maps.
+            let late = BTreeSet::from([ids["late"].1]);
+            let mut initial = optimizer(late.clone());
+            let local = initial.optimize(mv.raw_expr.as_ref().clone()).expect("optimize local MIR");
+            let mut mir = initial.optimize(local.clone()).expect("optimize global MIR");
+            let mut lir = initial.optimize(mir.clone()).expect("optimize physical plan");
+            assert_eq!(lir.df_desc().index_imports.keys().copied().collect::<BTreeSet<_>>(), late);
+            ensure_materialized_view_access_paths(&late, &local, &mut mir, &mut lir, || panic!("compatible plan must be reused")).expect("reuse compatible plan");
+
+            let early = BTreeSet::from([ids["early"].1]);
+            ensure_materialized_view_access_paths(&early, &local, &mut mir, &mut lir, || optimizer(early.clone())).expect("select readable index");
+            assert_eq!(lir.df_desc().index_imports.keys().copied().collect::<BTreeSet<_>>(), early);
+            assert_eq!(mir.df_desc().index_imports.keys().copied().collect::<BTreeSet<_>>(), early);
+            assert_eq!(
+                lir.df_meta().index_usage_types.keys().copied().collect::<BTreeSet<_>>(),
+                early,
+            );
+
+            // Pin the writer boundary too: the immutable candidate must contain
+            // this optimization's MIR, LIR, and rendered metadata together.
+            let written = mz_catalog::expr_cache::GlobalExpressions {
+                global_mir: mir.df_desc().clone(),
+                physical_plan: lir.df_desc().clone(),
+                dataflow_metainfos: CatalogState::render_notices_core(
+                    &state.for_system_session(), 0, lir.df_meta(),
+                    (100u64..).map(GlobalId::Transient)
+                        .take(lir.df_meta().optimizer_notices.len()).collect(),
+                    Some(ids["mv"].1),
+                ),
+                optimizer_features: optimize::OptimizerConfig::from(state.system_config()).features,
+                item_version: RelationVersion::root(),
+            };
+            let selections = catalog.write_plans(BTreeMap::from([(ids["mv"].1, written.clone())])).await.expect("write immutable plan");
+            let [catalog::Op::SetWrittenPlan {
+                revision: Some(revision), imports, ..
+            }] = selections.as_slice() else {
+                panic!("expected one immutable plan selection");
+            };
+            assert_eq!(imports, &early);
+            let stored = catalog.read_written_plans(vec![(ids["mv"].1, *revision)]).await.expect("read immutable plan");
+            assert_eq!(stored[&ids["mv"].1], written);
+
+            ensure_materialized_view_access_paths(&BTreeSet::new(), &local, &mut mir, &mut lir, || optimizer(BTreeSet::new())).expect("fall back to logical inputs");
+            assert!(lir.df_desc().index_imports.is_empty());
+            assert!(mir.df_desc().index_imports.is_empty());
+            assert!(lir.df_meta().index_usage_types.is_empty());
+            assert!(lir.df_desc().source_imports.contains_key(&ids["input"].1));
+            assert_eq!(lir.desc(), &mv.desc.latest());
+        }).await;
     }
 }

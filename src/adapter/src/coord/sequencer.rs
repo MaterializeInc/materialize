@@ -110,7 +110,7 @@ impl Coordinator {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
-            if self.controller.read_only() && !plan.allowed_in_read_only() {
+            if self.read_only_controllers && !plan.allowed_in_read_only() {
                 ctx.retire(Err(AdapterError::ReadOnly));
                 return;
             }
@@ -718,7 +718,7 @@ impl Coordinator {
                     let connection = plan
                         .connection
                         .into_inline_connection(self.catalog().state());
-                    let current_storage_configuration = self.controller.storage.config().clone();
+                    let current_storage_configuration = self.storage_configuration.clone();
                     mz_ore::task::spawn(|| "coord::validate_connection", async move {
                         let res = match connection
                             .validate(plan.id, &current_storage_configuration)
@@ -1114,7 +1114,8 @@ pub(crate) async fn explain_pushdown_future_inner<
 >(
     session: &Session,
     catalog: &Catalog,
-    storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
+    storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
+    query_client: Option<&Arc<crate::query_client::QueryClient>>,
     as_of: Antichain<Timestamp>,
     mz_now: ResultSpec<'static>,
     imports: I,
@@ -1135,9 +1136,28 @@ pub(crate) async fn explain_pushdown_future_inner<
             .relation_desc()
             .expect("source should have a proper desc")
             .into_owned();
-        let stats_future = storage_collections
-            .snapshot_parts_stats(id, as_of.clone())
-            .await;
+        let stats_future = if let Some(client) = query_client {
+            let metadata = client.collection_metadata(catalog, id);
+            let client = Arc::clone(client);
+            let as_of = as_of.clone();
+            async move {
+                let metadata = metadata?;
+                client
+                    .collection_reader()
+                    .await
+                    .snapshot_parts_stats(id, metadata, as_of)
+                    .await
+                    .map_err(AdapterError::from)
+            }
+            .boxed()
+        } else {
+            storage_collections
+                .expect("unprotected pushdown explanations require storage collections")
+                .snapshot_parts_stats(id, as_of.clone())
+                .await
+                .map(|result| result.map_err(AdapterError::from))
+                .boxed()
+        };
 
         let mz_now = mz_now.clone();
         // These futures may block if the source is not yet readable at the as-of;
@@ -1202,7 +1222,7 @@ pub(crate) async fn explain_pushdown_future_inner<
             Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
                 rows: Box::new(rows.into_row_iter()),
             }),
-            Ok(Err(err)) => Err(err.into()),
+            Ok(Err(err)) => Err(err),
             Err(_) => Err(AdapterError::StatementTimeout),
         }
     };
@@ -1278,7 +1298,8 @@ pub(crate) async fn statistics_oracle(
     query_as_of: &Antichain<Timestamp>,
     is_oneshot: bool,
     system_config: &vars::SystemVars,
-    storage_collections: &dyn StorageCollections,
+    storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
+    query_client: Option<(&crate::query_client::QueryClient, &Catalog)>,
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
     if !session.vars().enable_session_cardinality_estimates() {
         let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
@@ -1294,7 +1315,7 @@ pub(crate) async fn statistics_oracle(
 
     let cached_stats = mz_ore::future::timeout(
         timeout,
-        CachedStatisticsOracle::new(source_ids, query_as_of, storage_collections),
+        CachedStatisticsOracle::new(source_ids, query_as_of, storage_collections, query_client),
     )
     .await;
 
@@ -1309,7 +1330,7 @@ pub(crate) async fn statistics_oracle(
 
             Ok(Box::new(EmptyStatisticsOracle))
         }
-        Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
+        Err(mz_ore::future::TimeoutError::Inner(e)) => Err(e),
     }
 }
 
@@ -1322,18 +1343,40 @@ impl CachedStatisticsOracle {
     pub async fn new(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<Timestamp>,
-        storage_collections: &dyn StorageCollections,
-    ) -> Result<Self, StorageError> {
+        storage_collections: Option<&(dyn StorageCollections + Send + Sync)>,
+        query_client: Option<(&crate::query_client::QueryClient, &Catalog)>,
+    ) -> Result<Self, AdapterError> {
         let mut cache = BTreeMap::new();
 
         for id in ids {
-            let stats = storage_collections.snapshot_stats(*id, as_of.clone()).await;
+            let stats = if let Some((client, catalog)) = query_client {
+                match client.collection_metadata(catalog, *id) {
+                    Ok(metadata) => client
+                        .collection_reader()
+                        .await
+                        .snapshot_stats(*id, metadata, as_of.clone())
+                        .await
+                        .map_err(AdapterError::from),
+                    // Non-storage catalog items have no statistics, just like
+                    // collections absent from the legacy storage inventory.
+                    Err(AdapterError::CollectionUnreadable { .. }) => {
+                        Err(AdapterError::Storage(StorageError::IdentifierMissing(*id)))
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                storage_collections
+                    .expect("unprotected statistics require storage collections")
+                    .snapshot_stats(*id, as_of.clone())
+                    .await
+                    .map_err(AdapterError::from)
+            };
 
             match stats {
                 Ok(stats) => {
                     cache.insert(*id, stats.num_updates);
                 }
-                Err(StorageError::IdentifierMissing(id)) => {
+                Err(AdapterError::Storage(StorageError::IdentifierMissing(id))) => {
                     ::tracing::debug!("no statistics for {id}")
                 }
                 Err(e) => return Err(e),

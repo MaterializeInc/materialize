@@ -47,6 +47,8 @@ mod frontend_peek;
 mod frontend_read_then_write;
 mod notice;
 mod optimize;
+mod query_client;
+mod table_writer;
 mod util;
 
 pub mod catalog;
@@ -58,6 +60,8 @@ pub mod peek_client;
 pub mod session;
 pub mod statement_logging;
 pub mod telemetry;
+#[doc(hidden)]
+pub mod test_util;
 pub mod webhook;
 
 pub use crate::peek_client::PeekClient;

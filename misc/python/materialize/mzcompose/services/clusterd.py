@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+from typing import TYPE_CHECKING
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_MZ_VOLUMES
 from materialize.mzcompose.service import (
@@ -15,11 +16,51 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
+if TYPE_CHECKING:
+    from materialize.mzcompose.composition import Composition
+
 # Arrangement merge effort (`arrangement_exert_proportionality`) for the compute
 # and storage timely clusters. Kept as named constants so other launchers (e.g.
 # the clusterd-test-driver local runner) reuse the same defaults.
 DEFAULT_COMPUTE_EXERT_PROPORTIONALITY = 16
 DEFAULT_STORAGE_EXERT_PROPORTIONALITY = 1337
+
+
+def native_catalog_options(
+    c: "Composition", mz_service: str = "materialized"
+) -> list[str]:
+    """Copy the shared native catalog options from one managed clusterd.
+
+    Capture the JSON, generation and URL arguments without printing credentials.
+    Fail if no running managed process provides all four options.
+    """
+    result = c.exec(
+        mz_service,
+        "bash",
+        "-c",
+        r"""
+        for args in /proc/[0-9]*/cmdline; do
+            [[ -r "$args" ]] || continue
+            config= generation= blob= consensus=
+            while IFS= read -r -d '' argument; do
+                case "$argument" in
+                    --catalog-config=*) config="$argument" ;;
+                    --catalog-deploy-generation=*) generation="$argument" ;;
+                    --catalog-persist-blob-url=*) blob="$argument" ;;
+                    --catalog-persist-consensus-url=*) consensus="$argument" ;;
+                esac
+            done < "$args"
+            if [[ -n "$config" && -n "$generation" && -n "$blob" && -n "$consensus" ]]; then
+                printf '%s\0' "$config" "$generation" "$blob" "$consensus"
+                exit 0
+            fi
+        done
+        echo 'No managed clusterd with all four native catalog options found' >&2
+        exit 1
+        """,
+        capture=True,
+    )
+    return result.stdout.removesuffix("\0").split("\0")
 
 
 class Clusterd(Service):

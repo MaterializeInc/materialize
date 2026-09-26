@@ -316,6 +316,69 @@ steps:
     agents:
       queue: hetzner-aarch64-16cpu-32gb
 
+  - id: adapter-loss-native
+    topics: [kafka, kafka-sink, postgres]
+    label: Native adapter-loss recovery
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs:
+      - test/cluster
+      - src/adapter
+      - src/catalog
+      - src/clusterd
+      - src/compute
+      - src/storage
+      - src/storage-controller
+      - src/controller-types
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: adapter-loss
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
+  - id: iceberg-overlap-recovery
+    topics: [iceberg, postgres]
+    label: Iceberg overlap recovery
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/iceberg, src/storage/src/sink/iceberg.rs]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: iceberg
+          run: commit-overlap-recovery
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
+  - id: catalog-publication-native
+    topics: [kafka]
+    label: Native catalog publication (100/1000 objects, 2 replicas)
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs:
+      - test/restart
+      - src/clusterd/src/catalog_follower
+      - src/clusterd/src/catalog_follower.rs
+      - src/catalog
+      - src/controller-types/src/clusters.rs
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: restart
+          run: catalog-publication-measurement
+          args:
+            - --collection-counts=100,1000
+            - --active-collections=10
+            - --filler-kind=indexes
+            - --filler-replicas=2
+            - --publication-rounds=3
+            - --observation-seconds=30
+            - --publication-interval-ms=1000
+            - --timeout-seconds=300
+            - --observer=none
+            - --ddl-rate-hz=2
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
   - id: sqllogictest-fast
     label: SLT
     depends_on: build-aarch64

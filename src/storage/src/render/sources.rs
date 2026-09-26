@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
 use timely::dataflow::operators::vec::Map;
-use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, OkErr};
+use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, OkErr, Probe};
 use timely::dataflow::scope::Scope;
 use timely::progress::{Antichain, Timestamp};
 
@@ -308,22 +308,38 @@ where
                         let error_handler =
                             storage_state.error_handler("upsert_rehydration", export_id);
 
-                        let (ok_stream, err_stream, tok) = persist_source::persist_source_core(
-                            outer_mz_scope,
-                            scope,
-                            export_id,
-                            persist_clients,
-                            storage_metadata,
-                            None,
-                            Some(as_of),
-                            SnapshotMode::Include,
-                            Antichain::new(),
-                            None,
-                            flow_control,
-                            false.then_some(|| unreachable!()),
-                            async {},
-                            error_handler,
-                        );
+                        let (mut ok_stream, mut err_stream, tok) =
+                            persist_source::persist_source_core(
+                                outer_mz_scope,
+                                scope,
+                                export_id,
+                                persist_clients,
+                                storage_metadata,
+                                None,
+                                Some(as_of),
+                                SnapshotMode::Include,
+                                Antichain::new(),
+                                None,
+                                flow_control,
+                                false.then_some(|| unreachable!()),
+                                async {},
+                                error_handler,
+                            );
+                        if let Some(executions) = &storage_state.executions {
+                            let probe = timely::dataflow::operators::probe::Handle::new();
+                            // Protect the input until both successful and error updates advance.
+                            ok_stream = ok_stream.probe_with(&probe);
+                            err_stream = err_stream.probe_with(&probe);
+                            executions.observe(
+                                base_source_config.id,
+                                export_id,
+                                Box::new(move || {
+                                    probe.with_frontier(|frontier| {
+                                        frontier.iter().map(|time| time.0).collect()
+                                    })
+                                }),
+                            );
+                        }
                         (
                             ok_stream.as_collection(),
                             err_stream.as_collection(),

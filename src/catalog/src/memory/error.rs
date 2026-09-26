@@ -14,6 +14,41 @@ use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::session::vars::VarError;
 
+/// Failure to serialize or reconstruct an in-memory catalog item.
+///
+/// Plan errors remain typed because builtin reconstruction retries unresolved
+/// dependencies. Serving callers translate these causes at the adapter boundary.
+#[derive(Debug, thiserror::Error)]
+pub enum ItemError {
+    #[error(transparent)]
+    ParseError(#[from] mz_sql_parser::parser::ParserStatementError),
+    #[error(transparent)]
+    PlanError(#[from] mz_sql::plan::PlanError),
+    #[error(transparent)]
+    Optimizer(crate::optimize::OptimizerError),
+    #[error(transparent)]
+    Catalog(#[from] Error),
+    #[error("internal error: {0}")]
+    Internal(String),
+    #[error(transparent)]
+    Unstructured(#[from] anyhow::Error),
+}
+
+impl From<SqlCatalogError> for ItemError {
+    fn from(error: SqlCatalogError) -> Self {
+        Self::Catalog(error.into())
+    }
+}
+
+impl From<crate::optimize::OptimizerError> for ItemError {
+    fn from(error: crate::optimize::OptimizerError) -> Self {
+        match error {
+            crate::optimize::OptimizerError::PlanError(error) => Self::PlanError(error),
+            error => Self::Optimizer(error),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 pub struct Error {
@@ -224,5 +259,36 @@ impl std::error::Error for AmbiguousRename {
     // Explicitly no source for this kind of error
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         None
+    }
+}
+
+#[cfg(test)]
+mod item_error_tests {
+    use super::*;
+    use crate::optimize::OptimizerError;
+    use mz_repr::CatalogItemId;
+    use mz_sql::plan::PlanError;
+
+    #[mz_ore::test]
+    fn reconstruction_retry_causes_remain_typed() {
+        let causes: [fn() -> PlanError; 2] = [
+            || PlanError::InvalidId(CatalogItemId::User(1)),
+            || PlanError::Catalog(SqlCatalogError::UnknownItem("missing".into())),
+        ];
+        for cause in causes {
+            for error in [
+                ItemError::from(cause()),
+                ItemError::from(OptimizerError::PlanError(cause())),
+            ] {
+                let ItemError::PlanError(actual) = error else {
+                    panic!("reconstruction retry cause became opaque");
+                };
+                assert_eq!(
+                    std::mem::discriminant(&actual),
+                    std::mem::discriminant(&cause())
+                );
+                assert_eq!(actual.to_string(), cause().to_string());
+            }
+        }
     }
 }

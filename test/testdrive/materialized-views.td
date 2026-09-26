@@ -64,6 +64,8 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 > SELECT * FROM v1;
 3
 
+> CREATE DEFAULT INDEX ON v1;
+
 > CREATE SINK sink1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM v1

@@ -281,9 +281,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             PORT 22
         );
     """)
-    public_key = c.sql_query(
-        "select public_key_1 from mz_ssh_tunnel_connections where id = 'u1';"
-    )[0][0]
+    [(public_key,)] = c.sql_query("""
+        SELECT k.public_key_1 FROM mz_ssh_tunnel_connections k
+        JOIN mz_connections c ON c.id = k.id
+        JOIN mz_schemas s ON s.id = c.schema_id
+        JOIN mz_databases d ON d.id = s.database_id
+        WHERE d.name = 'testdrive_no_reset_connections'
+          AND s.name = 'public' AND c.name = 'ssh'
+    """)
     c.exec(
         "ssh-bastion-host",
         "bash",
@@ -300,9 +305,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             PORT 22
         );
     """)
-    public_key = c.sql_query(
-        "select public_key_1 from mz_ssh_tunnel_connections where id = 'u2';"
-    )[0][0]
+    [(public_key,)] = c.sql_query("""
+        SELECT k.public_key_1 FROM mz_ssh_tunnel_connections k
+        JOIN mz_connections c ON c.id = k.id
+        JOIN mz_schemas s ON s.id = c.schema_id
+        JOIN mz_databases d ON d.id = s.database_id
+        WHERE d.name = 'testdrive_no_reset_connections'
+          AND s.name = 'public' AND c.name = 'ssh_backup'
+    """)
     c.exec(
         "ssh-bastion-host",
         "bash",

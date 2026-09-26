@@ -673,12 +673,38 @@ impl Coordinator {
         }
     }
 
+    /// The preferred timestamp before input readability constrains selection.
+    /// This is an acquisition target, not permission to read. Running the same
+    /// solver after acquisition preserves exact AS OF, freshness, and isolation
+    /// constraints when retained history requires a later timestamp.
+    pub(crate) fn read_protection_timestamp(
+        session: &Session,
+        when: &QueryWhen,
+        timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
+        real_time_recency_ts: Option<Timestamp>,
+        upper: &Antichain<Timestamp>,
+    ) -> Result<Option<Timestamp>, AdapterError> {
+        Self::determine_timestamp_via_constraints(
+            session,
+            &ReadHolds::new(),
+            &CollectionIdBundle::default(),
+            when,
+            oracle_read_ts,
+            real_time_recency_ts,
+            session.vars().transaction_isolation(),
+            &Self::get_timeline(timeline_context),
+            Self::largest_not_in_advance_of_upper(upper),
+        )
+        .map(|determination| Some(determination.timestamp))
+    }
+
     /// Determines the timestamp for a query, acquires read holds that ensure the
     /// query remains executable at that time, and returns those.
     /// The caller is responsible for eventually dropping those read holds.
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) fn determine_timestamp(
-        &self,
+    pub(crate) async fn determine_timestamp(
+        &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -688,7 +714,31 @@ impl Coordinator {
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
-        let (det, read_holds) = self.determine_timestamp_for(
+        let (read_holds, upper) = if let Some(client) = &self.query_client {
+            let incarnation = client.protection.incarnation();
+            self.acquire_client_read_protection(incarnation, id_bundle.clone(), |upper| {
+                Self::read_protection_timestamp(
+                    session,
+                    when,
+                    timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                    upper,
+                )
+            })
+            .await?
+        } else if self.catalog().state().catalog_read_protection_enabled() && !id_bundle.is_empty()
+        {
+            return Err(AdapterError::Internal(
+                "durable query read protection is not initialized".into(),
+            ));
+        } else {
+            (
+                self.acquire_read_holds(id_bundle),
+                self.least_valid_write(id_bundle),
+            )
+        };
+        let (det, read_holds) = Self::determine_timestamp_for_inner(
             session,
             id_bundle,
             when,
@@ -696,6 +746,8 @@ impl Coordinator {
             oracle_read_ts,
             real_time_recency_ts,
             isolation_level,
+            read_holds,
+            upper.clone(),
         )?;
         self.metrics
             .by_cluster
@@ -710,8 +762,9 @@ impl Coordinator {
             && real_time_recency_ts.is_none()
         {
             // Note down the difference between BoundedStaleness and Serializable into a metric.
+            // Compare isolation levels against the same protected input observations.
             if let Some(bs_ts) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
+                let (serializable_det, _tmp_read_holds) = Self::determine_timestamp_for_inner(
                     session,
                     id_bundle,
                     when,
@@ -719,6 +772,8 @@ impl Coordinator {
                     oracle_read_ts,
                     real_time_recency_ts,
                     &IsolationLevel::Serializable,
+                    read_holds.clone(),
+                    upper,
                 )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics
@@ -805,8 +860,11 @@ pub struct TimestampExplanation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimestampSource {
     pub name: String,
-    pub read_frontier: Vec<Timestamp>,
-    pub write_frontier: Vec<Timestamp>,
+    /// Read frontier, or unknown. Protected observations report physical since,
+    /// not a grant or compaction permission. Empty and MIN are known frontiers.
+    pub read_frontier: Option<Vec<Timestamp>>,
+    /// Observed upper, independently available from the physical since.
+    pub write_frontier: Option<Vec<Timestamp>>,
 }
 
 pub trait DisplayableInTimeline {
@@ -925,24 +983,23 @@ impl fmt::Display for TimestampExplanation {
         for source in &self.sources {
             writeln!(f, "")?;
             writeln!(f, "source {}:", source.name)?;
-            writeln!(
-                f,
-                "                  read frontier:{:?}",
-                source
-                    .read_frontier
-                    .iter()
-                    .map(|t| t.display(timeline))
-                    .collect::<Vec<_>>()
-            )?;
-            writeln!(
-                f,
-                "                 write frontier:{:?}",
-                source
-                    .write_frontier
-                    .iter()
-                    .map(|t| t.display(timeline))
-                    .collect::<Vec<_>>()
-            )?;
+            for (label, frontier) in [
+                ("                  read frontier:", &source.read_frontier),
+                ("                 write frontier:", &source.write_frontier),
+            ] {
+                write!(f, "{label}")?;
+                match frontier {
+                    Some(frontier) => writeln!(
+                        f,
+                        "{:?}",
+                        frontier
+                            .iter()
+                            .map(|t| t.display(timeline))
+                            .collect::<Vec<_>>()
+                    )?,
+                    None => writeln!(f, "unknown")?,
+                }
+            }
         }
 
         writeln!(f, "")?;
@@ -1133,5 +1190,153 @@ mod constraints {
         /// constraints, and wants to minimally impact others.
         /// For example, `AS OF AT LEAST <time>`.
         StalestValid,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_storage_types::read_holds::ReadHold;
+
+    #[mz_ore::test]
+    fn timestamp_source_output_distinguishes_unknown_empty_and_min() {
+        let mut explanation = TimestampExplanation {
+            determination: TimestampDetermination {
+                timestamp_context: TimestampContext::NoTimestamp,
+                since: Antichain::new(),
+                upper: Antichain::new(),
+                largest_not_in_advance_of_upper: Timestamp::MIN,
+                oracle_read_ts: None,
+                session_oracle_read_ts: None,
+                real_time_recency_ts: None,
+                constraints: Default::default(),
+            },
+            sources: Vec::new(),
+            session_wall_time: DateTime::UNIX_EPOCH,
+            respond_immediately: true,
+        };
+        let cases = [
+            (None, serde_json::Value::Null, "unknown"),
+            (Some(vec![]), serde_json::json!([]), "[]"),
+            (
+                Some(vec![Timestamp::MIN]),
+                serde_json::json!([0]),
+                "[            0]",
+            ),
+        ];
+        for (read, read_json, read_text) in &cases {
+            for (write, write_json, write_text) in &cases {
+                explanation.sources = vec![TimestampSource {
+                    name: "input".into(),
+                    read_frontier: read.clone(),
+                    write_frontier: write.clone(),
+                }];
+                let json =
+                    serde_json::to_value(&explanation).expect("timestamp explanation serializes");
+                assert_eq!(&json["sources"][0]["read_frontier"], read_json);
+                assert_eq!(&json["sources"][0]["write_frontier"], write_json);
+                let text = explanation.to_string();
+                assert!(
+                    text.contains(&format!("                  read frontier:{read_text}\n")),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(&format!("                 write frontier:{write_text}\n")),
+                    "{text}"
+                );
+                let decoded: TimestampExplanation =
+                    serde_json::from_value(json).expect("timestamp explanation roundtrips");
+                assert_eq!(&decoded.sources[0].read_frontier, read);
+                assert_eq!(&decoded.sources[0].write_frontier, write);
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn acquisition_target_preserves_timestamp_constraints() {
+        let mut session = Session::dummy();
+        let timeline = TimelineContext::TimestampDependent;
+        let bundle = CollectionIdBundle {
+            storage_ids: [GlobalId::User(1)].into(),
+            compute_ids: Default::default(),
+        };
+        let holds_at = |since| {
+            let mut holds = ReadHolds::new();
+            holds.storage_holds.insert(
+                GlobalId::User(1),
+                ReadHold::new(
+                    GlobalId::User(1),
+                    Antichain::from_elem(since),
+                    Arc::new(|_, _| Ok(())),
+                ),
+            );
+            holds
+        };
+        for isolation in [
+            IsolationLevel::Serializable,
+            IsolationLevel::StrictSerializable,
+            IsolationLevel::StrongSessionSerializable,
+            IsolationLevel::BoundedStaleness(std::time::Duration::from_millis(20)),
+        ] {
+            session
+                .vars_mut()
+                .set_local_transaction_isolation(isolation);
+            for when in [
+                QueryWhen::Immediately,
+                QueryWhen::AtTimestamp(Timestamp::from(50)),
+                QueryWhen::AtLeastTimestamp(Timestamp::from(50)),
+                QueryWhen::FreshestTableWrite,
+            ] {
+                let oracle = Coordinator::needs_linearized_read_ts(&isolation, &when)
+                    .then_some(Timestamp::from(90));
+                for upper in [
+                    Antichain::from_elem(Timestamp::MIN),
+                    Antichain::from_elem(Timestamp::from(81)),
+                    Antichain::new(),
+                ] {
+                    let target = Coordinator::read_protection_timestamp(
+                        &session, &when, &timeline, oracle, None, &upper,
+                    );
+                    for retained in [
+                        Timestamp::from(40),
+                        Timestamp::from(60),
+                        Timestamp::from(100),
+                    ] {
+                        let select = |since| {
+                            Coordinator::determine_timestamp_for_inner(
+                                &session,
+                                &bundle,
+                                &when,
+                                &timeline,
+                                oracle,
+                                None,
+                                &isolation,
+                                holds_at(since),
+                                upper.clone(),
+                            )
+                            .map(|(det, _)| det.timestamp_context.timestamp_or_default())
+                        };
+                        let expected = select(retained);
+                        match &target {
+                            Ok(Some(target)) => {
+                                let actual = select(retained.max(*target));
+                                match (expected, actual) {
+                                    (Ok(expected), Ok(actual)) => assert_eq!(actual, expected),
+                                    (Err(expected), Err(actual)) => assert_eq!(
+                                        std::mem::discriminant(&actual),
+                                        std::mem::discriminant(&expected)
+                                    ),
+                                    outcomes => panic!(
+                                        "acquisition changed {isolation:?} {when:?}: {outcomes:?}"
+                                    ),
+                                }
+                            }
+                            Err(_) => assert!(expected.is_err()),
+                            Ok(None) => panic!("query must have an acquisition target"),
+                        }
+                    }
+                }
+            }
+        }
     }
 }

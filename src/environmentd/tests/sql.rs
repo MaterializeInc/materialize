@@ -55,6 +55,283 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::SqlState;
 use tracing::{debug, info};
 
+#[path = "sql/prepared_rewrites.rs"]
+mod prepared_rewrites;
+
+/// A missing peer selection must not block unrelated compute installation or SQL,
+/// and dropping the pending index must release the publication barrier.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_peer_index_pending_installation() {
+    use mz_catalog::durable::{
+        CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
+    };
+    use mz_catalog::expr_cache::ExpressionCacheHandle;
+    use mz_postgres_util::{PostgresError, batch_execute, query, query_one, sql};
+
+    let test_case = async {
+        let server = test_util::TestHarness::default().start().await;
+        let client = server.connect().await.unwrap();
+        let internal = server.connect().internal().await.unwrap();
+        batch_execute(&internal, sql!("SET CLUSTER = default"))
+            .await
+            .unwrap();
+        for statement in [
+            sql!("CREATE TABLE peer_input (a int)"),
+            sql!("INSERT INTO peer_input VALUES (1), (2), (3)"),
+            sql!("CREATE INDEX peer_template ON peer_input (a)"),
+        ] {
+            batch_execute(&client, statement).await.unwrap();
+        }
+
+        let catalog_version = mz_environmentd::BUILD_INFO.semver_version();
+        let persist = server
+            .persist_clients
+            .open(server.persist_location.clone())
+            .await
+            .unwrap();
+        let mut peer = persist_backed_catalog_join_active(
+            persist.clone(),
+            server.environment_id.organization_id(),
+            catalog_version,
+            Arc::new(mz_catalog::durable::Metrics::new(
+                &mz_ore::metrics::MetricsRegistry::new(),
+            )),
+        )
+        .await
+        .unwrap();
+        let (template, input, selection, shard) = loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let txn = match peer.transaction().await {
+                Ok(txn) => txn,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    continue;
+                }
+                Err(error) => panic!("peer template snapshot: {error}"),
+            };
+            let template = txn
+                .get_items()
+                .find(|item| item.name == "peer_template")
+                .unwrap();
+            let input = txn
+                .get_items()
+                .find(|item| item.name == "peer_input")
+                .unwrap();
+            let mut selections = txn
+                .get_written_plans()
+                .filter(|plan| plan.id == template.global_id);
+            let selection = selections
+                .next()
+                .expect("SQL must select its immutable plan");
+            assert!(selections.next().is_none(), "fresh fixture has one build");
+            let shard = txn.get_expression_cache_shard().unwrap();
+            break (template, input, selection, shard);
+        };
+        let build: semver::Version = selection
+            .build_version
+            .parse()
+            .expect("valid selected build version");
+        let store = ExpressionCacheHandle::open_plan_store(build.clone(), &persist, shard).await;
+        let mut plans = store
+            .read_plans(vec![(selection.id, selection.revision)])
+            .await
+            .unwrap();
+        let mut plan = plans.remove(&(selection.id, selection.revision)).unwrap();
+
+        // Reserve fresh identities durably before writing immutable bytes. No dropped
+        // SQL object's identity is recycled, even if the item transaction loses a CAS.
+        let ids = peer.allocate_user_ids(2, Timestamp::MIN).await.unwrap();
+        let (pending_item, pending_id) = ids[0];
+        let (selected_item, selected_id) = ids[1];
+        assert!(plan.dataflow_metainfos.optimizer_notices.is_empty());
+        assert!(plan.dataflow_metainfos.index_usage_types.is_empty());
+        // The first index on a table needs no internal-ID remapper. Assert that
+        // both SQL-produced plans are a single source-only export before cloning.
+        macro_rules! rename_export {
+            ($df:expr) => {{
+                let df = &mut $df;
+                assert!(df.index_imports.is_empty());
+                assert!(df.sink_exports.is_empty());
+                assert_eq!(
+                    df.source_imports.keys().copied().collect::<Vec<_>>(),
+                    vec![input.global_id]
+                );
+                assert_eq!(df.index_exports.len(), 1);
+                assert_eq!(df.objects_to_build.len(), 1);
+                assert_eq!(df.objects_to_build[0].id, template.global_id);
+                assert_eq!(
+                    df.depends_on(template.global_id),
+                    [template.global_id, input.global_id].into()
+                );
+                let export = df.index_exports.remove(&template.global_id).unwrap();
+                assert_eq!(export.0.on_id, input.global_id);
+                df.index_exports.insert(selected_id, export);
+                df.objects_to_build[0].id = selected_id;
+                df.debug_name = "peer_selected".into();
+                assert_eq!(
+                    df.depends_on(selected_id),
+                    [selected_id, input.global_id].into()
+                );
+            }};
+        }
+        rename_export!(plan.global_mir);
+        rename_export!(plan.physical_plan);
+        let revision = uuid::Uuid::new_v4();
+        store
+            .write_plans(vec![(selected_id, revision, plan)])
+            .await
+            .unwrap();
+
+        loop {
+            peer.sync_to_current_updates().await.unwrap();
+            let mut txn = match peer.transaction().await {
+                Ok(txn) => txn,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    continue;
+                }
+                Err(error) => panic!("peer transaction: {error}"),
+            };
+            for (item_id, global_id, name) in [
+                (pending_item, pending_id, "peer_pending"),
+                (selected_item, selected_id, "peer_selected"),
+            ] {
+                let oid = txn.allocate_oid(&Default::default()).unwrap();
+                txn.insert_item(
+                    item_id,
+                    oid,
+                    global_id,
+                    template.schema_id,
+                    name,
+                    template.create_sql.replace("peer_template", name),
+                    template.owner_id,
+                    template.privileges.clone(),
+                    BTreeMap::new(),
+                    None,
+                )
+                .unwrap();
+            }
+            txn.set_written_plan(selected_id, &build.to_string(), Some(revision))
+                .unwrap();
+            let ts = txn.upper();
+            let _ = txn.get_and_commit_op_updates();
+            match txn.commit(ts).await {
+                Ok(()) => break,
+                Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
+                    continue;
+                }
+                Err(error) => panic!("peer commit: {error}"),
+            }
+        }
+
+        // An ordinary metadata write observes the peer's content through the
+        // coordinator's production catalog CAS/follow path. If it discovers
+        // structural peer changes, retry the rejected DDL from a fresh snapshot.
+        loop {
+            match batch_execute(
+                &client,
+                sql!("COMMENT ON TABLE peer_input IS 'follow peer'"),
+            )
+            .await
+            {
+                Ok(()) => break,
+                Err(PostgresError::Postgres(error))
+                    if error.code() == Some(&SqlState::T_R_SERIALIZATION_FAILURE) =>
+                {
+                    continue;
+                }
+                Err(error) => panic!("follow peer DDL: {error}"),
+            }
+        }
+        let names: Vec<String> = query(
+            &client,
+            sql!(
+                "SELECT name FROM mz_indexes
+                  WHERE name IN ('peer_pending', 'peer_selected') ORDER BY name"
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+        assert_eq!(names, ["peer_pending", "peer_selected"]);
+
+        loop {
+            let ready: bool = query_one(
+                &internal,
+                sql!(
+                    "SELECT EXISTS (SELECT 1 FROM mz_introspection.mz_compute_frontiers
+                      WHERE export_id = $1 AND time > 0)"
+                ),
+                &[&selected_id.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+            if ready {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let absent: bool = query_one(
+            &internal,
+            sql!(
+                "SELECT NOT EXISTS (SELECT 1 FROM mz_introspection.mz_compute_exports
+                  WHERE export_id = $1)"
+            ),
+            &[&pending_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+        assert!(absent, "index without a selection must not enter compute");
+        let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(sum, 6);
+
+        // Other catalog keys have different ID shapes. CASE guards the fallible
+        // decoder without relying on the evaluation order of WHERE conjuncts.
+        let bound_sql = sql!(
+            "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_catalog_raw \
+                         WHERE CASE WHEN data->>'kind' = 'CollectionCompactionBound' \
+                         THEN mz_internal.parse_catalog_id(data->'key'->'id') = $1 \
+                         ELSE false END)"
+        );
+        let published: bool = query_one(&internal, bound_sql.clone(), &[&selected_id.to_string()])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(
+            !published,
+            "pending installation must hold back bound publication"
+        );
+        batch_execute(&client, sql!("DROP INDEX peer_pending"))
+            .await
+            .unwrap();
+        loop {
+            let published: bool =
+                query_one(&internal, bound_sql.clone(), &[&selected_id.to_string()])
+                    .await
+                    .unwrap()
+                    .get(0);
+            if published {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let sum: i64 = query_one(&client, sql!("SELECT sum(a) FROM peer_input"), &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(sum, 6);
+    };
+    tokio::time::timeout(Duration::from_secs(180), test_case)
+        .await
+        .expect("peer pending-installation test timed out");
+}
+
 /// An HTTP server whose responses can be controlled from another thread.
 struct MockHttpServer {
     _task: AbortOnDropHandle<()>,
@@ -1428,6 +1705,8 @@ fn test_transactional_explain_timestamps() {
             .first()
             .unwrap()
             .read_frontier
+            .as_ref()
+            .expect("physical since is observed")
             .first()
             .unwrap();
 
@@ -3570,6 +3849,24 @@ fn test_peek_on_dropped_indexed_view() {
         .unwrap();
     ddl_client.batch_execute("CREATE INDEX i ON v (a)").unwrap();
 
+    // DDL completion does not imply that a replica has a readable index yet.
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let ready: bool = ddl_client
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM mz_internal.mz_frontiers f \
+                     JOIN mz_internal.mz_object_global_ids g ON g.global_id = f.object_id \
+                     JOIN mz_indexes i ON i.id = g.id \
+                     WHERE i.name = 'i' AND f.read_frontier IS NOT NULL)",
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            ready.then_some(()).ok_or("Index not readable")
+        })
+        .unwrap();
+
     // Asynchronously query an indexed view.
     let handle = thread::spawn(move || {
         peek_client.query(
@@ -3579,7 +3876,11 @@ fn test_peek_on_dropped_indexed_view() {
     });
 
     let index_id: String = ddl_client
-        .query_one("SELECT id FROM mz_indexes WHERE name = 'i'", &[])
+        .query_one(
+            "SELECT g.global_id FROM mz_indexes i \
+             JOIN mz_internal.mz_object_global_ids g ON g.id = i.id WHERE i.name = 'i'",
+            &[],
+        )
         .unwrap()
         .get(0);
 
@@ -3758,8 +4059,14 @@ async fn test_retain_history() {
             .retry_async(|_| async {
                 let ts = get_explain_timestamp_determination(name, &client).await?;
                 let source = ts.sources.into_element();
-                let upper = source.write_frontier.into_element();
-                let since = source.read_frontier.into_element();
+                let upper = source
+                    .write_frontier
+                    .expect("upper is observed")
+                    .into_element();
+                let since = source
+                    .read_frontier
+                    .expect("physical since is observed")
+                    .into_element();
                 if upper.saturating_sub(since) < Timestamp::from(2000u64) {
                     anyhow::bail!("{upper} - {since} should be at least 2s apart")
                 }

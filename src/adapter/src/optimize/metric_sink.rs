@@ -169,12 +169,6 @@ pub struct GlobalLirPlan {
     df_meta: DataflowMetainfo,
 }
 
-impl GlobalLirPlan {
-    pub fn df_desc(&self) -> &LirDataflowDescription {
-        &self.df_desc
-    }
-}
-
 impl Optimize<MetricSink> for Optimizer {
     type To = GlobalMirPlan;
 

@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+arrow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bincode.workspace = true
@@ -19,23 +20,29 @@ bytesize.workspace = true
 chrono.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
+fail.workspace = true
 futures.workspace = true
+hex.workspace = true
+imbl.workspace = true
 ipnet.workspace = true
 itertools.workspace = true
+maplit.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-auth = { path = "../auth" }
 mz-build-info = { path = "../build-info" }
 mz-catalog-protos = { path = "../catalog-protos" }
 mz-cloud-resources = { path = "../cloud-resources" }
+mz-cluster-controller = { path = "../cluster-controller" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
-mz-controller = { path = "../controller" }
 mz-controller-types = { path = "../controller-types" }
 mz-durable-cache = { path = "../durable-cache" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
+mz-kafka-util = { path = "../kafka-util" }
 mz-license-keys = { path = "../license-keys" }
+mz-mysql-util = { path = "../mysql-util" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
@@ -44,34 +51,51 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-pgtz = { path = "../pgtz" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
+mz-rocksdb-types = { path = "../rocksdb-types" }
+mz-secrets = { path = "../secrets" }
+mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-server-util = { path = "../sql-server-util" }
+mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
+mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
 openssl.workspace = true
 paste.workspace = true
 prometheus.workspace = true
+prost.workspace = true
+rand.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_plain.workspace = true
+smallvec.workspace = true
 static_assertions.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 timely.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
 insta.workspace = true
 mz-catalog-protos = { path = "../catalog-protos", features = ["proptest"] }
+mz-persist = { path = "../persist", features = ["turmoil"] }
+mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
+mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true
 rand.workspace = true
+tokio-postgres.workspace = true
+tracing-subscriber.workspace = true
+turmoil.workspace = true
 
 [features]
 default = []
+test = []

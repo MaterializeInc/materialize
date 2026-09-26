@@ -37,6 +37,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 mz-row-spine = { path = "../row-spine" }
 mz-rocksdb = { path = "../rocksdb" }
+mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-operators = { path = "../storage-operators" }
@@ -56,7 +57,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-core_affinity = "0.8.3"
+core_affinity.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

@@ -18,12 +18,14 @@ import re
 import socket
 import struct
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from contextlib import ExitStack
 from copy import copy
 from datetime import datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Event, Thread
+from uuid import uuid4
 
 import psycopg
 import requests
@@ -44,12 +46,13 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.clusterd import Clusterd, native_catalog_options
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -80,6 +83,8 @@ SERVICES = [
     Postgres(),
     Redpanda(),
     Toxiproxy(),
+    Persistcli(),
+    Testdrive(name="adapter-loss-testdrive"),
     Testdrive(
         volume_workdir="../testdrive:/workdir/testdrive",
         volumes_extra=[".:/workdir/smoke"],
@@ -102,10 +107,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
         # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
         # and slow-seqno-hold are slow, run in separate CI step
+        # adapter-loss has its own native acceptance job and reclamation budget.
         # concurrent-connections is too flaky
         # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
             "default",
+            "adapter-loss",
             "test-concurrent-connections",
             "test-memory-limiter",
         ):
@@ -122,8 +129,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ui.warn(f"Skipping {name} under a sanitizer: build has no jemalloc")
             return
 
-        with c.test_case(name):
-            c.workflow(name)
+        # A failed workflow must not leave readers attached when the next one
+        # changes metadata backends or initializes a new catalog history.
+        try:
+            with c.test_case(name):
+                c.workflow(name)
+        finally:
             c.down()
 
     files = buildkite.shard_list(list(c.workflows.keys()), lambda workflow: workflow)
@@ -2108,7 +2119,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     in the process of reconciliation.
     """
 
-    c.up("materialized", "clusterd1")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2125,60 +2136,80 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
         ));
-        SET cluster = cluster1;
-
-        -- index on table
-        CREATE TABLE t1 (a int);
-        CREATE DEFAULT INDEX on t1;
-
-        -- index on view
-        CREATE VIEW v AS SELECT a + 1 FROM t1;
-        CREATE DEFAULT INDEX on v;
-
-        -- materialized view on table
-        CREATE TABLE t2 (a int);
-        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
-
-        -- materialized view on index
-        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
         """)
 
-    # Set up a subscribe dataflow that will be dropped during reconciliation.
-    cursor = c.sql_cursor()
-    cursor.execute("SET cluster = cluster1")
-    cursor.execute("INSERT INTO t1 VALUES (1)")
-    cursor.execute("BEGIN")
-    cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t1")
-    cursor.execute("FETCH 1 c")
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+           FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+           WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+    catalog_options = native_catalog_options(c)
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        ),
+    ):
+        c.up("clusterd1")
 
-    # Perform a query to ensure dataflows have been installed.
-    c.sql("""
-        SET cluster = cluster1;
-        SELECT * FROM t1, v, mv1, mv2;
-        """)
+        c.sql("""
+            SET cluster = cluster1;
 
-    # We don't have much control over compute reconciliation from here. We
-    # drop a dataflow and immediately kill environmentd, in hopes of maybe
-    # provoking an interesting race that way.
-    c.sql("DROP MATERIALIZED VIEW mv2")
+            -- index on table
+            CREATE TABLE t1 (a int);
+            CREATE DEFAULT INDEX on t1;
 
-    # Restart environmentd to trigger a reconciliation.
-    c.kill("materialized")
-    c.up("materialized")
+            -- index on view
+            CREATE VIEW v AS SELECT a + 1 FROM t1;
+            CREATE DEFAULT INDEX on v;
 
-    # Perform a query to ensure reconciliation has finished.
-    c.sql("""
-        SET cluster = cluster1;
-        SELECT * FROM v;
-        """)
+            -- materialized view on table
+            CREATE TABLE t2 (a int);
+            CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
 
-    # Verify the absence of logged errors.
-    for service in ("materialized", "clusterd1"):
-        p = c.invoke("logs", service, capture=True)
-        for line in p.stdout.splitlines():
-            assert (
-                " ERROR " not in line or "repr type error" in line
-            ), f"found non-repr-type ERROR in service {service}: {line}"
+            -- materialized view on index
+            CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+            """)
+
+        # Set up a subscribe dataflow that will be dropped during reconciliation.
+        cursor = c.sql_cursor()
+        cursor.execute("SET cluster = cluster1")
+        cursor.execute("INSERT INTO t1 VALUES (1)")
+        cursor.execute("BEGIN")
+        cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t1")
+        cursor.execute("FETCH 1 c")
+
+        # Perform a query to ensure dataflows have been installed.
+        c.sql("""
+            SET cluster = cluster1;
+            SELECT * FROM t1, v, mv1, mv2;
+            """)
+
+        # We don't have much control over compute reconciliation from here. We
+        # drop a dataflow and immediately kill environmentd, in hopes of maybe
+        # provoking an interesting race that way.
+        c.sql("DROP MATERIALIZED VIEW mv2")
+
+        # Restart environmentd to reconnect to the replica.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Perform a query to ensure the reconnected replica serves queries.
+        c.sql("""
+            SET cluster = cluster1;
+            SELECT * FROM v;
+            """)
+
+        # Verify the absence of logged errors.
+        for service in ("materialized", "clusterd1"):
+            p = c.invoke("logs", service, capture=True)
+            for line in p.stdout.splitlines():
+                assert (
+                    " ERROR " not in line or "repr type error" in line
+                ), f"found non-repr-type ERROR in service {service}: {line}"
 
 
 def workflow_test_drop_during_reconciliation(c: Composition) -> None:
@@ -5887,6 +5918,50 @@ def workflow_test_github_8734(c: Composition) -> None:
     Regression test for database-issues#8734.
     """
 
+    def protection_evidence(label: str) -> None:
+        try:
+            response = requests.get(
+                f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
+                timeout=10,
+            )
+            response.raise_for_status()
+            snapshot = response.json()
+            objects = c.sql_query("""
+                SELECT o.name, o.id, g.global_id FROM mz_objects o
+                JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+                WHERE o.name IN ('t', 'mv') ORDER BY o.name
+            """)
+            physical = {}
+            with c.sql_connection(port=6877, user="mz_system") as conn:
+                for name, item_id, _ in objects:
+                    row = conn.execute(
+                        sql.SQL("INSPECT SHARD {}").format(sql.Literal(item_id))
+                    ).fetchone()
+                    assert row is not None
+                    physical[name] = {
+                        key: row[0][key] for key in ("shard_id", "since", "upper")
+                    }
+            print(
+                json.dumps(
+                    {
+                        "label": label,
+                        "objects": objects,
+                        "physical": physical,
+                        **{
+                            key: snapshot[key]
+                            for key in (
+                                "client_incarnations",
+                                "client_read_requirements",
+                                "maintained_read_requirements",
+                                "collection_compaction_bounds",
+                            )
+                        },
+                    }
+                )
+            )
+        except Exception as error:
+            print(f"Protection diagnostics failed ({label}): {error}")
+
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
@@ -5916,12 +5991,17 @@ def workflow_test_github_8734(c: Composition) -> None:
         check_read_frontiers_not_stuck(c, ["t"])
 
         # Restart envd, then verify that the table's frontier still advances.
+        protection_evidence("before-restart")
         c.kill("materialized")
         c.up("materialized")
 
         c.sql("SELECT * FROM mv")
 
-        check_read_frontiers_not_stuck(c, ["t"])
+        try:
+            check_read_frontiers_not_stuck(c, ["t"])
+        except Exception:
+            protection_evidence("frontier-stuck-after-restart")
+            raise
 
 
 def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -6957,26 +7037,48 @@ def workflow_crash_on_replica_expiration_mv(
     """
     Tests that clusterd crashes when a replica is set to expire
     """
+    offset = 20
+
+    c.up("materialized")
+    c.sql(
+        f"""
+        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
+        ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
+
+        CREATE CLUSTER test REPLICAS (
+            test (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            )
+        );
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+           FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+           WHERE c.name = 'test' AND r.name = 'test'""")
+    catalog_options = native_catalog_options(c)
     with c.override(
-        Clusterd(name="clusterd1", restart="on-failure"),
+        Clusterd(
+            name="clusterd1",
+            workers=1,
+            restart="on-failure",
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        ),
     ):
-        offset = 20
+        c.up("clusterd1")
 
-        c.up("materialized", "clusterd1")
         c.sql(
-            f"""
-            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
-            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
-
-            CREATE CLUSTER test REPLICAS (
-                test (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
-                )
-            );
+            """
             SET CLUSTER TO test;
 
             CREATE TABLE t (x int);
@@ -7017,26 +7119,48 @@ def workflow_crash_on_replica_expiration_index(
     """
     Tests that clusterd crashes when a replica is set to expire
     """
+    offset = 20
+
+    c.up("materialized")
+    c.sql(
+        f"""
+        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
+        ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
+
+        CREATE CLUSTER test REPLICAS (
+            test (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            )
+        );
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+           FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+           WHERE c.name = 'test' AND r.name = 'test'""")
+    catalog_options = native_catalog_options(c)
     with c.override(
-        Clusterd(name="clusterd1", restart="on-failure"),
+        Clusterd(
+            name="clusterd1",
+            workers=1,
+            restart="on-failure",
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        ),
     ):
-        offset = 20
+        c.up("clusterd1")
 
-        c.up("materialized", "clusterd1")
         c.sql(
-            f"""
-            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
-            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
-
-            CREATE CLUSTER test REPLICAS (
-                test (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
-                )
-            );
+            """
             SET CLUSTER TO test;
 
             CREATE TABLE t (x int);
@@ -7731,7 +7855,7 @@ def workflow_alter_sink_hang(c: Composition) -> None:
         def alter_sink():
             c.sql("ALTER SINK snk SET FROM t2")
 
-        alter_thread = Thread(target=alter_sink)
+        alter_thread = PropagatingThread(target=alter_sink)
         alter_thread.start()
 
         # Sleep a bit to give the ALTER SINK a chance to run.
@@ -8425,7 +8549,7 @@ def workflow_test_item_parsing_expression_cache(c: Composition) -> None:
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
-                "log_filter": "mz_adapter::catalog::state=debug,info",
+                "log_filter": "mz_catalog::catalog::state=debug,info",
             },
         ),
     ):
@@ -8775,3 +8899,838 @@ def workflow_test_controller_oracle_stall(
         f"by {growth:.2f}x (ceiling {ceiling}x), so the reads did not stay "
         "bounded per reconciliation phase"
     )
+
+
+def workflow_adapter_loss(c: Composition) -> None:
+    """Source-fed execution and history compaction survive loss of SQL ingress.
+
+    Table/webhook-fed work may pause. Queries and those dataflows must catch up
+    after restart. All outage observations use Kafka or read-only Persist CLI,
+    never another adapter. Compute and storage replicas must remain alive.
+    """
+    timeout = 420  # Includes the abandoned query client's reclamation grace.
+    adapter = Materialized(
+        deploy_generation=1,
+        external_metadata_store=True,
+        external_blob_store=True,
+        use_default_volumes=False,
+        support_external_clusterd=True,
+        # The workflow verifies restart with the native catalog context intact.
+        # A harness restart after the overrides unwind would use another blob
+        # store and omit the replicas' reconstruction configuration.
+        sanity_restart=False,
+        additional_system_parameter_defaults={
+            "enable_catalog_read_protection": "true",
+            "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            "enable_index_options": "true",
+            "persist_inline_writes_single_max_bytes": "0",
+            "persist_compaction_heuristic_min_inputs": "2",
+            "enable_metric_sink": "true",
+        },
+    )
+    replicas = ("clusterd1", "clusterd2", "clusterd3")
+    running_replicas = set(replicas)
+    blob_uri = minio_blob_uri()
+    consensus_uri = (
+        f"postgres://root@{c.metadata_store()}:26257?options=--search_path=consensus"
+    )
+    prefix = f"adapter-loss-{uuid4().hex}"
+    source_topic = f"{prefix}-input"
+    outputs = {name: f"{prefix}-{name}" for name in ("source", "table", "webhook")}
+    td = Testdrive(
+        name="adapter-loss-testdrive",
+        materialize_url=f"postgres://materialize@{adapter.name}:6875",
+        materialize_url_internal=f"postgres://mz_system@{adapter.name}:6877",
+        no_reset=True,
+        no_consistency_checks=True,
+        set_persist_urls=False,
+        materialize_params={"cluster": "compute_cluster"},
+    )
+
+    def produce(value: int, count: int = 1) -> None:
+        c.exec(
+            "kafka",
+            "kafka-console-producer",
+            "--bootstrap-server=kafka:9092",
+            f"--topic={source_topic}",
+            "--command-property=acks=all",
+            stdin="".join(f"{item}\n" for item in range(value, value + count)),
+        )
+
+    def consume(name: str, count: int) -> set[int]:
+        # read_committed is essential: uncommitted sink output is not execution
+        # evidence. Start at the beginning so every check includes the warmup row.
+        result = c.exec(
+            "kafka",
+            "kafka-console-consumer",
+            "--bootstrap-server=kafka:9092",
+            f"--topic={outputs[name]}",
+            "--from-beginning",
+            f"--max-messages={count}",
+            "--timeout-ms=10000",
+            "--command-property=isolation.level=read_committed",
+            capture=True,
+            capture_stderr=True,
+            check=False,
+        )
+        if result.returncode and "TimeoutException" not in (result.stderr or ""):
+            raise RuntimeError(f"Kafka verification failed: {result}")
+        try:
+            return {json.loads(line)["v"] for line in result.stdout.splitlines()}
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"Kafka returned non-JSON records: stdout={result.stdout!r}, stderr={result.stderr!r}"
+            ) from error
+
+    def inspect(shard: str) -> dict:
+        wall_start_ms = time.time_ns() // 1_000_000
+        result = c.run(
+            "persistcli",
+            "inspect",
+            "state",
+            "--shard-id",
+            shard,
+            "--blob-uri",
+            blob_uri,
+            "--consensus-uri",
+            consensus_uri,
+            capture=True,
+            rm=True,
+        )
+
+        # CLI inspection serializes ProtoRollup, not SQL INSPECT SHARD's State.
+        # Timestamp codecs store u64 bits in signed protobuf int64 elements.
+        def frontier(proto: dict) -> list[int]:
+            elements = proto["elements"]
+            assert len(elements) <= 1, elements
+            return [element % (2**64) for element in elements]
+
+        rollup = json.loads(result.stdout)
+        trace = rollup["trace"]
+        physical = [
+            *trace["legacy_batches"],
+            *(entry["batch"] for entry in trace["hollow_batches"]),
+        ]
+        # Spine descriptions include empty intervals omitted from hollow batches.
+        # An empty upper means the shard is closed, not timestamp zero.
+        logical = (
+            [entry["batch"] for entry in trace["spine_batches"]]
+            if trace["spine_batches"]
+            else trace["legacy_batches"]
+        )
+        uppers = [frontier(batch["desc"]["upper"]) for batch in logical]
+        upper = (
+            []
+            if any(not upper for upper in uppers)
+            else [max((u[0] for u in uppers), default=0)]
+        )
+        return {
+            "wall_start_ms": wall_start_ms,
+            "wall_end_ms": time.time_ns() // 1_000_000,
+            "leased_readers": rollup["leased_readers"],
+            "critical_readers": rollup["critical_readers"],
+            "since": frontier(trace["since"]),
+            "upper": upper,
+            "batches": [
+                {
+                    "len": batch["len"],
+                    **{
+                        name: frontier(batch["desc"][name])
+                        for name in ("lower", "upper", "since")
+                    },
+                }
+                for batch in physical
+            ],
+        }
+
+    def compacted_past(state: dict, timestamp: int) -> bool:
+        # Require persisted history compaction, not just new batches or permission.
+        return (
+            bool(state["since"])
+            and state["since"][0] > timestamp
+            and any(
+                batch["len"] > 0
+                and batch["lower"][0] <= timestamp
+                and batch["since"]
+                and batch["since"][0] > timestamp
+                for batch in state["batches"]
+            )
+        )
+
+    def absent() -> None:
+        assert not c.is_running(adapter.name), "adapter restarted during absence"
+        for replica in running_replicas:
+            assert c.is_running(replica), f"replica stopped: {replica}"
+
+    def curated_frontiers(replica: str) -> dict[str, float]:
+        response = requests.get(
+            f"http://localhost:{c.port(replica, 6878)}/metrics", timeout=5
+        )
+        response.raise_for_status()
+        return {
+            name: float(value)
+            for name, value in re.findall(
+                r'^mz_compute_metric_sink_frontier_ms\{sink="([^"]+)"\} ([^\s]+)$',
+                response.text,
+                re.MULTILINE,
+            )
+        }
+
+    def observers_advanced(replica: str, before: dict[str, float]) -> bool:
+        current = curated_frontiers(replica)
+        return bool(before) and all(
+            0 < frontier < current.get(name, 0) < float(2**64 - 1)
+            for name, frontier in before.items()
+        )
+
+    def successive_observer_progress(replicas: Collection[str]) -> None:
+        before = {replica: curated_frontiers(replica) for replica in replicas}
+        deadline = time.monotonic() + timeout
+        for _ in range(2):
+            while True:
+                absent()
+                current = {replica: curated_frontiers(replica) for replica in replicas}
+                if all(
+                    metric_names <= before[replica].keys()
+                    and all(
+                        0
+                        < before[replica][name]
+                        < current[replica].get(name, 0)
+                        < float(2**64 - 1)
+                        for name in metric_names
+                    )
+                    for replica in replicas
+                ):
+                    print(f"Curated outage progress: before={before}, after={current}")
+                    before = current
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"Curated frontiers did not keep advancing: {before=}, {current=}"
+                    )
+                time.sleep(0.25)
+
+    with (
+        c.override(adapter, td, Minio(setup_materialize=True)),
+        ExitStack() as replica_overrides,
+    ):
+        c.up("kafka", adapter.name)
+        # Reuse the environment's actual reconstruction context from a managed
+        # replica. This keeps unmanaged replicas on the same size map, defaults,
+        # and deployment metadata without duplicating Rust configuration defaults.
+        catalog_options = native_catalog_options(c, adapter.name)
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            ));
+        """,
+            service=adapter.name,
+        )
+        c.sql(
+            """
+            CREATE CLUSTER compute_cluster REPLICAS (
+                replica1 (
+                    STORAGECTL ADDRESSES ['clusterd2:2100'],
+                    STORAGE ADDRESSES ['clusterd2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                    COMPUTE ADDRESSES ['clusterd2:2102'], WORKERS 2
+                ),
+                replica2 (
+                    STORAGECTL ADDRESSES ['clusterd3:2100'],
+                    STORAGE ADDRESSES ['clusterd3:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd3:2101'],
+                    COMPUTE ADDRESSES ['clusterd3:2102'], WORKERS 2
+                )
+            );
+            """,
+            service=adapter.name,
+        )
+        placements = {
+            ("cluster1", "replica1"): "clusterd1",
+            ("compute_cluster", "replica1"): "clusterd2",
+            ("compute_cluster", "replica2"): "clusterd3",
+        }
+        identities = c.sql_query(
+            """SELECT c.name, r.name, c.id, r.id
+               FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+               WHERE c.name IN ('cluster1', 'compute_cluster')""",
+            service=adapter.name,
+        )
+        assert {(c, r) for c, r, _, _ in identities} == set(placements), identities
+        replica_overrides.enter_context(
+            c.override(
+                *[
+                    Clusterd(
+                        name=placements[cluster_name, replica_name],
+                        workers=2,
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                    for cluster_name, replica_name, cluster_id, replica_id in identities
+                ]
+            )
+        )
+        c.up(*replicas)
+        c.exec(
+            "kafka",
+            "kafka-topics",
+            "--bootstrap-server=kafka:9092",
+            "--create",
+            f"--topic={source_topic}",
+            "--partitions=1",
+            "--replication-factor=1",
+        )
+        produce(0)
+        deadline = time.monotonic() + timeout
+        while True:
+            with c.sql_connection(
+                service=adapter.name, port=6877, user="mz_system"
+            ) as conn:
+                row = conn.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM mz_internal.mz_catalog_raw
+                        WHERE data->>'kind' = 'ClientIncarnation'
+                          AND data->'value'->>'replica_id' IS NOT NULL
+                    )
+                """).fetchone()
+                assert row is not None
+                if row[0]:
+                    break
+            if time.monotonic() >= deadline:
+                raise AssertionError("No native replica participant")
+            time.sleep(0.25)
+        # Controls ingest the same Kafka records into a separate shard. Their
+        # permitted stalls must not hold back the source-only compaction check.
+        # The zero-replica retention input has no compute readers. Readers on
+        # the shared recovery input can leave valid Persist leases after SIGKILL.
+        c.testdrive(
+            dedent(f"""
+            > CREATE CONNECTION al_kafka TO KAFKA
+              (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT)
+            > CREATE SOURCE al_source IN CLUSTER cluster1
+              FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
+            > CREATE TABLE al_input FROM SOURCE al_source
+              (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
+              WITH (RETAIN HISTORY = FOR '1s')
+            > CREATE SOURCE al_history_source IN CLUSTER cluster1
+              FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
+            > CREATE TABLE al_history_input FROM SOURCE al_history_source
+              (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
+              WITH (RETAIN HISTORY = FOR '1s')
+            > CREATE CLUSTER al_history REPLICAS ()
+            > CREATE INDEX al_history_idx IN CLUSTER al_history ON al_history_input (text)
+              WITH (RETAIN HISTORY = FOR '30s')
+            > CREATE SOURCE al_control_source IN CLUSTER cluster1
+              FROM KAFKA CONNECTION al_kafka (TOPIC '{source_topic}')
+            > CREATE TABLE al_control_input FROM SOURCE al_control_source
+              (REFERENCE "{source_topic}") FORMAT TEXT ENVELOPE NONE
+            > CREATE TABLE al_table (factor bigint)
+            > INSERT INTO al_table VALUES (1)
+            > CREATE SOURCE al_webhook IN CLUSTER cluster1
+              FROM WEBHOOK BODY FORMAT TEXT
+            > CREATE MATERIALIZED VIEW al_source_mv IN CLUSTER compute_cluster
+              WITH (RETAIN HISTORY = FOR '1s') AS
+              SELECT text::bigint * 10 AS v FROM al_input
+            > CREATE MATERIALIZED VIEW al_table_mv IN CLUSTER compute_cluster AS
+              SELECT text::bigint * 10 * factor AS v
+              FROM al_control_input CROSS JOIN al_table
+            > CREATE MATERIALIZED VIEW al_webhook_mv IN CLUSTER compute_cluster AS
+              SELECT text::bigint * 10 * body::bigint AS v
+              FROM al_control_input CROSS JOIN al_webhook
+            """),
+            service=td.name,
+        )
+        webhook_url = (
+            f"http://localhost:{c.port(adapter.name, 6876)}"
+            "/api/webhook/materialize/public/al_webhook"
+        )
+        requests.post(webhook_url, data="1", timeout=10).raise_for_status()
+        for name, topic in outputs.items():
+            c.testdrive(
+                dedent(f"""
+                > CREATE SINK al_{name}_sink IN CLUSTER cluster1
+                  FROM al_{name}_mv INTO KAFKA CONNECTION al_kafka (TOPIC '{topic}')
+                  KEY (v) NOT ENFORCED FORMAT JSON ENVELOPE UPSERT
+                > SELECT * FROM al_{name}_mv
+                0
+                """),
+                service=td.name,
+            )
+            assert consume(name, 1) == {0}, f"{name} sink failed warmup"
+
+        # Resolve shard identities while SQL is available. Never run testdrive
+        # during absence: its initialization can connect even for Kafka commands.
+        shards = dict(
+            c.sql_query(
+                """SELECT r.name, s.shard_id FROM mz_internal.mz_storage_shards s
+                   JOIN mz_internal.mz_object_global_ids g ON g.global_id = s.object_id
+                   JOIN mz_catalog.mz_relations r ON r.id = g.id
+                   WHERE r.name IN ('al_input', 'al_source_mv', 'al_history_input')""",
+                service=adapter.name,
+            )
+        )
+        history_shard = shards.pop("al_history_input")
+        assert set(shards) == {"al_input", "al_source_mv"}, shards
+        metric_names = {"mz_metric_arrangement_sizes", "mz_metric_dataflow_errors"}
+        deadline = time.monotonic() + timeout
+        while True:
+            metric_baselines = {
+                replica: curated_frontiers(replica) for replica in replicas
+            }
+            if all(
+                metric_names <= frontiers.keys()
+                and all(0 < frontiers[name] < float(2**64 - 1) for name in metric_names)
+                for frontiers in metric_baselines.values()
+            ):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"Curated observers did not initialize: {metric_baselines}"
+                )
+            time.sleep(0.25)
+        c.kill(adapter.name)
+        try:
+            absent()
+            history_before = inspect(history_shard)
+            assert history_before["upper"], history_before
+            history_threshold = history_before["upper"][0] - 1
+            before = {name: inspect(shard) for name, shard in shards.items()}
+            assert all(state["upper"] for state in before.values()), before
+            thresholds = {name: state["upper"][0] - 1 for name, state in before.items()}
+            expected = {0}
+            deadline = time.monotonic() + timeout
+            n = 0
+            input_count = 1
+            compaction_wave_size = None
+            compaction_waves_remaining = 4
+            while True:
+                absent()
+                first = n + 1
+                produce(first, input_count)
+                n += input_count
+                expected.update(value * 10 for value in range(first, n + 1))
+                actual = consume("source", len(expected))
+                after = {name: inspect(shard) for name, shard in shards.items()}
+                absent()
+                physical_progress = {
+                    name: compacted_past(after[name], thresholds[name])
+                    for name in shards
+                }
+                progressed = all(physical_progress.values())
+                if (
+                    actual == expected
+                    and progressed
+                    and all(
+                        observers_advanced(replica, metric_baselines[replica])
+                        for replica in running_replicas
+                    )
+                ):
+                    print(f"Adapter absent: Kafka MV/sink rows={sorted(actual)}")
+                    print(f"Compacted past outage timestamps: {thresholds}")
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"Outage acceptance incomplete: Kafka_complete={actual == expected}, "
+                        f"physical_progress={physical_progress}, "
+                        f"expected={expected}, Kafka={actual}, "
+                        f"compactions before={before}, after={after}"
+                    )
+                input_count = 1
+                if (
+                    not progressed
+                    and actual == expected
+                    and compaction_waves_remaining
+                    and all(
+                        state["since"] and state["since"][0] > thresholds[name]
+                        for name, state in after.items()
+                    )
+                ):
+                    # Advancing permission does not schedule a rewrite of old
+                    # batches. Supply bounded ordinary input after permission
+                    # advances, without tying every record to two CLI inspections.
+                    # Complete each wave through Kafka before starting the next.
+                    if compaction_wave_size is None:
+                        compaction_wave_size = max(
+                            1,
+                            max(
+                                sum(batch["len"] for batch in state["batches"])
+                                for state in after.values()
+                            ),
+                        )
+                        print(
+                            "Providing ordinary compaction work: "
+                            f"up to {compaction_waves_remaining} waves of "
+                            f"{compaction_wave_size} records"
+                        )
+                    input_count = compaction_wave_size
+                    compaction_waves_remaining -= 1
+
+            successive_observer_progress(running_replicas)
+            # Reconstruct after actual history compaction, with no SQL ingress.
+            # Stop the surviving compute sibling before producing a fresh value:
+            # its shared Persist upper cannot stand in for restarted-replica work.
+            c.kill("clusterd3")
+            running_replicas.remove("clusterd3")
+            absent()
+            c.up("clusterd3")
+            running_replicas.add("clusterd3")
+            c.kill("clusterd2")
+            running_replicas.remove("clusterd2")
+            n += 1
+            produce(n)
+            expected.add(n * 10)
+            deadline = time.monotonic() + timeout
+            while True:
+                absent()
+                assert not c.is_running("clusterd2"), "compute sibling restarted"
+                actual = consume("source", len(expected))
+                absent()
+                assert not c.is_running("clusterd2"), "compute sibling restarted"
+                if actual == expected and observers_advanced(
+                    "clusterd3", metric_baselines["clusterd3"]
+                ):
+                    print(
+                        f"Restarted replica alone, adapter absent: "
+                        f"fresh Kafka MV/sink value={n * 10}"
+                    )
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"Restarted replica did not reconstruct and progress: "
+                        f"expected={expected}, Kafka={actual}"
+                    )
+
+            successive_observer_progress({"clusterd3"})
+            # This replica is the only source and sink executor in cluster1.
+            # A new incarnation may wait for the abandoned Kafka writer's grace,
+            # but must then reconstruct both sides without SQL ingress.
+            c.kill("clusterd1")
+            running_replicas.remove("clusterd1")
+            absent()
+            c.up("clusterd1")
+            running_replicas.add("clusterd1")
+            n += 1
+            produce(n)
+            expected.add(n * 10)
+            deadline = time.monotonic() + timeout
+            while True:
+                absent()
+                actual = consume("source", len(expected))
+                if actual == expected and observers_advanced(
+                    "clusterd1", metric_baselines["clusterd1"]
+                ):
+                    print(f"Restarted source and Kafka sink, adapter absent: {n * 10}")
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"Storage replica did not reconstruct: expected={expected}, Kafka={actual}"
+                    )
+
+            successive_observer_progress({"clusterd1"})
+            for name in ("table", "webhook"):
+                actual = consume(name, len(expected))
+                assert {0} <= actual <= expected, (name, actual)
+                print(
+                    f"Adapter absent: {name}-fed rows={sorted(actual)}, "
+                    f"pending (allowed)={sorted(expected - actual)}"
+                )
+            # No SQL write attempt against a stopped adapter. Webhook ingress is
+            # an HTTP negative control, with the same URL verified in warmup.
+            try:
+                response = requests.post(webhook_url, data="2", timeout=5)
+            except (requests.ConnectionError, requests.Timeout):
+                pass
+            else:
+                assert not response.ok, "stopped adapter accepted webhook input"
+            absent()
+        finally:
+            # Restore ingress even on failure, without turning failed outage
+            # observations into passing post-restart observations.
+            c.up(*replicas)
+            c.up(adapter.name)
+
+        # No executor has ever existed for this index. Observe its retention
+        # window across advancing permissions, without an arrangement or reader
+        # protecting the historical points being tested.
+        # Post-restart SQL must not reuse sockets cached before the adapter died.
+        assert (
+            c.sql_query(
+                """SELECT count(*) FROM mz_cluster_replicas r
+               JOIN mz_clusters c ON c.id = r.cluster_id
+               WHERE c.name = 'al_history'""",
+                service=adapter.name,
+                reuse_connection=False,
+            )
+            == [(0,)]
+        )
+        history_ids = dict(
+            c.sql_query(
+                """SELECT o.name, g.global_id FROM mz_objects o
+                   JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+                   WHERE o.name IN ('al_history_input', 'al_history_idx')""",
+                service=adapter.name,
+                reuse_connection=False,
+            )
+        )
+        assert set(history_ids) == {"al_history_input", "al_history_idx"}, history_ids
+        input_id = history_ids["al_history_input"]
+        index_id = history_ids["al_history_idx"]
+        assert input_id.startswith("u"), input_id
+        input_json_id = {"User": int(input_id[1:])}
+        deadline = time.monotonic() + timeout
+        previous_unmasked = None
+        unmasked_advances = 0
+        while True:
+            # Observe Persist first, so this timestamp is strictly historical at
+            # the catalog snapshot. Leave room on both sides of the 30s window.
+            state = inspect(history_shard)
+            response = requests.get(
+                f"http://localhost:{c.port(adapter.name, 6878)}/api/catalog/dump",
+                timeout=10,
+            )
+            response.raise_for_status()
+            snapshot = response.json()
+            bounds = snapshot["collection_compaction_bounds"]
+            clients = [
+                (incarnation, frontier)
+                for incarnation, gid, frontier in snapshot["client_read_requirements"]
+                if gid == input_json_id
+            ]
+            maintained = {
+                output: frontier
+                for output, (inputs, frontier) in snapshot[
+                    "maintained_read_requirements"
+                ].items()
+                if input_json_id in inputs and frontier is not None
+            }
+            assert len(state["upper"]) == len(state["since"]) == 1, state
+            historical_ts = state["upper"][0] - 15_000
+            input_since = bounds[input_id]["elements"]
+            # A fresh index can lack its own published since. Its logical-input
+            # retention still constrains the input's committed permission.
+            index_since = bounds.get(index_id, {}).get("elements")
+            # Include *all* outstanding grants, even unreclaimed incarnations.
+            # Startup replica holds may need ordinary progress before this can
+            # pass. The input's own 1s policy cannot account for this history.
+            if (
+                len(input_since) == 1
+                and history_threshold < state["since"][0] <= historical_ts
+                and input_since[0] <= historical_ts
+                and (
+                    index_since is None
+                    or (len(index_since) == 1 and index_since[0] <= historical_ts)
+                )
+                and all(historical_ts < frontier for _, frontier in clients)
+                and all(historical_ts < frontier for frontier in maintained.values())
+            ):
+                current = (state["upper"][0], input_since[0], state["since"][0])
+                if previous_unmasked is None:
+                    previous_unmasked = current
+                elif all(
+                    new > old
+                    for new, old in zip(current, previous_unmasked, strict=True)
+                ):
+                    unmasked_advances += 1
+                    previous_unmasked = current
+                    print(
+                        f"Zero-replica history: {historical_ts=}, {unmasked_advances=}, "
+                        f"upper={state['upper']}, since={state['since']}, "
+                        f"{input_since=}, {index_since=}, {clients=}, {maintained=}"
+                    )
+                    if unmasked_advances == 2:
+                        break
+            else:
+                previous_unmasked = None
+                unmasked_advances = 0
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"No unmasked index-policy history: {historical_ts=}, "
+                    f"upper={state['upper']}, since={state['since']}, "
+                    f"{input_since=}, {index_since=}, {clients=}, {maintained=}"
+                )
+            # Fresh records also let ordinary Persist listeners release prior
+            # batches. Permission alone is not evidence of physical compaction.
+            n += 1
+            produce(n)
+            expected.add(n * 10)
+            time.sleep(0.25)
+
+        # The two unmasked advances prove the 30s policy without a reader or
+        # executor. Only now extend this index's window to cover the reference
+        # read, hydration, and indexed read, each with its existing 420s budget.
+        c.sql(
+            "ALTER INDEX al_history_idx SET (RETAIN HISTORY = FOR '30m')",
+            service=adapter.name,
+            reuse_connection=False,
+        )
+
+        def peek_strategy_counts() -> dict[str, float]:
+            response = requests.get(
+                f"http://localhost:{c.port(adapter.name, 6878)}/metrics", timeout=10
+            )
+            response.raise_for_status()
+            counts = {"fast-path": 0.0, "persist-fast-path": 0.0}
+            for line in response.text.splitlines():
+                if not line.startswith("mz_time_to_first_row_seconds_count{"):
+                    continue
+                if not re.search(r'(?:\{|,)application_name="psql"(?:,|\})', line):
+                    continue
+                strategy = re.search(r'(?:\{|,)strategy="([^"]+)"', line)
+                assert strategy is not None, line
+                if strategy[1] in counts:
+                    counts[strategy[1]] += float(line.rsplit(" ", 1)[1])
+            return counts
+
+        # Only now introduce a reader. Keep its logical-input hold through
+        # hydration, without a manual reclaim or an artificial grace period.
+        historical_query = sql.SQL(
+            "SELECT text FROM al_history_input ORDER BY text AS OF {}"
+        ).format(sql.Literal(historical_ts))
+        with c.sql_connection(service=adapter.name) as reference_conn:
+            with reference_conn.cursor() as reference:
+                reference.execute(
+                    sql.SQL("SET statement_timeout = {}").format(
+                        sql.Literal(f"{timeout}s")
+                    )
+                )
+                reference.execute("SET cluster = compute_cluster")
+                reference.execute("BEGIN")
+                reference.execute(historical_query)
+                historical_rows = reference.fetchall()
+                assert historical_rows, "historical reference must include warmup data"
+                # Make current contents observably different from the reference.
+                # The final source/MV/sink checks require this fresh value too.
+                n += 1
+                assert (str(n),) not in historical_rows, historical_rows
+                produce(n)
+                expected.add(n * 10)
+                c.sql(
+                    "CREATE CLUSTER REPLICA al_history.first SIZE 'scale=1,workers=1'",
+                    service=adapter.name,
+                    reuse_connection=False,
+                )
+                with c.sql_connection(service=adapter.name) as index_conn:
+                    with index_conn.cursor() as indexed:
+                        indexed.execute(
+                            sql.SQL("SET statement_timeout = {}").format(
+                                sql.Literal(f"{timeout}s")
+                            )
+                        )
+                        indexed.execute("SET cluster = al_history")
+                        deadline = time.monotonic() + timeout
+                        while True:
+                            indexed.execute(
+                                sql.SQL("EXPLAIN OPTIMIZED PLAN FOR {}").format(
+                                    historical_query
+                                )
+                            )
+                            plan = "\n".join(str(row[0]) for row in indexed.fetchall())
+                            hydrated = c.sql_query(
+                                """SELECT bool_and(h.hydrated)
+                                   FROM mz_internal.mz_compute_hydration_statuses h
+                                   JOIN mz_indexes i ON i.id = h.object_id
+                                   WHERE i.name = 'al_history_idx'""",
+                                service=adapter.name,
+                                reuse_connection=False,
+                            )
+                            if hydrated == [(True,)] and re.search(
+                                r"(?:ReadIndex|Indexed)[^\n]*al_history_idx", plan
+                            ):
+                                break
+                            if time.monotonic() >= deadline:
+                                raise AssertionError(
+                                    f"Historical read must use the reconstructed index: {plan}, {hydrated=}"
+                                )
+                            time.sleep(0.25)
+                        # Only this SELECT uses the psql metric label in this
+                        # fixture. The pgwire metric records the actual execution
+                        # strategy, so EXPLAIN alone or Persist fallback cannot pass.
+                        indexed.execute("SET application_name = 'psql'")
+                        before = peek_strategy_counts()
+                        indexed.execute(historical_query)
+                        assert indexed.fetchall() == historical_rows
+                        after = peek_strategy_counts()
+                        assert after["fast-path"] == before["fast-path"] + 1, (
+                            before,
+                            after,
+                        )
+                        assert (
+                            after["persist-fast-path"] == before["persist-fast-path"]
+                        ), (
+                            before,
+                            after,
+                        )
+                reference.execute("COMMIT")
+
+        for name in outputs:
+            c.testdrive(
+                dedent(f"""
+                > SELECT count(*), max(v) FROM al_{name}_mv
+                {len(expected)} {n * 10}
+                """),
+                service=td.name,
+            )
+            assert consume(name, len(expected)) == expected, name
+
+
+def workflow_test_explain_pending_index(c: Composition) -> None:
+    """EXPLAIN plans a declared index without requiring an installed trace."""
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_catalog_read_protection": "true",
+                "enable_frontend_peek_sequencing": "true",
+            }
+        )
+    ):
+        c.up("materialized")
+        for statement in (
+            "CREATE TABLE explain_pending_t (a int)",
+            "INSERT INTO explain_pending_t VALUES (1), (2)",
+            "CREATE CLUSTER explain_pending REPLICAS ()",
+            "CREATE INDEX explain_pending_idx IN CLUSTER explain_pending ON explain_pending_t (a)",
+        ):
+            c.sql(statement)
+        with c.sql_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SET cluster = explain_pending")
+                cursor.execute("SET statement_timeout = '120s'")
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT a FROM explain_pending_t"
+                )
+                plan = "\n".join(str(row[0]) for row in cursor.fetchall())
+                assert re.search(r"ReadIndex[^\n]*explain_pending_idx", plan), plan
+                cursor.execute("COMMIT")
+                c.sql("""
+                    CREATE CLUSTER REPLICA explain_pending.r SIZE 'scale=1,workers=1'
+                """)
+                deadline = time.monotonic() + 120
+                while c.sql_query("""
+                    SELECT bool_and(h.hydrated)
+                    FROM mz_internal.mz_compute_hydration_statuses h
+                    JOIN mz_indexes i ON i.id = h.object_id
+                    WHERE i.name = 'explain_pending_idx'
+                """) != [(True,)]:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("Pending index did not hydrate")
+                    time.sleep(0.25)
+                # An EXPLAIN against an available index must establish the same
+                # transaction read inputs as the following SELECT.
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT a FROM explain_pending_t"
+                )
+                plan = "\n".join(str(row[0]) for row in cursor.fetchall())
+                assert re.search(r"ReadIndex[^\n]*explain_pending_idx", plan), plan
+                cursor.execute("SELECT a FROM explain_pending_t ORDER BY a")
+                assert cursor.fetchall() == [(1,), (2,)]
+                cursor.execute("COMMIT")

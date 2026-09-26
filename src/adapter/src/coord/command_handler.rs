@@ -353,9 +353,30 @@ impl Coordinator {
                     drop(retire_notify);
                 }
 
-                Command::CatalogSnapshot { tx } => {
+                Command::CatalogSnapshot {
+                    tx,
+                    include_durable_upper,
+                } => {
+                    let durable_upper = if include_durable_upper {
+                        let mut upper = self.catalog().current_upper_if_in_sync().await;
+                        if upper
+                            .as_ref()
+                            .is_err_and(|error| error.is_catalog_out_of_sync())
+                        {
+                            // Catch up once in this turn. Further contention retries
+                            // belong to the caller, not an on-loop retry loop.
+                            upper = match self.refresh_catalog_after_conflict().await {
+                                Ok(()) => self.catalog().current_upper_if_in_sync().await,
+                                Err(error) => Err(error),
+                            };
+                        }
+                        Some(upper)
+                    } else {
+                        None
+                    };
                     let _ = tx.send(CatalogSnapshot {
                         catalog: self.owned_catalog(),
+                        durable_upper,
                     });
                 }
 
@@ -369,6 +390,18 @@ impl Coordinator {
 
                 Command::GetComputeInstanceClient { instance_id, tx } => {
                     let _ = tx.send(self.controller.compute.instance_client(instance_id));
+                }
+
+                Command::AcquireClientReadProtection {
+                    incarnation,
+                    bundle,
+                    read_ts,
+                    tx,
+                } => {
+                    let result = self
+                        .acquire_client_read_protection(incarnation, bundle, |_| Ok(read_ts))
+                        .await;
+                    let _ = tx.send(result);
                 }
 
                 Command::GetOracle { timeline, tx } => {
@@ -521,7 +554,7 @@ impl Coordinator {
                     let connection_context = self.connection_context().clone();
                     let enforce_external_addresses =
                         mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-                            .get(self.controller.storage.config().config_set());
+                            .get(self.storage_configuration.config_set());
                     task::spawn(|| "copy_to_preflight", async move {
                         let result = mz_storage_types::sinks::s3_oneshot_sink::preflight(
                             connection_context,
@@ -891,7 +924,7 @@ impl Coordinator {
                     authenticated_role: role_id,
                     deferred_lock: None,
                 };
-                let update = self.catalog().state().pack_session_update(&conn, Diff::ONE);
+                let update = crate::catalog::pack_session_update(&conn, Diff::ONE);
                 let update = self.catalog().state().resolve_builtin_table_update(update);
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
@@ -941,7 +974,11 @@ impl Coordinator {
                     write_notify: notify,
                     session_defaults,
                     catalog,
-                    storage_collections: Arc::clone(&self.controller.storage_collections),
+                    storage_collections: self
+                        .query_client
+                        .is_none()
+                        .then(|| Arc::clone(&self.controller.storage_collections)),
+                    query_client: self.query_client.clone(),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
@@ -950,7 +987,7 @@ impl Coordinator {
                     occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
                     frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
                     group_commit_notifier: self.group_commit_tx.clone(),
-                    read_only: self.controller.read_only(),
+                    read_only: self.read_only_controllers,
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -1411,7 +1448,7 @@ impl Coordinator {
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
                         let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
+                        let transient_revision = self.catalog().transient_revision();
 
                         // Initialize our transaction with a set of empty ops, or return an error
                         // if we can't run a DDL transaction
@@ -1419,7 +1456,7 @@ impl Coordinator {
                         if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
                             ops: vec![],
                             state,
-                            revision,
+                            transient_revision,
                             side_effects: vec![],
                             snapshot: None,
                         }) {
@@ -1587,7 +1624,7 @@ impl Coordinator {
                 let catalog = self.owned_catalog();
                 let now = self.now();
                 let otel_ctx = OpenTelemetryContext::obtain();
-                let current_storage_configuration = self.controller.storage.config().clone();
+                let current_storage_configuration = self.storage_configuration.clone();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let conn_catalog = catalog.for_session(ctx.session());
 
@@ -1665,12 +1702,7 @@ impl Coordinator {
                 }
 
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(
-                        &cmvs,
-                        &resolved_ids,
-                        ctx.session_mut(),
-                        true,
-                    )
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, ctx.session_mut(), true)
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -1712,12 +1744,7 @@ impl Coordinator {
             }) => {
                 let mut cmvs = *box_cmvs;
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(
-                        &cmvs,
-                        &resolved_ids,
-                        ctx.session_mut(),
-                        false,
-                    )
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, ctx.session_mut(), false)
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -1875,7 +1902,6 @@ impl Coordinator {
     async fn resolve_mz_now_for_create_materialized_view(
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
-        resolved_ids: &ResolvedIds,
         session: &Session,
         acquire_read_holds: bool,
     ) -> Result<Option<Timestamp>, AdapterError> {
@@ -1886,9 +1912,18 @@ impl Coordinator {
         {
             let catalog = self.catalog().for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
-            let ids = self
-                .index_oracle(cluster)
-                .sufficient_collections(resolved_ids.collections().copied());
+            let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &cmvs.query);
+            let logical_inputs =
+                self.materialized_view_logical_inputs(resolved_ids.collections().copied())?;
+            let ids = if self.query_client.is_some() {
+                logical_inputs.clone()
+            } else {
+                let mut ids = self
+                    .index_oracle(cluster)
+                    .sufficient_collections(resolved_ids.collections().copied());
+                ids.extend(&logical_inputs);
+                ids
+            };
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1899,7 +1934,7 @@ impl Coordinator {
             // It's important that we acquire read holds _before_ we determine the least valid read.
             // Otherwise, we're not guaranteed that the since frontier doesn't
             // advance forward from underneath us.
-            let read_holds = self.acquire_read_holds(&ids);
+            let read_holds = self.acquire_query_read_holds(&ids).await?;
 
             // Does `mz_now()` occur?
             let mz_now_ts = if cmvs
@@ -1938,7 +1973,12 @@ impl Coordinator {
                 // after its creation might see input changes that happened after the CRATE MATERIALIZED
                 // VIEW statement returned.
                 let oracle_timestamp = timestamp;
-                let least_valid_read = read_holds.least_valid_read();
+                let least_valid_read =
+                    read_holds
+                        .least_valid_read()
+                        .join(&self.materialized_view_input_permission(
+                            logical_inputs.storage_ids.iter().copied(),
+                        )?);
                 timestamp.advance_by(least_valid_read.borrow());
 
                 if oracle_timestamp != timestamp {
@@ -2118,10 +2158,7 @@ impl Coordinator {
         // Queue the builtin table update, but do not wait for it to complete. We explicitly do
         // this to prevent blocking the Coordinator in the case that a lot of connections are
         // closed at once, which occurs regularly in some workflows.
-        let update = self
-            .catalog()
-            .state()
-            .pack_session_update(&conn, Diff::MINUS_ONE);
+        let update = crate::catalog::pack_session_update(&conn, Diff::MINUS_ONE);
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
@@ -2222,14 +2259,12 @@ impl Coordinator {
 
             // Get a channel so we can queue updates to be written.
             let row_tx = coord
-                .controller
-                .storage
+                .adapter_storage
                 .monotonic_appender(global_id)
                 .map_err(|_| name.clone())?;
             let stats = coord
-                .controller
-                .storage
-                .webhook_statistics(global_id)
+                .adapter_storage
+                .statistics(global_id)
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks

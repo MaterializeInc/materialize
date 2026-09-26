@@ -273,6 +273,7 @@ pub trait HealthOperator {
 
 /// A default `HealthOperator` for use in normal cases.
 pub struct DefaultWriter {
+    pub execution: Option<u64>,
     pub command_tx: InternalCommandSender,
     pub updates: Rc<RefCell<Vec<StatusUpdate>>>,
 }
@@ -309,6 +310,7 @@ impl HealthOperator for DefaultWriter {
     fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
         self.command_tx
             .send(InternalStorageCommand::SuspendAndRestart {
+                execution: self.execution,
                 // Suspend and restart is expected to operate on the primary object and
                 // not any of the sub-objects
                 id,
