@@ -747,20 +747,37 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM
-
+            """),
+    )
+    # A same-generation restart can leave the predecessor eligible for Kafka
+    # until the five-minute incarnation grace elapses.
+    c.testdrive(
+        service="testdrive_no_reset",
+        args=["--default-timeout=420s"],
+        input=dedent("""
             $ kafka-verify-topic sink=materialize.public.kafka_sink
             """),
     )
 
     # Fill mz_source_status_history and mz_sink_status_history up with enough events
-    for i in range(5):
-        c.testdrive(
-            service="testdrive_no_reset",
-            input=dedent("""
-                > ALTER CONNECTION kafka_conn SET (BROKER = 'kafka:9093') WITH (VALIDATE = false);
-                > ALTER CONNECTION kafka_conn SET (BROKER = 'kafka:9092') WITH (VALIDATE = true);
-                """),
-        )
+    for _ in range(5):
+        for broker, validate in (("kafka:9093", "false"), ("kafka:9092", "true")):
+            [(source_rows, sink_rows)] = c.sql_query("""
+                SELECT (SELECT COUNT(*) FROM mz_internal.mz_source_status_history),
+                       (SELECT COUNT(*) FROM mz_internal.mz_sink_status_history)
+            """)
+            # Observe enactment before replacing the configuration again. Both
+            # endpoints are healthy, so coalescing changes need not add history.
+            c.testdrive(
+                service="testdrive_no_reset",
+                input=dedent(f"""
+                    > ALTER CONNECTION kafka_conn SET (BROKER = '{broker}') WITH (VALIDATE = {validate});
+                    > SELECT COUNT(*) > {source_rows} FROM mz_internal.mz_source_status_history;
+                    true
+                    > SELECT COUNT(*) > {sink_rows} FROM mz_internal.mz_sink_status_history;
+                    true
+                    """),
+            )
 
     # Verify that we have enough events so that they can be truncated
     c.testdrive(
@@ -786,7 +803,13 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
         input=dedent("""
             > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
             14
-
+            """),
+    )
+    # New sink execution contributes its starting/running rows after takeover.
+    c.testdrive(
+        service="testdrive_no_reset",
+        args=["--default-timeout=420s"],
+        input=dedent("""
             > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7
             """),
