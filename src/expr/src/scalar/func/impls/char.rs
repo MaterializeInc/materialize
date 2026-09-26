@@ -11,7 +11,7 @@ use std::fmt;
 
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::char::{Char, CharLength, format_str_pad};
-use mz_repr::{SqlColumnType, SqlScalarType};
+use mz_repr::{RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
@@ -38,7 +38,7 @@ impl EagerUnaryFunc for PadChar {
     type Input<'a> = &'a str;
     type Output<'a> = Char<String>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         Char(format_str_pad(a, self.length))
     }
 
@@ -62,10 +62,10 @@ impl fmt::Display for PadChar {
     sqlname = "char_to_text",
     preserves_uniqueness = true,
     is_eliminable_cast = true,
-    inverse = to_unary!(super::CastStringToChar{
+    inverse = super::CastStringToChar{
         length: None,
         fail_on_len: false,
-    })
+    }
 )]
 fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
     a.0

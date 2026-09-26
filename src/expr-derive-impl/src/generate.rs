@@ -41,10 +41,11 @@ fn override_methods(
                 .find(|(candidate, _)| candidate == modifier)
                 .map(|(_, expr)| *expr)?;
             let name = Ident::new(modifier.name(), proc_macro2::Span::call_site());
+            let body = ret.body(expr);
             let ret = ret.to_tokens();
             Some(quote! {
                 fn #name(&self) -> #ret {
-                    #expr
+                    #body
                 }
             })
         })
@@ -61,11 +62,14 @@ struct Codegen {
     /// The registry's record of this function's source, generated as members of the
     /// `FuncName` impl.
     source: TokenStream,
+    /// Suppresses the generated `Display` impl, so a call site whose SQL name
+    /// depends on struct state can supply its own.
+    skip_display: bool,
 }
 
 /// Wraps an arity's trait impl with the parts every arity shares: the unit-struct
-/// definition (unless `has_self`), the `Display` impl, the `FuncName` impl, and the
-/// annotated function itself.
+/// definition (unless `has_self`), the `Display` impl (unless `skip_display`), the
+/// `FuncName` impl, and the annotated function itself.
 fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStream {
     let func_name = &func.sig.ident;
     let Codegen {
@@ -73,12 +77,17 @@ fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStre
         has_self,
         sqlname,
         source,
+        skip_display,
     } = e;
 
-    let display_impl = quote! {
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#sqlname)
+    let display_impl = if *skip_display {
+        quote! {}
+    } else {
+        quote! {
+            impl std::fmt::Display for #struct_name {
+                fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str(#sqlname)
+                }
             }
         }
     };
@@ -157,9 +166,9 @@ fn variadic_params(
 /// Generates the trait impl for one `#[sqlfunc]`-annotated function, together with the
 /// items [`expand`] wraps around it.
 ///
-/// `struct_ty` names the generated struct when the call site spells one, which only
-/// the variadic arity accepts. `has_self` says the annotated function takes a
-/// receiver, so the trait's `call` dispatches through it.
+/// `struct_ty` names the generated struct when the call site spells one. `has_self`
+/// says the annotated function takes a receiver, so the trait's `call` dispatches
+/// through it.
 pub(crate) fn generate(
     shape: Shape,
     func: &syn::ItemFn,
@@ -183,14 +192,19 @@ pub(crate) fn generate(
     let generic_params = signature::find_generic_type_params(func);
 
     // Unary and binary bind their inputs positionally, ignoring how the function
-    // spells its parameters, while variadic forwards the real names.
+    // spells its parameters, while variadic forwards the real names. A `&self`
+    // receiver occupies position 0, so it offsets where the bound arguments start.
+    let self_offset = usize::from(has_self);
     let (param_types_raw, param_names) = match shape {
         Shape::Unary => (
-            vec![signature::arg_type(func, 0)?],
+            vec![signature::arg_type(func, self_offset)?],
             vec![Ident::new("a", Span::call_site())],
         ),
         Shape::Binary => (
-            vec![signature::arg_type(func, 0)?, signature::arg_type(func, 1)?],
+            vec![
+                signature::arg_type(func, self_offset)?,
+                signature::arg_type(func, self_offset + 1)?,
+            ],
             vec![
                 Ident::new("a", Span::call_site()),
                 Ident::new("b", Span::call_site()),
@@ -220,18 +234,21 @@ pub(crate) fn generate(
         }
     }
 
-    // TODO: these two conflict checks construct their error with `unknown_field`,
-    // which renders as "Unknown field: <message>", while every other modifier
-    // legality error in the crate uses `Error::custom`. The message text is pinned
-    // by a snapshot, so changing the constructor requires updating that snapshot.
     if output_type.is_some() && output_type_expr.is_some() {
-        return Err(darling::Error::unknown_field(
+        return Err(darling::Error::custom(
             "output_type and output_type_expr cannot be used together",
         ));
     }
-    if output_type_expr.is_some() && introduces_nulls.is_none() {
-        return Err(darling::Error::unknown_field(
-            "output_type_expr requires introduces_nulls",
+    if mods.skip_display() && mods.sqlname.is_some() {
+        return Err(darling::Error::custom(
+            "sqlname has no effect with skip_display, which suppresses the only impl that reads it",
+        ));
+    }
+    // A hand-written `Display` is only needed when the name depends on struct state,
+    // and without `&self` the macro defines a unit struct that has none.
+    if mods.skip_display() && !has_self {
+        return Err(darling::Error::custom(
+            "skip_display requires a &self receiver, since a unit struct has no state for a hand-written Display to read",
         ));
     }
 
@@ -283,11 +300,9 @@ pub(crate) fn generate(
 
     let methods = override_methods(shape, &mods, introduces_nulls_fn);
 
-    let arena_param = if shape.takes_arena() {
-        quote! { , temp_storage: &'a mz_repr::RowArena }
-    } else {
-        quote! {}
-    };
+    // Every arity's `call` receives the arena; only `arena` (whether the annotated
+    // function itself wants it) varies.
+    let arena_param = quote! { , temp_storage: &'a mz_repr::RowArena };
     let arena_arg = if arena {
         quote! { , temp_storage }
     } else {
@@ -340,6 +355,7 @@ pub(crate) fn generate(
         has_self,
         sqlname,
         source: sqlfunc_source(attr, func, &param_types_raw, output_ty_raw, &param_types),
+        skip_display: mods.skip_display(),
     };
     Ok(expand(&codegen, func, trait_impl))
 }

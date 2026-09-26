@@ -110,6 +110,19 @@ mod test {
 
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
+    fn insta_test_unary_arena_used() {
+        let attr = quote! { sqlname = "to_arena_string", test = true };
+        let item = quote! {
+            fn to_arena_string<'a>(a: i32, temp_storage: &'a RowArena) -> &'a str {
+                temp_storage.push_string(a.to_string())
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("unary_arena_used", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
     fn insta_test_unary_ref() {
         let attr = quote! {test = true};
         let item = quote! {
@@ -293,7 +306,7 @@ mod test {
         let attr = quote! {
             could_error = true,
             output_type = i16,
-            inverse = None,
+            inverse = UnaryAllModifiers,
             is_monotone = true,
             preserves_uniqueness = true,
             is_eliminable_cast = false,
@@ -317,7 +330,7 @@ mod test {
             is_infix_op = true,
             is_monotone = (true, true),
             is_infinity_monotone = false,
-            negate = None,
+            negate = BinaryAllModifiers,
             propagates_nulls = true,
             sqlname = "binary_all_modifiers",
         };
@@ -354,8 +367,8 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn unary_rejects_negate_by_name() {
-        let (output, _input) = crate::test_sqlfunc(
-            quote! { negate = to_unary!(super::Foo) },
+        let (output, _input) = super::test_sqlfunc(
+            quote! { negate = super::Foo },
             quote! {
                 fn some_unary<'a>(a: i32) -> i32 { a }
             },
@@ -369,7 +382,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn unary_rejects_is_infinity_monotone() {
-        let (output, _input) = crate::test_sqlfunc(
+        let (output, _input) = super::test_sqlfunc(
             quote! { is_infinity_monotone = false },
             quote! {
                 fn some_unary<'a>(a: i32) -> i32 { a }
@@ -378,6 +391,81 @@ mod test {
         assert!(
             output.contains("`is_infinity_monotone` is not supported for unary functions"),
             "is_infinity_monotone must be rejected on unary rather than ignored, got:\n{output}"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_unary_self() {
+        let attr = quote! { PadTo, sqlname = "pad_to", test = true };
+        let item = quote! {
+            fn pad_to<'a>(&self, a: &'a str, temp_storage: &'a RowArena) -> &'a str {
+                temp_storage.push_string(format!("{a:width$}", width = self.width))
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("unary_self", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_binary_self() {
+        let attr = quote! { ClampAt, sqlname = "clamp_at", is_infix_op = false, test = true };
+        let item = quote! {
+            fn clamp_at<'a>(&self, a: i64, b: i64) -> i64 {
+                a.clamp(self.lower, b)
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("binary_self", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_skip_display() {
+        let attr = quote! { ExtractThing, skip_display = true, test = true };
+        let item = quote! {
+            fn extract_thing<'a>(&self, a: i64) -> i64 {
+                a + self.offset
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        assert!(
+            !output.contains("impl std::fmt::Display"),
+            "skip_display must suppress the Display impl, got:\n{output}"
+        );
+        insta::assert_snapshot!("skip_display", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn skip_display_rejects_sqlname() {
+        let (output, _input) = super::test_sqlfunc(
+            quote! { ExtractThing, skip_display = true, sqlname = "extract_thing" },
+            quote! {
+                fn extract_thing<'a>(&self, a: i64) -> i64 { a + self.offset }
+            },
+        );
+        // A successful expansion also contains both modifier names, because the
+        // registry's `decl` field echoes the attribute text, so match the error itself.
+        assert!(
+            output.contains("sqlname has no effect with skip_display"),
+            "expected the conflict error, got:\n{output}"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn skip_display_rejects_a_unit_struct() {
+        let (output, _input) = super::test_sqlfunc(
+            quote! { skip_display = true },
+            quote! {
+                fn extract_thing(a: i64) -> i64 { a }
+            },
+        );
+        assert!(
+            output.contains("skip_display requires a &self receiver"),
+            "expected the receiver error, got:\n{output}"
         );
     }
 }

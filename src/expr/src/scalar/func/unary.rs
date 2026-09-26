@@ -111,7 +111,7 @@ pub trait EagerUnaryFunc {
     type Input<'a>: InputDatumType<'a, EvalError>;
     type Output<'a>: OutputDatumType<'a, EvalError>;
 
-    fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a>;
+    fn call<'a>(&self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
@@ -165,7 +165,7 @@ impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
     ) -> Result<Datum<'a>, EvalError> {
         match T::Input::<'_>::try_from_result(a.eval(datums, temp_storage)) {
             // If we can convert to the input type then we call the function
-            Ok(input) => self.call(input).into_result(temp_storage),
+            Ok(input) => self.call(input, temp_storage).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner
             Err(Ok(datum)) if !datum.is_null() => {
                 Err(EvalError::Internal("invalid input type".into()))

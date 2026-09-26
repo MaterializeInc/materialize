@@ -1,0 +1,67 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(ClampAt, sqlname = \"clamp_at\", is_infix_op = false, test = true)]\nfn clamp_at<'a>(&self, a: i64, b: i64) -> i64 {\n    a.clamp(self.lower, b)\n}\n"
+---
+impl ClampAt {
+    fn clamp_at<'a>(&self, a: i64, b: i64) -> i64 {
+        a.clamp(self.lower, b)
+    }
+}
+impl crate::func::binary::EagerBinaryFunc for ClampAt {
+    type Input<'a> = (i64, i64);
+    type Output<'a> = i64;
+    fn call<'a>(
+        &self,
+        (a, b): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        self.clamp_at(a, b)
+    }
+    fn output_sql_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false
+            || input_types.get(0usize).map_or(false, |t| t.nullable)
+            || input_types.get(1usize).map_or(false, |t| t.nullable);
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
+    }
+    fn is_infix_op(&self) -> bool {
+        false
+    }
+}
+impl std::fmt::Display for ClampAt {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("clamp_at")
+    }
+}
+impl crate::func::FuncName for ClampAt {
+    const NAME: &'static str = stringify!(clamp_at);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(ClampAt, sqlname = \"clamp_at\", is_infix_op = false, test = true)] fn clamp_at<'a>(&self, a: i64, b: i64) -> i64",
+        signature: "fn(i64, i64) -> i64",
+        body_fingerprint: 6685180180282358271u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<i64>(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<i64>(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
+}

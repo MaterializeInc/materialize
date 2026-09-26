@@ -32,7 +32,7 @@ pub fn sqlfunc(
 ) -> darling::Result<TokenStream> {
     let mut attr_args = darling::ast::NestedMeta::parse_meta_list(attr.clone())?;
 
-    // Check if the first attribute arg is a bare Path (struct name for variadic).
+    // Check if the first attribute arg is a bare Path (struct name).
     let struct_ty = match attr_args.first() {
         Some(darling::ast::NestedMeta::Meta(syn::Meta::Path(_))) => {
             let darling::ast::NestedMeta::Meta(syn::Meta::Path(path)) = attr_args.remove(0) else {
@@ -49,13 +49,12 @@ pub fn sqlfunc(
 
     let tokens = match determine_arity(&func) {
         Arity::Nullary => Err(darling::Error::custom("Nullary functions not supported")),
-        Arity::Unary { arena: false } => {
-            generate(Shape::Unary, &func, modifiers, None, false, &attr)
+        Arity::Unary { has_self } => {
+            generate(Shape::Unary, &func, modifiers, struct_ty, has_self, &attr)
         }
-        Arity::Unary { arena: true } => Err(darling::Error::custom(
-            "Unary functions do not yet support RowArena.",
-        )),
-        Arity::Binary => generate(Shape::Binary, &func, modifiers, None, false, &attr),
+        Arity::Binary { has_self } => {
+            generate(Shape::Binary, &func, modifiers, struct_ty, has_self, &attr)
+        }
         Arity::Variadic { has_self } => generate(
             Shape::Variadic,
             &func,
@@ -100,15 +99,9 @@ fn generate_test(_attr: TokenStream, _item: TokenStream, _name: &Ident) -> Token
 /// Arity classification for a function annotated with `#[sqlfunc]`.
 enum Arity {
     Nullary,
-    Unary {
-        /// Whether a trailing `&RowArena` parameter is present, which
-        /// `EagerUnaryFunc::call` has no place for.
-        arena: bool,
-    },
-    Binary,
-    Variadic {
-        has_self: bool,
-    },
+    Unary { has_self: bool },
+    Binary { has_self: bool },
+    Variadic { has_self: bool },
 }
 
 /// Checks whether a parameter's type is `Variadic<...>` or `OptionalArg<...>`,
@@ -163,8 +156,8 @@ fn determine_arity(func: &syn::ItemFn) -> Arity {
     } else {
         match effective_count {
             0 => Arity::Nullary,
-            1 => Arity::Unary { arena },
-            2 => Arity::Binary,
+            1 => Arity::Unary { has_self },
+            2 => Arity::Binary { has_self },
             _ => unreachable!(),
         }
     }

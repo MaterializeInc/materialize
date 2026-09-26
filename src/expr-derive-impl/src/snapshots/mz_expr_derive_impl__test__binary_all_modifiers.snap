@@ -1,6 +1,6 @@
 ---
 source: src/expr-derive-impl/src/lib.rs
-expression: "#[sqlfunc(\n    could_error = true,\n    output_type = i16,\n    is_infix_op = true,\n    is_monotone = (true, true),\n    is_infinity_monotone = false,\n    negate = None,\n    propagates_nulls = true,\n    sqlname = \"binary_all_modifiers\",\n)]\nfn binary_all_modifiers<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    a\n}\n"
+expression: "#[sqlfunc(\n    could_error = true,\n    output_type = i16,\n    is_infix_op = true,\n    is_monotone = (true, true),\n    is_infinity_monotone = false,\n    negate = BinaryAllModifiers,\n    propagates_nulls = true,\n    sqlname = \"binary_all_modifiers\",\n)]\nfn binary_all_modifiers<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    a\n}\n"
 ---
 #[derive(
     Ord,
@@ -57,7 +57,7 @@ impl crate::func::binary::EagerBinaryFunc for BinaryAllModifiers {
         false
     }
     fn negate(&self) -> Option<crate::BinaryFunc> {
-        None
+        Some(crate::BinaryFunc::from(BinaryAllModifiers))
     }
     fn propagates_nulls(&self) -> bool {
         true
@@ -72,7 +72,7 @@ impl crate::func::FuncName for BinaryAllModifiers {
     const NAME: &'static str = stringify!(binary_all_modifiers);
     #[cfg(feature = "func-registry")]
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
-        decl: "#[sqlfunc(could_error = true, output_type = i16, is_infix_op = true, is_monotone = (true, true), is_infinity_monotone = false, negate = None, propagates_nulls = true, sqlname = \"binary_all_modifiers\",)] fn binary_all_modifiers<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>",
+        decl: "#[sqlfunc(could_error = true, output_type = i16, is_infix_op = true, is_monotone = (true, true), is_infinity_monotone = false, negate = BinaryAllModifiers, propagates_nulls = true, sqlname = \"binary_all_modifiers\",)] fn binary_all_modifiers<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>",
         signature: "fn(Datum<'a>, Datum<'a>) -> Datum<'a>",
         body_fingerprint: 14373755090808246356u64,
     });
