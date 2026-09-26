@@ -216,7 +216,17 @@ async fn savepoint_catalog_has_no_position_certificate() {
         .open_savepoint(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
         .await
         .expect("open savepoint");
-    let mut savepoint = open_protected_catalog_with_storage(persist, organization, storage).await;
+    let mut state = Catalog::diagnostic_state_config(&catalog.diagnostic_config);
+    state.read_only = true;
+    state.builtin_item_migration_config.read_only = true;
+    let mut savepoint = Catalog::open(crate::config::Config {
+        storage,
+        metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
+        state,
+    })
+    .await
+    .expect("open read-only serving catalog")
+    .catalog;
     assert_eq!(savepoint.planning_position(), None);
     assert_eq!(savepoint.observed_position(), None);
     let ts = savepoint.current_upper().await;
