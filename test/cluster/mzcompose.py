@@ -2242,8 +2242,10 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             cursor.execute("SET auto_route_catalog_queries = false")
             cursor.execute("SET cluster = cluster1")
             cursor.execute("""
-                SELECT mz_internal.parse_catalog_id(c.data->'key'->'id'),
-                       mz_internal.parse_catalog_id(r.data->'key'->'id')
+                SELECT CASE WHEN c.data->>'kind' = 'Cluster'
+                         THEN mz_internal.parse_catalog_id(c.data->'key'->'id') END,
+                       CASE WHEN r.data->>'kind' = 'ClusterReplica'
+                         THEN mz_internal.parse_catalog_id(r.data->'key'->'id') END
                 FROM mz_internal.mz_catalog_raw c
                 JOIN mz_internal.mz_catalog_raw r
                   ON r.data->'value'->'cluster_id' = c.data->'key'->'id'
