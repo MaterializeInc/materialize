@@ -1628,26 +1628,53 @@ def workflow_test_upsert(c: Composition) -> None:
 def workflow_test_remote_storage(c: Composition) -> None:
     """Test creating sources in a remote clusterd process."""
 
-    with c.override(
-        Testdrive(no_reset=True, consistent_seed=True),
-        Clusterd(
-            name="clusterd1",
-            workers=4,
-            process_names=["clusterd1", "clusterd2"],
+    with (
+        c.override(
+            Testdrive(no_reset=True, consistent_seed=True),
         ),
-        Clusterd(
-            name="clusterd2",
-            workers=4,
-            process_names=["clusterd1", "clusterd2"],
-        ),
+        ExitStack() as stack,
     ):
-        c.up(
-            "materialized",
-            "clusterd1",
-            "clusterd2",
-            "kafka",
-            "schema-registry",
+        c.up("materialized", "kafka", "schema-registry")
+        c.sql(
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+            ALTER SYSTEM SET storage_statistics_collection_interval = 1000;
+            ALTER SYSTEM SET storage_statistics_interval = 2000;
+            """,
+            user="mz_system",
+            port=6877,
         )
+        c.sql("""
+            CREATE CLUSTER storage_cluster REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
+                    WORKERS 4
+                )
+            );
+            """)
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'storage_cluster' AND r.name = 'r1'""")
+        catalog_options = native_catalog_options(c)
+        for name in ("clusterd1", "clusterd2"):
+            stack.enter_context(
+                c.override(
+                    Clusterd(
+                        name=name,
+                        workers=4,
+                        process_names=["clusterd1", "clusterd2"],
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                )
+            )
+        c.up("clusterd1", "clusterd2")
 
         c.run_testdrive_files("storage/01-create-sources.td")
 
@@ -2619,7 +2646,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     mz_subscriptions.
     """
 
-    c.up("materialized", "clusterd1")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2643,6 +2670,23 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         INSERT INTO t2 VALUES (1);
         INSERT INTO t3 VALUES (1);
         """)
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'cluster1' AND r.name = 'r'""")
+    catalog_options = native_catalog_options(c)
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        )
+    ):
+        c.up("clusterd1")
 
     def start_subscribe(table: str, cluster: str) -> Cursor:
         """Start a subscribe on the given table and cluster."""
@@ -2983,7 +3027,7 @@ class Metrics:
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
 
-    with c.override(Clusterd(name="clusterd1", workers=1)):
+    with c.override(Clusterd(name="clusterd1", workers=1)), ExitStack() as stack:
         c.up("materialized", "clusterd1")
 
         def fetch_metrics() -> Metrics:
@@ -3016,6 +3060,26 @@ def workflow_test_replica_metrics(c: Composition) -> None:
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 1
             ));
+            """)
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+        catalog_options = native_catalog_options(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    workers=1,
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *catalog_options,
+                    ],
+                )
+            )
+        )
+        c.up("clusterd1")
+        c.sql("""
             SET cluster = cluster1;
 
             CREATE TABLE t (a int);
@@ -4434,14 +4498,49 @@ def workflow_test_github_cloud_7998(
 ) -> None:
     """Regression test for MaterializeInc/cloud#7998."""
 
-    with c.override(
-        Testdrive(no_reset=True),
-        Clusterd(name="clusterd1"),
-        Materialized(
-            support_external_clusterd=True,
+    with (
+        c.override(
+            Testdrive(no_reset=True),
+            Materialized(
+                support_external_clusterd=True,
+            ),
         ),
+        ExitStack() as stack,
     ):
-        c.up("materialized", "clusterd1")
+        c.up("materialized")
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            user="mz_system",
+            port=6877,
+        )
+        c.sql("""
+            CREATE CLUSTER compute REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            """)
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'compute' AND r.name = 'r1'""")
+        catalog_options = native_catalog_options(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *catalog_options,
+                    ],
+                )
+            )
+        )
+        c.up("clusterd1")
 
         c.run_testdrive_files("github-cloud-7998/setup.td")
 
