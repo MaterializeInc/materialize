@@ -22,6 +22,7 @@ pub mod builder;
 pub mod builder_input;
 pub mod chunk;
 pub mod consolidate;
+pub mod external;
 pub mod merge_batcher;
 pub mod unload;
 

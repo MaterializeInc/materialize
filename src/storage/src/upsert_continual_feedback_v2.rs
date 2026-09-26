@@ -105,7 +105,9 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 #[cfg(feature = "fuzzing")]
 use mz_row_spine::DatumSeq;
 use mz_row_spine::{FundedValRowSpine, ValRowColPagedBuilder};
-use mz_storage_types::dyncfgs::{ENABLE_UPSERT_ASYNC_READS, ENABLE_UPSERT_CHUNKED_STASH};
+use mz_storage_types::dyncfgs::{
+    ENABLE_UPSERT_ASYNC_READS, ENABLE_UPSERT_CHUNKED_STASH, ENABLE_UPSERT_PAYLOAD_STASH,
+};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -114,6 +116,10 @@ use mz_timely_util::builder_async::{
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk};
+use mz_timely_util::columnar::external::{
+    Blob, BlobLayout, BlobWriter, ExternalChunk, ExternalChunker, ExternalStaging, Externalize,
+    Resolver,
+};
 use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::columnar::unload::UnloadBatch;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
@@ -149,6 +155,10 @@ pub enum UpsertStashFlavor {
     /// Chunk merge batcher stash, chunk-spine feedback arrangement,
     /// bulk-probe drain. Spills through the process buffer pool.
     Chunked { async_reads: bool },
+    /// As [`UpsertStashFlavor::Chunked`], with feedback values stored out of
+    /// line as content-addressed blobs, so feedback merges move keys and
+    /// digests instead of value bytes.
+    External { async_reads: bool },
 }
 
 impl UpsertStashFlavor {
@@ -157,8 +167,11 @@ impl UpsertStashFlavor {
     /// for its whole life even if the flag flips underneath it.
     pub fn from_config(config: &ConfigSet) -> Self {
         if ENABLE_UPSERT_CHUNKED_STASH.get(config) {
-            Self::Chunked {
-                async_reads: ENABLE_UPSERT_ASYNC_READS.get(config),
+            let async_reads = ENABLE_UPSERT_ASYNC_READS.get(config);
+            if ENABLE_UPSERT_PAYLOAD_STASH.get(config) {
+                Self::External { async_reads }
+            } else {
+                Self::Chunked { async_reads }
             }
         } else {
             Self::Paged
@@ -232,6 +245,42 @@ type FeedbackChunk<T> = ColumnChunk<(UpsertKey, Row), T, Diff>;
 type FeedbackSpine<T> =
     mz_timely_util::funded_spine::Spine<std::rc::Rc<ChunkBatch<FeedbackChunk<T>>>>;
 
+/// The external flavor's feedback record: the key and a blob holding the
+/// value row's bytes.
+struct FeedbackBlobs;
+
+impl BlobLayout for FeedbackBlobs {
+    type Data = (UpsertKey, Blob);
+    type Diff = Diff;
+
+    fn blocks(
+        (_, blob): columnar::Ref<'_, Self::Data>,
+        _: columnar::Ref<'_, Diff>,
+        out: &mut Vec<u64>,
+    ) {
+        out.push(<Blob as columnar::Columnar>::into_owned(blob).block());
+    }
+}
+
+impl Externalize for FeedbackBlobs {
+    type Input = (UpsertKey, Row);
+    type Layout = Self;
+
+    fn externalize(
+        (key, row): columnar::Ref<'_, Self::Input>,
+        writer: &mut BlobWriter,
+    ) -> (UpsertKey, Blob) {
+        (*key, writer.push(row.data()))
+    }
+}
+
+/// One external-flavor feedback chunk.
+type ExternalFeedbackChunk<T> = ExternalChunk<FeedbackBlobs, T>;
+
+/// The external flavor's feedback trace.
+type ExternalFeedbackSpine<T> =
+    mz_timely_util::funded_spine::Spine<std::rc::Rc<ChunkBatch<ExternalFeedbackChunk<T>>>>;
+
 // The source stash carries the upsert payload in a custom diff type so the
 // merge batcher consolidates by (key, time), keeping the update with the
 // highest `FromTime` (latest source offset) per group. The diff is `Columnar`
@@ -297,6 +346,160 @@ type UpsertUpdate<T, O> = (UpsertKey, T, UpsertDiff<O>);
 /// One stash chunk: a sorted, consolidated run of updates, resident or
 /// spilled to the buffer pool.
 type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>>;
+
+/// [`UpsertDiff`] with the value row stored out of line. Consolidation keeps
+/// the maximum `from_time` exactly as `UpsertDiff` does, moving only the
+/// handle, so losing commands never have their bytes read.
+#[derive(Clone, Debug, Default, columnar::Columnar)]
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
+struct ExternalUpsertDiff<O> {
+    from_time: O,
+    value: Option<Blob>,
+}
+
+impl<O> IsZero for ExternalUpsertDiff<O> {
+    fn is_zero(&self) -> bool {
+        false
+    }
+}
+
+impl<O: Ord + Clone> Semigroup for ExternalUpsertDiff<O> {
+    fn plus_equals(&mut self, rhs: &Self) {
+        if rhs.from_time > self.from_time {
+            *self = rhs.clone();
+        }
+    }
+}
+
+impl<'a, O> Semigroup<columnar::Ref<'a, ExternalUpsertDiff<O>>> for ExternalUpsertDiff<O>
+where
+    O: columnar::Columnar + Ord + Clone,
+{
+    fn plus_equals(&mut self, rhs: &columnar::Ref<'a, ExternalUpsertDiff<O>>) {
+        let rhs_from_time = <O as columnar::Columnar>::into_owned(rhs.from_time);
+        if rhs_from_time > self.from_time {
+            self.from_time = rhs_from_time;
+            self.value = <Option<Blob> as columnar::Columnar>::into_owned(rhs.value);
+        }
+    }
+}
+
+/// The external flavor's stash record: a key and a command whose value is a
+/// blob.
+struct StashBlobs<O>(std::marker::PhantomData<O>);
+
+impl<O: columnar::Columnar + 'static> BlobLayout for StashBlobs<O> {
+    type Data = UpsertKey;
+    type Diff = ExternalUpsertDiff<O>;
+
+    fn blocks(
+        _: columnar::Ref<'_, UpsertKey>,
+        diff: columnar::Ref<'_, Self::Diff>,
+        out: &mut Vec<u64>,
+    ) {
+        if let Some(blob) = diff.value {
+            out.push(<Blob as columnar::Columnar>::into_owned(blob).block());
+        }
+    }
+}
+
+/// One external-flavor stash chunk.
+type ExternalStashChunk<T, O> = ExternalChunk<StashBlobs<O>, T>;
+
+/// One external-flavor stash record.
+type ExternalStashUpdate<T, O> = (UpsertKey, T, ExternalUpsertDiff<O>);
+
+/// The external flavor's stash: differential's chunk merge batcher over
+/// [`ExternalStashChunk`]s, plus the writer that moves each command's value
+/// out of line as it enters.
+///
+/// Values are written after the chunker's offset consolidation, so only the
+/// winning command per `(key, time)` within a flush pays for a write.
+///
+/// NOTE: generic over the inner batcher so the definition carries no trait
+/// bounds. Higher-ranked bounds on the definition send rustdoc's auto-trait
+/// analysis into an internal compiler error.
+struct ExternalStashBatcherOf<B> {
+    inner: B,
+    writer: BlobWriter,
+}
+
+type ExternalStashBatcher<T, O> = ExternalStashBatcherOf<ChunkBatcher<ExternalStashChunk<T, O>>>;
+
+impl<T, O> ExternalStashBatcherOf<ChunkBatcher<ExternalStashChunk<T, O>>>
+where
+    T: Timestamp + Lattice + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    O: columnar::Columnar + Default + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, O>: Ord + Copy,
+{
+    /// Moves the values of sorted, consolidated `chunk` out of line and
+    /// inserts it.
+    fn push_inline(&mut self, chunk: Column<UpsertUpdate<T, O>>) {
+        use columnar::{Index, Len};
+        let mut external: Column<ExternalStashUpdate<T, O>> = Default::default();
+        {
+            let view = chunk.borrow();
+            if view.len() == 0 {
+                return;
+            }
+            for index in 0..view.len() {
+                let (key, time, diff) = view.get(index);
+                let value = diff.value.map(|row| self.writer.push(row.data()));
+                external.push_into(&(
+                    *key,
+                    <T as columnar::Columnar>::into_owned(time),
+                    ExternalUpsertDiff {
+                        from_time: <O as columnar::Columnar>::into_owned(diff.from_time),
+                        value,
+                    },
+                ));
+            }
+        }
+        let owners = self.writer.take_owners();
+        self.inner
+            .push_into(ExternalChunk::from_column(external, owners));
+    }
+}
+
+impl<T, O> Batcher for ExternalStashBatcherOf<ChunkBatcher<ExternalStashChunk<T, O>>>
+where
+    T: Timestamp + Lattice + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    O: columnar::Columnar + Default + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, O>: Ord + Copy,
+{
+    type Output = ExternalStashChunk<T, O>;
+    type Time = T;
+
+    fn new(logger: Option<Logger>, operator_id: usize) -> Self {
+        Self {
+            inner: Batcher::new(logger, operator_id),
+            writer: BlobWriter::default(),
+        }
+    }
+
+    fn seal(&mut self, upper: Antichain<T>) -> (Vec<Self::Output>, Description<T>) {
+        self.inner.seal(upper)
+    }
+
+    fn frontier(&mut self) -> AntichainRef<'_, T> {
+        self.inner.frontier()
+    }
+}
+
+impl<T, O> PushInto<ExternalStashChunk<T, O>>
+    for ExternalStashBatcherOf<ChunkBatcher<ExternalStashChunk<T, O>>>
+where
+    T: Timestamp + Lattice + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    O: columnar::Columnar + Default + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, O>: Ord + Copy,
+{
+    fn push_into(&mut self, chunk: ExternalStashChunk<T, O>) {
+        self.inner.push_into(chunk);
+    }
+}
 
 /// The chunked flavor's stash: differential's chunk merge batcher over
 /// `ColumnChunk`s. Data is pushed in unsorted. The batcher maintains
@@ -463,6 +666,25 @@ where
                 FeedbackSpine<T>,
             >(encoded, Pipeline, "Persist feedback");
             build_upsert_operator::<ChunkedArm, _, _>(
+                input,
+                resume_upper,
+                persist_arranged,
+                persist_token,
+                upsert_metrics,
+                source_config,
+                async_reads,
+            )
+        }
+        UpsertStashFlavor::External { async_reads } => {
+            let persist_arranged = arrange_core::<
+                _,
+                _,
+                ExternalChunker<FeedbackBlobs, T>,
+                ChunkBatcher<ExternalFeedbackChunk<T>>,
+                ChunkBuilder<ExternalFeedbackChunk<T>>,
+                ExternalFeedbackSpine<T>,
+            >(encoded, Pipeline, "Persist feedback");
+            build_upsert_operator::<ExternalArm, _, _>(
                 input,
                 resume_upper,
                 persist_arranged,
@@ -796,7 +1018,7 @@ where
                 // Frontier of data remaining in the batcher (ts >= input_upper).
                 let remaining_frontier = batcher.frontier().to_owned();
 
-                let mut ineligible = Vec::new();
+                let mut ineligible = A::Ineligible::default();
                 // The drain emits eligible output directly through
                 // `output_handle` (fueled), so there is no intermediate
                 // output buffer to drain afterward.
@@ -833,8 +1055,7 @@ where
                 // Downgrade the output capability to the minimum time of any
                 // remaining data: either entries still in the batcher (above
                 // input_upper) or ineligible entries being pushed back.
-                let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
-                A::flush(&mut ineligible, &mut chunker, &mut batcher);
+                let min_ineligible_ts = A::restash(&mut ineligible, &mut chunker, &mut batcher);
 
                 // `Option::min` alone would be wrong here, `None` sorts low.
                 // Chain the candidates and take the min over present ones.
@@ -888,6 +1109,9 @@ where
     /// The source-stash batcher. `'static` because the operator future owns
     /// it.
     type Batcher: Batcher<Time = T> + 'static;
+    /// Commands a drain found ahead of the persist frontier, held until they
+    /// return to the batcher.
+    type Ineligible: Default;
 
     /// A new stash batcher for one source dataflow.
     fn new_batcher() -> Self::Batcher;
@@ -919,11 +1143,19 @@ where
         }
     }
 
+    /// Returns `ineligible` to `batcher`, leaving it empty, and reports the
+    /// least time among the returned commands.
+    fn restash(
+        ineligible: &mut Self::Ineligible,
+        chunker: &mut UpsertChunker<T, O>,
+        batcher: &mut Self::Batcher,
+    ) -> Option<T>;
+
     /// Classify one sealed stash against `persist_upper` and emit eligible
     /// output; see [`DrainStats`].
     async fn drain(
         sealed: Vec<<Self::Batcher as Batcher>::Output>,
-        ineligible: &mut Vec<UpsertUpdate<T, O>>,
+        ineligible: &mut Self::Ineligible,
         output_handle: &UpsertOutputHandle<T>,
         output_cap: &Capability<T>,
         persist_upper: &Antichain<T>,
@@ -957,6 +1189,17 @@ where
 {
     type Spine = FeedbackSpine<T>;
     type Batcher = UpsertChunkBatcher<T, O>;
+    type Ineligible = Vec<UpsertUpdate<T, O>>;
+
+    fn restash(
+        ineligible: &mut Self::Ineligible,
+        chunker: &mut UpsertChunker<T, O>,
+        batcher: &mut Self::Batcher,
+    ) -> Option<T> {
+        let min = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
+        Self::flush(ineligible, chunker, batcher);
+        min
+    }
 
     fn new_batcher() -> Self::Batcher {
         Batcher::new(None, 0)
@@ -992,6 +1235,154 @@ where
     }
 }
 
+/// The external flavor: the chunked flavor's stash and drain, over a
+/// feedback arrangement whose values are blobs. The drain reads a value's
+/// bytes only to emit its retraction.
+struct ExternalArm;
+
+impl<T, O> UpsertStashArm<T, O> for ExternalArm
+where
+    T: Timestamp + TotalOrder + Lattice + Sync,
+    T: columnation::Columnation + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
+    for<'a> columnar::Ref<'a, O>: Ord + Copy,
+{
+    type Spine = ExternalFeedbackSpine<T>;
+    type Batcher = ExternalStashBatcher<T, O>;
+    type Ineligible = Vec<ExternalStashChunk<T, O>>;
+
+    fn new_batcher() -> Self::Batcher {
+        Batcher::new(None, 0)
+    }
+
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+        batcher.push_inline(chunk);
+    }
+
+    fn restash(
+        ineligible: &mut Self::Ineligible,
+        _chunker: &mut UpsertChunker<T, O>,
+        batcher: &mut Self::Batcher,
+    ) -> Option<T> {
+        use columnar::{Index, Len};
+        let mut min: Option<T> = None;
+        for chunk in ineligible.drain(..) {
+            let column = chunk.column();
+            let view = column.borrow();
+            for index in 0..view.len() {
+                let (_, time, _) = view.get(index);
+                let time = <T as columnar::Columnar>::into_owned(time);
+                if min.as_ref().map_or(true, |m| time < *m) {
+                    min = Some(time);
+                }
+            }
+            batcher.push_into(chunk);
+        }
+        min
+    }
+
+    async fn drain(
+        sealed: Vec<ExternalStashChunk<T, O>>,
+        ineligible: &mut Self::Ineligible,
+        output_handle: &UpsertOutputHandle<T>,
+        output_cap: &Capability<T>,
+        persist_upper: &Antichain<T>,
+        trace: &mut TraceAgent<Self::Spine>,
+        worker_id: usize,
+        source_id: GlobalId,
+        async_reads: bool,
+    ) -> DrainStats {
+        use columnar::{Index, Len};
+        let mut stats = DrainStats::default();
+        let mut resolver = Resolver::default();
+        for chunk in sealed {
+            let column = if async_reads {
+                chunk.column_async().await
+            } else {
+                chunk.column()
+            };
+            let view = column.borrow();
+
+            // Ineligible commands return to the stash still out of line, so
+            // a lagging persist frontier never reads or rewrites their values.
+            // Only eligible commands' values are read, because the drain
+            // emits them.
+            let mut deferred: Column<ExternalStashUpdate<T, O>> = Default::default();
+            let mut eligible = Vec::new();
+            let mut blobs = Vec::new();
+            for index in 0..view.len() {
+                let (_, time, diff) = view.get(index);
+                let time = <T as columnar::Columnar>::into_owned(time);
+                match classify_time(persist_upper, &time) {
+                    TimeClass::AlreadyPersisted => {}
+                    TimeClass::Ineligible => deferred.push_into(
+                        &<ExternalStashUpdate<T, O> as columnar::Columnar>::into_owned(
+                            view.get(index),
+                        ),
+                    ),
+                    TimeClass::Eligible => {
+                        eligible.push(index);
+                        if let Some(blob) = diff.value {
+                            blobs.push(<Blob as columnar::Columnar>::into_owned(blob));
+                        }
+                    }
+                }
+            }
+            if deferred.borrow().len() > 0 {
+                ineligible.push(ExternalChunk::from_column(deferred, chunk.owners().clone()));
+            }
+            if eligible.is_empty() {
+                continue;
+            }
+
+            resolver.clear();
+            let owners = std::slice::from_ref(chunk.owners());
+            if async_reads {
+                resolver.load(&blobs, owners).await;
+            } else {
+                resolver.load_sync(&blobs, owners);
+            }
+            let mut inline: Column<UpsertUpdate<T, O>> = Default::default();
+            for index in eligible {
+                let (key, time, diff) = view.get(index);
+                let value = diff.value.map(|blob| {
+                    let blob = <Blob as columnar::Columnar>::into_owned(blob);
+                    resolver.with(&blob, |bytes| {
+                        // SAFETY: `push_inline` wrote these bytes from
+                        // `Row::data` of a valid row, and blocks are immutable.
+                        unsafe { Row::from_bytes_unchecked(bytes) }
+                    })
+                });
+                inline.push_into(&(
+                    *key,
+                    <T as columnar::Columnar>::into_owned(time),
+                    UpsertDiff {
+                        from_time: <O as columnar::Columnar>::into_owned(diff.from_time),
+                        value,
+                    },
+                ));
+            }
+            let mut none = Vec::new();
+            let chunk_stats = drain_sealed_input_chunked(
+                std::iter::once(ColumnChunk::from_column(inline)),
+                &mut none,
+                output_handle,
+                output_cap,
+                persist_upper,
+                trace,
+                worker_id,
+                source_id,
+                async_reads,
+            )
+            .await;
+            assert!(none.is_empty(), "eligible commands are never re-stashed");
+            stats.add(&chunk_stats);
+        }
+        stats
+    }
+}
+
 /// The paged flavor: [`UpsertPagedBatcher`] stash, `ValRowSpine` feedback
 /// arrangement, cursor drain. Cold chains page out of RSS through the
 /// storage-owned column pager, captured once per batcher at construction.
@@ -1006,6 +1397,17 @@ where
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
     type Spine = FundedValRowSpine<UpsertKey, T, Diff>;
+    type Ineligible = Vec<UpsertUpdate<T, O>>;
+
+    fn restash(
+        ineligible: &mut Self::Ineligible,
+        chunker: &mut UpsertChunker<T, O>,
+        batcher: &mut Self::Batcher,
+    ) -> Option<T> {
+        let min = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
+        Self::flush(ineligible, chunker, batcher);
+        min
+    }
     type Batcher = UpsertPagedBatcher<T, O>;
 
     fn new_batcher() -> Self::Batcher {
@@ -1071,6 +1473,7 @@ fn classify_time<T: PartialOrder>(persist_upper: &Antichain<T>, ts: &T) -> TimeC
 
 /// Counts from a single call to [`drain_sealed_input_chunked`] or
 /// [`drain_sealed_input_paged`], used to update metrics.
+#[derive(Default)]
 struct DrainStats {
     /// Number of eligible entries probed against the feedback trace.
     eligible: u64,
@@ -1084,6 +1487,159 @@ struct DrainStats {
     deletes: u64,
     /// Total output records emitted (retractions + insertions).
     output_count: u64,
+}
+
+impl DrainStats {
+    fn add(&mut self, other: &DrainStats) {
+        self.eligible += other.eligible;
+        self.result_count += other.result_count;
+        self.inserts += other.inserts;
+        self.updates += other.updates;
+        self.deletes += other.deletes;
+        self.output_count += other.output_count;
+    }
+}
+
+/// How the bulk-probe drain reads each key's prior value from a feedback
+/// trace.
+trait FeedbackProbe<T>: TraceReader<Time = T> + 'static
+where
+    T: Timestamp + Lattice + columnar::Columnar,
+{
+    /// Inserts the value each of `probes` holds in `batches`, consolidated
+    /// across them, into `out`. `probes` are sorted and deduplicated.
+    ///
+    /// The caller probes only keys eligible at the persist frontier, where
+    /// each key holds at most one value with multiplicity one.
+    async fn prior_values(
+        batches: &[Self::Batch],
+        probes: columnar::BorrowedOf<'_, UpsertKey>,
+        async_reads: bool,
+        out: &mut std::collections::BTreeMap<UpsertKey, UpsertValue>,
+    );
+}
+
+impl<T> FeedbackProbe<T> for FeedbackSpine<T>
+where
+    T: Timestamp + Lattice + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+{
+    async fn prior_values(
+        batches: &[Self::Batch],
+        probes: columnar::BorrowedOf<'_, UpsertKey>,
+        async_reads: bool,
+        out: &mut std::collections::BTreeMap<UpsertKey, UpsertValue>,
+    ) {
+        use columnar::{Borrow, Index, Len};
+        let mut staging = <FeedbackUpdate<T> as columnar::Columnar>::Container::default();
+        for batch in batches {
+            if async_reads {
+                batch.extract_into_async(probes, &mut staging).await;
+            } else {
+                batch.extract_into(probes, &mut staging);
+            }
+        }
+        // Hits arrive per batch, so equal `(key, val)` pairs from different
+        // batches are non-adjacent. Sort before folding.
+        let staged = staging.borrow();
+        let mut hits: Vec<_> = (0..staged.len())
+            .map(|i| {
+                let ((key, val), _time, diff) = staged.get(i);
+                (key, val, <Diff as columnar::Columnar>::into_owned(diff))
+            })
+            .collect();
+        hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        for (key, val) in positive_groups(&hits) {
+            let prev = out.insert(*key, decode_upsert_value(val.iter()));
+            assert!(
+                prev.is_none(),
+                "unexpected multiple values for the same key in persist trace"
+            );
+        }
+    }
+}
+
+impl<T> FeedbackProbe<T> for ExternalFeedbackSpine<T>
+where
+    T: Timestamp + Lattice + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+{
+    async fn prior_values(
+        batches: &[Self::Batch],
+        probes: columnar::BorrowedOf<'_, UpsertKey>,
+        async_reads: bool,
+        out: &mut std::collections::BTreeMap<UpsertKey, UpsertValue>,
+    ) {
+        use columnar::{Borrow, Index, Len};
+        let mut staging = ExternalStaging::<((UpsertKey, Blob), T, Diff)>::default();
+        for batch in batches {
+            if async_reads {
+                batch.extract_into_async(probes, &mut staging).await;
+            } else {
+                batch.extract_into(probes, &mut staging);
+            }
+        }
+        // Blobs compare by digest, so copies of one value written to
+        // different blocks consolidate here without reading their bytes.
+        let staged = staging.updates.borrow();
+        let mut hits: Vec<_> = (0..staged.len())
+            .map(|i| {
+                let ((key, blob), _time, diff) = staged.get(i);
+                (key, blob, <Diff as columnar::Columnar>::into_owned(diff))
+            })
+            .collect();
+        hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        let winners: Vec<(UpsertKey, Blob)> = positive_groups(&hits)
+            .map(|(key, blob)| (*key, <Blob as columnar::Columnar>::into_owned(blob)))
+            .collect();
+        let mut resolver = Resolver::default();
+        let blobs = winners.iter().map(|(_, blob)| blob);
+        if async_reads {
+            resolver.load(blobs, &staging.owners).await;
+        } else {
+            resolver.load_sync(blobs, &staging.owners);
+        }
+        for (key, blob) in &winners {
+            let value = resolver.with(blob, |bytes| {
+                // SAFETY: the blob's bytes were written by `FeedbackBlobs`
+                // from `Row::data` of a valid row, and blocks are immutable.
+                let row = unsafe { mz_repr::RowRef::from_slice(bytes) };
+                decode_upsert_value(row.iter())
+            });
+            let prev = out.insert(*key, value);
+            assert!(
+                prev.is_none(),
+                "unexpected multiple values for the same key in persist trace"
+            );
+        }
+    }
+}
+
+/// The `(key, value)` groups of sorted `hits` whose counts sum to one.
+///
+/// Panics on a count above one: at the persist frontier a key holds one value.
+fn positive_groups<'h, K: Copy + Eq, V: Copy + Eq>(
+    hits: &'h [(K, V, Diff)],
+) -> impl Iterator<Item = (K, V)> + 'h {
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        while i < hits.len() {
+            let (key, val, _) = hits[i];
+            let mut count = Diff::ZERO;
+            while i < hits.len() && hits[i].0 == key && hits[i].1 == val {
+                count += hits[i].2;
+                i += 1;
+            }
+            if count.is_positive() {
+                assert!(
+                    count == 1.into(),
+                    "unexpected multiple entries for the same key in persist trace"
+                );
+                return Some((key, val));
+            }
+        }
+        None
+    })
 }
 
 /// Process sealed chunks from the batcher, classifying each entry by its
@@ -1111,13 +1667,13 @@ struct DrainStats {
 /// before the next is requested, so at most one loaded stash chunk (plus the
 /// probe hits for its keys) is resident regardless of drain size. Only the
 /// re-stashed ineligible set is materialized.
-async fn drain_sealed_input_chunked<T, O>(
+async fn drain_sealed_input_chunked<T, O, S>(
     sealed: impl Iterator<Item = UpsertChunk<T, O>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<FeedbackSpine<T>>,
+    trace: &mut TraceAgent<S>,
     worker_id: usize,
     source_id: GlobalId,
     async_reads: bool,
@@ -1127,6 +1683,7 @@ where
     T: columnation::Columnation + columnar::Columnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     O: columnar::Columnar,
+    S: FeedbackProbe<T>,
 {
     let mut eligible_count: u64 = 0;
     let mut result_count: u64 = 0;
@@ -1187,55 +1744,13 @@ where
                 }
             }
 
-            // Pass 2: bulk-probe the trace's batches through the chunk
-            // batches' `UnloadChunk` surface and consolidate the hits into
-            // the prior value per key. Hits arrive per batch, so equal
-            // `(key, val)` pairs from different batches are non-adjacent.
-            // Sort before folding.
+            // Pass 2: the prior value of each probed key, from the trace's
+            // batches.
             let mut old_values: std::collections::BTreeMap<UpsertKey, UpsertValue> =
                 std::collections::BTreeMap::new();
             if probe_count > 0 {
                 use columnar::Borrow;
-                let mut staging = <FeedbackUpdate<T> as columnar::Columnar>::Container::default();
-                for batch in &batches {
-                    if async_reads {
-                        batch
-                            .extract_into_async(probe_col.borrow(), &mut staging)
-                            .await;
-                    } else {
-                        batch.extract_into(probe_col.borrow(), &mut staging);
-                    }
-                }
-                let staged = staging.borrow();
-                let mut hits: Vec<_> = (0..staged.len())
-                    .map(|i| {
-                        let ((key, val), _time, diff) = staged.get(i);
-                        (key, val, <Diff as columnar::Columnar>::into_owned(diff))
-                    })
-                    .collect();
-                hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-                let mut i = 0;
-                while i < hits.len() {
-                    let (key, val, _) = hits[i];
-                    let mut count = Diff::ZERO;
-                    let mut j = i;
-                    while j < hits.len() && hits[j].0 == key && hits[j].1 == val {
-                        count += hits[j].2;
-                        j += 1;
-                    }
-                    if count.is_positive() {
-                        assert!(
-                            count == 1.into(),
-                            "unexpected multiple entries for the same key in persist trace"
-                        );
-                        let prev = old_values.insert(*key, decode_upsert_value(val.iter()));
-                        assert!(
-                            prev.is_none(),
-                            "unexpected multiple values for the same key in persist trace"
-                        );
-                    }
-                    i = j;
-                }
+                S::prior_values(&batches, probe_col.borrow(), async_reads, &mut old_values).await;
             }
 
             // Pass 3: classify and emit this window's records.
@@ -1598,6 +2113,10 @@ mod test {
             assert_eq!(paged, chunked, "stash flavors must produce equal output");
             let asynchronous = run(UpsertStashFlavor::Chunked { async_reads: true });
             assert_eq!(chunked, asynchronous, "async reads must preserve output");
+            let external = run(UpsertStashFlavor::External { async_reads: false });
+            assert_eq!(chunked, external, "external values must preserve output");
+            let external_async = run(UpsertStashFlavor::External { async_reads: true });
+            assert_eq!(chunked, external_async, "async external reads must preserve output");
             chunked
         }};
     }
@@ -1645,6 +2164,75 @@ mod test {
             (Ok(value4), new_ts(3), Diff::ONE),
         ];
         assert_eq!(actual, expected);
+    }
+
+    /// The source runs three timestamps ahead of the persist frontier, so
+    /// each drain emits one timestamp and returns the rest to the stash, and
+    /// commands are re-stashed across several drains before they apply. Each
+    /// `(key, time)` also carries a losing command with a lower offset.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn source_ahead_of_persist_restashes_across_drains() {
+        const KEYS: i64 = 64;
+        let actual = upsert_test!(|input, persist, worker| {
+            for k in 0..KEYS {
+                persist.send((row(k, 0), new_ts(0), Diff::ONE));
+            }
+            persist.advance_to(new_ts(1));
+            worker.step();
+
+            let mut commands = Vec::new();
+            for t in 1..=3u64 {
+                let t_i = i64::try_from(t).unwrap();
+                for k in 0..KEYS {
+                    let offset = i32::try_from(t * 10).unwrap();
+                    commands.push((
+                        (key(k), Some(Ok(row(k, 100 + t_i))), offset - 1),
+                        new_ts(t),
+                        Diff::ONE,
+                    ));
+                    commands.push((
+                        (key(k), Some(Ok(row(k, t_i))), offset),
+                        new_ts(t),
+                        Diff::ONE,
+                    ));
+                }
+            }
+            input.send_batch(&mut commands);
+            input.advance_to(new_ts(4));
+            for _ in 0..10 {
+                worker.step();
+            }
+
+            for t in 1..=2u64 {
+                let t_i = i64::try_from(t).unwrap();
+                for k in 0..KEYS {
+                    persist.send((row(k, t_i - 1), new_ts(t), Diff::MINUS_ONE));
+                    persist.send((row(k, t_i), new_ts(t), Diff::ONE));
+                }
+                persist.advance_to(new_ts(t + 1));
+                for _ in 0..10 {
+                    worker.step();
+                }
+            }
+            persist.advance_to(new_ts(4));
+            for _ in 0..10 {
+                worker.step();
+            }
+        });
+
+        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
+        for t in 1..=3u64 {
+            let t_i = i64::try_from(t).unwrap();
+            for k in 0..KEYS {
+                expected.push((Ok(row(k, t_i - 1)), new_ts(t), Diff::MINUS_ONE));
+                expected.push((Ok(row(k, t_i)), new_ts(t), Diff::ONE));
+            }
+        }
+        let mut actual_sorted = actual;
+        actual_sorted.sort();
+        expected.sort();
+        assert_eq!(actual_sorted, expected);
     }
 
     #[mz_ore::test]
@@ -1813,6 +2401,120 @@ mod test {
         for k in 0..KEYS {
             expected.push((Ok(row(k, k)), new_ts(1), Diff::MINUS_ONE));
             expected.push((Ok(row(k, k + 1)), new_ts(1), Diff::ONE));
+        }
+        let mut actual_sorted = actual;
+        actual_sorted.sort();
+        expected.sort();
+        assert_eq!(actual_sorted, expected);
+    }
+
+    /// Values wide enough that the external flavor's blocks fill and move to
+    /// an evicting pool, so the drain resolves retractions from evicted
+    /// blocks. Every flavor must agree on the output.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn drain_resolves_wide_values_from_evicted_blocks() {
+        use mz_ore::pool::Pool;
+        use mz_timely_util::columnar::chunk::set_spill_override;
+
+        let pool = Pool::new().expect("pool creation");
+        pool.set_budget(0);
+        set_spill_override(Some(pool.clone()));
+
+        const KEYS: i64 = 300;
+        let wide = |k: i64, v: i64| {
+            let text = format!("{v:0>20000}");
+            Row::pack_slice(&[Datum::Int64(k), Datum::String(&text)])
+        };
+        let actual = upsert_test!(|input, persist, worker| {
+            for k in 0..KEYS {
+                persist.send((wide(k, k), new_ts(0), Diff::ONE));
+            }
+            persist.advance_to(new_ts(1));
+            worker.step();
+
+            for k in 0..KEYS {
+                let value = if k % 3 == 0 {
+                    None
+                } else {
+                    Some(Ok(wide(k, k + 1)))
+                };
+                input.send(((key(k), value, 1), new_ts(1), Diff::ONE));
+            }
+            input.advance_to(new_ts(2));
+            worker.step();
+            persist.advance_to(new_ts(2));
+            worker.step();
+        });
+
+        set_spill_override(None);
+        assert!(
+            pool.stats().inserts > 0,
+            "blocks should have sealed into the pool"
+        );
+
+        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
+        for k in 0..KEYS {
+            expected.push((Ok(wide(k, k)), new_ts(1), Diff::MINUS_ONE));
+            if k % 3 != 0 {
+                expected.push((Ok(wide(k, k + 1)), new_ts(1), Diff::ONE));
+            }
+        }
+        let mut actual_sorted = actual;
+        actual_sorted.sort();
+        expected.sort();
+        assert_eq!(actual_sorted, expected);
+    }
+
+    /// Rehydration from feedback batches of very different sizes and value
+    /// widths, so payload blocks open in one batch and fill in a later one.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn rehydration_fills_payload_blocks_across_feedback_batches() {
+        let value = |k: i64, v: i64, width: usize| {
+            let text = format!("{v}{}", "0".repeat(width));
+            Row::pack_slice(&[Datum::Int64(k), Datum::String(&text)])
+        };
+        // (first key, key count, value width): a large batch that leaves the
+        // open block about half full, a small batch of wide values that fills
+        // it and opens another, and a small batch that merges with the second.
+        const ROUNDS: [(i64, i64, usize); 3] =
+            [(0, 200, 5_000), (200, 10, 150_000), (210, 10, 100)];
+        let keys = || {
+            ROUNDS
+                .into_iter()
+                .flat_map(|(first, count, width)| (first..first + count).map(move |k| (k, width)))
+        };
+        let actual = upsert_test!(|input, persist, worker| {
+            for (first, count, width) in ROUNDS {
+                for k in first..first + count {
+                    persist.send((value(k, k, width), new_ts(0), Diff::ONE));
+                }
+                // The input handle buffers until flushed, and each flush
+                // reaches the feedback chunker as a separate batch.
+                persist.flush();
+                worker.step();
+            }
+            persist.advance_to(new_ts(1));
+            worker.step();
+
+            for (k, width) in keys() {
+                input.send((
+                    (key(k), Some(Ok(value(k, k + 1, width))), 1),
+                    new_ts(1),
+                    Diff::ONE,
+                ));
+            }
+            input.advance_to(new_ts(2));
+            worker.step();
+            persist.advance_to(new_ts(2));
+            worker.step();
+        });
+
+        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
+        for (k, width) in keys() {
+            expected.push((Ok(value(k, k, width)), new_ts(1), Diff::MINUS_ONE));
+            expected.push((Ok(value(k, k + 1, width)), new_ts(1), Diff::ONE));
         }
         let mut actual_sorted = actual;
         actual_sorted.sort();
@@ -1991,6 +2693,8 @@ mod test {
             UpsertStashFlavor::Paged,
             UpsertStashFlavor::Chunked { async_reads: false },
             UpsertStashFlavor::Chunked { async_reads: true },
+            UpsertStashFlavor::External { async_reads: false },
+            UpsertStashFlavor::External { async_reads: true },
         ] {
             let (frontier, emitted) = run_below_upper_scenario_v2(flavor);
 

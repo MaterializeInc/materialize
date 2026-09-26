@@ -452,6 +452,17 @@ pub const ENABLE_UPSERT_ASYNC_READS: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Store upsert v2 feedback values out of line, as content-addressed blobs in
+/// the buffer pool, so feedback arrangement merges move keys and digests
+/// instead of value bytes. Read at operator construction.
+pub const ENABLE_UPSERT_PAYLOAD_STASH: Config<bool> = Config::new(
+    "enable_upsert_payload_stash",
+    false,
+    "Store upsert-v2 feedback values out of line when enable_upsert_v2 and \
+     enable_upsert_chunked_stash are true. Takes effect on new dataflows.",
+    ParameterScope::Replica,
+);
+
 // RocksDB
 
 /// How many times to try to cleanup old RocksDB DB's on disk before giving up.
@@ -577,6 +588,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_UPSERT_PAGED_SPILL)
         .add(&ENABLE_UPSERT_CHUNKED_STASH)
         .add(&ENABLE_UPSERT_ASYNC_READS)
+        .add(&ENABLE_UPSERT_PAYLOAD_STASH)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)
