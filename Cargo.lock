@@ -6857,6 +6857,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
+ "async-trait",
+ "bytes",
  "chrono",
  "columnar",
  "columnation",
