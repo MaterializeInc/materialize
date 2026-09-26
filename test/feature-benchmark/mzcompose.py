@@ -78,6 +78,7 @@ from materialize.feature_benchmark.scenarios.benchmark_main import (
 )
 from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.customer import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.interactive_runtime import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.scale import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.skew import *  # noqa: F401 F403
@@ -401,7 +402,14 @@ def create_clusterd_service(
     unified_cluster = (additional_system_parameter_defaults or {}).get(
         "enable_unified_cluster", "false"
     ) == "true"
-    return Clusterd(image=clusterd_image, unified_cluster=unified_cluster)
+    # For the same reason `enable_compute_interactive_runtime` never reaches
+    # it, so the second runtime has to be configured here. An image without
+    # the option ignores the variable and stays single-runtime.
+    return Clusterd(
+        image=clusterd_image,
+        unified_cluster=unified_cluster,
+        interactive_compute=True,
+    )
 
 
 def start_overridden_mz_clusterd_and_cockroach(
