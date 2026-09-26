@@ -7,19 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use chrono::{DateTime, Utc};
 use mz_expr_derive::sqlfunc;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
 use crate::scalar::DomainLimit;
-use crate::scalar::func::EagerUnaryFunc;
 
 #[sqlfunc(
     sqlname = "-",
@@ -213,44 +210,29 @@ fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
 )]
 pub struct CastFloat64ToNumeric(pub Option<NumericMaxScale>);
 
-impl EagerUnaryFunc for CastFloat64ToNumeric {
-    type Input<'a> = f64;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
-        if a.is_infinite() {
-            return Err(EvalError::InfinityOutOfDomain(
-                "casting double precision to numeric".into(),
-            ));
+#[sqlfunc(
+    CastFloat64ToNumeric,
+    sqlname = "double_to_numeric",
+    inverse = super::CastNumericToFloat64,
+    is_monotone = true,
+    output_type_expr = SqlScalarType::Numeric { max_scale: self.0 }
+        .nullable(input_type.nullable)
+)]
+fn cast_float64_to_numeric(&self, a: f64) -> Result<Numeric, EvalError> {
+    if a.is_infinite() {
+        return Err(EvalError::InfinityOutOfDomain(
+            "casting double precision to numeric".into(),
+        ));
+    }
+    let mut a = Numeric::from(a);
+    if let Some(scale) = self.0 {
+        if numeric::rescale(&mut a, scale.into_u8()).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
         }
-        let mut a = Numeric::from(a);
-        if let Some(scale) = self.0 {
-            if numeric::rescale(&mut a, scale.into_u8()).is_err() {
-                return Err(EvalError::NumericFieldOverflow);
-            }
-        }
-        match numeric::munge_numeric(&mut a) {
-            Ok(_) => Ok(a),
-            Err(_) => Err(EvalError::NumericFieldOverflow),
-        }
     }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastNumericToFloat64)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastFloat64ToNumeric {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("double_to_numeric")
+    match numeric::munge_numeric(&mut a) {
+        Ok(_) => Ok(a),
+        Err(_) => Err(EvalError::NumericFieldOverflow),
     }
 }
 
