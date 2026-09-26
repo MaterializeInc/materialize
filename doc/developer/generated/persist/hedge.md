@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/hedge.rs
-revision: 25bb158528
+revision: 897da7252d
 ---
 
 # `persist::hedge`
