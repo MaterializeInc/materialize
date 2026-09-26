@@ -24,6 +24,34 @@ use serde::{Deserialize, Serialize};
 pub mod client;
 pub mod metrics;
 
+/// A position within one fenced catalog history.
+///
+/// Query requirements cover the definitions and configuration used by planning,
+/// not subsequent progress-only publications. A receiver compares them with a
+/// prefix whose effects it has applied, not merely observed in the catalog.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CatalogPosition {
+    /// The Persist shard identifying the catalog history.
+    pub shard_id: mz_persist_types::ShardId,
+    /// Deployment generation in which the context was validated.
+    pub deployment_generation: u64,
+    /// Exclusive upper of the required or applied catalog prefix.
+    pub upper: mz_repr::Timestamp,
+}
+
+impl CatalogPosition {
+    /// Whether both positions belong to the same fenced catalog history.
+    pub fn same_history(&self, other: &Self) -> bool {
+        self.shard_id == other.shard_id && self.deployment_generation == other.deployment_generation
+    }
+
+    /// Whether this applied prefix includes the required context. A position
+    /// from another history or generation cannot satisfy the requirement.
+    pub fn covers(&self, required: &Self) -> bool {
+        self.same_history(required) && self.upper >= required.upper
+    }
+}
+
 /// A function that computes the lag between the given time and wallclock time.
 ///
 /// Because sources usually tick once per second and we collect wallclock lag measurements once per

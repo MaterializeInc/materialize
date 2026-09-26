@@ -6763,6 +6763,7 @@ dependencies = [
  "mz-build-info",
  "mz-catalog-protos",
  "mz-cloud-resources",
+ "mz-cluster-client",
  "mz-cluster-controller",
  "mz-compute-client",
  "mz-compute-types",
@@ -6969,6 +6970,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
+ "mz-persist-types",
  "mz-repr",
  "prometheus",
  "serde",

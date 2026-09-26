@@ -45,6 +45,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cluster_client::CatalogPosition;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -143,6 +144,8 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn crate::durable::DurableCatalogState>>>,
     transient_revision: u64,
+    planning_position: Option<CatalogPosition>,
+    observed_position: Option<CatalogPosition>,
     /// Opening context needed to reconstruct persisted state independently of this catalog.
     diagnostic_config: Arc<StateConfig>,
     /// The latest `transient_revision`, shared by all clones of this catalog.
@@ -195,6 +198,8 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
+            planning_position: self.planning_position,
+            observed_position: self.observed_position,
             diagnostic_config: Arc::clone(&self.diagnostic_config),
             shared_transient_revision: Arc::clone(&self.shared_transient_revision),
         }
@@ -395,6 +400,40 @@ pub struct DebugAwsContext {
 }
 
 impl Catalog {
+    /// The durable prefix required by this projection's planning-visible state.
+    ///
+    /// Starts conservatively at the reconstructed prefix and advances only for
+    /// planning-visible changes. Progress and read-protection metadata do not
+    /// advance it. Savepoints return `None` because their writes are local.
+    pub fn planning_position(&self) -> Option<CatalogPosition> {
+        self.planning_position
+    }
+
+    /// A complete durable prefix applied to this projection, with an exclusive upper.
+    ///
+    /// This is frozen in a clone, not shared with the durable handle or other
+    /// projections. Fetching or advancing a remote upper does not advance this
+    /// certificate. Savepoints return `None`.
+    pub fn observed_position(&self) -> Option<CatalogPosition> {
+        self.observed_position
+    }
+
+    /// Publish only after the corresponding prefix has been applied to `state`.
+    fn advance_positions(
+        &mut self,
+        upper: mz_repr::Timestamp,
+        planning_upper: Option<mz_repr::Timestamp>,
+    ) {
+        if let Some(position) = &mut self.observed_position {
+            assert!(upper >= position.upper, "applied catalog prefix regressed");
+            position.upper = upper;
+            if let Some(upper) = planning_upper {
+                assert!(upper <= position.upper);
+                self.planning_position = Some(CatalogPosition { upper, ..*position });
+            }
+        }
+    }
+
     /// Returns the catalog's transient revision, which starts at 1 and is
     /// incremented on every planning-visible change, including system configuration.
     /// Audit logs, read protection, and shard finalization bookkeeping do not affect it.
@@ -1424,6 +1463,8 @@ impl Catalog {
         use mz_storage_client::controller::StorageTxn;
         let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config));
         let deployment_generation = storage.get_deployment_generation().await?;
+        let shard_id = storage.shard_id();
+        let is_savepoint = storage.is_savepoint();
         let is_bootstrap_complete = storage.is_bootstrap_complete();
         let mut updates = Vec::new();
         let (snapshot, upper, expression_cache_shard, txn_wal_shard) = loop {
@@ -1455,12 +1496,19 @@ impl Catalog {
         )
         .await?;
         storage.mark_bootstrap_complete().await;
+        let position = (!is_savepoint).then_some(CatalogPosition {
+            shard_id,
+            deployment_generation,
+            upper,
+        });
         Ok(OpenCommittedCatalog {
             catalog: Self {
                 state,
                 expr_cache_handle: None,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
                 transient_revision: 1,
+                planning_position: position,
+                observed_position: position,
                 shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 diagnostic_config,
             },
@@ -1868,7 +1916,7 @@ impl Catalog {
         }
     }
 
-    /// Classify an update against the catalog state before applying its batch.
+    /// Classify an update against the catalog state before applying its transaction.
     fn update_affects_planning(
         state: &CatalogState,
         update: &crate::memory::objects::StateUpdate,
@@ -1907,9 +1955,11 @@ impl Catalog {
         ),
         DurableError,
     > {
-        let updates = match mz_ore::future::OreFutureExt::ore_catch_unwind(
+        let (updates, upper) = match mz_ore::future::OreFutureExt::ore_catch_unwind(
             std::panic::AssertUnwindSafe(async {
-                self.storage().await.sync_to_current_updates().await
+                let mut storage = self.storage().await;
+                let updates = storage.sync_to_current_updates().await?;
+                Ok::<_, DurableError>((updates, storage.synced_upper()))
             }),
         )
         .await
@@ -1926,20 +1976,41 @@ impl Catalog {
                 mz_ore::halt!("cannot decode committed catalog changes, restart required: {cause}")
             }
         };
-        let planning_changed = updates
-            .iter()
-            .any(|update| Self::update_affects_planning(&self.state, update));
-        let (builtin_table_updates, catalog_updates) =
-            mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(
-                self.state
-                    .apply_updates(updates, &mut state::LocalExpressionCache::Closed),
-            ))
+        let (builtin_table_updates, catalog_updates, planning_upper) =
+            mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(async {
+                let mut builtin_table_updates = Vec::with_capacity(updates.len());
+                let mut catalog_updates = Vec::with_capacity(updates.len());
+                let mut planning_upper = None;
+                let mut transactions = BTreeMap::<_, Vec<_>>::new();
+                for update in updates {
+                    transactions.entry(update.ts).or_default().push(update);
+                }
+                for (ts, updates) in transactions {
+                    // Classify against each transaction's pre-application state.
+                    // A later release can retire metadata for an earlier DROP
+                    // without advancing the planning position again.
+                    if updates
+                        .iter()
+                        .any(|update| Self::update_affects_planning(&self.state, update))
+                    {
+                        planning_upper = Some(ts.step_forward());
+                    }
+                    let (builtin_updates, parsed_updates) = self
+                        .state
+                        .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
+                        .await;
+                    builtin_table_updates.extend(builtin_updates);
+                    catalog_updates.extend(parsed_updates);
+                }
+                (builtin_table_updates, catalog_updates, planning_upper)
+            }))
             .await
             .unwrap_or_else(|payload| {
                 let cause = mz_ore::panic::downcast_panic_message(&*payload);
                 mz_ore::halt!("cannot apply committed catalog changes, restart required: {cause}")
             });
-        if planning_changed {
+        self.advance_positions(upper, planning_upper);
+        if planning_upper.is_some() {
             self.transient_revision += 1;
             self.shared_transient_revision
                 .store(self.transient_revision, std::sync::atomic::Ordering::SeqCst);

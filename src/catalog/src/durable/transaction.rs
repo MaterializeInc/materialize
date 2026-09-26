@@ -3637,7 +3637,21 @@ impl<'a> Transaction<'a> {
     /// after committing and only then apply the updates in-memory. While this removes assumptions
     /// about the caller in this method, in practice it results in duplicate work on every commit.
     #[mz_ore::instrument(level = "debug")]
-    pub async fn commit(mut self, commit_ts: mz_repr::Timestamp) -> Result<(), CatalogError> {
+    pub async fn commit(self, commit_ts: mz_repr::Timestamp) -> Result<(), CatalogError> {
+        self.commit_with_upper(commit_ts).await.map(|_| ())
+    }
+
+    /// Like [`Self::commit`], returning the actual exclusive commit upper.
+    ///
+    /// The caller's timestamp is a lower bound. Empty progress and timestamp
+    /// allocation can move the successful batch above it. The same update
+    /// consumption and error contracts as [`Self::commit`] apply.
+    /// Read-only empty transactions return their synchronized prefix's upper.
+    /// Savepoint commits return a local upper, not a durable certificate.
+    pub async fn commit_with_upper(
+        mut self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<mz_repr::Timestamp, CatalogError> {
         self.ensure_committable()?;
         self.finalize_index_compaction_bounds();
         let op_updates = self.get_op_updates();
@@ -3664,7 +3678,7 @@ impl<'a> Transaction<'a> {
                     .all(|update| update.ts >= commit_ts && update.ts < upper),
             "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, upper={upper:?}, updates:{updates:?}"
         );
-        Ok(())
+        Ok(upper)
     }
 }
 

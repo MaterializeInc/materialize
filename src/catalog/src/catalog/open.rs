@@ -46,6 +46,7 @@ use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
 };
 use mz_auth::hash::scram256_hash;
+use mz_cluster_client::CatalogPosition;
 use mz_controller_types::ClusterId;
 use mz_controller_types::clusters::ReplicaLogging;
 use mz_expr::CollectionPlan;
@@ -221,7 +222,18 @@ impl Catalog {
         config: StateConfig,
         storage: &'a mut Box<dyn crate::durable::DurableCatalogState>,
     ) -> Result<InitializeStateResult, CatalogError> {
+        Self::initialize_state_with_position(config, storage)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    async fn initialize_state_with_position(
+        config: StateConfig,
+        storage: &mut Box<dyn crate::durable::DurableCatalogState>,
+    ) -> Result<(InitializeStateResult, Option<CatalogPosition>), CatalogError> {
         let deploy_generation = storage.get_deployment_generation().await?;
+        let shard_id = storage.shard_id();
+        let is_savepoint = storage.is_savepoint();
         let writable = !storage.is_read_only() && !storage.is_savepoint();
         let boot_ts = config.boot_ts;
         let mut updates = Vec::new();
@@ -257,13 +269,18 @@ impl Catalog {
                 let collections = reconcile_bootstrap_state(&config, &mut txn)?;
                 // Retired-index bounds can add retractions to the replay input.
                 txn.finalize_index_compaction_bounds();
-                let own_updates = txn.get_and_commit_op_updates();
+                let mut own_updates = txn.get_and_commit_op_updates();
                 fail::fail_point!(&format!(
                     "catalog_initialize_before_commit_{}",
                     config.environment_id.organization_id()
                 ));
-                match txn.commit(boot_ts).await {
-                    Ok(()) => {
+                match txn.commit_with_upper(boot_ts).await {
+                    Ok(upper) => {
+                        for update in &mut own_updates {
+                            update.ts = upper
+                                .step_back()
+                                .expect("committed upper has a predecessor");
+                        }
                         updates.extend(own_updates);
                         reconciled = Some(collections);
                         continue;
@@ -287,6 +304,7 @@ impl Catalog {
             // Reconciliation owns bootstrap audit writes. Replay's durable
             // changes are therefore represented by snapshot equality.
             let before = separate_replay.then(|| txn.current_snapshot());
+            let mut upper = txn.upper();
             fail::fail_point!(&format!(
                 "catalog_initialize_before_replay_{}",
                 config.environment_id.organization_id()
@@ -304,10 +322,17 @@ impl Catalog {
             {
                 // Birth, upgrade and state-changing migrations retain their
                 // atomic write. Same-version replay leaves peer updates queued.
-                txn.commit(boot_ts).await?;
+                upper = txn.commit_with_upper(boot_ts).await?;
             }
             cleanup.await;
-            return Ok(result);
+            // Reconstruction may have left newer peer updates queued. Only the
+            // captured transaction prefix (or our successful commit) is applied.
+            let position = (!is_savepoint).then_some(CatalogPosition {
+                shard_id,
+                deployment_generation: deploy_generation,
+                upper,
+            });
+            return Ok((result, position));
         }
     }
 
@@ -797,6 +822,12 @@ impl Catalog {
             let mut storage = config.storage;
             let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config.state));
 
+            // BOXED FUTURE: Keep initialization's large future off the caller's stack.
+            let (result, position) =
+                Self::initialize_state_with_position(config.state, &mut storage)
+                    .instrument(tracing::info_span!("catalog::initialize_state"))
+                    .boxed()
+                    .await?;
             let InitializeStateResult {
                 state,
                 catalog_updates: _,
@@ -807,20 +838,15 @@ impl Catalog {
                 expr_cache_handle,
                 cached_global_exprs,
                 uncached_local_exprs,
-            } =
-                // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
-                // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-                // Because of that we purposefully move this Future onto the heap (i.e. Box it).
-                Self::initialize_state(config.state, &mut storage)
-                    .instrument(tracing::info_span!("catalog::initialize_state"))
-                    .boxed()
-                    .await?;
+            } = result;
 
             let catalog = Catalog {
                 state,
                 expr_cache_handle,
                 diagnostic_config,
                 transient_revision: 1,
+                planning_position: position,
+                observed_position: position,
                 shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
@@ -983,6 +1009,9 @@ impl Catalog {
         }
 
         let updates = txn.get_and_commit_op_updates();
+        let planning_changed = updates
+            .iter()
+            .any(|update| Self::update_affects_planning(&self.state, update));
         assert!(updates.iter().all(|update| matches!(
             update.kind,
             StateUpdateKind::StorageCollectionMetadata(_)
@@ -999,11 +1028,12 @@ impl Catalog {
             "storage is not allowed to generate catalog changes that would cause changes to builtin tables"
         );
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await?;
+        let upper = txn.commit_with_upper(commit_ts).await?;
         drop(storage);
 
         // Save updated state.
         self.state = state;
+        self.advance_positions(upper, planning_changed.then_some(upper));
         Ok(())
     }
 
