@@ -326,7 +326,7 @@ impl PeekClient {
     /// `catalog_snapshot_cache`.
     ///
     /// This cache tracks the local projection, not durable freshness. SQL
-    /// planning uses [`Self::fresh_catalog_snapshot`] to validate visibility.
+    /// planning separately validates durable visibility before execution.
     pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
         // NOTE: The upgrade can fail even when the revision is unchanged: any
         // in-place mutation of the Coordinator's catalog (including

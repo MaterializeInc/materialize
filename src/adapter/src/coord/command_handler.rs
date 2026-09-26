@@ -371,7 +371,12 @@ impl Coordinator {
                             Ok::<_, AdapterError>(
                                 self.catalog()
                                     .observed_position()
-                                    .expect("query certification requires a committed catalog")
+                                    .ok_or_else(|| {
+                                        AdapterError::Internal(
+                                            "query certification requires a committed catalog"
+                                                .into(),
+                                        )
+                                    })?
                                     .upper,
                             )
                         }

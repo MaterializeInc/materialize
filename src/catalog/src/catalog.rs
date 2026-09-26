@@ -1960,6 +1960,8 @@ impl Catalog {
 
     /// Apply a complete prefix through an exclusive upper. Already synchronized
     /// progress is drained locally, without fetching newer consensus state.
+    /// Waits if the requested upper is not durable yet. Callers that cannot wait
+    /// for a writer must first establish it, for example with [`Self::advance_upper`].
     pub async fn sync_updates_through(
         &mut self,
         upper: mz_repr::Timestamp,
