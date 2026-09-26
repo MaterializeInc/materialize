@@ -29,6 +29,7 @@ from psycopg.errors import (
     InternalError_,
     OperationalError,
 )
+from psycopg.sql import SQL, Identifier
 from urllib3.exceptions import ReadTimeoutError
 
 from materialize import MZ_ROOT, buildkite
@@ -3054,7 +3055,9 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
             with conn.cursor() as cursor:
                 while True:
                     cursor.execute(
-                        f"EXPLAIN TIMESTAMP AS JSON FOR SELECT y FROM {table}"
+                        SQL("EXPLAIN TIMESTAMP AS JSON FOR SELECT y FROM {}").format(
+                            Identifier(table)
+                        )
                     )
                     [(raw,)] = cursor.fetchall()
                     explanation = json.loads(raw)
@@ -3065,7 +3068,9 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
                         and source["write_frontier"]
                         for source in explanation["sources"]
                     ):
-                        cursor.execute(f"SELECT y FROM {table}")
+                        cursor.execute(
+                            SQL("SELECT y FROM {}").format(Identifier(table))
+                        )
                         cursor.fetchall()
                         return
                     if time.monotonic() >= deadline:
