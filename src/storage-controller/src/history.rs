@@ -93,6 +93,7 @@ impl CommandHistory {
                 HelloQuery { .. } | SubscribeObservations => {
                     panic!("query command in lifecycle history")
                 }
+                ApplyCatalogPosition(_) => panic!("replica catalog marker in controller history"),
                 cmd @ Hello { .. } => hello_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,

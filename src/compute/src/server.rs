@@ -24,7 +24,7 @@ use mz_cluster::client::{ClusterClient, ClusterSpec, GuestClusterClient, TimelyC
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
-use mz_compute_client::protocol::response::ComputeResponse;
+use mz_compute_client::protocol::response::{ComputeResponse, PeekError, PeekResponse};
 use mz_compute_client::service::{ComputeClient, PartitionedComputeState, RoleClient};
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
@@ -1139,7 +1139,126 @@ impl<'w> Worker<'w> {
         let Some(state) = self.compute_state.as_mut() else {
             return;
         };
-        for (command, nonce) in self.command_rx.deferred_queries.drain(..) {
+        let commands = std::mem::take(&mut self.command_rx.deferred_queries);
+        let mut blocked = BTreeSet::new();
+        for (command, nonce) in commands {
+            // Cleanup must overtake a catalog wait. Retain FIFO order for other
+            // commands in this connection, including its per-query settings.
+            let cleanup = matches!(command, None | Some(ComputeCommand::CancelPeek { .. }))
+                || matches!(
+                    &command,
+                    Some(ComputeCommand::AllowCompaction { frontier, .. }) if frontier.is_empty()
+                );
+            if cleanup {
+                self.command_rx.deferred_queries.retain(|(waiting, owner)| {
+                    if *owner != nonce {
+                        return true;
+                    }
+                    match (&command, waiting) {
+                        (None, _) => false,
+                        (
+                            Some(ComputeCommand::CancelPeek { uuid }),
+                            Some(ComputeCommand::Peek(peek)),
+                        ) if *uuid == peek.uuid => {
+                            let _ = self.response_tx.send_query(
+                                nonce,
+                                ComputeResponse::PeekResponse(
+                                    peek.uuid,
+                                    PeekResponse::Canceled,
+                                    peek.otel_ctx.clone(),
+                                ),
+                            );
+                            false
+                        }
+                        (
+                            Some(ComputeCommand::AllowCompaction { id, .. }),
+                            Some(ComputeCommand::CreateQueryDataflow {
+                                request_id,
+                                dataflow,
+                                ..
+                            }),
+                        ) if dataflow.export_ids().any(|export| export == *id) => {
+                            let _ = self.response_tx.send_query(
+                                nonce,
+                                ComputeResponse::QueryDataflowResponse {
+                                    request_id: *request_id,
+                                    error: Some(format!(
+                                        "query export {id} dropped before admission"
+                                    )),
+                                },
+                            );
+                            false
+                        }
+                        _ => true,
+                    }
+                });
+                if !self
+                    .command_rx
+                    .deferred_queries
+                    .iter()
+                    .any(|(_, owner)| *owner == nonce)
+                {
+                    blocked.remove(&nonce);
+                }
+            }
+            if !cleanup && blocked.contains(&nonce) {
+                self.command_rx.deferred_queries.push_back((command, nonce));
+                continue;
+            }
+            if self.command_rx.replica_owned {
+                let required = match &command {
+                    Some(ComputeCommand::Peek(peek)) => Some(peek.catalog_position.as_ref()),
+                    Some(ComputeCommand::CreateQueryDataflow {
+                        catalog_position, ..
+                    }) => Some(catalog_position.as_deref()),
+                    _ => None,
+                };
+                if let Some(required) = required {
+                    let admission = match (required, state.catalog_position.as_ref()) {
+                        (None, _) => Err("native query requires a catalog position"),
+                        (Some(required), Some(applied)) if !applied.same_history(required) => Err(
+                            "query catalog history or deployment generation does not match replica",
+                        ),
+                        (Some(required), applied) => {
+                            Ok(applied.is_some_and(|applied| applied.covers(required)))
+                        }
+                    };
+                    match admission {
+                        Ok(true) => (),
+                        Ok(false) => {
+                            if !state.catalog_catchup_requested {
+                                state.catalog_catchup_requested = true;
+                                let _ = self.response_tx.send(ComputeResponse::CatalogCatchup(
+                                    Box::new(*required.unwrap()),
+                                ));
+                            }
+                            blocked.insert(nonce);
+                            self.command_rx.deferred_queries.push_back((command, nonce));
+                            continue;
+                        }
+                        Err(error) => {
+                            let response = match command {
+                                Some(ComputeCommand::Peek(peek)) => ComputeResponse::PeekResponse(
+                                    peek.uuid,
+                                    PeekResponse::Error(PeekError::unstructured(error)),
+                                    peek.otel_ctx,
+                                ),
+                                Some(ComputeCommand::CreateQueryDataflow {
+                                    request_id, ..
+                                }) => ComputeResponse::QueryDataflowResponse {
+                                    request_id,
+                                    error: Some(error.into()),
+                                },
+                                _ => unreachable!(
+                                    "only execution commands require catalog admission"
+                                ),
+                            };
+                            let _ = self.response_tx.send_query(nonce, response);
+                            continue;
+                        }
+                    }
+                }
+            }
             // Routing events and responses share one FIFO. Opening precedes QueryReady,
             // and retirement follows the handler's cleanup, even without a local peer.
             if matches!(command, Some(ComputeCommand::HelloQuery { .. })) {

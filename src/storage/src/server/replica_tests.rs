@@ -139,8 +139,47 @@ async fn native_storage_outlives_queries() {
     ));
     let before = progress(&mut replica, id, Timestamp::MIN).await;
 
+    let position = mz_cluster_client::CatalogPosition {
+        shard_id: mz_persist_types::ShardId::new(),
+        deployment_generation: 1,
+        upper: Timestamp::from(20),
+    };
     let oneshot = Uuid::new_v4();
-    query.send(request(oneshot)).await.unwrap();
+    query.send(request(oneshot, position)).await.unwrap();
+    loop {
+        if let ReplicaStorageResponse::Response(StorageResponse::CatalogCatchup(required)) =
+            replica.recv().await.unwrap().unwrap()
+        {
+            assert_eq!(*required, position);
+            break;
+        }
+    }
+    // Readiness alone does not certify any catalog prefix. A query cannot supply
+    // its own application marker, even when no lifecycle prefix is defined yet.
+    assert!(
+        query
+            .send(StorageCommand::ApplyCatalogPosition(Box::new(position)))
+            .await
+            .is_err()
+    );
+    assert!(
+        timeout(Duration::from_millis(100), query.recv())
+            .await
+            .is_err()
+    );
+    replica.send(StorageCommand::UpdateConfiguration(Default::default()));
+    replica.send(StorageCommand::ApplyCatalogPosition(Box::new(
+        mz_cluster_client::CatalogPosition {
+            upper: Timestamp::from(19),
+            ..position
+        },
+    )));
+    assert!(
+        timeout(Duration::from_millis(100), query.recv())
+            .await
+            .is_err()
+    );
+    replica.send(StorageCommand::ApplyCatalogPosition(Box::new(position)));
     let Some(StorageResponse::StagedBatches(batches)) = query.recv().await.unwrap() else {
         panic!("expected query result");
     };
@@ -275,9 +314,10 @@ pub(crate) fn ingestion(id: GlobalId, remap: GlobalId) -> StorageCommand {
     }))
 }
 
-fn request(id: Uuid) -> StorageCommand {
+fn request(id: Uuid, position: mz_cluster_client::CatalogPosition) -> StorageCommand {
     let desc = mz_repr::RelationDesc::empty();
     StorageCommand::RunOneshotIngestion(Box::new(RunOneshotIngestion {
+        catalog_position: Some(Box::new(position)),
         ingestion_id: id,
         collection_id: GlobalId::User(3),
         collection_meta: metadata(desc.clone()),

@@ -146,6 +146,16 @@ async fn exercise_liveness() {
     driver.configure(mz_catalog::compute_config::replica_compute_config(
         &catalog, cluster, replica,
     ));
+    let catalog_position = catalog
+        .planning_position()
+        .expect("committed fixture position");
+    // This test drives enactment without the follower loop. Certify the applied
+    // configuration before installation, not later read-protection publications.
+    driver.io.apply_catalog_position(
+        catalog
+            .observed_position()
+            .expect("committed follower position"),
+    );
     driver
         .io
         .wait(effects.observe_plans(&catalog, cluster, replica, &fixture.store, &build))
@@ -291,6 +301,7 @@ async fn exercise_liveness() {
         .io
         .wait(assert_rows(
             &mut *query,
+            catalog_position,
             fixture.index,
             &fixture.desc,
             15_000,

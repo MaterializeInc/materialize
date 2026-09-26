@@ -10,7 +10,8 @@
 use std::process::Stdio;
 
 use mz_compute_client::logging::{LogVariant, LoggingConfig, TimelyLog};
-use mz_compute_client::protocol::command::InstanceConfig;
+use mz_compute_client::protocol::command::{InstanceConfig, PeekTarget};
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_persist_client::PersistLocation;
 use mz_repr::{GlobalId, Timestamp};
 use mz_service::client::GenericClient;
@@ -140,6 +141,75 @@ async fn replica_progress_outlives_query_factory() {
         query.recv().await.unwrap(),
         Some(ComputeResponse::QueryReady)
     ));
+
+    let position = mz_cluster_client::CatalogPosition {
+        shard_id: mz_persist_client::ShardId::new(),
+        deployment_generation: 1,
+        upper: Timestamp::from(10),
+    };
+    let request_id = Uuid::new_v4();
+    let export = GlobalId::Transient(1);
+    query
+        .send(ComputeCommand::SetQueryMaxResultSize {
+            max_result_size: u64::MAX,
+        })
+        .await
+        .unwrap();
+    query
+        .send(ComputeCommand::CreateQueryDataflow {
+            request_id,
+            catalog_position: Some(Box::new(position)),
+            dataflow: Box::new(super::query_wire_tests::constant_dataflow(export)),
+        })
+        .await
+        .unwrap();
+    // Catch-up requests use maintained progress, never the query response lane.
+    loop {
+        if let ComputeResponse::CatalogCatchup(required) = replica.recv().await.unwrap().unwrap() {
+            assert_eq!(*required, position);
+            break;
+        }
+    }
+    assert!(
+        query
+            .send(ComputeCommand::ApplyCatalogPosition(Box::new(position)))
+            .await
+            .is_err()
+    );
+    replica.send(ComputeCommand::ApplyCatalogPosition(Box::new(position)));
+    loop {
+        match query.recv().await.unwrap().unwrap() {
+            ComputeResponse::QueryDataflowResponse {
+                request_id: id,
+                error,
+            } => {
+                assert_eq!(id, request_id);
+                assert_eq!(error, None);
+                break;
+            }
+            ComputeResponse::Frontiers(..) => (),
+            response => panic!("unexpected query admission response: {response:?}"),
+        }
+    }
+    // Admission precedes scheduling and hydration, including on the second worker.
+    query.send(ComputeCommand::Schedule(export)).await.unwrap();
+    let mut peek = crate::compute_state::index_peek_tests::index_peek_with_uuid(request_id, None);
+    peek.target = PeekTarget::Index { id: export };
+    peek.catalog_position = Some(position);
+    query
+        .send(ComputeCommand::Peek(Box::new(peek)))
+        .await
+        .unwrap();
+    loop {
+        match query.recv().await.unwrap().unwrap() {
+            ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _) => {
+                assert_eq!(id, request_id);
+                break;
+            }
+            ComputeResponse::Frontiers(..) => (),
+            response => panic!("unexpected query execution response: {response:?}"),
+        }
+    }
     let before = logging_progress_after(&mut replica, log_id, Timestamp::MIN).await;
     drop(query);
     drop(factory);

@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 mz-ore = { path = "../ore", features = ["tracing"] }
+mz-persist-types = { path = "../persist-types" }
+mz-repr = { path = "../repr" }
 prometheus.workspace = true
 proptest = { workspace = true, optional = true }
 serde.workspace = true

@@ -113,6 +113,7 @@ impl Harness {
             nonce,
             ComputeCommand::CreateQueryDataflow {
                 request_id: A,
+                catalog_position: None,
                 dataflow: Box::new(alias(as_of)),
             },
         );
@@ -301,6 +302,7 @@ async fn query_subscribe_logs_frontiers_without_disturbing_maintained_logging() 
         A,
         ComputeCommand::CreateQueryDataflow {
             request_id: B,
+            catalog_position: None,
             dataflow: Box::new(subscribe),
         },
     );
@@ -391,6 +393,7 @@ async fn drop_before_reader_acquisition_resolves_creation_once() {
         A,
         ComputeCommand::CreateQueryDataflow {
             request_id: B,
+            catalog_position: None,
             dataflow: Box::new(source_dataflow(source_metadata(), EXPORT)),
         },
     );

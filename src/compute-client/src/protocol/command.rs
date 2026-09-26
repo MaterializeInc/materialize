@@ -51,15 +51,24 @@ pub enum ComputeCommand {
     CreateQueryDataflow {
         /// Unique creation request within this connection.
         request_id: Uuid,
+        /// Validated catalog context. Native replicas require this position.
+        /// Boxed to keep the shared command enum small.
+        catalog_position: Option<Box<mz_cluster_client::CatalogPosition>>,
         /// Dataflow to admit and render.
         dataflow: Box<DataflowDescription<RenderPlan, CollectionMetadata>>,
     },
+    /// Certifies a catalog prefix after the replica owner has enqueued its
+    /// configuration and retirement effects in this lane. Query connections
+    /// cannot send this command. Import readiness remains a separate check.
+    /// Broadcast to every worker, including across processes.
+    ApplyCatalogPosition(Box<mz_cluster_client::CatalogPosition>),
     /// `Hello` is the first command sent to a replica after a connection was established. It
     /// provides the replica with meta information about the connection.
     ///
     /// This command is special in that it is broadcast to all workers of a multi-worker replica.
-    /// All subsequent commands, except `UpdateConfiguration`, are only sent to the first worker,
-    /// which then distributes them to the other workers using a dataflow.
+    /// Subsequent lifecycle commands, except `UpdateConfiguration` and `ApplyCatalogPosition`,
+    /// are only sent to the first worker, which then distributes them to the other workers
+    /// using a dataflow.
     Hello {
         /// A nonce unique to the current iteration of the compute protocol.
         ///
@@ -467,6 +476,9 @@ impl PeekTarget {
 /// correctly answer the `Peek`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Peek {
+    /// Validated definitions/configuration context for the independent query
+    /// protocol. Legacy controller peeks do not require a catalog position.
+    pub catalog_position: Option<mz_cluster_client::CatalogPosition>,
     /// Target-specific metadata.
     pub target: PeekTarget,
     /// The relation description for the rows returned by this peek, before

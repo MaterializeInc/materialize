@@ -87,6 +87,9 @@ pub enum InternalStorageCommand {
     },
     /// Initial lifecycle configuration has entered the common command order.
     QueryReady,
+    /// Lifecycle catalog marker, ordered after rendering-stage configuration
+    /// and retirement commands emitted by the same worker.
+    ApplyCatalogPosition(Box<mz_cluster_client::CatalogPosition>),
     /// One worker has produced its terminal result. Tokens can be released only
     /// after every worker has finished, so local shutdown cannot stop a sibling's
     /// progress. The nonce fences notifications from cancelled connections.

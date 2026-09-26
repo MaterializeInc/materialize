@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail, ensure};
 use differential_dataflow::lattice::Lattice;
@@ -33,6 +33,8 @@ use mz_compute_types::plan::LirRelationExpr;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::metrics::{MetricVecExt, MetricsRegistry};
 use mz_repr::{GlobalId, Timestamp};
+use mz_storage::server::ReplicaStorageResponse;
+use mz_storage_client::client::StorageResponse;
 use mz_storage_client::storage_collections::CollectionFrontiers;
 use mz_storage_types::read_holds::{ChangeTx, ReadHold};
 use mz_storage_types::time_dependence::TimeDependence;
@@ -78,9 +80,33 @@ pub(super) struct ReplicaIo {
     frontiers: BTreeMap<GlobalId, FrontiersResponse>,
     hydration: SequentialHydration,
     config: mz_dyncfg::ConfigSet,
+    catalog_catchup: Arc<tokio::sync::Notify>,
 }
 
 impl ReplicaIo {
+    pub async fn idle(&mut self, delay: Duration) {
+        let catchup = Arc::clone(&self.catalog_catchup).notified_owned();
+        self.wait(async {
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => (),
+                _ = catchup => (),
+            }
+        })
+        .await;
+    }
+
+    /// Configuration and retirement precede these markers. Installation and
+    /// import readiness are independent, so a missing unrelated plan cannot
+    /// prevent queries from observing applied configuration.
+    pub fn apply_catalog_position(&mut self, position: mz_cluster_client::CatalogPosition) {
+        self.send(ComputeCommand::ApplyCatalogPosition(Box::new(position)));
+        if let Some(storage) = &mut self.storage {
+            storage.endpoint.send(
+                mz_storage_client::client::StorageCommand::ApplyCatalogPosition(Box::new(position)),
+            );
+        }
+    }
+
     pub async fn wait<F: Future>(&mut self, future: F) -> F::Output {
         tokio::pin!(future);
         loop {
@@ -92,11 +118,20 @@ impl ReplicaIo {
                         None => std::future::pending().await,
                     }
                 } => match response {
+                    Ok(Some(ReplicaStorageResponse::Response(
+                        StorageResponse::CatalogCatchup(_),
+                    ))) => {
+                        self.catalog_catchup.notify_one();
+                    }
                     Ok(Some(response)) => self.storage.as_mut().expect("storage endpoint").absorb(response),
                     result => mz_ore::halt!("replica storage progress lost: {result:?}"),
                 },
                 response = self.endpoint.recv() => match response {
                     Ok(Some(response)) => {
+                        if matches!(&response, ComputeResponse::CatalogCatchup(_)) {
+                            self.catalog_catchup.notify_one();
+                            continue;
+                        }
                         for command in self.hydration.observe_response(&response, &self.config) {
                             self.endpoint.send(command);
                         }
@@ -236,6 +271,7 @@ impl ReplicaEnactment {
             frontiers: BTreeMap::new(),
             hydration,
             config: mz_dyncfgs::all_dyncfgs(),
+            catalog_catchup: Arc::new(tokio::sync::Notify::new()),
         };
         io.send(ComputeCommand::CreateInstance(Box::new(config)));
         let mut result = Self {

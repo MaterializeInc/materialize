@@ -3553,11 +3553,14 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
     )
     # Introspection inventories durable items across owners. Name resolution
     # must not expose a foreign owner's temporary namespace to a new session.
+    # Catalog lookup errors use a generic SQLSTATE, so check the missing name.
     for name in ("tt", "tv"):
         try:
             query(f"SELECT * FROM {name}")
         except PsycopgError as error:
-            assert error.sqlstate == "42P01", str(error)
+            assert error.diag.message_primary == f"unknown catalog item '{name}'", str(
+                error
+            )
         else:
             raise UIError(f"a new session resolved the crashed owner's {name}")
     # Connection IDs can be recycled. Session UUIDs identify the rows that must

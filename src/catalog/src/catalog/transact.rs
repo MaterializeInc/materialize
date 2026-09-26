@@ -829,19 +829,25 @@ impl Catalog {
         // A definite CAS loss leaves the candidate unpublished. The caller must
         // refresh its projection and revalidate before retrying. Other failures
         // can follow a successful append, so they still require recovery.
-        match tx.commit(commit_ts).await {
+        let upper = match tx.commit_with_upper(commit_ts).await {
             Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
                 return Err(error.into());
             }
-            result => {
-                result.unwrap_or_terminate("catalog storage transaction commit must succeed");
-            }
+            result => result.unwrap_or_terminate("catalog storage transaction commit must succeed"),
+        };
+        // These are this transaction's own effects, parsed before the durable
+        // append could rebase or allocate its final timestamp.
+        for update in &mut catalog_updates {
+            update.ts = upper
+                .step_back()
+                .expect("committed upper has a predecessor");
         }
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
         let mut created_clients = Vec::new();
+        let mut position_planning_changed = false;
         if let Some(TransactInnerResult {
             state,
             planning_changed,
@@ -858,7 +864,9 @@ impl Catalog {
             }
             self.state = state;
             created_clients = created_client_incarnations;
+            position_planning_changed = planning_changed;
         }
+        self.advance_positions(upper, position_planning_changed.then_some(upper));
 
         Ok(TransactionResult {
             builtin_table_updates,
@@ -4481,6 +4489,12 @@ mod tests {
             )
             .await
             .expect("client protection");
+        let mut batched_follower =
+            Catalog::open_debug_read_only_catalog(persist.clone(), organization, &bootstrap)
+                .await
+                .expect("open follower before SQL drop");
+        assert!(batched_follower.state().try_get_entry(&id).is_some());
+        let batched_revision = batched_follower.transient_revision();
         let ts = catalog.current_upper().await;
         catalog
             .transact(
@@ -4491,6 +4505,8 @@ mod tests {
             )
             .await
             .expect("SQL drop preserves client-required shared metadata");
+        let drop_position = catalog.planning_position().expect("committed SQL drop");
+        assert_eq!(drop_position.upper, ts.step_forward());
         let metadata = catalog.state().storage_metadata();
         assert_eq!(metadata.collection_metadata[&global_id], shard);
         assert!(!metadata.collection_metadata.contains_key(&new_global_id));
@@ -4527,6 +4543,28 @@ mod tests {
         assert!(metadata.unfinalized_shards.contains(&shard));
         assert_eq!(catalog.transient_revision(), revision);
         assert!(snapshot.transient_revision_is_current());
+        assert_eq!(catalog.planning_position(), snapshot.planning_position());
+        let observed = catalog.observed_position().expect("committed release");
+        assert!(observed.upper > snapshot.observed_position().expect("snapshot prefix").upper);
+        assert_eq!(snapshot.observed_position(), snapshot.planning_position());
+
+        // One sync must classify cleanup against the state after DROP, not
+        // against the live table at the beginning of the batched prefix.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            batched_follower.sync_to_current_updates(),
+        )
+        .await
+        .expect("bounded batched drop and cleanup sync")
+        .expect("follow SQL drop and client release together");
+        assert_eq!(batched_follower.planning_position(), Some(drop_position));
+        assert_eq!(batched_follower.observed_position(), Some(observed));
+        assert_eq!(batched_follower.transient_revision(), batched_revision + 1);
+        assert!(batched_follower.state().try_get_entry(&id).is_none());
+        let metadata = batched_follower.state().storage_metadata();
+        assert!(!metadata.collection_metadata.contains_key(&global_id));
+        assert!(!metadata.collection_metadata.contains_key(&new_global_id));
+        assert!(metadata.unfinalized_shards.contains(&shard));
 
         follower
             .sync_to_current_updates()
@@ -4538,7 +4576,57 @@ mod tests {
         assert!(metadata.unfinalized_shards.contains(&shard));
         assert_eq!(follower.transient_revision(), follower_revision);
         assert!(follower_snapshot.transient_revision_is_current());
+        assert_eq!(follower.observed_position(), Some(observed));
+        assert_eq!(
+            follower.planning_position(),
+            follower_snapshot.planning_position()
+        );
+        assert!(
+            follower_snapshot
+                .observed_position()
+                .expect("frozen follower")
+                .upper
+                < observed.upper
+        );
+
+        // Remote progress alone is not an applied-prefix certificate, even
+        // though it requires no planning or projection changes once consumed.
+        let progress = observed.upper.saturating_add(100);
+        catalog
+            .upper_handle()
+            .advance_upper(progress)
+            .await
+            .expect("empty progress");
+        assert_eq!(catalog.observed_position(), Some(observed));
+        assert_eq!(catalog.current_upper().await, progress);
+        assert_eq!(catalog.observed_position(), Some(observed));
+        catalog
+            .sync_to_current_updates()
+            .await
+            .expect("consume empty progress");
+        assert_eq!(
+            catalog.observed_position().expect("applied progress").upper,
+            progress
+        );
+        assert_eq!(catalog.planning_position(), snapshot.planning_position());
+        assert!(
+            catalog
+                .transact(None, progress, None, vec![])
+                .await
+                .expect("no-op commit")
+                .catalog_updates
+                .is_empty()
+        );
+        assert_eq!(
+            catalog.observed_position().expect("applied no-op").upper,
+            catalog.current_upper().await
+        );
+        assert_eq!(catalog.planning_position(), snapshot.planning_position());
+        assert_eq!(snapshot.observed_position(), snapshot.planning_position());
+        drop(snapshot);
+        drop(follower_snapshot);
         follower.expire().await;
+        batched_follower.expire().await;
         catalog.expire().await;
     }
 
@@ -6778,6 +6866,7 @@ mod tests {
         Catalog::with_debug(|mut catalog| async move {
             let observed = record_max_connections(&mut catalog);
             let before = catalog.system_config().max_connections();
+            let positions = (catalog.planning_position(), catalog.observed_position());
 
             // The clone carries the registered callbacks, so the dry run
             // genuinely *could* fire them. That's what makes this test worth
@@ -6797,6 +6886,10 @@ mod tests {
 
             assert_eq!(dry_run_state.system_config().max_connections(), before + 1);
             assert_eq!(catalog.system_config().max_connections(), before);
+            assert_eq!(
+                (catalog.planning_position(), catalog.observed_position()),
+                positions
+            );
             assert!(
                 observed.lock().expect("recorder lock").is_empty(),
                 "a dry run must not notify callbacks"
@@ -6815,6 +6908,7 @@ mod tests {
         Catalog::with_debug(|mut catalog| async move {
             let observed = record_max_connections(&mut catalog);
             let before = catalog.system_config().max_connections();
+            let positions = (catalog.planning_position(), catalog.observed_position());
 
             let oracle_write_ts = catalog.current_upper().await;
             let result = catalog
@@ -6836,6 +6930,10 @@ mod tests {
 
             assert!(result.is_err(), "the second op must abort the transaction");
             assert_eq!(catalog.system_config().max_connections(), before);
+            assert_eq!(
+                (catalog.planning_position(), catalog.observed_position()),
+                positions
+            );
             assert!(
                 observed.lock().expect("recorder lock").is_empty(),
                 "an aborted transaction must not notify callbacks"

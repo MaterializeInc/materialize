@@ -1234,6 +1234,7 @@ impl Instance {
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
             | ComputeCommand::UpdateConfiguration(_)
+            | ComputeCommand::ApplyCatalogPosition(_)
             | ComputeCommand::CancelPeek { .. } => None,
         }
     }
@@ -1752,6 +1753,7 @@ impl Instance {
         );
 
         let peek = Peek {
+            catalog_position: None,
             literal_constraints,
             uuid,
             timestamp,
@@ -2022,6 +2024,10 @@ impl Instance {
         // Invariant: the replica exists and has the expected epoch.
 
         match response {
+            ComputeResponse::CatalogCatchup(_) => {
+                // Native catalog catch-up belongs to the replica owner, not this controller.
+                soft_panic_or_log!("catalog catch-up received by legacy compute controller");
+            }
             ComputeResponse::QueryReady | ComputeResponse::QueryDataflowResponse { .. } => {
                 soft_panic_or_log!("query-only response received on lifecycle connection");
             }

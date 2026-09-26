@@ -187,6 +187,7 @@ pub fn render(
                                     cmd,
                                     Some(
                                         ComputeCommand::UpdateConfiguration(_)
+                                            | ComputeCommand::ApplyCatalogPosition(_)
                                             | ComputeCommand::HelloQuery { .. }
                                             | ComputeCommand::SetQueryMaxResultSize { .. }
                                     )
@@ -356,16 +357,17 @@ fn split_command(
 ) -> impl Iterator<Item = (usize, UnifiedCommand)> {
     use itertools::Either;
 
-    let (command, request_id) = match command {
+    let (command, query_context) = match command {
         UnifiedCommand::Compute(
             Some(ComputeCommand::CreateQueryDataflow {
                 request_id,
                 dataflow,
+                catalog_position,
             }),
             origin,
         ) => (
             UnifiedCommand::Compute(Some(ComputeCommand::CreateDataflow(dataflow)), origin),
-            Some(request_id),
+            Some((request_id, catalog_position)),
         ),
         command => (command, None),
     };
@@ -418,13 +420,14 @@ fn split_command(
 
     commands
         .into_iter()
-        .map(move |command| match (request_id, command) {
+        .map(move |command| match (&query_context, command) {
             (
-                Some(request_id),
+                Some((request_id, catalog_position)),
                 UnifiedCommand::Compute(Some(ComputeCommand::CreateDataflow(dataflow)), origin),
             ) => UnifiedCommand::Compute(
                 Some(ComputeCommand::CreateQueryDataflow {
-                    request_id,
+                    request_id: *request_id,
+                    catalog_position: catalog_position.clone(),
                     dataflow,
                 }),
                 origin,

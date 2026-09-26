@@ -53,11 +53,14 @@ const COPY_FROM_STDIN_MAX_BATCH_BYTES: usize = 32 * 1024 * 1024;
 const COPY_FROM_STDIN_MAX_WORKERS: usize = 8;
 
 impl Coordinator {
+    /// `catalog` is the captured planning snapshot, validated by the caller for
+    /// native execution. It must not be replaced by a fresh sequencing snapshot.
     pub(crate) async fn sequence_copy_from(
         &mut self,
         mut ctx: ExecuteContext,
         plan: plan::CopyFromPlan,
         target_cluster: TargetCluster,
+        catalog: Arc<crate::catalog::Catalog>,
     ) {
         if ctx
             .session()
@@ -100,9 +103,9 @@ impl Coordinator {
             let style = ExprPrepOneShot {
                 logical_time: EvalTime::NotAvailable,
                 session: ctx.session(),
-                catalog_state: self.catalog().state(),
+                catalog_state: catalog.state(),
             };
-            let mut from = from.lower_uncorrelated(self.catalog().state().system_config())?;
+            let mut from = from.lower_uncorrelated(catalog.state().system_config())?;
             style.prep_scalar_expr(&mut from)?;
 
             // TODO(cf3): Add structured errors for the below uses of `coord_bail!`
@@ -119,7 +122,7 @@ impl Coordinator {
         };
 
         // We check in planning that we're copying into a Table, but be defensive.
-        let Some(entry) = self.catalog().try_get_entry(&target_id) else {
+        let Some(entry) = catalog.try_get_entry(&target_id) else {
             return ctx.retire(Err(AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "table",
                 dependency_id: target_id.to_string(),
@@ -255,10 +258,7 @@ impl Coordinator {
             shape,
         };
 
-        let target_cluster = match self
-            .catalog()
-            .resolve_target_cluster(target_cluster, ctx.session())
-        {
+        let target_cluster = match catalog.resolve_target_cluster(target_cluster, ctx.session()) {
             Ok(cluster) => cluster,
             Err(err) => {
                 return ctx.retire(Err(err));
@@ -269,11 +269,16 @@ impl Coordinator {
             if self.read_only_controllers {
                 return ctx.retire(Err(AdapterError::ReadOnly));
             }
-            let metadata = return_if_err!(
-                client.collection_metadata(self.catalog(), collection_id),
+            let metadata = return_if_err!(client.collection_metadata(&catalog, collection_id), ctx);
+            let position = return_if_err!(
+                catalog
+                    .planning_position()
+                    .ok_or_else(|| AdapterError::Unstructured(anyhow::anyhow!(
+                        "native COPY FROM requires a validated catalog position"
+                    ))),
                 ctx
             );
-            Some((client, metadata))
+            Some((client, metadata, position))
         } else {
             None
         };
@@ -303,8 +308,9 @@ impl Coordinator {
             },
         );
 
-        if let Some((client, collection_meta)) = query_execution {
+        if let Some((client, collection_meta, position)) = query_execution {
             let command = mz_storage_client::client::RunOneshotIngestion {
+                catalog_position: None,
                 ingestion_id,
                 collection_id,
                 collection_meta,
@@ -313,7 +319,7 @@ impl Coordinator {
             let task = mz_ore::task::spawn(
                 || "query COPY FROM",
                 async move {
-                    let result = client.stage_oneshot(cluster_id, command).await;
+                    let result = client.stage_oneshot(cluster_id, command, position).await;
                     closure(result.unwrap_or_else(|error| vec![Err(error.to_string())]));
                 }
                 .instrument(tracing::Span::current()),

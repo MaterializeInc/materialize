@@ -15,6 +15,122 @@ use std::num::NonZeroUsize;
 use mz_repr::Row;
 
 #[mz_ore::test]
+fn catalog_markers_broadcast_and_catchup_comes_from_worker_zero() {
+    let position = mz_cluster_client::CatalogPosition {
+        shard_id: mz_persist_types::ShardId::new(),
+        deployment_generation: 1,
+        upper: Timestamp::from(10),
+    };
+    let marker = ComputeCommand::ApplyCatalogPosition(Box::new(position));
+    let catchup = ComputeResponse::CatalogCatchup(Box::new(position));
+    let mut processes = <(ComputeCommand, ComputeResponse)>::new(2);
+    for (process, command) in processes
+        .split_command(marker.clone())
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(command, Some(marker.clone()));
+        let mut workers = <(ComputeCommand, ComputeResponse)>::new(3);
+        assert_eq!(
+            workers.split_command(command.unwrap()),
+            vec![Some(marker.clone()); 3]
+        );
+        for worker in [2, 0, 1] {
+            let response = workers.absorb_response(worker, catchup.clone());
+            assert_eq!(response.is_some(), worker == 0);
+            if let Some(response) = response {
+                let response = processes.absorb_response(process, response.unwrap());
+                assert_eq!(
+                    response.map(Result::unwrap),
+                    (process == 0).then(|| catchup.clone())
+                );
+            }
+        }
+    }
+
+    // Query payloads and cancellations still take the ordered worker-0 lane.
+    for command in [
+        ComputeCommand::CreateQueryDataflow {
+            request_id: Uuid::new_v4(),
+            catalog_position: Some(Box::new(position)),
+            dataflow: Box::new(mz_compute_types::dataflows::DataflowDescription::new(
+                "query".into(),
+            )),
+        },
+        ComputeCommand::CancelPeek {
+            uuid: Uuid::new_v4(),
+        },
+    ] {
+        assert_eq!(
+            processes.split_command(command.clone()),
+            vec![Some(command), None]
+        );
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+async fn catalog_authority_is_lifecycle_only() {
+    use mz_service::local::LocalClient;
+    use tokio::sync::mpsc;
+
+    let position = mz_cluster_client::CatalogPosition {
+        shard_id: mz_persist_types::ShardId::new(),
+        deployment_generation: 1,
+        upper: Timestamp::from(10),
+    };
+    for query in [false, true] {
+        let (commands, mut received) = mpsc::unbounded_channel();
+        let (responses, response_rx) = mpsc::unbounded_channel();
+        let mut client = RoleClient::new(LocalClient::new(
+            response_rx,
+            commands,
+            std::thread::current(),
+        ));
+        let nonce = Uuid::new_v4();
+        let hello = if query {
+            ComputeCommand::HelloQuery { nonce }
+        } else {
+            ComputeCommand::Hello { nonce }
+        };
+        client.send(hello.clone()).await.unwrap();
+        assert_eq!(received.recv().await, Some(ComputeCommand::Hello { nonce }));
+        if query {
+            assert_eq!(received.recv().await, Some(hello));
+            let limit = ComputeCommand::SetQueryMaxResultSize {
+                max_result_size: 100,
+            };
+            client.send(limit.clone()).await.unwrap();
+            assert_eq!(received.recv().await, Some(limit));
+        }
+        let marker = ComputeCommand::ApplyCatalogPosition(Box::new(position));
+        let result = client.send(marker.clone()).await;
+        let catchup = ComputeResponse::CatalogCatchup(Box::new(position));
+        responses.send(catchup.clone()).unwrap();
+        if query {
+            assert!(result.is_err());
+            assert!(received.try_recv().is_err());
+            assert!(client.recv().await.is_err());
+        } else {
+            result.unwrap();
+            assert_eq!(received.recv().await, Some(marker));
+            assert_eq!(client.recv().await.unwrap(), Some(catchup));
+        }
+
+        let uuid = Uuid::new_v4();
+        let cancel = ComputeCommand::CancelPeek { uuid };
+        client.send(cancel.clone()).await.unwrap();
+        assert_eq!(received.recv().await, Some(cancel));
+        let canceled = ComputeResponse::PeekResponse(
+            uuid,
+            PeekResponse::Canceled,
+            OpenTelemetryContext::empty(),
+        );
+        responses.send(canceled.clone()).unwrap();
+        assert_eq!(client.recv().await.unwrap(), Some(canceled));
+    }
+}
+
+#[mz_ore::test]
 fn hydration_waits_for_every_worker_and_is_monotone() {
     for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
         let mut state = <(ComputeCommand, ComputeResponse)>::new(3);

@@ -82,6 +82,7 @@ use std::thread;
 use std::time::Duration;
 
 use fail::fail_point;
+use mz_cluster_client::CatalogPosition;
 use mz_ore::now::NowFn;
 use mz_ore::soft_assert_or_log;
 use mz_ore::tracing::TracingHandle;
@@ -309,6 +310,8 @@ impl StorageState {
             query_ready: false,
             replica_commands: None,
             replica_progress: None,
+            applied_catalog_position: None,
+            catalog_catchup: None,
             now,
             timely_worker_index,
             timely_worker_peers,
@@ -381,6 +384,11 @@ pub struct StorageState {
     /// Both remain absent for storage guests whose host owns command dispatch.
     replica_commands: Option<mpsc::UnboundedReceiver<crate::replica::ReplicaCommand>>,
     replica_progress: Option<mz_cluster::replica_progress::Sender<crate::replica::WorkerResponse>>,
+    /// Undefined until a lifecycle marker passes rendering-stage configuration.
+    /// Query requirements and catalog observations cannot advance this prefix.
+    applied_catalog_position: Option<CatalogPosition>,
+    /// Highest outstanding catch-up hint, coalesced across pending queries.
+    catalog_catchup: Option<CatalogPosition>,
     /// Undocumented
     pub now: NowFn,
     /// Index of the associated timely dataflow worker.
@@ -896,16 +904,56 @@ impl<'w> Worker<'w> {
     }
 
     fn admit_queries(&mut self) {
-        if !self.storage_state.query_ready {
-            return;
+        let applied = self.storage_state.applied_catalog_position;
+        let mut ready = Vec::new();
+        let mut catchup: Option<CatalogPosition> = None;
+        // Oneshots have independent contexts and no connection-local settings.
+        // A newer context's wait must not block another ingestion that is ready.
+        for query in self.storage_state.queries.values_mut() {
+            for ingestion in std::mem::take(&mut query.pending).into_values() {
+                let id = ingestion.ingestion_id;
+                let error = match ingestion.catalog_position.as_deref() {
+                    None if self.storage_state.replica_progress.is_some() => {
+                        Some("native oneshot ingestion requires catalog position")
+                    }
+                    Some(required) if applied.is_some_and(|p| !p.same_history(required)) => {
+                        Some("oneshot catalog history or deployment generation mismatch")
+                    }
+                    _ => None,
+                };
+                if let Some(error) = error {
+                    self.storage_state.query_owners.remove(&id);
+                    query
+                        .responses
+                        .push(StorageResponse::StagedBatches(BTreeMap::from([(
+                            id,
+                            vec![Err(error.into())],
+                        )])));
+                    continue;
+                }
+                if let Some(required) = ingestion.catalog_position.as_deref() {
+                    if !applied.is_some_and(|p| p.covers(required)) {
+                        match &mut catchup {
+                            None => catchup = Some(*required),
+                            Some(position) if position.same_history(required) => {
+                                position.upper = position.upper.max(required.upper);
+                            }
+                            // Bootstrap has no authority to choose a history from
+                            // query tokens. One hint suffices to wake the owner.
+                            Some(_) => (),
+                        }
+                        query.pending.insert(id, ingestion);
+                        continue;
+                    }
+                }
+                if !self.storage_state.query_ready {
+                    query.pending.insert(id, ingestion);
+                    continue;
+                }
+                ready.push(ingestion);
+            }
         }
-        let pending: Vec<_> = self
-            .storage_state
-            .queries
-            .values_mut()
-            .flat_map(|query| std::mem::take(&mut query.pending).into_values())
-            .collect();
-        for ingestion in pending {
+        for ingestion in ready {
             crate::render::build_oneshot_ingestion_dataflow(
                 self.timely_worker,
                 &mut self.storage_state,
@@ -914,6 +962,28 @@ impl<'w> Worker<'w> {
                 ingestion.collection_meta,
                 ingestion.request,
             );
+        }
+        match catchup {
+            Some(required) => {
+                if !self
+                    .storage_state
+                    .catalog_catchup
+                    .is_some_and(|p| p.covers(&required))
+                {
+                    self.storage_state.catalog_catchup = Some(required);
+                    if self.timely_worker.index() == 0 {
+                        if let Some(progress) = &self.storage_state.replica_progress {
+                            progress.send(crate::replica::WorkerResponse {
+                                output_generation: None,
+                                response: crate::server::ReplicaStorageResponse::Response(
+                                    StorageResponse::CatalogCatchup(Box::new(required)),
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            None => self.storage_state.catalog_catchup = None,
         }
     }
 
@@ -1047,6 +1117,17 @@ impl<'w> Worker<'w> {
                 }
             }
             InternalStorageCommand::Query { nonce, command } => self.handle_query(nonce, command),
+            InternalStorageCommand::ApplyCatalogPosition(position) => {
+                assert!(
+                    self.storage_state
+                        .applied_catalog_position
+                        .is_none_or(|previous| position.covers(&previous)),
+                    "lifecycle catalog position must advance within one fenced history"
+                );
+                self.storage_state.applied_catalog_position = Some(*position);
+                self.admit_queries();
+                self.flush_query_responses();
+            }
             InternalStorageCommand::QueryFinished {
                 nonce,
                 ingestion_id,
@@ -1739,6 +1820,7 @@ impl<'w> Worker<'w> {
                 }
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
+                | StorageCommand::ApplyCatalogPosition(_)
                 | StorageCommand::UpdateConfiguration(_) => (),
             }
         }
@@ -1860,6 +1942,7 @@ impl<'w> Worker<'w> {
                 }
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
+                | StorageCommand::ApplyCatalogPosition(_)
                 | StorageCommand::UpdateConfiguration(_)
                 | StorageCommand::AllowCompaction(_, _) => (),
             }
@@ -1963,6 +2046,15 @@ impl StorageState {
                 panic!("transport and query commands must be captured before")
             }
             StorageCommand::InitializationComplete => (),
+            StorageCommand::ApplyCatalogPosition(position) => {
+                // Configuration and retirement emit rendering-stage commands.
+                // Sequence this marker behind them instead of acknowledging the
+                // first-stage native ingress before their effects are applied.
+                if self.timely_worker_index == 0 {
+                    self.internal_cmd_tx
+                        .send(InternalStorageCommand::ApplyCatalogPosition(position));
+                }
+            }
             StorageCommand::AllowWrites => {
                 self.read_only_tx
                     .send(false)

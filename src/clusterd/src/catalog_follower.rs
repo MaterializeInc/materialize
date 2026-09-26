@@ -410,6 +410,15 @@ pub(crate) async fn run(
                 ));
                 effects.configuration_changed = false;
             }
+            execution.retire_storage(&catalog, config.cluster_id, config.replica_id);
+            // Capture this projection's applied prefix now. Installation and
+            // protection publication below can absorb later catalog changes
+            // whose configuration effects belong to the next iteration.
+            execution.io.apply_catalog_position(
+                catalog
+                    .observed_position()
+                    .expect("committed follower position"),
+            );
         }
         if execution.is_none() && !changed && effects.pending.is_empty() && !pending_metadata {
             tokio::time::sleep(delay).await;
@@ -643,7 +652,10 @@ pub(crate) async fn run(
                 delay = (delay * 2).min(Duration::from_secs(10));
             }
         }
-        wait(&mut execution, tokio::time::sleep(delay)).await;
+        match &mut execution {
+            Some(execution) => execution.io.idle(delay).await,
+            None => tokio::time::sleep(delay).await,
+        }
     }
 }
 

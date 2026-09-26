@@ -120,7 +120,12 @@ impl<C: ComputeClient> GenericClient<ComputeCommand, ComputeResponse> for RoleCl
     }
 
     async fn recv(&mut self) -> anyhow::Result<Option<ComputeResponse>> {
-        self.inner.recv().await
+        let response = self.inner.recv().await?;
+        if self.query == Some(true) && matches!(response, Some(ComputeResponse::CatalogCatchup(_)))
+        {
+            anyhow::bail!("catalog catch-up received on query connection");
+        }
+        Ok(response)
     }
 }
 
@@ -139,13 +144,11 @@ impl<C: ComputeClient> GenericClient<ComputeCommand, ComputeResponse> for RoleCl
 ///   * One instance on the controller side, dispatching between cluster processes.
 ///   * One instance in each cluster process, dispatching between timely worker threads.
 ///
-/// Note that because compute commands, except handshakes and configuration updates, are only
-/// sent to the first process, the cluster-side instances of `PartitionedComputeState` are not
-/// guaranteed to see all compute commands. Or more specifically: The instance running inside
-/// process 0 sees all commands, whereas the instances running inside the other processes only see
-/// handshakes and configuration updates. The `PartitionedComputeState` implementation must be
-/// able to cope with this limited visibility. It does so by performing most of its state management
-/// based on observed compute responses rather than commands.
+/// Only handshakes, configuration updates, and catalog application markers are broadcast to all
+/// processes. The cluster-side instance of `PartitionedComputeState` in process 0 sees all commands,
+/// whereas instances in other processes see only those broadcasts. The implementation must cope
+/// with this limited visibility. It does so by performing most of its state management based on
+/// observed compute responses rather than commands.
 #[derive(Debug)]
 pub struct PartitionedComputeState {
     /// Number of partitions the state machine represents.
@@ -450,12 +453,13 @@ impl PartitionedState<ComputeCommand, ComputeResponse> for PartitionedComputeSta
         self.observe_command(&command);
 
         // As specified by the compute protocol:
-        //  * Forward handshakes and configuration updates to all shards.
+        //  * Forward handshakes, configuration updates, and catalog markers to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
             command @ ComputeCommand::Hello { .. }
             | command @ ComputeCommand::HelloQuery { .. }
             | command @ ComputeCommand::SetQueryMaxResultSize { .. }
+            | command @ ComputeCommand::ApplyCatalogPosition(_)
             | command @ ComputeCommand::UpdateConfiguration(_) => {
                 vec![Some(command); self.parts]
             }
@@ -473,6 +477,11 @@ impl PartitionedState<ComputeCommand, ComputeResponse> for PartitionedComputeSta
         message: ComputeResponse,
     ) -> Option<Result<ComputeResponse, anyhow::Error>> {
         let response = match message {
+            response @ ComputeResponse::CatalogCatchup(_) => {
+                // Every worker sees query requirements. Forward only worker 0's hint,
+                // selecting shard 0 at both the worker and process partitioning layers.
+                (shard_id == 0).then_some(response)
+            }
             ComputeResponse::QueryReady => {
                 assert!(
                     self.query_ready.insert(shard_id),

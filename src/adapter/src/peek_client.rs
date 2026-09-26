@@ -383,6 +383,7 @@ impl PeekClient {
     /// subsequent `client.peek()` fails to issue.
     pub(crate) async fn implement_fast_path_peek_plan(
         &mut self,
+        catalog: Arc<Catalog>,
         fast_path: FastPathPlan,
         timestamp: Timestamp,
         finishing: mz_expr::RowSetFinishing,
@@ -474,7 +475,6 @@ impl PeekClient {
             FastPathPlan::PeekPersist(coll_id, literal_constraint, mfp) => {
                 let literal_constraints = literal_constraint.map(|r| vec![r]);
                 let metadata = if let Some(client) = self.query_client.clone() {
-                    let catalog = self.catalog_snapshot("query collection metadata").await;
                     client.collection_metadata(&catalog, coll_id)?
                 } else {
                     self.storage_collections
@@ -577,6 +577,7 @@ impl PeekClient {
             let coordinator = self.coordinator_client.clone();
             let registration = query_registration.expect("registered query peek");
             let peek = Peek {
+                catalog_position: catalog.planning_position(),
                 target: peek_target,
                 result_desc,
                 literal_constraints,

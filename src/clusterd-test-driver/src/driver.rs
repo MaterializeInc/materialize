@@ -199,6 +199,7 @@ impl Driver {
             .into_nontemporal()
             .map_err(|_| anyhow::anyhow!("unexpected temporal MFP for identity plan"))?;
         let peek = Peek {
+            catalog_position: None,
             target,
             result_desc: result_desc.clone(),
             literal_constraints: None,

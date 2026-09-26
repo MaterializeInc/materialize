@@ -18,6 +18,7 @@ use mz_catalog::catalog::{Catalog, CatalogError, Op, test_support};
 use mz_catalog::durable::{DurableCatalogError, TestCatalogStateBuilder};
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions};
 use mz_catalog::memory::error::ErrorKind;
+use mz_cluster_client::CatalogPosition;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_compute_client::protocol::command::{ComputeCommand, Peek, PeekTarget};
@@ -135,6 +136,9 @@ async fn written_index_survives_writer_and_query_disconnect() {
         shard,
         mut input,
     } = Fixture::new((1, 15_000), 20_000, false).await;
+    let catalog_position = writer
+        .planning_position()
+        .expect("committed fixture position");
     let ts = writer.current_upper().await;
     let reader = writer
         .transact(
@@ -172,7 +176,7 @@ async fn written_index_survives_writer_and_query_disconnect() {
         query.recv().await.unwrap(),
         Some(ComputeResponse::QueryReady)
     ));
-    assert_rows(&mut *query, index, &desc, 15_000, &[1]).await;
+    assert_rows(&mut *query, catalog_position, index, &desc, 15_000, &[1]).await;
     publish(&mut observer, reader, BTreeMap::new())
         .await
         .unwrap();
@@ -274,7 +278,7 @@ async fn written_index_survives_writer_and_query_disconnect() {
         query.recv().await.unwrap(),
         Some(ComputeResponse::QueryReady)
     ));
-    assert_rows(&mut *query, index, &desc, 35_000, &[1, 2]).await;
+    assert_rows(&mut *query, catalog_position, index, &desc, 35_000, &[1, 2]).await;
     std::process::exit(0);
 }
 
@@ -691,6 +695,7 @@ pub(super) async fn publish(
 
 pub(super) async fn assert_rows(
     query: &mut dyn ComputeClient,
+    catalog_position: CatalogPosition,
     index: GlobalId,
     desc: &RelationDesc,
     timestamp: u64,
@@ -705,6 +710,7 @@ pub(super) async fn assert_rows(
         .unwrap();
     query
         .send(ComputeCommand::Peek(Box::new(Peek {
+            catalog_position: Some(catalog_position),
             target: PeekTarget::Index { id: index },
             result_desc: desc.clone(),
             literal_constraints: None,

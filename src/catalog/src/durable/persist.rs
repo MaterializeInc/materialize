@@ -2148,8 +2148,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     async fn sync_to_current_updates(
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
-        let upper = self.current_upper().await;
-        self.sync_updates(upper).await
+        self.sync_to_current_upper().await?;
+        // Listen can overshoot its target. Drain the whole synchronized prefix
+        // so callers can pair these updates with `synced_upper`.
+        Ok(self.update_applier.updates.drain(..).collect())
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -2199,6 +2201,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     async fn current_upper(&mut self) -> Timestamp {
         self.current_upper().await
+    }
+
+    fn synced_upper(&self) -> Timestamp {
+        self.upper
     }
 }
 

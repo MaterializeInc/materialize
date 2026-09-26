@@ -1988,7 +1988,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     replica disconnects.
     """
 
-    c.up("materialized", "clusterd1", "clusterd2")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2016,51 +2016,81 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
         CREATE TABLE t (a int);
         """)
 
-    def drop_replica_with_delay() -> None:
-        time.sleep(2)
-        c.sql("DROP CLUSTER REPLICA cluster1.replica1;")
+    placements = {"replica1": "clusterd1", "replica2": "clusterd2"}
+    identities = c.sql_query("""SELECT c.id, r.id, r.name
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'cluster1'""")
+    assert {name for _, _, name in identities} == set(placements), identities
+    catalog_options = native_catalog_options(c)
+    with c.override(
+        *[
+            Clusterd(
+                name=placements[replica_name],
+                workers=2,
+                options=[
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *catalog_options,
+                ],
+            )
+            for cluster_id, replica_id, replica_name in identities
+        ]
+    ):
+        c.up("clusterd1", "clusterd2")
 
-    dropper = Thread(target=drop_replica_with_delay)
-    dropper.start()
+        # Faults target active query replicas, not their initial catalog bootstrap.
+        for replica_name in placements:
+            c.sql(f"""
+                SET cluster = cluster1;
+                SET cluster_replica = {replica_name};
+                SELECT * FROM t;
+                """)
 
-    try:
-        c.sql("""
-            SET cluster = cluster1;
-            SET cluster_replica = replica1;
-            SELECT * FROM t AS OF 18446744073709551615;
-            """)
-    except InternalError_ as e:
-        assert (
-            e.diag.message_primary
-            and "target replica failed or was dropped" in e.diag.message_primary
-        ), e
-    else:
-        raise RuntimeError("SELECT didn't return the expected error")
+        def drop_replica_with_delay() -> None:
+            time.sleep(2)
+            c.sql("DROP CLUSTER REPLICA cluster1.replica1;")
 
-    dropper.join()
+        dropper = Thread(target=drop_replica_with_delay)
+        dropper.start()
 
-    def kill_replica_with_delay() -> None:
-        time.sleep(2)
-        c.kill("clusterd2")
+        try:
+            c.sql("""
+                SET cluster = cluster1;
+                SET cluster_replica = replica1;
+                SELECT * FROM t AS OF 18446744073709551615;
+                """)
+        except InternalError_ as e:
+            assert (
+                e.diag.message_primary
+                and "target replica failed or was dropped" in e.diag.message_primary
+            ), e
+        else:
+            raise RuntimeError("SELECT didn't return the expected error")
 
-    killer = Thread(target=kill_replica_with_delay)
-    killer.start()
+        dropper.join()
 
-    try:
-        c.sql("""
-            SET cluster = cluster1;
-            SET cluster_replica = replica2;
-            SELECT * FROM t AS OF 18446744073709551615;
-            """)
-    except InternalError_ as e:
-        assert (
-            e.diag.message_primary
-            and "target replica failed or was dropped" in e.diag.message_primary
-        ), e
-    else:
-        raise RuntimeError("SELECT didn't return the expected error")
+        def kill_replica_with_delay() -> None:
+            time.sleep(2)
+            c.kill("clusterd2")
 
-    killer.join()
+        killer = Thread(target=kill_replica_with_delay)
+        killer.start()
+
+        try:
+            c.sql("""
+                SET cluster = cluster1;
+                SET cluster_replica = replica2;
+                SELECT * FROM t AS OF 18446744073709551615;
+                """)
+        except InternalError_ as e:
+            assert (
+                e.diag.message_primary
+                and "target replica failed or was dropped" in e.diag.message_primary
+            ), e
+        else:
+            raise RuntimeError("SELECT didn't return the expected error")
+
+        killer.join()
 
 
 def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
@@ -2190,10 +2220,6 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
         # Replace the `mz_catalog_server` replica with an unorchestrated one so we
         # can test reconciliation of system indexes too.
-        # TODO: Remove these temporary progress prints once the CI136466 stall is located.
-        print(
-            "reconciliation-reuse: starting catalog replica replacement DDL", flush=True
-        )
         c.sql(
             """
             ALTER CLUSTER mz_catalog_server SET (MANAGED = false);
@@ -2209,30 +2235,24 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             port=6877,
             user="mz_system",
         )
-        print(
-            "reconciliation-reuse: catalog replica replacement DDL returned", flush=True
-        )
 
-        # The replacement catalog-server replica cannot serve its own ID lookup.
-        print("reconciliation-reuse: opening catalog ID lookup cursor", flush=True)
-        with c.sql_cursor() as cursor:
-            print(
-                "reconciliation-reuse: lookup cursor opened, disabling auto-routing",
-                flush=True,
-            )
+        # The catalog MVs have no producer until the replacement starts. Read
+        # the durable catalog source on a running cluster instead.
+        with c.sql_cursor(port=6877, user="mz_system") as cursor:
             cursor.execute("SET auto_route_catalog_queries = false")
-            print("reconciliation-reuse: executing catalog ID lookup", flush=True)
-            cursor.execute("""SELECT c.id, r.id
-                FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
-                WHERE c.name = 'mz_catalog_server' AND r.name = 'r1'""")
-            print(
-                "reconciliation-reuse: catalog ID lookup executed, fetching", flush=True
-            )
+            cursor.execute("SET cluster = cluster1")
+            cursor.execute("""
+                SELECT mz_internal.parse_catalog_id(c.data->'key'->'id'),
+                       mz_internal.parse_catalog_id(r.data->'key'->'id')
+                FROM mz_internal.mz_catalog_raw c
+                JOIN mz_internal.mz_catalog_raw r
+                  ON r.data->'value'->'cluster_id' = c.data->'key'->'id'
+                WHERE c.data->>'kind' = 'Cluster'
+                  AND c.data->'value'->>'name' = 'mz_catalog_server'
+                  AND r.data->>'kind' = 'ClusterReplica'
+                  AND r.data->'value'->>'name' = 'r1'
+                """)
             [(cluster_id, replica_id)] = cursor.fetchall()
-            print(
-                f"reconciliation-reuse: catalog ID lookup result {cluster_id=}, {replica_id=}",
-                flush=True,
-            )
         stack.enter_context(
             c.override(
                 Clusterd(

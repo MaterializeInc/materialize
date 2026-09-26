@@ -39,6 +39,15 @@ async fn open_protected_catalog(persist: PersistClient, organization: Uuid) -> C
         .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
         .await
         .expect("open durable catalog");
+    open_protected_catalog_with_storage(persist, organization, storage).await
+}
+
+async fn open_protected_catalog_with_storage(
+    persist: PersistClient,
+    organization: Uuid,
+    storage: Box<dyn crate::durable::DurableCatalogState>,
+) -> Catalog {
+    let bootstrap = crate::catalog::test_bootstrap_args();
     Catalog::open_debug_catalog_inner(
         persist.clone(),
         storage,
@@ -56,6 +65,193 @@ async fn open_protected_catalog(persist: PersistClient, organization: Uuid) -> C
     )
     .await
     .expect("open protected catalog")
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn catalog_positions_use_actual_commit_upper() {
+    use std::sync::{Arc, Mutex};
+
+    use mz_repr::Timestamp;
+    use mz_sql::session::vars::OwnedVarInput;
+    use mz_timestamp_oracle::{TimestampOracle, WriteTimestamp};
+
+    #[derive(Debug, Default)]
+    struct TestOracle(Mutex<(Timestamp, Timestamp)>);
+
+    #[async_trait::async_trait]
+    impl TimestampOracle<Timestamp> for TestOracle {
+        async fn write_ts(&self) -> WriteTimestamp {
+            let mut times = self.0.lock().expect("oracle lock");
+            times.1 = times.1.step_forward();
+            WriteTimestamp {
+                timestamp: times.1,
+                advance_to: times.1.step_forward(),
+            }
+        }
+
+        async fn peek_write_ts(&self) -> Timestamp {
+            self.0.lock().expect("oracle lock").1
+        }
+
+        async fn read_ts(&self) -> Timestamp {
+            self.0.lock().expect("oracle lock").0
+        }
+
+        async fn apply_write(&self, timestamp: Timestamp) {
+            let mut times = self.0.lock().expect("oracle lock");
+            times.0 = times.0.max(timestamp);
+            times.1 = times.1.max(timestamp);
+        }
+    }
+
+    let persist = PersistClient::new_for_tests().await;
+    let organization = Uuid::new_v4();
+    let bootstrap = crate::catalog::test_bootstrap_args();
+    let oracle = Arc::new(TestOracle::default());
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .with_timestamp_oracle(crate::durable::CatalogTimestampOracle::new(
+            Arc::<TestOracle>::clone(&oracle),
+            mz_ore::now::SYSTEM_TIME.clone(),
+        ))
+        .unwrap_build()
+        .await
+        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("open oracle-backed catalog");
+    let shard_id = storage.shard_id();
+    let mut catalog =
+        open_protected_catalog_with_storage(persist.clone(), organization, storage).await;
+    let initial = catalog.observed_position().expect("durable bootstrap");
+    assert_eq!(initial.shard_id, shard_id);
+    assert_eq!(initial.deployment_generation, 0);
+    assert_eq!(initial.upper, catalog.current_upper().await);
+    assert_eq!(catalog.planning_position(), Some(initial));
+    let snapshot = catalog.clone();
+
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist)
+        .with_organization_id(organization)
+        .unwrap_build()
+        .await
+        .open_read_only(&bootstrap)
+        .await
+        .expect("physical reader");
+    let mut opened = Catalog::open_committed(
+        Catalog::diagnostic_state_config(&catalog.diagnostic_config),
+        storage,
+    )
+    .await
+    .expect("reconstruct committed prefix");
+    assert_eq!(opened.catalog.observed_position(), Some(initial));
+    assert_eq!(opened.catalog.planning_position(), Some(initial));
+
+    let candidate = catalog.current_upper().await;
+    oracle.apply_write(candidate.saturating_add(100)).await;
+    let result = catalog
+        .transact(
+            None,
+            candidate,
+            None,
+            vec![Op::UpdateSystemConfiguration {
+                name: "max_connections".into(),
+                value: OwnedVarInput::Flat(
+                    (catalog.system_config().max_connections() + 1).to_string(),
+                ),
+            }],
+        )
+        .await
+        .expect("commit at a freshly allocated timestamp");
+    let actual_upper = catalog.current_upper().await;
+    assert!(actual_upper > candidate.step_forward());
+    assert!(!result.catalog_updates.is_empty());
+    assert!(
+        result
+            .catalog_updates
+            .iter()
+            .all(|update| update.ts.step_forward() == actual_upper)
+    );
+    let position = catalog.planning_position().expect("durable planning state");
+    assert_eq!(position.upper, actual_upper);
+    assert_eq!(catalog.observed_position(), Some(position));
+    assert_eq!(snapshot.planning_position(), Some(initial));
+    assert_eq!(snapshot.observed_position(), Some(initial));
+
+    let progress = actual_upper.saturating_add(100);
+    catalog
+        .upper_handle()
+        .advance_upper(progress)
+        .await
+        .expect("trailing empty progress");
+    opened
+        .catalog
+        .sync_to_current_updates()
+        .await
+        .expect("apply planning change and trailing progress together");
+    assert_eq!(
+        opened
+            .catalog
+            .observed_position()
+            .expect("applied prefix")
+            .upper,
+        progress
+    );
+    assert_eq!(opened.catalog.planning_position(), Some(position));
+    opened.catalog.expire().await;
+    drop(snapshot);
+    catalog.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn savepoint_catalog_has_no_position_certificate() {
+    let (catalog, persist, organization) = protected_catalog().await;
+    let bootstrap = crate::catalog::test_bootstrap_args();
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+        .with_organization_id(organization)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open_savepoint(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("open savepoint");
+    let mut state = Catalog::diagnostic_state_config(&catalog.diagnostic_config);
+    state.read_only = true;
+    state.builtin_item_migration_config.read_only = true;
+    let mut savepoint = Catalog::open(crate::config::Config {
+        storage,
+        metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
+        state,
+    })
+    .await
+    .expect("open read-only serving catalog")
+    .catalog;
+    assert_eq!(savepoint.planning_position(), None);
+    assert_eq!(savepoint.observed_position(), None);
+    let ts = savepoint.current_upper().await;
+    savepoint
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::UpdateSystemConfiguration {
+                name: "max_connections".into(),
+                value: mz_sql::session::vars::OwnedVarInput::Flat(
+                    (savepoint.system_config().max_connections() + 1).to_string(),
+                ),
+            }],
+        )
+        .await
+        .expect("local planning change");
+    savepoint
+        .sync_to_current_updates()
+        .await
+        .expect("local sync");
+    assert_eq!(savepoint.planning_position(), None);
+    assert_eq!(savepoint.observed_position(), None);
+    savepoint.expire().await;
+    catalog.expire().await;
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -142,6 +338,7 @@ async fn protected_bootstrap_absorbs_publication_without_replay_cas() {
             .expect("publication mutex")
             .expect("bootstrap crossed rendezvous");
         if phase == "before_replay" {
+            assert!(catalog.observed_position().expect("captured prefix").upper < upper);
             assert_eq!(
                 catalog.current_upper().await,
                 upper,
@@ -156,15 +353,26 @@ async fn protected_bootstrap_absorbs_publication_without_replay_cas() {
         } else {
             assert!(
                 catalog
+                    .observed_position()
+                    .expect("applied publication")
+                    .upper
+                    >= upper
+            );
+            assert!(
+                catalog
                     .state()
                     .client_incarnations()
                     .contains_key(&incarnation)
             );
         }
+        let planning_position = catalog.planning_position();
+        assert_eq!(planning_position, catalog.observed_position());
         catalog
             .sync_to_current_updates()
             .await
             .expect("apply queued publication");
+        assert!(catalog.observed_position().expect("applied prefix").upper >= upper);
+        assert_eq!(catalog.planning_position(), planning_position);
         assert!(
             catalog
                 .state()

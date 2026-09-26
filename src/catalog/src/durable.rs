@@ -331,6 +331,18 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
 
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
+
+    /// The exclusive upper already synchronized by this handle, without remote I/O.
+    ///
+    /// This can include pending projection updates. It certifies an in-memory
+    /// projection only after applying the corresponding drained updates or
+    /// reconstructing a captured transaction prefix. Capture it under the same
+    /// lock as the drain, after successful fence validation. Savepoint uppers
+    /// do not certify durable history.
+    ///
+    /// [`Self::sync_to_current_updates`] drains through this upper, whereas
+    /// [`Self::sync_updates`] can leave a suffix queued beyond its target.
+    fn synced_upper(&self) -> Timestamp;
 }
 
 /// Owned durable input for independent catalog reconstruction, with no persist handles.

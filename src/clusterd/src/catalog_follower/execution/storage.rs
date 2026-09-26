@@ -195,23 +195,18 @@ impl ReplicaEnactment {
         }
     }
 
-    /// Returns whether any source still awaits metadata, admission, or global
-    /// reader installation. All read grants share the replica's single publisher.
-    pub async fn install_sources(
-        &mut self,
-        catalog: &mut Catalog,
-        effects: &mut ReplicaEffects,
-        cluster: ClusterId,
-        replica: ReplicaId,
-        build: &str,
-        metadata: &storage_metadata::Resolution,
-    ) -> anyhow::Result<bool> {
+    /// Queue retirement independently of metadata resolution or new installation.
+    /// The follower certifies its catalog prefix only after these commands.
+    pub fn retire_storage(&mut self, catalog: &Catalog, cluster: ClusterId, replica: ReplicaId) {
         if self.io.storage.is_none() {
-            return Ok(false);
+            return;
         }
-        self.ensure_live(catalog)?;
-        self.apply_storage_progress();
-        let desired = ingestions(catalog, cluster, replica);
+        self.retire_sources_not_in(&ingestions(catalog, cluster, replica));
+        let sinks = self.desired_sinks(catalog, cluster);
+        self.retire_sinks_not_in(&sinks);
+    }
+
+    fn retire_sources_not_in(&mut self, desired: &BTreeMap<GlobalId, IngestionDescription<()>>) {
         let dropped: Vec<_> = self
             .storage_state
             .ingestions
@@ -237,6 +232,26 @@ impl ReplicaEnactment {
                     .send(StorageCommand::AllowCompaction(output, Antichain::new()));
             }
         }
+    }
+
+    /// Returns whether any source still awaits metadata, admission, or global
+    /// reader installation. All read grants share the replica's single publisher.
+    pub async fn install_sources(
+        &mut self,
+        catalog: &mut Catalog,
+        effects: &mut ReplicaEffects,
+        cluster: ClusterId,
+        replica: ReplicaId,
+        build: &str,
+        metadata: &storage_metadata::Resolution,
+    ) -> anyhow::Result<bool> {
+        if self.io.storage.is_none() {
+            return Ok(false);
+        }
+        self.ensure_live(catalog)?;
+        self.apply_storage_progress();
+        let desired = ingestions(catalog, cluster, replica);
+        self.retire_sources_not_in(&desired);
         let mut pending = false;
         for (id, definition) in desired {
             if self
