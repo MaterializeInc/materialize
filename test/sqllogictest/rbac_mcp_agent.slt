@@ -912,6 +912,52 @@ EXPLAIN ANALYZE CLUSTER MEMORY;
 db error: ERROR: access to system object mz_arrangement_sizes_per_worker is restricted
 DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
 
+# A source the agent owns, whose subsources another role owns. The generated
+# query reads system catalog objects, which the restriction blocks as for
+# EXPLAIN ANALYZE CLUSTER, and a subsource the agent does not own is rejected
+# by the ownership check.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_analyze_storage_objects = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SOURCE materialize.agent_objects.agent_auction IN CLUSTER agent_serving FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA agent_objects TO agent;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SOURCE agent_objects.agent_auction OWNER TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+EXPLAIN ANALYZE INGESTION FOR SOURCE agent_objects.agent_auction;
+----
+db error: ERROR: access to system object mz_object_dependencies is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+EXPLAIN ANALYZE INGESTION FOR TABLE agent_objects.bids;
+----
+db error: ERROR: must be owner of SOURCE materialize.agent_objects.bids
+
+simple conn=mz_system,user=mz_system
+DROP SOURCE materialize.agent_objects.agent_auction CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_explain_analyze_storage_objects
+----
+COMPLETE 0
+
 # =============================================================================
 # Test: pg_catalog access is blocked when restrict_to_user_objects is active
 # =============================================================================

@@ -27,13 +27,14 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlRelationType, SqlScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainAnalyzeClusterStatement, ExplainAnalyzeComputationProperties,
-    ExplainAnalyzeComputationProperty, ExplainAnalyzeObjectStatement, ExplainAnalyzeProperty,
-    ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement, ExplainSinkSchemaFor,
-    ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
-    SetExpr, SubscribeOutput, UnresolvedItemName,
+    ExplainAnalyzeComputationProperty, ExplainAnalyzeExplainee, ExplainAnalyzeObjectStatement,
+    ExplainAnalyzeProperty, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
+    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
+    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
@@ -48,7 +49,7 @@ use crate::ast::{
     SelectStatement, SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement,
     UpdateStatement,
 };
-use crate::catalog::CatalogItemType;
+use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{
@@ -436,6 +437,31 @@ pub fn describe_explain_analyze_object(
                 .with_column("to_cut", SqlScalarType::Int64.nullable(true))
                 .with_column("hint", SqlScalarType::Float64.nullable(true))
                 .with_column("savings", SqlScalarType::String.nullable(true))
+                .finish();
+            Ok(StatementDesc::new(Some(relation_desc)))
+        }
+        ExplainAnalyzeProperty::Ingestion => {
+            let relation_desc = RelationDesc::builder()
+                .with_column("object", SqlScalarType::String.nullable(false))
+                .with_column("status", SqlScalarType::String.nullable(true))
+                .with_column(
+                    "snapshot_progress",
+                    SqlScalarType::Numeric { max_scale: None }.nullable(true),
+                )
+                .with_column(
+                    "offset_lag",
+                    SqlScalarType::Numeric { max_scale: None }.nullable(true),
+                )
+                .with_column("messages_received", SqlScalarType::UInt64.nullable(true))
+                .with_column("bytes_received", SqlScalarType::String.nullable(true))
+                .with_column("updates_committed", SqlScalarType::UInt64.nullable(true))
+                .with_column("state_bytes", SqlScalarType::String.nullable(true))
+                .with_column("state_records", SqlScalarType::UInt64.nullable(true))
+                .with_column(
+                    "rehydration_latency",
+                    SqlScalarType::Interval.nullable(true),
+                )
+                .with_column("wallclock_lag", SqlScalarType::Interval.nullable(true))
                 .finish();
             Ok(StatementDesc::new(Some(relation_desc)))
         }
@@ -892,28 +918,33 @@ pub fn plan_explain_analyze_object(
     statement: ExplainAnalyzeObjectStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let explainee_name = statement
-        .explainee
+    let explainee: Explainee<Aug> = match statement.explainee {
+        ExplainAnalyzeExplainee::Index(name) => Explainee::Index(name),
+        ExplainAnalyzeExplainee::MaterializedView(name) => Explainee::MaterializedView(name),
+        explainee @ (ExplainAnalyzeExplainee::Source(_) | ExplainAnalyzeExplainee::Table(_)) => {
+            return plan_explain_analyze_storage_object(
+                scx,
+                statement.properties,
+                explainee,
+                statement.as_sql,
+            );
+        }
+    };
+    let explainee_name = explainee
         .name()
         .ok_or_else(|| sql_err!("EXPLAIN ANALYZE on anonymous dataflows",))?
         .full_name_str();
-    let explainee = plan_explainee(scx, statement.explainee, params)?;
+    let explainee = plan_explainee(scx, explainee, params)?;
 
-    let check_ownership = |item_id: &CatalogItemId, item_type: &str| -> Result<(), PlanError> {
-        if scx.catalog.restrict_to_user_objects() {
-            let item = scx.catalog.get_item(item_id);
-            if item.owner_id() != *scx.catalog.active_role_id() {
-                let full_name = scx.catalog.resolve_full_name(item.name());
-                return Err(sql_err!("must be owner of {item_type} {full_name}"));
-            }
-        }
-        Ok(())
-    };
     match &explainee {
-        plan::Explainee::Index(item_id) => check_ownership(item_id, "INDEX")?,
-        plan::Explainee::MaterializedView(item_id) => {
-            check_ownership(item_id, "MATERIALIZED VIEW")?
+        plan::Explainee::Index(item_id) => {
+            check_explain_analyze_ownership(scx, scx.catalog.get_item(item_id), "INDEX")?
         }
+        plan::Explainee::MaterializedView(item_id) => check_explain_analyze_ownership(
+            scx,
+            scx.catalog.get_item(item_id),
+            "MATERIALIZED VIEW",
+        )?,
         _ => return Err(sql_err!("EXPLAIN ANALYZE queries for this explainee type",)),
     };
 
@@ -1081,6 +1112,9 @@ GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
             "LEFT JOIN (generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id JOIN \
              mz_introspection.mz_expected_group_size_advice megsa ON (megsa.region_id = valid_id)) ON (megsa.dataflow_id = mdgi.id)"]);
         }
+        ExplainAnalyzeProperty::Ingestion => {
+            return Err(PlanError::ExplainAnalyzeIngestionUnsupported);
+        }
     }
 
     from.push("JOIN mz_introspection.mz_mappable_objects mo ON (mlm.global_id = mo.global_id)");
@@ -1109,7 +1143,16 @@ WHERE {predicates}
 ORDER BY {order_by}"#
     );
 
-    if statement.as_sql {
+    plan_explain_analyze_query(scx, query, statement.as_sql)
+}
+
+/// Plans the SQL an `EXPLAIN ANALYZE` statement rewrites to, or returns it as text if `as_sql`.
+fn plan_explain_analyze_query(
+    scx: &StatementContext,
+    query: String,
+    as_sql: bool,
+) -> Result<Plan, PlanError> {
+    if as_sql {
         let rows = vec![Row::pack_slice(&[Datum::String(
             &mz_sql_pretty::pretty_str_simple(&query, 80).map_err(|e| {
                 PlanError::Unstructured(format!("internal error parsing our own SQL: {e}"))
@@ -1123,6 +1166,174 @@ ORDER BY {order_by}"#
         scx.record_sql_impl_ids(&resolved_ids);
         show_select.plan()
     }
+}
+
+/// With `restrict_to_user_objects`, only the owner of an object may explain it.
+fn check_explain_analyze_ownership(
+    scx: &StatementContext,
+    item: &dyn CatalogItem,
+    item_type: &str,
+) -> Result<(), PlanError> {
+    if scx.catalog.restrict_to_user_objects() && item.owner_id() != *scx.catalog.active_role_id() {
+        let full_name = scx.catalog.resolve_full_name(item.name());
+        return Err(sql_err!("must be owner of {item_type} {full_name}"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StorageExplainee {
+    Source,
+    /// A table created from a source, or a subsource.
+    Table,
+}
+
+/// Plans `EXPLAIN ANALYZE` for a source or a table from a source.
+fn plan_explain_analyze_storage_object(
+    scx: &StatementContext,
+    properties: ExplainAnalyzeProperty,
+    explainee: ExplainAnalyzeExplainee<Aug>,
+    as_sql: bool,
+) -> Result<Plan, PlanError> {
+    let item = scx.get_item_by_resolved_name(explainee.name())?;
+    let full_name = scx.catalog.resolve_full_name(item.name());
+    let item_type = item.item_type();
+
+    scx.require_feature_flag(&vars::ENABLE_EXPLAIN_ANALYZE_STORAGE_OBJECTS)?;
+
+    let kind = match explainee {
+        ExplainAnalyzeExplainee::Source(_) => {
+            if item_type != CatalogItemType::Source {
+                sql_bail!("{item_type} {full_name} is not a source");
+            }
+            if item.source_export_details().is_some() {
+                return Err(PlanError::ExplainAnalyzeSubsource {
+                    item_name: full_name.to_string(),
+                });
+            }
+            if item.is_progress_source() {
+                sql_bail!("{full_name} is a progress source, which has no dataflow of its own");
+            }
+            StorageExplainee::Source
+        }
+        ExplainAnalyzeExplainee::Table(_) => {
+            let from_source = matches!(item_type, CatalogItemType::Table | CatalogItemType::Source)
+                && item.source_export_details().is_some();
+            if !from_source {
+                sql_bail!(
+                    "EXPLAIN ANALYZE ... FOR TABLE requires a table created from a source \
+                     or a subsource, but {full_name} is not"
+                );
+            }
+            StorageExplainee::Table
+        }
+        ExplainAnalyzeExplainee::Index(_) | ExplainAnalyzeExplainee::MaterializedView(_) => {
+            bail_internal!("{full_name} is not a storage object")
+        }
+    };
+
+    check_explain_analyze_ownership(scx, &*item, &item_type.to_string().to_uppercase())?;
+    // A source lists its exports, which other roles may own. With `restrict_to_user_objects`
+    // only the exports of the active role are listed.
+    let export_owner = scx
+        .catalog
+        .restrict_to_user_objects()
+        .then(|| *scx.catalog.active_role_id());
+
+    let query = match properties {
+        ExplainAnalyzeProperty::Computation(_) => {
+            bail_unsupported!("EXPLAIN ANALYZE CPU and MEMORY for sources and tables")
+        }
+        ExplainAnalyzeProperty::Ingestion => {
+            explain_analyze_ingestion_query(kind, item.id(), export_owner)
+        }
+        ExplainAnalyzeProperty::Hints => {
+            sql_bail!("EXPLAIN ANALYZE HINTS is only supported for indexes and materialized views")
+        }
+    };
+
+    plan_explain_analyze_query(scx, query, as_sql)
+}
+
+/// Generates the `INGESTION` query for a source or a table from a source.
+///
+/// A source reports one row for itself, carrying `mz_source_statistics`'s roll-up of its
+/// exports, and one row per export. A table reports only its own row. With `export_owner`, a
+/// source lists only the exports that role owns.
+fn explain_analyze_ingestion_query(
+    kind: StorageExplainee,
+    item_id: CatalogItemId,
+    export_owner: Option<RoleId>,
+) -> String {
+    let item_id = item_id.to_string();
+    let id = escaped_string_literal(&item_id);
+    let owner_filter = match export_owner {
+        Some(owner) => format!(
+            " AND sub.owner_id = {}",
+            escaped_string_literal(&owner.to_string())
+        ),
+        None => String::new(),
+    };
+    let objects = match kind {
+        StorageExplainee::Source => format!(
+            "
+  SELECT src.id AS id, TRUE AS is_source
+    FROM mz_catalog.mz_sources src
+   WHERE src.id = {id}
+UNION ALL
+  SELECT dep.object_id AS id, FALSE AS is_source
+    FROM      mz_internal.mz_object_dependencies dep
+         JOIN mz_catalog.mz_sources sub ON (dep.object_id = sub.id)
+   WHERE dep.referenced_object_id = {id} AND sub.type = 'subsource'{owner_filter}
+UNION ALL
+  SELECT sub.id AS id, FALSE AS is_source
+    FROM mz_catalog.mz_tables sub
+   WHERE sub.source_id = {id}{owner_filter}"
+        ),
+        StorageExplainee::Table => format!(
+            "
+  SELECT {id} AS id, FALSE AS is_source"
+        ),
+    };
+
+    // `mz_source_statistics` has a row per replica that has run the source. Report the
+    // replica that has committed the most.
+    //
+    // `offset_known` and `offset_committed` are reported independently, so their difference can
+    // briefly be negative.
+    //
+    // `snapshot_progress` trusts `snapshot_committed` over the record counts. A known total of
+    // 0 means either an empty upstream table or sizing not yet done, and a restarted replica
+    // reports no total for a snapshot it committed before the restart.
+    format!(
+        r#"WITH objects AS ({objects}),
+statistics AS (
+  SELECT DISTINCT ON (ss.id) ss.*
+    FROM      mz_internal.mz_source_statistics ss
+         JOIN objects o ON (ss.id = o.id)
+ORDER BY ss.id, ss.updates_committed DESC)
+SELECT ms.name || '.' || mo.name AS object,
+       mss.status AS status,
+       CASE WHEN ss.snapshot_committed THEN 1.00
+            WHEN ss.snapshot_records_known IS NULL OR ss.snapshot_records_known = 0 THEN NULL
+            ELSE ROUND(ss.snapshot_records_staged :: numeric / ss.snapshot_records_known :: numeric, 2)
+       END AS snapshot_progress,
+       CASE WHEN o.is_source THEN GREATEST(ss.offset_known :: numeric - ss.offset_committed :: numeric, 0) ELSE NULL END AS offset_lag,
+       ss.messages_received AS messages_received,
+       pg_size_pretty(ss.bytes_received :: numeric) AS bytes_received,
+       ss.updates_committed AS updates_committed,
+       pg_size_pretty(ss.bytes_indexed :: numeric) AS state_bytes,
+       ss.records_indexed AS state_records,
+       ss.rehydration_latency AS rehydration_latency,
+       wgl.lag AS wallclock_lag
+FROM           objects o
+          JOIN mz_catalog.mz_objects mo ON (o.id = mo.id)
+          JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)
+     LEFT JOIN mz_internal.mz_source_statuses mss ON (o.id = mss.id)
+     LEFT JOIN statistics ss ON (o.id = ss.id)
+     LEFT JOIN mz_internal.mz_wallclock_global_lag wgl ON (o.id = wgl.object_id)
+ORDER BY o.is_source DESC, object"#
+    )
 }
 
 pub fn plan_explain_analyze_cluster(
@@ -1486,20 +1697,7 @@ FROM {from}
 ORDER BY {order_by}"#
     );
 
-    if statement.as_sql {
-        let rows = vec![Row::pack_slice(&[Datum::String(
-            &mz_sql_pretty::pretty_str_simple(&query, 80).map_err(|e| {
-                PlanError::Unstructured(format!("internal error parsing our own SQL: {e}"))
-            })?,
-        )])];
-        let typ = SqlRelationType::new(vec![SqlScalarType::String.nullable(false)]);
-
-        Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
-    } else {
-        let (show_select, resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
-        scx.record_sql_impl_ids(&resolved_ids);
-        show_select.plan()
-    }
+    plan_explain_analyze_query(scx, query, statement.as_sql)
 }
 
 pub fn plan_explain_timestamp(
@@ -2225,5 +2423,28 @@ pub fn plan_copy(
             plan_copy_to_expr(scx, plan, desc, to_expr, format, options)
         }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn ingestion_query_filters_exports_by_owner() {
+        let source = CatalogItemId::User(7);
+        let unrestricted = explain_analyze_ingestion_query(StorageExplainee::Source, source, None);
+        assert!(!unrestricted.contains("owner_id"));
+
+        let restricted = explain_analyze_ingestion_query(
+            StorageExplainee::Source,
+            source,
+            Some(RoleId::User(2)),
+        );
+        assert_eq!(
+            restricted.matches("sub.owner_id = 'u2'").count(),
+            2,
+            "both the subsource and the table branch filter by owner: {restricted}"
+        );
     }
 }
