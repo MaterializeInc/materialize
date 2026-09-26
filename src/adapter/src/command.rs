@@ -93,6 +93,9 @@ pub enum Command {
     CatalogSnapshot {
         tx: oneshot::Sender<CatalogSnapshot>,
         include_durable_upper: bool,
+        /// Certify an applied prefix through this timestamp for query planning.
+        /// This does not announce completion of a table write.
+        through: Option<mz_repr::Timestamp>,
     },
 
     Startup {
@@ -293,6 +296,7 @@ pub enum Command {
     },
 
     ExecuteSlowPathPeek {
+        catalog: Arc<Catalog>,
         dataflow_plan: Box<PeekDataflowPlan>,
         determination: TimestampDetermination,
         finishing: RowSetFinishing,
@@ -310,6 +314,7 @@ pub enum Command {
     },
 
     ExecuteSubscribe {
+        catalog: Arc<Catalog>,
         df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
@@ -335,6 +340,7 @@ pub enum Command {
     },
 
     ExecuteCopyTo {
+        catalog: Arc<Catalog>,
         df_desc: Box<DataflowDescription<mz_compute_types::plan::LirRelationExpr>>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
@@ -413,10 +419,11 @@ pub enum Command {
     /// Registers a connection-scoped cancellation watch and returns a receiver
     /// that becomes `true` when cancellation is requested for the connection.
     ///
-    /// Registration always installs a fresh channel, so the caller cannot
-    /// observe a cancellation aimed at an earlier statement.
+    /// New outer statements reset the channel. Continuations retain any
+    /// cancellation already requested for the execution they belong to.
     RegisterConnectionCancelWatch {
         conn_id: ConnectionId,
+        reset: bool,
         tx: oneshot::Sender<watch::Receiver<bool>>,
     },
 
@@ -425,6 +432,7 @@ pub enum Command {
     /// frontend-sequenced read-then-write (DELETE/UPDATE/INSERT...SELECT)
     /// operations via OCC.
     CreateInternalSubscribe {
+        catalog: Arc<Catalog>,
         df_desc: Box<LirDataflowDescription>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,

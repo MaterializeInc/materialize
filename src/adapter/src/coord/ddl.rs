@@ -392,7 +392,7 @@ impl Coordinator {
                             )
                         ) =>
                 {
-                    self.refresh_catalog_after_conflict().await?;
+                    self.refresh_catalog(None).await?;
                     if self.catalog().transient_revision() != txn_revision {
                         return Err(AdapterError::DDLTransactionRace);
                     }
@@ -422,10 +422,16 @@ impl Coordinator {
         result
     }
 
-    /// Apply the committed prefix exposed by a retryable catalog conflict.
+    /// Apply a requested committed prefix, or fetch current progress after a conflict.
     /// Structural changes are checked by the caller against its planning revision.
-    pub(super) async fn refresh_catalog_after_conflict(&mut self) -> Result<(), AdapterError> {
-        let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
+    pub(super) async fn refresh_catalog(
+        &mut self,
+        upper: Option<mz_repr::Timestamp>,
+    ) -> Result<(), AdapterError> {
+        let (builtin, updates) = match upper {
+            Some(upper) => self.catalog_mut().sync_updates_through(upper).await?,
+            None => self.catalog_mut().sync_to_current_updates().await?,
+        };
         let builtin = self
             .catalog()
             .state()
@@ -488,7 +494,7 @@ impl Coordinator {
                         )
                     ) =>
                 {
-                    self.refresh_catalog_after_conflict().await?;
+                    self.refresh_catalog(None).await?;
                     if !retry_after_planning_change
                         && self.catalog().transient_revision() != revision
                     {
@@ -1007,7 +1013,7 @@ impl Coordinator {
                             mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
                         ))) =>
                 {
-                    self.refresh_catalog_after_conflict()
+                    self.refresh_catalog(None)
                         .wall_time()
                         .observe(phase_seconds.with_label_values(&["conflict_refresh"]))
                         .await?;

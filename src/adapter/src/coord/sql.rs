@@ -53,7 +53,10 @@ impl Coordinator {
         sql: String,
         params: Params,
     ) {
-        let catalog = self.owned_catalog();
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
         let now = self.now();
         mz_ore::task::spawn(|| "coord::declare", async move {
             let result =

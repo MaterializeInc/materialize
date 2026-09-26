@@ -1343,3 +1343,35 @@ discipline. Queries validate immutable catalog snapshots and carry their require
 definitions/configuration to replica admission, without progress-only definition
 waits or catalog time travel. Fixed data timestamps retain fresh catalog per
 statement. The catalog-ordering appendix specifies the contract.
+
+### 2026-09-14: Applied catalog context and query admission
+
+Snapshot positions distinguish the complete applied prefix from planning-visible
+changes and use actual commit uppers. Following a DROP and later metadata cleanup
+in one batch must classify each transaction against its own preceding state.
+Replica markers follow configuration and retirement, independently of missing
+plans, metadata resolution, or hydration. Cancellation can clean up catalog waits.
+Storage oneshots retain their independent admission rather than imposing a new
+connection-wide ordering guarantee.
+
+Inherited future progress retains log-and-proceed behavior. Explicit fixture clocks
+cover catalog/oracle allocation and checks, not source clocks, leases, or timers.
+Reuse ordinary oracle progress and group-commit nudges rather than having readers
+complete foreign writes. Read-only prewarming retains its frozen SQL savepoint,
+private replicas, and independent committed-protection follower. Full freshness
+and execution ordering apply in native serving, including coordinator fallbacks.
+A conservative initial prefix may require one catch-up. No durable version record
+is needed to avoid that startup cost. Complete the serving ordering path before
+the next checkpoint, preserving transaction admission and statement logging across
+replanning.
+
+Lock-based read-then-write retains its oracle read after write-lock admission.
+Its earlier catalog certification is not a substitute for that data timestamp.
+Query catch-up applies the requested complete prefix from the durable handle,
+including buffered updates, without treating a fetched or synchronized upper as
+an already-applied projection.
+
+Catalog certification can wait before a peek is registered. Cancellation admission
+belongs to the outer execution boundary and must survive frontend replanning,
+coordinator fallback, and nested FETCH. Only a new outer statement discards a prior
+cancellation. Submitted writes still require a definitive result.

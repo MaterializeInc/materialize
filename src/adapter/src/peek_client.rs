@@ -218,6 +218,96 @@ impl PeekClient {
         Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
     }
 
+    /// Obtain an oracle timestamp covering `lower`. A query may request ordinary
+    /// write progress, but must not announce completion on another writer's behalf.
+    pub(crate) async fn oracle_read_ts_at_least(
+        &mut self,
+        timeline: Timeline,
+        lower: Timestamp,
+    ) -> Result<Timestamp, AdapterError> {
+        let notifier = self.group_commit_notifier.clone();
+        let read_only = self.read_only;
+        let oracle = self.ensure_oracle(timeline).await?;
+        let mut nudged = false;
+        loop {
+            let timestamp = oracle.read_ts().await;
+            if timestamp >= lower {
+                return Ok(timestamp);
+            }
+            // One nudge per wait. Repeated nudges cannot overcome the committer's
+            // clock policy and would spin while a future timestamp is pending.
+            if !read_only && !nudged {
+                notifier.notify();
+                nudged = true;
+            }
+            let wait = std::time::Duration::from_millis(u64::from(lower.saturating_sub(timestamp)))
+                .min(std::time::Duration::from_secs(1));
+            tokio::time::sleep(wait).await;
+        }
+    }
+
+    /// Validate catalog visibility within this operation's real-time interval.
+    /// The returned EpochMilliseconds timestamp can also anchor a current-data
+    /// read. Savepoints retain their private, frozen planning state.
+    pub(crate) async fn fresh_catalog_snapshot(
+        &mut self,
+        context: &str,
+    ) -> Result<(Arc<Catalog>, Option<Timestamp>), AdapterError> {
+        let mut catalog = self.catalog_snapshot(context).await;
+        if catalog.observed_position().is_none() {
+            return Ok((catalog, None));
+        }
+        let mut timestamp = self
+            .oracle_read_ts_at_least(Timeline::EpochMilliseconds, Timestamp::MIN)
+            .await?;
+        loop {
+            catalog = self.catalog_snapshot_at(catalog, timestamp).await?;
+            let required = catalog
+                .planning_position()
+                .expect("committed catalog")
+                .upper
+                .step_back()
+                .expect("catalog prefix is nonempty");
+            if required <= timestamp {
+                return Ok((catalog, Some(timestamp)));
+            }
+            timestamp = self
+                .oracle_read_ts_at_least(Timeline::EpochMilliseconds, required)
+                .await?;
+        }
+    }
+
+    /// Certify the complete prefix through `timestamp`, preserving an immutable
+    /// snapshot when its certificate already suffices. Callers that have planned
+    /// must compare planning positions and replan if the returned context changed.
+    pub(crate) async fn catalog_snapshot_at(
+        &mut self,
+        catalog: Arc<Catalog>,
+        timestamp: Timestamp,
+    ) -> Result<Arc<Catalog>, AdapterError> {
+        if catalog
+            .observed_position()
+            .is_none_or(|position| position.upper > timestamp)
+        {
+            return Ok(catalog);
+        }
+        let snapshot = self
+            .call_coordinator(|tx| Command::CatalogSnapshot {
+                tx,
+                include_durable_upper: true,
+                through: Some(timestamp),
+            })
+            .await?;
+        let upper = snapshot.durable_upper.expect("requested catalog prefix")?;
+        if upper <= timestamp {
+            return Err(AdapterError::Internal(
+                "query catalog prefix is incomplete".into(),
+            ));
+        }
+        self.catalog_cache = Arc::downgrade(&snapshot.catalog);
+        Ok(snapshot.catalog)
+    }
+
     /// Fetch a snapshot of the catalog.
     ///
     /// Serves from the session-side cache when the catalog's transient
@@ -230,6 +320,9 @@ impl PeekClient {
     /// Cache misses record the round-trip time in the adapter metrics,
     /// labeled by `context`. Hits and misses are counted in
     /// `catalog_snapshot_cache`.
+    ///
+    /// This cache tracks the local projection, not durable freshness. SQL
+    /// planning separately validates durable visibility before execution.
     pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
         // NOTE: The upgrade can fail even when the revision is unchanged: any
         // in-place mutation of the Coordinator's catalog (including
@@ -259,6 +352,7 @@ impl PeekClient {
             .call_coordinator(|tx| Command::CatalogSnapshot {
                 tx,
                 include_durable_upper: false,
+                through: None,
             })
             .await
             .expect("coordinator unexpectedly dropped catalog snapshot response");

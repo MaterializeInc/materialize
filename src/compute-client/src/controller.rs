@@ -86,6 +86,7 @@ use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
 mod instance;
 mod introspection;
+pub use introspection::refresh_introspection;
 mod replica;
 
 pub mod error;

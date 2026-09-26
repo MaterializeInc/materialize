@@ -30,7 +30,7 @@ use mz_expr::{MapFilterProject, ResultSpec};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
-use mz_ore::task::{self, JoinHandle, spawn};
+use mz_ore::task::{self, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
 use mz_repr::adt::jsonb::Jsonb;
@@ -209,7 +209,10 @@ impl Coordinator {
         S: Staged + 'static,
         S::Ctx: Send + 'static,
     {
-        return_if_err!(stage.validity().check(self.catalog()), ctx);
+        if let Err(error) = stage.validity().check(self.catalog()) {
+            ctx.handle_error(error);
+            return;
+        }
         loop {
             let mut cancel_enabled = stage.cancel_enabled();
             if let Some(session) = ctx.session() {
@@ -238,11 +241,24 @@ impl Coordinator {
                 .stage(self, &mut ctx)
                 .instrument(parent_span.clone())
                 .await;
-            let res = return_if_err!(next, ctx);
+            let res = match next {
+                Ok(next) => next,
+                Err(error) => {
+                    ctx.handle_error(error);
+                    return;
+                }
+            };
             stage = match res {
                 StageResult::Handle(handle) => {
                     let internal_cmd_tx = self.internal_cmd_tx.clone();
                     self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, next| {
+                        let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
+                    });
+                    return;
+                }
+                StageResult::Await(future) => {
+                    let internal_cmd_tx = self.internal_cmd_tx.clone();
+                    self.handle_spawn(ctx, future, cancel_enabled, move |ctx, next| {
                         let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
                     });
                     return;
@@ -264,10 +280,12 @@ impl Coordinator {
 
     /// Waits for either the spawned stage work to complete or cancellation to
     /// be signaled through the connection-scoped cancel watch.
-    fn handle_spawn<C, T, F>(
+    /// Cancellation drops the supplied future, including its caller-chosen
+    /// ownership policy for any spawned work.
+    pub(crate) fn handle_spawn<C, T, F>(
         &self,
         ctx: C,
-        handle: JoinHandle<Result<T, AdapterError>>,
+        handle: impl Future<Output = Result<T, AdapterError>> + Send + 'static,
         cancel_enabled: bool,
         f: F,
     ) where
@@ -291,8 +309,10 @@ impl Coordinator {
         spawn(|| "sequence_staged", async move {
             tokio::select! {
                 res = handle => {
-                    let next = return_if_err!(res, ctx);
-                    f(ctx, next);
+                    match res {
+                        Ok(next) => f(ctx, next),
+                        Err(error) => ctx.handle_error(error),
+                    }
                 }
                 _ = rx, if cancel_enabled => {
                     ctx.retire(Err(AdapterError::Canceled));
@@ -2501,6 +2521,9 @@ impl Coordinator {
             }) => {
                 let stage = return_if_err!(
                     self.peek_validate(
+                        ctx.query_catalog()
+                            .cloned()
+                            .unwrap_or_else(|| self.owned_catalog()),
                         ctx.session(),
                         plan,
                         target_cluster,
@@ -3872,11 +3895,12 @@ impl Coordinator {
     #[instrument]
     pub(super) fn sequence_execute(
         &self,
+        catalog: &crate::catalog::Catalog,
         session: &mut Session,
         plan: plan::ExecutePlan,
     ) -> Result<String, AdapterError> {
         // Verify the stmt is still valid.
-        Self::verify_prepared_statement(self.catalog(), session, &plan.name)?;
+        Self::verify_prepared_statement(catalog, session, &plan.name)?;
         let ps = session
             .get_prepared_statement_unverified(&plan.name)
             .expect("known to exist");

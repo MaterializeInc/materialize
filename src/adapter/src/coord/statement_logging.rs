@@ -167,6 +167,8 @@ impl Coordinator {
                 self.write_began_execution_events(record, mseh_update, prepared_statement);
             }
             FrontendStatementLoggingEvent::EndedExecution(ended_record) => {
+                // Let tests delay consumption without delaying frontend execution.
+                fail::fail_point!("frontend_statement_logging_end");
                 self.end_statement_execution(
                     StatementLoggingId(ended_record.id),
                     ended_record.reason,

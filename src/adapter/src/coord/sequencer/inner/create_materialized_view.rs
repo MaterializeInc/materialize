@@ -878,7 +878,7 @@ impl Coordinator {
                             )
                         ) =>
                     {
-                        self.refresh_catalog_after_conflict().await?;
+                        self.refresh_catalog(None).await?;
                         if self.catalog().transient_revision() != planning_revision {
                             return Err(AdapterError::DDLTransactionRace);
                         }
@@ -1276,7 +1276,7 @@ impl Coordinator {
                     let canceled = async {
                         let _ = cancel_rx.wait_for(|canceled| *canceled).await;
                     };
-                    let result = crate::util::run_diagnostic(
+                    let result = crate::util::run_cancellable(
                         canceled,
                         expires,
                         Self::explain_written_materialized_view_pushdown(

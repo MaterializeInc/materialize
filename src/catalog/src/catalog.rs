@@ -1955,11 +1955,50 @@ impl Catalog {
         ),
         DurableError,
     > {
+        self.sync_updates_inner(None).await
+    }
+
+    /// Apply a complete prefix through an exclusive upper. Already synchronized
+    /// progress is drained locally, without fetching newer consensus state.
+    /// Waits if the requested upper is not durable yet. Callers that cannot wait
+    /// for a writer must first establish it, for example with [`Self::advance_upper`].
+    pub async fn sync_updates_through(
+        &mut self,
+        upper: mz_repr::Timestamp,
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        DurableError,
+    > {
+        let upper = self.observed_position.map_or(upper, |p| upper.max(p.upper));
+        self.sync_updates_inner(Some(upper)).await
+    }
+
+    async fn sync_updates_inner(
+        &mut self,
+        target_upper: Option<mz_repr::Timestamp>,
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        DurableError,
+    > {
         let (updates, upper) = match mz_ore::future::OreFutureExt::ore_catch_unwind(
             std::panic::AssertUnwindSafe(async {
                 let mut storage = self.storage().await;
-                let updates = storage.sync_to_current_updates().await?;
-                Ok::<_, DurableError>((updates, storage.synced_upper()))
+                match target_upper {
+                    Some(upper) => {
+                        let updates = storage.sync_updates(upper).await?;
+                        Ok::<_, DurableError>((updates, upper))
+                    }
+                    None => {
+                        let updates = storage.sync_to_current_updates().await?;
+                        Ok((updates, storage.synced_upper()))
+                    }
+                }
             }),
         )
         .await

@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
@@ -40,6 +40,7 @@ use mz_sql::session::vars::{
     CLUSTER, CLUSTER_REPLICA, IsolationLevel, TRANSACTION_ISOLATION, Var, VarInput,
 };
 use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement};
+use mz_storage_types::sources::Timeline;
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -100,7 +101,17 @@ impl PeekClient {
             }
         }
 
-        let catalog = self.catalog_snapshot("try_frontend_peek").await;
+        let timeout = *session.vars().statement_timeout();
+        let expires = (!timeout.is_zero())
+            .then_some(timeout)
+            .and_then(|timeout| execute_started.checked_add(timeout));
+        let diagnostic_cancel = diagnostic_cancel.boxed().shared();
+        let (mut catalog, mut catalog_read_ts) = crate::util::run_cancellable(
+            diagnostic_cancel.clone(),
+            expires,
+            self.fresh_catalog_snapshot("try_frontend_peek"),
+        )
+        .await?;
 
         // Extract things from the portal. A failed verification does not begin
         // an entry, mirroring the coordinator: the portal is what statement
@@ -205,16 +216,32 @@ impl PeekClient {
             TakeOver::StatementToRun,
         );
 
-        self.try_frontend_peek_inner(
-            session,
-            catalog,
-            stmt,
-            params,
-            logging,
-            diagnostic_cancel,
-            execute_started,
-        )
-        .await
+        loop {
+            let response = self
+                .try_frontend_peek_inner(
+                    session,
+                    Arc::clone(&catalog),
+                    catalog_read_ts,
+                    stmt.clone(),
+                    &params,
+                    logging,
+                    diagnostic_cancel.clone(),
+                    expires,
+                )
+                .await?;
+            if response.is_some() {
+                return Ok(response);
+            }
+            // No execution or transaction timestamp was installed. A newer
+            // definition prefix requires planning again, not replaying old work.
+            (catalog, catalog_read_ts) = crate::util::run_cancellable(
+                diagnostic_cancel.clone(),
+                expires,
+                self.fresh_catalog_snapshot("replan frontend peek"),
+            )
+            .await?;
+            Coordinator::verify_portal(&catalog, session, portal_name)?;
+        }
     }
 
     /// Executes a coordinator-owned `SELECT`, pinned to `replica_id`, and
@@ -324,11 +351,12 @@ impl PeekClient {
         &mut self,
         session: &mut Session,
         catalog: Arc<Catalog>,
+        catalog_read_ts: Option<Timestamp>,
         stmt: Option<Arc<Statement<Raw>>>,
-        params: Params,
+        params: &Params,
         logging: &mut ExecutionLogging,
-        diagnostic_cancel: impl std::future::Future<Output = ()> + Send,
-        execute_started: std::time::Instant,
+        diagnostic_cancel: impl std::future::Future<Output = ()> + Send + Clone,
+        expires: Option<std::time::Instant>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -347,7 +375,7 @@ impl PeekClient {
 
         let pcx = session.pcx();
         let (plan, sql_impl_ids) =
-            mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+            mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, params, &resolved_ids)?;
 
         /// What do we do with the result of the select?
         enum QueryPlan<'a> {
@@ -662,6 +690,14 @@ impl PeekClient {
             Coordinator::needs_linearized_read_ts(&isolation_level, when);
 
         let oracle_read_ts = match timeline {
+            Some(Timeline::EpochMilliseconds)
+                if needs_linearized_read_ts
+                    && !when.must_advance_to_timeline_ts()
+                    && isolation_level == IsolationLevel::StrictSerializable
+                    && catalog_read_ts.is_some() =>
+            {
+                catalog_read_ts
+            }
             Some(timeline) if needs_linearized_read_ts => {
                 let oracle = self.ensure_oracle(timeline).await?;
                 let oracle_read_ts = oracle.read_ts().await;
@@ -805,6 +841,29 @@ impl PeekClient {
                         real_time_recency_ts,
                     )
                     .await?;
+
+                if needs_linearized_read_ts
+                    && isolation_level == IsolationLevel::StrictSerializable
+                    && let Some(validated_at) = catalog_read_ts
+                    && let TimestampContext::TimelineTimestamp {
+                        timeline: Timeline::EpochMilliseconds,
+                        chosen_ts: timestamp,
+                        ..
+                    } = &determination.timestamp_context
+                    && *timestamp > validated_at
+                {
+                    let current =
+                        crate::util::run_cancellable(diagnostic_cancel.clone(), expires, async {
+                            self.oracle_read_ts_at_least(Timeline::EpochMilliseconds, *timestamp)
+                                .await?;
+                            self.catalog_snapshot_at(Arc::clone(&catalog), *timestamp)
+                                .await
+                        })
+                        .await?;
+                    if current.planning_position() != catalog.planning_position() {
+                        return Ok(None);
+                    }
+                }
 
                 // If this query pins the timestamp of a multi-statement transaction, store
                 // the read holds in the coordinator, so subsequent queries can validate
@@ -1397,29 +1456,18 @@ impl PeekClient {
                     // Diagnostic work has not dispatched a peek. It can stop on
                     // disconnect, cancellation, or the original execution budget
                     // without abandoning an executing query.
-                    let timeout = *session.vars().statement_timeout();
-                    let expires = (!timeout.is_zero())
-                        .then_some(timeout)
-                        .and_then(|timeout| execute_started.checked_add(timeout));
                     let observe = async {
-                        let mut cancel = self
-                            .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
-                                conn_id: session.conn_id().clone(),
-                                tx,
-                            })
-                            .await?;
-                        tokio::select! {
-                            biased;
-                            _ = cancel.wait_for(|canceled| *canceled) => {
-                                Err(AdapterError::Canceled)
-                            },
-                            explanation = client.explain_timestamp(
-                                &catalog, session.conn_id(), session.pcx().wall_time,
-                                &input_id_bundle, determination,
-                            ) => Ok(explanation),
-                        }
+                        Ok(client
+                            .explain_timestamp(
+                                &catalog,
+                                session.conn_id(),
+                                session.pcx().wall_time,
+                                &input_id_bundle,
+                                determination,
+                            )
+                            .await)
                     };
-                    Some(crate::util::run_diagnostic(diagnostic_cancel, expires, observe).await?)
+                    Some(crate::util::run_cancellable(diagnostic_cancel, expires, observe).await?)
                 } else {
                     None
                 };
@@ -1486,6 +1534,7 @@ impl PeekClient {
 
                         let response = self
                             .call_coordinator(|tx| Command::ExecuteSlowPathPeek {
+                                catalog: Arc::clone(&catalog),
                                 dataflow_plan: Box::new(dataflow_plan),
                                 determination,
                                 finishing,
@@ -1563,6 +1612,7 @@ impl PeekClient {
 
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSubscribe {
+                        catalog: Arc::clone(&catalog),
                         df_desc,
                         dependency_ids: subscribe_plan.from.depends_on(),
                         cluster_id: target_cluster_id,
@@ -1643,6 +1693,7 @@ impl PeekClient {
                 // logged by the caller.
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteCopyTo {
+                        catalog: Arc::clone(&catalog),
                         df_desc: Box::new(df_desc),
                         compute_instance: target_cluster_id,
                         target_replica,

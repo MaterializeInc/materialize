@@ -47,6 +47,7 @@ use crate::controller::error::{
     CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
 use crate::controller::instance_client::PeekError;
+use crate::controller::introspection::refresh_introspection;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionReadiness, ComputeControllerResponse, IntrospectionUpdates, PeekNotification,
@@ -3092,50 +3093,8 @@ impl RefreshIntrospectionState {
     /// Should be called whenever the write frontier of the collection advances. It updates the
     /// state that should be recorded in introspection relations, but doesn't send the updates yet.
     fn frontier_update(&mut self, write_frontier: &Antichain<Timestamp>) {
-        if write_frontier.is_empty() {
-            self.last_completed_refresh =
-                if let Some(last_refresh) = self.refresh_schedule.last_refresh() {
-                    last_refresh.into()
-                } else {
-                    // If there is no last refresh, then we have a `REFRESH EVERY`, in which case
-                    // the saturating roundup puts a refresh at the maximum possible timestamp.
-                    Timestamp::MAX.into()
-                };
-            self.next_refresh = Datum::Null;
-        } else {
-            if PartialOrder::less_equal(write_frontier, &self.initial_as_of) {
-                // We are before the first refresh.
-                self.last_completed_refresh = Datum::Null;
-                let initial_as_of = self.initial_as_of.as_option().expect(
-                    "initial_as_of can't be [], because then there would be no refreshes at all",
-                );
-                let first_refresh = self
-                    .refresh_schedule
-                    .round_up_timestamp(*initial_as_of)
-                    .expect("sequencing makes sure that REFRESH MVs always have a first refresh");
-                soft_assert_or_log!(
-                    first_refresh == *initial_as_of,
-                    "initial_as_of should be set to the first refresh"
-                );
-                self.next_refresh = first_refresh.into();
-            } else {
-                // The first refresh has already happened.
-                let write_frontier = write_frontier.as_option().expect("checked above");
-                self.last_completed_refresh = self
-                    .refresh_schedule
-                    .round_down_timestamp_m1(*write_frontier)
-                    .map_or_else(
-                        || {
-                            soft_panic_or_log!(
-                                "rounding down should have returned the first refresh or later"
-                            );
-                            Datum::Null
-                        },
-                        |last_completed_refresh| last_completed_refresh.into(),
-                    );
-                self.next_refresh = write_frontier.clone().into();
-            }
-        }
+        (self.last_completed_refresh, self.next_refresh) =
+            refresh_introspection(&self.refresh_schedule, &self.initial_as_of, write_frontier);
     }
 }
 

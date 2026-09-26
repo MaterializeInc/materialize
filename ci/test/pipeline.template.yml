@@ -393,6 +393,18 @@ steps:
     agents:
       queue: hetzner-aarch64-16cpu-32gb
 
+  - id: catalog-read-protection-restart
+    topics: [kafka, kafka-sink]
+    label: Catalog read-protection restart
+    depends_on: build-aarch64
+    timeout_in_minutes: 60
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: restart
+          run: catalog-read-protection
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
   - id: restarts
     topics: [kafka, kafka-sink]
     label: Restart

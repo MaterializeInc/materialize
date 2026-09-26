@@ -65,6 +65,9 @@ pub enum AdapterError {
     /// TODO(ggevay): we should refactor 2. usages to use `ConcurrentDependencyDrop` instead
     /// (e.g., in MV sequencing)
     ChangedPlan(String),
+    /// Catalog validation requires replanning. This may only be produced before
+    /// execution or installation of a newly selected transaction timestamp.
+    CatalogSnapshotChanged,
     /// The cursor already exists.
     DuplicateCursor(String),
     /// An error while evaluating an expression.
@@ -948,6 +951,7 @@ impl AdapterError {
                 _ => SqlState::INTERNAL_ERROR,
             },
             AdapterError::ChangedPlan(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::CatalogSnapshotChanged => SqlState::T_R_SERIALIZATION_FAILURE,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             // Evaluation errors are almost all user-facing data exceptions, not
             // internal errors. `eval_error_code` matches every variant
@@ -1285,6 +1289,9 @@ impl fmt::Display for AdapterError {
                 )
             }
             AdapterError::ChangedPlan(e) => write!(f, "{}", e),
+            AdapterError::CatalogSnapshotChanged => {
+                write!(f, "catalog changed during query planning")
+            }
             AdapterError::Catalog(e) => e.fmt(f),
             AdapterError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())

@@ -235,6 +235,7 @@ pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
 pub mod catalog_implications;
+mod catalog_reads;
 mod caught_up;
 mod command_handler;
 mod compaction_bound_subscriber;
@@ -355,6 +356,12 @@ pub enum Message {
     ControllerReady {
         controller: ControllerReadiness,
     },
+    ExecuteCatalogReady {
+        ctx: ExecuteContext,
+        continuation: catalog_reads::ExecuteCatalogContinuation,
+        otel_ctx: OpenTelemetryContext,
+    },
+    ExecuteReplan(ExecuteContext),
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
@@ -542,6 +549,8 @@ impl Message {
             } => "controller_ready(internal)",
             Message::QueryDataflowResponse(_) => "query_dataflow_response",
             Message::QueryWatchSetReady(..) => "query_watch_set_ready",
+            Message::ExecuteCatalogReady { .. } => "execute_catalog_ready",
+            Message::ExecuteReplan(_) => "execute_replan",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::DeferredPlanReady { .. } => "deferred_plan_ready",
@@ -639,6 +648,7 @@ pub enum PeekStage {
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
+    TimestampValidated(PeekStageTimestampValidated),
     Optimize(PeekStageOptimize),
     /// Final stage for a peek.
     Finish(PeekStageFinish),
@@ -732,6 +742,12 @@ pub struct PeekStageOptimize {
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
+}
+
+#[derive(Debug)]
+pub struct PeekStageTimestampValidated {
+    stage: PeekStageOptimize,
+    read_holds: Option<ReadHolds>,
 }
 
 #[derive(Debug)]
@@ -1065,6 +1081,7 @@ pub enum SubscribeStage {
     OptimizeMir(SubscribeOptimizeMir),
     LinearizeTimestamp(SubscribeLinearizeTimestamp),
     TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
+    TimestampValidated(SubscribeTimestampValidated),
     Finish(SubscribeFinish),
     Explain(SubscribeExplain),
 }
@@ -1125,6 +1142,13 @@ pub struct SubscribeFinish {
 }
 
 #[derive(Debug)]
+pub struct SubscribeTimestampValidated {
+    stage: SubscribeTimestampOptimizeLir,
+    determination: TimestampDetermination,
+    read_holds: ReadHolds,
+}
+
+#[derive(Debug)]
 pub struct SubscribeExplain {
     validity: PlanValidity,
     optimizer: optimize::subscribe::Optimizer,
@@ -1142,6 +1166,7 @@ pub enum IntrospectionSubscribeStage {
 
 #[derive(Debug)]
 pub struct IntrospectionSubscribeOptimizeMir {
+    catalog: Arc<Catalog>,
     validity: PlanValidity,
     plan: plan::SubscribePlan,
     subscribe_id: GlobalId,
@@ -1151,6 +1176,7 @@ pub struct IntrospectionSubscribeOptimizeMir {
 
 #[derive(Debug)]
 pub struct IntrospectionSubscribeTimestampOptimizeLir {
+    catalog: Arc<Catalog>,
     validity: PlanValidity,
     optimizer: optimize::subscribe::Optimizer,
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
@@ -1160,6 +1186,7 @@ pub struct IntrospectionSubscribeTimestampOptimizeLir {
 
 #[derive(Debug)]
 pub struct IntrospectionSubscribeFinish {
+    catalog: Arc<Catalog>,
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
     read_holds: ReadHolds,
@@ -1256,6 +1283,8 @@ pub enum TargetCluster {
 pub(crate) enum StageResult<T> {
     /// A task was spawned that will return the next stage.
     Handle(JoinHandle<Result<T, AdapterError>>),
+    /// Async admission work whose resources are released on cancellation.
+    Await(futures::future::BoxFuture<'static, Result<T, AdapterError>>),
     /// A task was spawned that will return a response for the client.
     HandleRetire(JoinHandle<Result<ExecuteResponse, AdapterError>>),
     /// The next stage is immediately ready and will execute.
@@ -1287,9 +1316,27 @@ pub(crate) trait Staged: Send {
 pub trait StagedContext {
     fn retire(self, result: Result<ExecuteResponse, AdapterError>);
     fn session(&self) -> Option<&Session>;
+
+    /// Handle an error before a stage installs execution. Statement contexts
+    /// can retry catalog invalidation without retiring their logging obligation.
+    fn handle_error(self, error: AdapterError)
+    where
+        Self: Sized,
+    {
+        self.retire(Err(error));
+    }
 }
 
 impl StagedContext for ExecuteContext {
+    fn handle_error(self, error: AdapterError) {
+        if matches!(&error, AdapterError::CatalogSnapshotChanged) && self.query_replan.is_some() {
+            let sender = self.internal_cmd_tx.clone();
+            let _ = sender.send(Message::ExecuteReplan(self));
+        } else {
+            self.retire(Err(error));
+        }
+    }
+
     fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
         self.retire(result);
     }
@@ -1682,10 +1729,48 @@ pub struct ExecuteContextInner {
     /// Fixed when execution enters the coordinator, not renewed by diagnostic stages.
     statement_deadline: Option<Instant>,
     #[derivative(Debug = "ignore")]
+    query_catalog: Option<(Arc<Catalog>, Option<Timestamp>)>,
+    #[derivative(Debug = "ignore")]
+    query_replan: Option<Arc<(Arc<Statement<Raw>>, Params)>>,
+    query_portal: Option<String>,
+    query_replanned: bool,
+    subscribe_admitted: bool,
+    #[derivative(Debug = "ignore")]
     response_barriers: Vec<BuiltinTableAppendNotify>,
 }
 
 impl ExecuteContext {
+    pub(crate) fn admit_subscribe(&mut self) -> Result<(), AdapterError> {
+        if !self.subscribe_admitted {
+            self.session_mut()
+                .add_transaction_ops(crate::session::TransactionOps::Subscribe)?;
+            self.subscribe_admitted = true;
+        }
+        Ok(())
+    }
+
+    /// The immutable catalog captured for this execution's preplanning.
+    /// Contexts that bypass statement preplanning need not have a snapshot.
+    pub(crate) fn query_catalog(&self) -> Option<&Arc<Catalog>> {
+        self.query_catalog.as_ref().map(|(catalog, _)| catalog)
+    }
+
+    /// The EpochMilliseconds certification timestamp, absent for frozen savepoints
+    /// or contexts that bypass statement preplanning. This is not a data timestamp.
+    pub(crate) fn query_catalog_timestamp(&self) -> Option<Timestamp> {
+        self.query_catalog
+            .as_ref()
+            .and_then(|(_, timestamp)| *timestamp)
+    }
+
+    pub(crate) fn set_query_catalog(
+        &mut self,
+        catalog: Arc<Catalog>,
+        timestamp: Option<Timestamp>,
+    ) {
+        self.query_catalog = Some((catalog, timestamp));
+    }
+
     pub(crate) fn statement_deadline(&self) -> Option<Instant> {
         self.statement_deadline
     }
@@ -1742,6 +1827,11 @@ impl ExecuteContext {
                     statement_deadline,
                     response_barriers,
                     internal_cmd_tx,
+                    query_catalog: None,
+                    query_replan: None,
+                    query_portal: None,
+                    query_replanned: false,
+                    subscribe_admitted: false,
                 }
                 .into(),
             ),
@@ -1757,6 +1847,8 @@ impl ExecuteContext {
     /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
     /// eventual retirement. The returned response barriers must stay attached
     /// to the user-visible response path.
+    /// Catalog certification is not part of these returned parts. A continuing
+    /// execution must preserve it explicitly or reenter through catalog freshness.
     ///
     /// The returned parts lose the `Drop` backstop that answers the client on shutdown, so they
     /// must not be held across an await point. A bare `ClientTransmitter` panics when dropped
@@ -1777,6 +1869,11 @@ impl ExecuteContext {
             extra,
             response_barriers,
             statement_deadline: _,
+            query_catalog: _,
+            query_replan: _,
+            query_portal: _,
+            query_replanned: _,
+            subscribe_admitted: _,
         } = *self.inner.take().expect("only consumed by value");
         (tx, internal_cmd_tx, session, extra, response_barriers)
     }
@@ -6363,6 +6460,71 @@ mod execute_context_tests {
     use super::*;
     use crate::session::Session;
     use crate::util::ClientTransmitter;
+
+    #[mz_ore::test(tokio::test)]
+    async fn replan_preserves_admission_logging_and_response_barriers() {
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_tx, mut internal_rx) = mpsc::unbounded_channel();
+        let (release, barrier) = oneshot::channel::<()>();
+        let logging_id = StatementLoggingId(Uuid::new_v4());
+        let mut session = Session::dummy();
+        session.start_transaction_single_stmt(mz_ore::now::to_datetime(0));
+        let session_id = session.uuid();
+        let mut ctx = ExecuteContext::from_parts_with_response_barriers(
+            ClientTransmitter::new(client_tx, internal_tx.clone()),
+            internal_tx.clone(),
+            session,
+            ExecuteContextGuard::new(Some(logging_id), internal_tx),
+            vec![Box::pin(async move {
+                barrier.await.expect("release barrier");
+            })],
+        )
+        .with_statement_deadline(Some(Instant::now() + Duration::from_secs(60)));
+        let statement = mz_sql_parser::parser::parse_statements("SUBSCRIBE (SELECT 1)")
+            .expect("valid subscribe")
+            .remove(0)
+            .ast;
+        ctx.query_replan = Some(Arc::new((Arc::new(statement), Params::empty())));
+        ctx.admit_subscribe()
+            .expect("initial transaction admission");
+        let deadline = ctx.statement_deadline();
+        StagedContext::handle_error(ctx, AdapterError::CatalogSnapshotChanged);
+
+        let Message::ExecuteReplan(mut ctx) = internal_rx.try_recv().expect("replan request")
+        else {
+            panic!("planning invalidation must retain the execution");
+        };
+        assert_eq!(ctx.session().uuid(), session_id);
+        assert_eq!(ctx.extra().contents(), Some(logging_id));
+        assert_eq!(ctx.statement_deadline(), deadline);
+        ctx.admit_subscribe()
+            .expect("same statement must not repeat transaction admission");
+        assert!(
+            internal_rx.try_recv().is_err(),
+            "replanning must not end logging"
+        );
+        assert!(matches!(
+            client_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+
+        ctx.retire(Err(AdapterError::Canceled));
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            client_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        release.send(()).expect("barrier retained until retirement");
+        let response = client_rx.await.expect("final client response");
+        assert!(matches!(response.result, Err(AdapterError::Canceled)));
+        let Message::RetireExecute { data, .. } =
+            internal_rx.recv().await.expect("retirement event")
+        else {
+            panic!("final retirement must end the original log entry");
+        };
+        assert_eq!(data.contents(), Some(logging_id));
+        assert!(internal_rx.try_recv().is_err());
+    }
 
     /// Runtime shutdown drops the barrier-waiting task that `retire` spawns. The context's `Drop`
     /// backstop must answer the client, rather than panicking on an unsent `ClientTransmitter`.
