@@ -16,18 +16,17 @@ queries may fail. Transparent query or session failover is out of scope.
 For this deliverable, table and webhook ticking and shard finalization remain
 adapter-owned and may pause while no adapter is live.
 
-Working multi-adapter operation is the destination, not this deliverable.
-Boundaries must support independent adapters becoming catalog writers and query
-clients without another ownership redesign. Once lifecycle enactment leaves the
-adapter, the adapter's DDL and the lifecycle components' publication are two
-cooperating catalog writers, and that much concurrency is required. Arbitrary
-numbers of adapters and their deployment are not.
+Active and prewarming deployments coexist as independent catalog participants.
+Their adapters and lifecycle components are cooperating catalog writers, with
+authority appropriate to each deployment. Arbitrary concurrently serving
+adapters remain a destination, not this deliverable. The boundaries must
+support them without another ownership redesign.
 
 Initial implementation and validation target environments initialized under the
-new protection rules. Conversion of existing environments, builtin schema migration,
-and version-upgrade support for protected environments are deferred until after
-demonstrating fresh-environment decoupling. They are not prerequisites for the
-[milestones](#milestones).
+new protection rules. Native prewarming and handover between compatible
+participating versions are in scope. Conversion of existing environments and
+interoperation with binaries that lack this deployment model remain separate
+rollout work, not prerequisites for the [milestones](#milestones).
 
 Enabling the new ownership model for existing environments requires a separate
 conversion and rollout decision that preserves their promised results. Conversion
@@ -41,33 +40,43 @@ SELECTs, SUBSCRIBEs, and COPY TO, remain on the fast protocol. Their creation,
 execution, responses, and cleanup are part of request-scoped execution, not
 durable catalog lifecycle.
 
-## Future work: true zero-downtime upgrades
+## Deployment coexistence and native prewarming
 
-The end state this work must not foreclose is an upgrade in which an environment
-of the new version runs beside the current one, hydrates everything on its own
-replicas, and takes over only at cutover. Both generations are full participants:
-catalog writers, query clients, and lifecycle followers. Cutover transfers
-ownership of maintained outputs and external writes to the new generation and
-fences the old one. An outside signal from the upgrade orchestrator decides when
-that is safe. Nothing in the environment infers it.
+Each deployment's replica set and read-only/output-write authority are durable
+catalog state. Both active and prewarming deployments use native
+catalog-following replicas throughout their lifetime. The pending deployment
+hydrates its own replicas while the active deployment serves. Promotion changes
+durable authority without switching execution models or discarding the state
+warmed for takeover. An outside signal from the upgrade orchestrator authorizes
+promotion. Neither joining the catalog nor observing hydration grants that
+authority.
 
-The catalog is shared across generations, and some state must be kept per
-generation. Items, clusters, protection, and what a user has declared for a
-cluster, whether its managed configuration and strategy or the replicas of an
-unmanaged cluster, live in the catalog once, for all generations. Replicas are
-per generation: each generation keeps the replicas it runs for a cluster, derived
-from that shared declaration, together with the state that drives them, such as
-hydration, scaling, and reconfiguration. A generation's clients and lifecycle
-components use its own replicas. Write ownership of a maintained output and a
-generation's client incarnations are per generation as well, and exactly one
-generation writes a given output at a time. Other state found to differ between
-generations is kept per generation rather than folded into a shared definition.
+User objects, clusters, and declared cluster configuration live once in the
+shared catalog. Actual replicas and deployment-specific hydration, scaling and
+reconfiguration state are scoped to their deployment. Clients route to their
+own deployment's replicas, and observations identify that scope. There is no
+private durable SQL catalog per deployment. Written plans retain their
+[build ownership](#written-plans).
 
-While generations coexist, the catalog is written in a form every live generation
-understands. A newer version introduces no record kinds, builtin schema changes,
-or migrations until older generations are fenced, and operates against the older
-durable state until then. Persist applies the same discipline to its own state.
-This is a contract on how versions are developed, not only on this design.
+Catalog participation is distinct from output-write authority. A read-only
+deployment can publish its replicas, plans and protection without gaining the
+right to write shared user data or maintained outputs. Promotion transfers
+output authority and fences the retired deployment at the catalog and output
+commit boundaries. Delayed followers must not permit both generations to write
+the same output. Restart recovers the committed authority rather than inferring
+it from process startup or connection order.
+
+Protection accounts for all live deployments. Promotion preserves the warmed
+deployment's requirements. Retirement or abandonment releases only that
+deployment's resources under the existing protection rules, not another's holds
+or shared user objects.
+
+While versions coexist, shared catalog and Persist state must remain readable
+and writable by every live participant. Writers preserve each other's state and
+invariants, not merely accept each other's encodings. Incompatible records,
+builtin schema changes and migrations wait until the affected older generations
+are fenced. This is a contract for participating versions, not a requirement
+that unmodified pre-feature binaries understand the deployment model.
 
 ## Approach
 
@@ -248,10 +257,34 @@ The [catalog-ordering appendix](#appendix-catalog-freshness-and-execution-orderi
 describes the corresponding requirement for independently following clients and
 replicas.
 
+The catalog determines index candidates and transaction eligibility.
+Installation or hydration must not make an index appear or disappear from that
+logical view. Read acquisition establishes a justified protected frontier
+before fixing the transaction's timestamp and time domain. Pending installation
+belongs at read preparation and execution admission, not in a filter that hides
+declared indexes. A catalog entry or missing compaction bound is not proof of
+readability. With no intervening DDL, physical readiness alone cannot break
+repeated logical reads.
+
+Catalog certification and readiness waits remain cancellable and preserve
+statement-specific timeout semantics. They do not impose a common deadline on
+previously unbounded session controls, transaction controls or DDL. Submitted
+writes still require a definitive result before reporting cancellation or
+timeout.
+
 Query-client connections must not replace one another's desired state or reset
 maintained dataflows. Lifecycle ownership and permission to perform external
 writes must remain safe across restarts and handover, independently of query
 connection lifetime.
+
+### Observability
+
+Metrics follow the responsibilities they describe. Retire accounting for removed
+controller queues, transports and command paths rather than recreating those
+components for metric parity. Meaningful observations, including public lag
+reporting, frontiers, hydration and cleanup, remain at their owning boundaries.
+Preserve autonomous curated-metric emission during adapter absence. Missing
+observations are not zero values or execution prerequisites.
 
 ## Selected implementation decisions
 
@@ -281,25 +314,29 @@ write. Live readers of an existing trace remain protected by execution holds.
 
 ### Read-only prewarming
 
-Preserve prewarming by following committed catalog permission independently of the
-SQL savepoint. Read-only bootstrap follows [Index reconstruction](#index-reconstruction)
-without waiting for the writer. A local savepoint write grants no compaction
-permission, and there is no startup-specific writer protocol.
+Prewarming uses
+[deployment-scoped replicas](#deployment-coexistence-and-native-prewarming).
+They follow committed definitions, written plans and compaction permission for
+their deployment. Read-only bootstrap follows
+[Index reconstruction](#index-reconstruction) without depending on the serving
+adapter to grant permission. A SQL savepoint or adapter-local read-only setting
+grants neither compaction permission nor output-write authority.
 
 ### Lifecycle placement
 
-Following and enactment run in clusterd, at the replica, for compute and storage
-alike. Each replica follows the catalog for its cluster and reconciles itself: it
-installs from written plans or source and sink definitions, applies committed
-bounds, and proposes bounds from its own progress. There is no lifecycle
-connection: the fast protocol is the only protocol, and nothing sends maintained
-installation commands. Which replica serves a request and how replicated
-responses are merged belong to the query client. Environment-wide storage
-accounting dissolves along the way: critical since handles follow committed
-bounds, table registration is adapter-owned, and shard finalization applies
-committed retirement permission idempotently. Adapters perform finalization for
-this deliverable. Creating replica processes stays with envd for now. DDL and table
-appends are request-scoped and stay with adapters.
+Following and enactment run in clusterd, at the replica, for compute and
+storage alike. Each replica follows the catalog for its cluster and deployment
+and reconciles itself: it installs from written plans or source and sink
+definitions, applies committed bounds, and proposes bounds from its own
+progress. There is no lifecycle connection: the fast protocol is the only
+protocol, and nothing sends maintained installation commands. Which replica
+serves a request and how replicated responses are merged belong to the query
+client. Environment-wide storage accounting dissolves along the way: critical
+since handles follow committed bounds, table registration is adapter-owned, and
+shard finalization applies committed retirement permission idempotently.
+Adapters perform finalization for this deliverable. Creating replica processes
+stays with envd for now. DDL and table appends are request-scoped and stay with
+adapters.
 
 A replica's execution reads and live-index retention windows use incarnation-scoped
 client protection. A slow or hydrating replica keeps the input history it needs
@@ -334,22 +371,24 @@ The following rules apply to protected environments. Unprotected environments
 retain local-capability-driven compaction and epoch-fenced normal writer opens,
 including their existing migration behavior.
 
-The deployment generation is the catalog fence. Components of the active
-generation write without fencing each other, and promotion fences the whole old
-generation. Persist compare-and-append is the commit authority: metadata-only
-writes such as protection and heartbeats retry on contention, while DDL refreshes
-and revalidates and reports a planning conflict when structural changes
-invalidated it rather than merging. Each writer follows the durable stream it
-commits to. Within a generation, safety comes from validation at commit, not from
+Catalog writes validate deployment membership and the operation's authority at
+commit. Active and prewarming generations participate under their own
+identities without fencing one another by joining. Promotion revokes the
+retired generation's write authority without invalidating the warmed
+generation's protection. Persist compare-and-append is the commit authority:
+metadata-only writes such as protection and heartbeats retry on contention,
+while DDL refreshes and revalidates and reports a planning conflict when
+structural changes invalidated it rather than merging. Each writer follows the
+durable stream it commits to. Cooperating writers do not fence one another with
 per-process epochs.
 
-Persist critical since handles follow the committed bound only. Every valid read
-requirement is in that bound, so applying it is monotone and needs no per-process
-opaque. Local hold accounting does not drive critical handles. A prewarming
-process that needs client protection writes under the active generation, since a
-writer opened under its own pending generation would fence the leader before
-promotion. Where an enactment proves unsafe when two same-generation followers
-perform it, that case gets a narrow fence of its own, not a general epoch.
+Persist critical since handles follow the committed bound only. Every valid
+read requirement is in that bound, so applying it is monotone and needs no
+per-process opaque. Local hold accounting does not drive critical handles.
+Prewarming client protection belongs to its own deployment and participates in
+the shared bound. Where concurrent enactment is unsafe, enforce authority at
+the affected output's write boundary rather than treating catalog membership as
+exclusive ownership.
 
 ## Alternatives
 
@@ -444,13 +483,21 @@ storage follows on the same path, and neither is complete without the other.
 
 Demonstrate: stop the adapter while maintained dataflows, sources, sinks, and
 compaction continue, explicitly allowing table- and webhook-fed work to pause.
-Restart a replica during the outage and show that it reconstructs and progresses
-without the adapter, rather than relying on a surviving sibling's progress.
-Then restart the adapter and resume queries. Include a multi-replica cluster with
-one replica still hydrating, same-batch dependencies, and concurrent or delayed
-application of committed permission. One adapter and one query client suffice.
-Verify policy-based retention independently of live client or replica grants,
-including their reclamation and subsequent reconstruction.
+Restart a replica during the outage and show that it reconstructs and
+progresses without the adapter, rather than relying on a surviving sibling's
+progress. Then restart the adapter and resume queries. Include a multi-replica
+cluster with one replica still hydrating, same-batch dependencies, and
+concurrent or delayed application of committed permission. One adapter and one
+query client suffice for this outage demonstration. Verify policy-based
+retention independently of live client or replica grants, including their
+reclamation and subsequent reconstruction.
+
+Native deployment handover is also part of this milestone. Prewarm a second
+deployment on its catalog-owned replicas and show that externally authorized
+promotion retains warmed execution while transferring write authority safely.
+Compatible participating versions must coexist as catalog writers without
+premature shared-state migration. This requires active/prewarming overlap, not
+arbitrary concurrently serving adapters or a general upgrade-version matrix.
 
 #### 3. Independent query clients
 
@@ -520,6 +567,7 @@ Requests carry a catalog position covering their validated definitions and
 configuration, scoped to the catalog history and deployment fence.
 Progress-only publications neither invalidate planning nor impose
 definition-application waits. Their protection constraints remain binding.
+A reconstructed snapshot may conservatively require one initial prefix catch-up.
 
 The receiver waits for required state and configuration to be applied, not
 merely read, then checks readiness and read protection for the imports. A newer

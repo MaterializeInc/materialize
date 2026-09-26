@@ -21,58 +21,62 @@ Current steering
 Recheck these priorities against the code and latest handoff. Flag resolved
 steering for removal rather than accumulating a checklist.
 
-Milestone 2 is active. The ownership cutover is enabled: clusterd replicas enact
-compute and storage from the shared committed catalog. Keep the architecture stable
-and the native gate enabled. Adapter inventory and SQL observations are passive,
-not a second installer. Table/WAL work, webhook ticking, introspection writers and
-shard finalization remain adapter-owned and may pause during adapter absence.
+Milestone 2 is active. The ownership cutover is enabled: clusterd replicas
+enact compute and storage from the committed catalog. Keep native ownership
+enabled. Adapter inventory and observations are passive, not a second
+installer. Table/WAL work, webhook ticking, introspection writers and shard
+finalization remain adapter-owned and may pause during adapter absence.
 
-Finish the cluster/adapter-loss demonstration and the bounded multi-replica
-measurements. Fix demonstrated regressions at their owning boundaries. Review the
-complete acceptance setup against actual service configuration and batch related
-plumbing corrections. Prefer targeted acceptance runs against available binaries
-where practical. Passing unit tests and preparatory cleanup do not replace the
-remaining end-to-end proof.
+The native outage, targeted DDL and bounded-throughput acceptance proofs are
+closed. Preserve their assertions and existing CI coverage without adding
+another acceptance campaign. Remaining work is compatibility and integration,
+plus the native deployment handover and writer compatibility now included in
+milestone 2.
 
-Show compute and storage reconstruction and progress during adapter absence,
-including progress by the restarted replica rather than only its surviving sibling.
-Preserve physical compaction, successive autonomous curated metrics, resumed queries,
-and zero-replica historical recovery assertions. Independent reader holds still
-constrain advancement. Compute logs and indexes over them retain replica-local
-history semantics, not shutdown persistence. Unavailable diagnostics may remain
-unknown, but must not be invented or become execution prerequisites.
+Restore catalog-authoritative index candidates and transaction eligibility.
+Observed installation must not change the logical time domain without DDL.
+Repair the handoff to real read protection and execution readiness, not the
+transaction check or fixture timing. Removing the observed-index filter alone
+is insufficient while read preparation rejects pending indexes. Never invent a
+readable frontier. Keep existing behavior for intervening DDL and fixed
+timestamps.
 
-EXPLAIN can describe declared indexes before their traces are installed. Keep its
-planning candidates separate from actual read admission without weakening read
-protection. Surface consequential transaction behavior changes separately.
+Map existing statement-specific timeout semantics onto the new admission waits.
+Keep freshness and explicit cancellation without a universal deadline or a
+SET-only exception. Submitted writes retain definitive completion. Reuse the
+existing configuration, transaction and cancellation regressions at these
+boundaries.
 
-Distinguish the agreed five-minute reclamation grace from leaks. Observe abandoned
-incarnations being reclaimed, then assert release. Do not shorten production grace
-or broadly reclaim clients to make tests pass. Pending installation defers bounds
-and reclamation, so check its interaction with Kafka takeover against the restart
-proof. Bring concrete stalls before proposing coordination machinery. Kafka keeps
-its incarnation-based eligibility, local pre-open admission, transactional fencing
-and versioned progress, without another lease. Iceberg retains its guarded commit
-and fail-closed missing-progress boundaries.
+Remove metric accounting that no longer describes the architecture. Preserve
+meaningful public lag, frontier, hydration and cleanup observations, and
+autonomous curated metrics, at their owning boundaries. No controller
+reconstruction for metric parity, synthetic zeroes, or general observability
+project.
 
-Current-status recovery and live observations are the immediate target. Do not add
-durable outage-status history or redesign replica failure detection. Prove the
-native path first, then integrate upstream in a separate review boundary unless an
-upstream change actually blocks acceptance.
+Prewarming and serving must use the same native lifecycle model. Each
+deployment has catalog-owned replicas and durable read-only/output-write
+authority. Promotion retains warmed execution rather than replacing private
+controller-driven replicas with cold native ones. Implement the design's
+membership, protection, output fencing and common-format writer compatibility
+together. Do not preserve the single-active-generation catalog restriction
+through borrowed deployment identity. Keep build-owned plans and live
+deployments' state isolated. Existing-environment conversion and compatibility
+with pre-feature binaries remain separate rollout work, not an excuse to defer
+the participating-version contract.
 
-Keep per-build selection keys, but defer cross-build follower repair, version
-upgrades, and prewarming-owned selections. Retired-build cleanup is also deferred.
-After a generation is fenced, its survivor may remove older builds' selections
-and entries. An unfenced owner's entries are off limits.
+Use focused boundary checks and existing promotion coverage for the added
+handover scope. Fix demonstrated CI regressions at their owners, compare
+disputed semantics against the baseline, and batch related fixture startup
+corrections. Do not change scheduling, grace periods or assertions to
+compensate for an unexplained timeout. The agreed five-minute reclamation
+grace, Persist leases, Kafka fencing and Iceberg guarded commits remain
+constraints, not test knobs.
 
-Milestone 1's performance scope is 100 and 1,000 generated objects, retaining the
-shared-view index topology and diagnostics. Larger-scale work and the known
-quadratic identical-index notice/dependency costs are deferred. Baseline catalog
-snapshot and storage-metadata cloning costs remain. Keep payload, Persist metadata,
-and current-state batch footprint distinct in reports, and do not treat observer
-timings as isolated subscriber latency or current-state bytes as total disk usage.
-At replica cutover, measure follower and publication costs with multiple replicas
-at those same bounded sizes. Single-publisher measurements are not that evidence.
+The bounded performance scope remains 100 and 1,000 generated objects with the
+shared-view topology. Larger-scale work and known quadratic notice/dependency
+costs remain deferred. Keep payload, Persist metadata and current-state
+footprint distinct, and do not equate observer timings with isolated subscriber
+latency.
 
 Keep the draft PR description accurate about what is implemented and what remains,
 with validation status in the PR rather than the design log.
@@ -84,9 +88,9 @@ Standing rules
 - A durable record is added only when it carries information that cannot be
   derived from existing catalog state or durable progress. A record whose value
   is constant at birth is a signal to look again.
-- Milestone 2 builds the query client with durable client protection for one
-  adapter. Multiplicity and isolation of clients stay in milestone 3. Do not
-  build a bridge that the design's shape will replace.
+- Milestone 2 includes active/prewarming deployment overlap. Arbitrary
+  concurrent serving adapters remain out of scope, and independent query-client
+  isolation remains milestone 3. Do not build a bridge the design will replace.
 
 Prefer changes that remove a dependency on the originating adapter and demonstrate
 that through a production path. Preparatory work is appropriate when it unblocks
@@ -166,8 +170,8 @@ upstream or other branches without asking.
 - [Catalog implications](../../../src/adapter/src/coord/catalog_implications.rs)
   derive effects from committed changes, including maintained compute installation
   and sink alteration.
-- [Compute protocol](../../../src/compute-client/src/protocol/command.rs) carries
-  separate lifecycle and query connections through
+- [Compute protocol](../../../src/compute-client/src/protocol/command.rs)
+  separates replica-owned lifecycle commands from client query execution through
   [transport](../../../src/service/src/transport.rs).
 - [StorageCollections](../../../src/storage-client/src/storage_collections.rs)
   owns storage capability accounting and critical since handles. Protected

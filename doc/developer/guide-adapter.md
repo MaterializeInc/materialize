@@ -340,11 +340,15 @@ progress alone does not establish completion of source output.
 
 ### Planning eligibility is not execution readability
 
-EXPLAIN may describe a catalog-declared index before any replica has installed it.
-Keep those planning candidates separate from the observed collections used for
-timestamp selection, transaction read holds, and actual statistics reads. A fresh
-index can legitimately have neither a reported read frontier nor a published bound.
-Do not invent a bound or weaken execution admission merely to describe its plan.
+The catalog determines index candidates and transaction eligibility, even
+before replica installation. Runtime observations must not change that logical
+domain without DDL. Read acquisition must establish a justified protected
+frontier before fixing a transaction timestamp, while execution checks actual
+import readability and waits for required progress. Pending installation is not
+object absence. A fresh index can have neither a reported read frontier nor a
+published bound. Do not invent one, weaken protection, or hide the index to
+avoid read admission. Pure EXPLAIN may describe a plan without waiting for its
+hypothetical execution.
 
 ## Rejected Optimizations
 

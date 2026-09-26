@@ -1375,3 +1375,20 @@ Catalog certification can wait before a peek is registered. Cancellation admissi
 belongs to the outer execution boundary and must survive frontend replanning,
 coordinator fallback, and nested FETCH. Only a new outer statement discards a prior
 cancellation. Submitted writes still require a definitive result.
+
+### 2026-09-20: Catalog authority and native deployment handover
+
+Catalog state determines index candidates and transaction eligibility. Repair
+the handoff to real read protection and execution admission, not the
+hydration-only transaction symptom. Timeout admission restores existing
+statement-specific semantics, with freshness and cancellation intact. Retire
+obsolete controller accounting, not meaningful observations whose producer has
+moved.
+
+Native prewarming replaces the controller/native split. Each deployment owns
+its replicas and durable read-only/output-write authority in the shared
+catalog. Promotion retains warmed execution and transfers authority, with
+protection and output fencing preserved. Cold reconstruction is not the chosen
+handover model. Deployment coexistence and compatible-version catalog/Persist
+writing are part of M2. Pre-feature conversion remains separate, and the
+completed outage, DDL and bounded-throughput proofs stay closed.
