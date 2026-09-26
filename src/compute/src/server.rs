@@ -281,6 +281,7 @@ async fn serve_inner(
         mz_timely_util::column_pager::tiered_policy(),
     );
     mz_timely_util::pool_config::metrics::register(&config.metrics_registry);
+    mz_timely_util::columnar::align_buffer::metrics::register(&config.metrics_registry);
 
     let tokio_executor = tokio::runtime::Handle::current();
 

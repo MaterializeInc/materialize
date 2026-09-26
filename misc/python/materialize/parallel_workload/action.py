@@ -3185,6 +3185,10 @@ class FlipFlagsAction(Action):
             "0.01",
             "0.02",
         ]
+        self.flags_with_values["enable_column_align_buffer_tracking"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["enable_column_edge_paging"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [

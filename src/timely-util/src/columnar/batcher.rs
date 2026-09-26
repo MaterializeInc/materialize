@@ -825,7 +825,10 @@ mod tests {
             .chunks_exact(8)
             .map(|w| u64::from_ne_bytes(w.try_into().expect("chunk is 8 bytes")))
             .collect();
-        Column::Align(words)
+        Column::Align(crate::columnar::align_buffer::AlignBuffer::from_words(
+            crate::columnar::align_buffer::Origin::Decode,
+            words,
+        ))
     }
 
     /// Drive a single `push_into` call with `inputs` and collect the
