@@ -177,6 +177,10 @@ fn peek_row_iteration_limit(config: &ConfigSet) -> Option<usize> {
 /// done between data ingress and egress.
 pub struct ComputeState {
     queries: BTreeMap<Uuid, query_execution::QueryState>,
+    /// Configuration/retirement prefix applied in the lifecycle lane. Query
+    /// connections cannot advance this position.
+    pub(crate) catalog_position: Option<mz_cluster_client::CatalogPosition>,
+    pub(crate) catalog_catchup_requested: bool,
     active_query: Option<Uuid>,
     /// First busy query served in the last sweep. Its successor gets first turn next.
     last_query_served: Option<Uuid>,
@@ -334,6 +338,8 @@ impl ComputeState {
 
         Self {
             queries: Default::default(),
+            catalog_position: None,
+            catalog_catchup_requested: false,
             active_query: None,
             last_query_served: None,
             retiring_dataflows: Default::default(),
@@ -714,6 +720,16 @@ impl<'a> ActiveComputeState<'a> {
             CreateInstance(instance_config) => self.handle_create_instance(*instance_config),
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(*params),
+            ApplyCatalogPosition(position) => {
+                if let Some(current) = self.compute_state.catalog_position {
+                    assert!(
+                        position.covers(&current),
+                        "catalog application must advance within one history"
+                    );
+                }
+                self.compute_state.catalog_position = Some(*position);
+                self.compute_state.catalog_catchup_requested = false;
+            }
             CreateDataflow(dataflow) => self.handle_create_dataflow(*dataflow),
             Schedule(id) => self.handle_schedule(id),
             AllowCompaction { id, frontier } => self.handle_allow_compaction(id, frontier),

@@ -32,6 +32,10 @@ use uuid::Uuid;
 /// [`ComputeCommand`]: super::command::ComputeCommand
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse {
+    /// A query needs the replica owner to catch up to committed catalog state.
+    /// Sent on the replica progress channel, without granting the query client
+    /// authority to install dataflows or advance catalog progress.
+    CatalogCatchup(Box<mz_cluster_client::CatalogPosition>),
     /// All partitions have opened this query connection after lifecycle initialization.
     QueryReady,
     /// Query dataflow admission result. Any partition's error wins aggregation.

@@ -1551,6 +1551,7 @@ impl StorageController for Controller {
             StorageError::Generic(anyhow::anyhow!("missing cluster {instance_id}"))
         })?;
         let oneshot_cmd = RunOneshotIngestion {
+            catalog_position: None,
             ingestion_id,
             collection_id,
             collection_meta,
@@ -2414,6 +2415,9 @@ impl StorageController for Controller {
                 }
                 (_, StorageResponse::QueryReady) => {
                     panic!("query response on lifecycle connection")
+                }
+                (_, StorageResponse::CatalogCatchup(_)) => {
+                    panic!("replica catalog catchup on controller connection")
                 }
                 (_replica_id, StorageResponse::StagedBatches(batches)) => {
                     for (ingestion_id, batches) in batches {

@@ -51,7 +51,7 @@ async fn lagging_index_admits_new_historical_reader() {
     let Fixture {
         clients,
         persist: _persist,
-        writer: _writer,
+        writer,
         mut observer,
         store: _store,
         config,
@@ -61,6 +61,9 @@ async fn lagging_index_admits_new_historical_reader() {
         shard,
         mut input,
     } = Fixture::new((1, 45_000), 50_000, true).await;
+    let catalog_position = writer
+        .planning_position()
+        .expect("committed fixture position");
     // The writer and catalog observer already hold the unwrapped backend. Only
     // clients opened for the runtime below see the gate, so write maintenance
     // cannot be the operation that satisfies the blocked-GET notification.
@@ -184,14 +187,14 @@ async fn lagging_index_admits_new_historical_reader() {
         );
     }
     assert!(*gate.closed.borrow());
-    assert_rows(&mut *query, index, &desc, 45_000, &[1]).await;
+    assert_rows(&mut *query, catalog_position, index, &desc, 45_000, &[1]).await;
     assert!(*gate.closed.borrow());
 
     gate.closed.send_replace(false);
     // Completion at 95 proves that the same running index consumes the released
     // input. The outstanding 45 grant still protects old rows across catch-up.
-    assert_rows(&mut *query, index, &desc, 95_000, &[1, 2]).await;
-    assert_rows(&mut *query, index, &desc, 45_000, &[1]).await;
+    assert_rows(&mut *query, catalog_position, index, &desc, 95_000, &[1, 2]).await;
+    assert_rows(&mut *query, catalog_position, index, &desc, 45_000, &[1]).await;
     publish(&mut observer, reader, BTreeMap::new())
         .await
         .unwrap();

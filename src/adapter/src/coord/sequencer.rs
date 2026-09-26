@@ -435,7 +435,8 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CopyFrom(plan) => {
-                    self.sequence_copy_from(ctx, plan, target_cluster).await;
+                    self.sequence_copy_from(ctx, plan, target_cluster, Arc::clone(&self.catalog))
+                        .await;
                 }
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;

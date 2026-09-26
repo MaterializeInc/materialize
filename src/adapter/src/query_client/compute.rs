@@ -245,13 +245,18 @@ impl ReplicaQueryClient {
     /// Sink response routes are installed before sending the create command.
     /// Dropping the future or returned handle drops only this request's exports.
     /// Export IDs must be transient and never reused on this connection.
-    pub async fn create_dataflow(&self, dataflow: Dataflow) -> Result<QueryDataflow, QueryError> {
+    pub async fn create_dataflow(
+        &self,
+        dataflow: Dataflow,
+        catalog_position: Option<mz_cluster_client::CatalogPosition>,
+    ) -> Result<QueryDataflow, QueryError> {
         let request_id = Uuid::new_v4();
         let (reply, waiting) = oneshot::channel();
         let (responses, receiver) = mpsc::unbounded_channel();
         self.send(Request::Create {
             request_id,
             dataflow: Box::new(dataflow),
+            catalog_position: catalog_position.map(Box::new),
             reply,
             responses,
         })?;
@@ -308,6 +313,7 @@ enum Request {
     Create {
         request_id: Uuid,
         dataflow: Box<Dataflow>,
+        catalog_position: Option<Box<mz_cluster_client::CatalogPosition>>,
         reply: Reply<()>,
         responses: mpsc::UnboundedSender<Result<DataflowResponse, QueryError>>,
     },
@@ -404,6 +410,7 @@ impl Actor {
             Request::Create {
                 request_id,
                 dataflow,
+                catalog_position,
                 reply,
                 responses,
             } => {
@@ -435,6 +442,7 @@ impl Actor {
                     .send(ComputeCommand::CreateQueryDataflow {
                         request_id,
                         dataflow,
+                        catalog_position,
                     })
                     .await?;
             }
@@ -536,6 +544,9 @@ impl Actor {
             }
             ComputeResponse::CopyToResponse(id, response) => {
                 self.route(id, DataflowResponse::CopyTo(id, response));
+            }
+            ComputeResponse::CatalogCatchup(_) => {
+                anyhow::bail!("replica catalog catchup on query connection");
             }
             ComputeResponse::Status(_) => {}
         }
@@ -674,6 +685,7 @@ mod tests {
 
     fn peek(uuid: Uuid) -> Peek {
         Peek {
+            catalog_position: None,
             target: PeekTarget::Index {
                 id: GlobalId::User(1),
             },
@@ -802,7 +814,7 @@ mod tests {
             read_frontier: Some(Antichain::from_elem(Timestamp::from(1))),
             ..Default::default()
         };
-        let mut survivor = Box::pin(client.create_dataflow(subscribe(live)));
+        let mut survivor = Box::pin(client.create_dataflow(subscribe(live), None));
         assert!(futures::poll!(&mut survivor).is_pending());
         assert!(matches!(
             peer.command().await,
@@ -815,7 +827,7 @@ mod tests {
         // without reconnecting. A separate pending request must retain its state.
         for cycle in 0..30 {
             let id = GlobalId::Transient(cycle + 2);
-            let mut creating = Box::pin(client.create_dataflow(subscribe(id)));
+            let mut creating = Box::pin(client.create_dataflow(subscribe(id), None));
             assert!(futures::poll!(&mut creating).is_pending());
             let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await
             else {
@@ -978,7 +990,7 @@ mod tests {
     async fn creation_buffers_early_responses_and_schedules_only_after_ack() {
         let (client, mut peer) = connect().await;
         let id = GlobalId::Transient(1);
-        let mut creating = Box::pin(client.create_dataflow(subscribe(id)));
+        let mut creating = Box::pin(client.create_dataflow(subscribe(id), None));
         assert!(futures::poll!(&mut creating).is_pending());
         let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await else {
             panic!("expected creation");
@@ -1016,7 +1028,7 @@ mod tests {
     async fn abandoned_creation_drops_exports_without_waiting_for_ack() {
         let (client, mut peer) = connect().await;
         let id = GlobalId::Transient(1);
-        let mut creating = Box::pin(client.create_dataflow(subscribe(id)));
+        let mut creating = Box::pin(client.create_dataflow(subscribe(id), None));
         assert!(futures::poll!(&mut creating).is_pending());
         let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await else {
             panic!("expected creation");
@@ -1088,8 +1100,8 @@ mod tests {
         let (client, mut peer) = connect().await;
         let first = GlobalId::Transient(1);
         let second = GlobalId::Transient(2);
-        let mut creating_first = Box::pin(client.create_dataflow(subscribe(first)));
-        let mut creating_second = Box::pin(client.create_dataflow(subscribe(second)));
+        let mut creating_first = Box::pin(client.create_dataflow(subscribe(first), None));
+        let mut creating_second = Box::pin(client.create_dataflow(subscribe(second), None));
         assert!(futures::poll!(&mut creating_first).is_pending());
         assert!(futures::poll!(&mut creating_second).is_pending());
         let mut requests = vec![];
@@ -1130,7 +1142,7 @@ mod tests {
         let (client, mut peer) = connect().await;
         let held = client.clone();
         let (sibling, mut sibling_peer) = connect().await;
-        let mut creating = Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(1))));
+        let mut creating = Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(1)), None));
         assert!(futures::poll!(&mut creating).is_pending());
         let ComputeCommand::CreateQueryDataflow { request_id, .. } = peer.command().await else {
             panic!("expected creation");
@@ -1142,7 +1154,7 @@ mod tests {
         let mut installed = bounded(creating).await.expect("creation ACK");
         assert!(matches!(peer.command().await, ComputeCommand::Schedule(_)));
 
-        let mut pending = Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(2))));
+        let mut pending = Box::pin(held.create_dataflow(subscribe(GlobalId::Transient(2)), None));
         assert!(futures::poll!(&mut pending).is_pending());
         assert!(matches!(
             peer.command().await,

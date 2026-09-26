@@ -81,6 +81,7 @@ fn drive(worker: &mut Worker<'_>, done: impl Fn(&Worker<'_>) -> bool) {
 fn request(id: Uuid) -> StorageCommand {
     let desc = mz_repr::RelationDesc::empty();
     StorageCommand::RunOneshotIngestion(Box::new(RunOneshotIngestion {
+        catalog_position: None,
         ingestion_id: id,
         collection_id: GlobalId::User(1),
         collection_meta: CollectionMetadata {
@@ -106,6 +107,159 @@ fn request(id: Uuid) -> StorageCommand {
             },
         },
     }))
+}
+
+#[mz_ore::test]
+fn native_catalog_wait_scope_and_cancellation() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _guard = runtime.enter();
+    timely::execute_directly(|timely| {
+        let (clients, rx) = mpsc::unbounded_channel();
+        let mut worker = worker(timely, rx);
+        let (_commands, mut progress) = worker.enable_replica();
+        let owner = Uuid::new_v4();
+        let sibling = Uuid::new_v4();
+        let (owner_tx, mut owner_rx) = connect(&clients, owner, true);
+        let (sibling_tx, mut sibling_rx) = connect(&clients, sibling, true);
+        let lifecycle = |worker: &mut Worker<'_>, command| {
+            worker.handle_internal_storage_command(InternalStorageCommand::Replica(
+                crate::replica::ReplicaCommand::Storage(0, command),
+            ));
+        };
+        lifecycle(&mut worker, StorageCommand::InitializationComplete);
+        drive(&mut worker, |w| w.query_ready && w.queries.len() == 2);
+        assert_eq!(owner_rx.try_recv().unwrap(), StorageResponse::QueryReady);
+        assert_eq!(sibling_rx.try_recv().unwrap(), StorageResponse::QueryReady);
+
+        let missing = Uuid::new_v4();
+        owner_tx.send(request(missing)).unwrap();
+        drive(&mut worker, |_| !owner_rx.is_empty());
+        assert!(
+            matches!(owner_rx.try_recv().unwrap(), StorageResponse::StagedBatches(b)
+            if b[&missing][0].as_ref().unwrap_err().contains("requires catalog position"))
+        );
+
+        let required = CatalogPosition {
+            shard_id: mz_persist_types::ShardId::new(),
+            deployment_generation: 1,
+            upper: Timestamp::from(20),
+        };
+        let positioned = |id, position| {
+            let StorageCommand::RunOneshotIngestion(mut request) = request(id) else {
+                unreachable!()
+            };
+            request.catalog_position = Some(Box::new(position));
+            StorageCommand::RunOneshotIngestion(request)
+        };
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        owner_tx.send(positioned(first, required)).unwrap();
+        sibling_tx.send(positioned(second, required)).unwrap();
+        drive(&mut worker, |w| {
+            w.queries[&owner].pending.contains_key(&first)
+                && w.queries[&sibling].pending.contains_key(&second)
+                && !progress.is_empty()
+        });
+        assert!(worker.storage_state.applied_catalog_position.is_none());
+        assert!(worker.storage_state.oneshot_ingestions.is_empty());
+        assert!(matches!(progress.try_recv().unwrap().1.response,
+            crate::server::ReplicaStorageResponse::Response(StorageResponse::CatalogCatchup(p))
+                if *p == required));
+        assert!(owner_rx.try_recv().is_err());
+        assert!(sibling_rx.try_recv().is_err());
+
+        sibling_tx
+            .send(StorageCommand::CancelOneshotIngestion(first))
+            .unwrap();
+        drive(&mut worker, |w| w.queries[&sibling].seen.contains(&first));
+        assert!(worker.queries[&owner].pending.contains_key(&first));
+        owner_tx
+            .send(StorageCommand::CancelOneshotIngestion(first))
+            .unwrap();
+        drive(&mut worker, |w| {
+            !w.storage_state.query_owners.contains_key(&first)
+        });
+        let disconnected = Uuid::new_v4();
+        owner_tx.send(positioned(disconnected, required)).unwrap();
+        drive(&mut worker, |w| {
+            w.queries[&owner].pending.contains_key(&disconnected)
+        });
+        drop(owner_tx);
+        drive(&mut worker, |w| !w.queries.contains_key(&owner));
+        assert!(
+            !worker
+                .storage_state
+                .query_owners
+                .contains_key(&disconnected)
+        );
+        assert!(worker.queries[&sibling].pending.contains_key(&second));
+
+        let applied = CatalogPosition {
+            upper: Timestamp::from(10),
+            ..required
+        };
+        let mut params = mz_storage_types::parameters::StorageParameters::default();
+        params.statistics_collection_interval = Duration::from_secs(99);
+        lifecycle(
+            &mut worker,
+            StorageCommand::UpdateConfiguration(Box::new(params)),
+        );
+        lifecycle(
+            &mut worker,
+            StorageCommand::ApplyCatalogPosition(Box::new(applied)),
+        );
+        // First-stage ingress is not application. The marker must follow the
+        // rendering-stage configuration in the common command order.
+        assert!(worker.storage_state.applied_catalog_position.is_none());
+        drive(&mut worker, |w| {
+            if w.storage_state.applied_catalog_position == Some(applied) {
+                assert_eq!(
+                    w.storage_state
+                        .storage_configuration
+                        .parameters
+                        .statistics_collection_interval,
+                    Duration::from_secs(99)
+                );
+                true
+            } else {
+                false
+            }
+        });
+        assert!(worker.queries[&sibling].pending.contains_key(&second));
+        assert!(worker.storage_state.oneshot_ingestions.is_empty());
+        assert!(
+            progress.try_recv().is_err(),
+            "same wait must not repeat catch-up hints"
+        );
+
+        for wrong in [
+            CatalogPosition {
+                shard_id: mz_persist_types::ShardId::new(),
+                ..required
+            },
+            CatalogPosition {
+                deployment_generation: 2,
+                ..required
+            },
+        ] {
+            let id = Uuid::new_v4();
+            sibling_tx.send(positioned(id, wrong)).unwrap();
+            drive(&mut worker, |_| !sibling_rx.is_empty());
+            assert!(
+                matches!(sibling_rx.try_recv().unwrap(), StorageResponse::StagedBatches(b)
+                if b[&id][0].as_ref().unwrap_err().contains("history or deployment generation mismatch"))
+            );
+            assert!(!worker.storage_state.query_owners.contains_key(&id));
+            assert_eq!(worker.storage_state.applied_catalog_position, Some(applied));
+        }
+        drop(sibling_tx);
+        drive(&mut worker, |w| w.queries.is_empty());
+        assert!(worker.storage_state.query_owners.is_empty());
+        assert!(worker.storage_state.catalog_catchup.is_none());
+        for dataflow in worker.timely_worker.installed_dataflows() {
+            worker.timely_worker.drop_dataflow(dataflow);
+        }
+    });
 }
 
 #[mz_ore::test]

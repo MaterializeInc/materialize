@@ -1189,6 +1189,7 @@ impl crate::coord::Coordinator {
         }
         let registration = client.register_peek(uuid);
         let peek = Peek {
+            catalog_position: self.catalog.planning_position(),
             target: peek_target,
             result_desc,
             literal_constraints,

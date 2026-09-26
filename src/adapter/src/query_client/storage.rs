@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use futures::StreamExt;
+use mz_cluster_client::CatalogPosition;
 use mz_compute_types::ComputeInstanceId;
 use mz_persist_client::batch::ProtoBatch;
 use mz_service::client::GenericClient;
@@ -30,11 +31,14 @@ impl QueryClient {
     /// Stage one COPY request on query connections. The first complete replica
     /// result wins, including execution errors. Dropping the future closes all
     /// connections and cancels their work. Failed execution is never replayed.
+    /// `catalog_position` must come from the request's validated planning snapshot.
     pub(crate) async fn stage_oneshot(
         &self,
         cluster: ComputeInstanceId,
-        command: RunOneshotIngestion,
+        mut command: RunOneshotIngestion,
+        catalog_position: CatalogPosition,
     ) -> anyhow::Result<Batches> {
+        command.catalog_position = Some(Box::new(catalog_position));
         let mut topology = self.connections.changes();
         let mut attempted = BTreeSet::new();
         let mut executions = futures::stream::FuturesUnordered::new();
@@ -141,6 +145,11 @@ mod tests {
     fn request(id: Uuid) -> RunOneshotIngestion {
         let desc = mz_repr::RelationDesc::empty();
         RunOneshotIngestion {
+            catalog_position: Some(Box::new(CatalogPosition {
+                shard_id: mz_persist_types::ShardId::new(),
+                deployment_generation: 1,
+                upper: mz_repr::Timestamp::from(10),
+            })),
             ingestion_id: id,
             collection_id: mz_repr::GlobalId::User(1),
             collection_meta: CollectionMetadata {

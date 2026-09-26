@@ -153,6 +153,7 @@ impl ComputeState {
                     Some(ComputeCommand::CreateQueryDataflow {
                         request_id,
                         dataflow,
+                        catalog_position: _,
                     }) => {
                         active.create_query_dataflow(query, request_id, *dataflow);
                     }

@@ -1360,6 +1360,7 @@ impl PeekClient {
                                 .get(catalog.system_config().dyncfgs());
 
                         self.implement_fast_path_peek_plan(
+                            Arc::clone(&catalog),
                             fast_path_plan,
                             determination.timestamp_context.timestamp_or_default(),
                             finishing,

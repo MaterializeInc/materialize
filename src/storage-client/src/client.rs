@@ -18,8 +18,8 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::TryIntoProtocolNonce;
+use mz_cluster_client::{CatalogPosition, ReplicaId};
 use mz_ore::assert_none;
 use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
@@ -163,6 +163,10 @@ pub enum StorageCommand {
     /// Statuses are timestamped at subscription time, not replayed as history.
     /// Statistics are subsequent deltas, without replay or durability guarantees.
     SubscribeObservations,
+    /// Lifecycle-only marker for a catalog prefix whose configuration and
+    /// retirements precede this command. Observation or query context is not
+    /// evidence of application. Send before installing work from that prefix.
+    ApplyCatalogPosition(Box<CatalogPosition>),
 }
 
 impl StorageCommand {
@@ -176,6 +180,7 @@ impl StorageCommand {
             | InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
+            | ApplyCatalogPosition(_)
             | AllowCompaction(_, _)
             | CancelOneshotIngestion { .. } => false,
             // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
@@ -212,6 +217,10 @@ pub struct RunOneshotIngestion {
     pub collection_meta: CollectionMetadata,
     /// Details for the oneshot ingestion.
     pub request: OneshotIngestionRequest,
+    /// Validated planning context, required by native replicas. Legacy requests
+    /// without a catalog application contract use `None`.
+    #[serde(default)]
+    pub catalog_position: Option<Box<CatalogPosition>>,
 }
 
 /// A command that starts exporting the given sink description
@@ -412,6 +421,9 @@ pub enum StorageResponse {
     /// A status update for a source or a sink. Periodically sent from
     /// storage workers to convey the latest status information about an object.
     StatusUpdate(StatusUpdate),
+    /// Expedite the native lifecycle owner's catalog catch-up. This is a hint,
+    /// not an application acknowledgement, and never goes to a query connection.
+    CatalogCatchup(Box<CatalogPosition>),
 }
 
 /// Maintained state for partitioned storage clients.
@@ -472,6 +484,7 @@ impl PartitionedStorageState {
             | StorageCommand::SubscribeObservations
             | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
+            | StorageCommand::ApplyCatalogPosition(_)
             | StorageCommand::AllowCompaction(_, _)
             | StorageCommand::RunOneshotIngestion(_)
             | StorageCommand::CancelOneshotIngestion { .. } => {}
@@ -514,6 +527,9 @@ impl PartitionedState<StorageCommand, StorageResponse> for PartitionedStorageSta
         response: StorageResponse,
     ) -> Option<Result<StorageResponse, anyhow::Error>> {
         match response {
+            StorageResponse::CatalogCatchup(position) => {
+                Some(Ok(StorageResponse::CatalogCatchup(position)))
+            }
             StorageResponse::QueryReady => {
                 let novel = self.query_ready.insert(shard_id);
                 (novel && self.query_ready.len() == self.parts)
@@ -768,6 +784,11 @@ mod query_wire_tests {
                 StorageCommand::InitializationComplete,
                 StorageCommand::AllowWrites,
                 StorageCommand::UpdateConfiguration(Default::default()),
+                StorageCommand::ApplyCatalogPosition(Box::new(CatalogPosition {
+                    shard_id: mz_persist_types::ShardId::new(),
+                    deployment_generation: 1,
+                    upper: Timestamp::from(10),
+                })),
                 StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
             ] {
                 let result = client.send(command.clone()).await;

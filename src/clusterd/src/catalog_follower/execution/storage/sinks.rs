@@ -131,23 +131,10 @@ impl ReplicaEnactment {
             .collect()
     }
 
-    /// Installs current sink definitions under the replica's shared protection.
-    /// Health requests reconstruct from durable output progress, never from a
-    /// cached execution description or an adapter's observation of that progress.
-    pub async fn install_sinks(
+    pub(super) fn retire_sinks_not_in(
         &mut self,
-        catalog: &mut Catalog,
-        effects: &mut ReplicaEffects,
-        cluster: ClusterId,
-        build: &str,
-        metadata: &storage_metadata::Resolution,
-    ) -> anyhow::Result<bool> {
-        if self.io.storage.is_none() {
-            return Ok(false);
-        }
-        self.ensure_live(catalog)?;
-        self.apply_storage_progress();
-        let desired = self.desired_sinks(catalog, cluster);
+        desired: &BTreeMap<GlobalId, StorageSinkDesc<()>>,
+    ) {
         let dropped: Vec<_> = self
             .storage_state
             .sinks
@@ -169,6 +156,26 @@ impl ReplicaEnactment {
                 .endpoint
                 .send(StorageCommand::AllowCompaction(id, Antichain::new()));
         }
+    }
+
+    /// Installs current sink definitions under the replica's shared protection.
+    /// Health requests reconstruct from durable output progress, never from a
+    /// cached execution description or an adapter's observation of that progress.
+    pub async fn install_sinks(
+        &mut self,
+        catalog: &mut Catalog,
+        effects: &mut ReplicaEffects,
+        cluster: ClusterId,
+        build: &str,
+        metadata: &storage_metadata::Resolution,
+    ) -> anyhow::Result<bool> {
+        if self.io.storage.is_none() {
+            return Ok(false);
+        }
+        self.ensure_live(catalog)?;
+        self.apply_storage_progress();
+        let desired = self.desired_sinks(catalog, cluster);
+        self.retire_sinks_not_in(&desired);
         let mut pending = false;
         for (id, definition) in desired {
             if self

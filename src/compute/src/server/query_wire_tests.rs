@@ -9,9 +9,420 @@
 
 use super::*;
 use command_channel::Origin;
+use mz_cluster_client::CatalogPosition;
+use mz_compute_client::protocol::command::ComputeParameters;
 use mz_compute_client::protocol::response::PeekResponse;
+use mz_repr::{GlobalId, Timestamp};
 
 use crate::command_channel::UnifiedCommand::Compute;
+use crate::compute_state::index_peek_tests::{
+    TARGET_ID, index_peek_with_uuid, trace_bundle, wide_ok_rows,
+};
+
+fn query_worker(
+    timely_worker: &mut TimelyWorker,
+) -> (
+    Worker<'_>,
+    command_channel::Sender,
+    mpsc::UnboundedReceiver<ResponseEvent>,
+) {
+    let registry = MetricsRegistry::new();
+    let metrics = ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Solo).for_worker(0);
+    let context = ComputeInstanceContext {
+        scratch_directory: None,
+        worker_core_affinity: false,
+        connection_context: mz_storage_types::connections::ConnectionContext::for_tests(Arc::new(
+            mz_secrets::InMemorySecretsController::new(),
+        )),
+    };
+    let persist_clients = Arc::new(PersistClientCache::new_no_metrics());
+    let tracing_handle = Arc::new(TracingHandle::disabled());
+    let peek_permits = Arc::new(PeekPermits::new(1));
+    let state = ComputeState::new(
+        Arc::clone(&persist_clients),
+        TxnsContext::default(),
+        metrics.clone(),
+        Arc::clone(&tracing_handle),
+        context.clone(),
+        registry.clone(),
+        1,
+        Arc::clone(&peek_permits),
+    );
+    let (commands, command_rx) = command_channel::render(timely_worker, None);
+    let (responses, response_rx) = mpsc::unbounded_channel();
+    let worker = Worker {
+        timely_worker,
+        command_rx: CommandReceiver::new(command_rx, 0),
+        response_tx: ResponseSender::new(responses, 0),
+        compute_state: Some(state),
+        metrics,
+        persist_clients,
+        txns_ctx: TxnsContext::default(),
+        tracing_handle,
+        context,
+        metrics_registry: registry,
+        workers_per_process: 1,
+        peek_permits,
+        storage: None,
+    };
+    (worker, commands, response_rx)
+}
+
+pub(super) fn constant_dataflow(
+    export_id: mz_repr::GlobalId,
+) -> mz_compute_types::dataflows::DataflowDescription<
+    mz_compute_types::plan::render_plan::RenderPlan,
+    mz_storage_types::controller::CollectionMetadata,
+> {
+    let view_id = mz_repr::GlobalId::User(1);
+    let typ = mz_repr::ReprRelationType::new(vec![mz_repr::ReprScalarType::UInt64.nullable(false)]);
+    let mut dataflow =
+        mz_compute_types::dataflows::DataflowDescription::new("constant test".into());
+    dataflow.insert_plan(
+        view_id,
+        mz_expr::OptimizedMirRelationExpr::declare_optimized(mz_expr::MirRelationExpr::Constant {
+            rows: Ok(vec![(
+                mz_repr::Row::pack_slice(&[mz_repr::Datum::UInt64(1)]),
+                mz_repr::Diff::ONE,
+            )]),
+            typ: typ.clone(),
+        }),
+    );
+    dataflow.export_index(
+        export_id,
+        mz_compute_types::dataflows::IndexDesc {
+            on_id: view_id,
+            key: vec![mz_expr::MirScalarExpr::Column(0, Default::default())],
+        },
+        typ,
+    );
+    dataflow.as_of = Some(timely::progress::Antichain::from_elem(
+        mz_repr::Timestamp::MIN,
+    ));
+    mz_compute_types::plan::LirRelationExpr::finalize_dataflow(
+        dataflow,
+        &Default::default(),
+        None,
+    )
+    .expect("constant dataflow")
+    .into_render_plan::<mz_storage_types::controller::CollectionMetadata, std::convert::Infallible>(
+        |_| unreachable!("no storage inputs"),
+        |_| unreachable!("no storage outputs"),
+    )
+    .expect("render constant dataflow")
+}
+
+struct AdmissionHarness<'w> {
+    worker: Worker<'w>,
+    commands: command_channel::Sender,
+    responses: mpsc::UnboundedReceiver<ResponseEvent>,
+}
+
+impl AdmissionHarness<'_> {
+    fn query(&self, nonce: Uuid, command: Option<ComputeCommand>) {
+        self.commands.send((command, Origin::Query(nonce)));
+    }
+
+    fn lifecycle(&self, command: ComputeCommand) {
+        self.commands.send((Some(command), Origin::Replica));
+    }
+
+    fn open(&self, nonce: Uuid) {
+        self.query(nonce, Some(ComputeCommand::HelloQuery { nonce }));
+        self.query(
+            nonce,
+            Some(ComputeCommand::SetQueryMaxResultSize {
+                max_result_size: u64::MAX,
+            }),
+        );
+    }
+
+    /// A separate connection is a sequencer barrier, even while another query waits.
+    /// Negative assertions therefore need no wall-clock delay.
+    fn flush(&mut self) -> Vec<(ComputeResponse, Uuid)> {
+        let barrier = Uuid::new_v4();
+        self.query(barrier, Some(ComputeCommand::HelloQuery { nonce: barrier }));
+        self.query(barrier, None);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut responses = Vec::new();
+        loop {
+            self.worker.timely_worker.step();
+            assert!(self.worker.handle_pending_commands().is_ok());
+            self.worker.activate_compute().unwrap().process_peeks();
+            self.worker
+                .compute_state
+                .as_mut()
+                .unwrap()
+                .poll_query_commands(self.worker.timely_worker, &mut self.worker.response_tx);
+            let mut finished = false;
+            while let Ok(event) = self.responses.try_recv() {
+                match event {
+                    ResponseEvent::Response(response, nonce) if nonce != barrier => {
+                        responses.push((response, nonce));
+                    }
+                    ResponseEvent::QueryRetired(nonce) if nonce == barrier => finished = true,
+                    _ => (),
+                }
+            }
+            if finished {
+                return responses;
+            }
+            assert!(Instant::now() < deadline, "query sequencer stalled");
+        }
+    }
+}
+
+fn with_query_worker(
+    native: bool,
+    test: impl FnOnce(&mut AdmissionHarness<'_>) + Send + Sync + 'static,
+) {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _guard = runtime.enter();
+    timely::execute_directly(move |timely_worker| {
+        let (mut worker, commands, responses) = query_worker(timely_worker);
+        worker.command_rx.replica_owned = native;
+        worker.set_nonce(Uuid::nil());
+        worker
+            .compute_state
+            .as_mut()
+            .unwrap()
+            .traces
+            .set(TARGET_ID, trace_bundle(&wide_ok_rows(1), vec![]));
+        let mut h = AdmissionHarness {
+            worker,
+            commands,
+            responses,
+        };
+        test(&mut h);
+        for id in h.worker.timely_worker.installed_dataflows() {
+            h.worker.timely_worker.drop_dataflow(id);
+        }
+    });
+}
+
+fn catalog_position() -> CatalogPosition {
+    CatalogPosition {
+        shard_id: mz_persist_client::ShardId::new(),
+        deployment_generation: 1,
+        upper: Timestamp::from(10),
+    }
+}
+
+fn catalog_peek(uuid: Uuid, position: Option<CatalogPosition>) -> ComputeCommand {
+    let mut peek = index_peek_with_uuid(uuid, None);
+    peek.catalog_position = position;
+    ComputeCommand::Peek(Box::new(peek))
+}
+
+fn catalog_dataflow(request_id: Uuid, position: Option<CatalogPosition>) -> ComputeCommand {
+    ComputeCommand::CreateQueryDataflow {
+        request_id,
+        catalog_position: position.map(Box::new),
+        dataflow: Box::new(constant_dataflow(GlobalId::Transient(1))),
+    }
+}
+
+#[mz_ore::test]
+fn native_catalog_wait_applies_configuration_before_release_and_preserves_fifo() {
+    with_query_worker(true, |h| {
+        let query = Uuid::new_v4();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let required = catalog_position();
+        h.open(query);
+        h.lifecycle(ComputeCommand::UpdateConfiguration(Box::new(
+            ComputeParameters {
+                max_result_size: Some(0),
+                ..Default::default()
+            },
+        )));
+        h.flush();
+        h.query(query, Some(catalog_peek(first, Some(required))));
+        h.query(
+            query,
+            Some(ComputeCommand::SetQueryMaxResultSize { max_result_size: 0 }),
+        );
+        h.query(query, Some(catalog_peek(second, Some(required))));
+        assert_eq!(
+            h.flush(),
+            vec![(
+                ComputeResponse::CatalogCatchup(Box::new(required)),
+                Uuid::nil()
+            )]
+        );
+
+        h.lifecycle(ComputeCommand::ApplyCatalogPosition(Box::new(
+            CatalogPosition {
+                upper: Timestamp::from(9),
+                ..required
+            },
+        )));
+        assert_eq!(
+            h.flush(),
+            vec![(
+                ComputeResponse::CatalogCatchup(Box::new(required)),
+                Uuid::nil()
+            )]
+        );
+        assert!(
+            h.flush().is_empty(),
+            "a stationary prefix must not spin on catch-up requests"
+        );
+
+        // A query-origin marker cannot release another connection's waiting work.
+        let impostor = Uuid::new_v4();
+        h.open(impostor);
+        h.flush();
+        h.query(
+            impostor,
+            Some(ComputeCommand::ApplyCatalogPosition(Box::new(required))),
+        );
+        assert!(h.flush().is_empty());
+
+        h.lifecycle(ComputeCommand::UpdateConfiguration(Box::new(
+            ComputeParameters {
+                max_result_size: Some(u64::MAX),
+                ..Default::default()
+            },
+        )));
+        assert!(
+            h.flush().is_empty(),
+            "configuration alone does not certify a prefix"
+        );
+        h.lifecycle(ComputeCommand::ApplyCatalogPosition(Box::new(required)));
+        let responses = h.flush();
+        assert_eq!(responses.len(), 2, "{responses:?}");
+        assert!(
+            matches!(&responses[0], (ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _), n)
+            if *id == first && *n == query)
+        );
+        assert!(
+            matches!(&responses[1], (ComputeResponse::PeekResponse(id, PeekResponse::Error(
+            mz_compute_client::protocol::response::PeekError::ResultExceedsMaxSize { max_result_size: 0 }
+        ), _), n) if *id == second && *n == query)
+        );
+    });
+}
+
+#[mz_ore::test]
+fn native_catalog_admission_rejects_missing_context_and_wrong_scope() {
+    with_query_worker(true, |h| {
+        let query = Uuid::new_v4();
+        let applied = catalog_position();
+        h.open(query);
+        h.lifecycle(ComputeCommand::ApplyCatalogPosition(Box::new(applied)));
+        h.flush();
+        let installed = h.worker.timely_worker.next_dataflow_index();
+        for position in [
+            None,
+            Some(CatalogPosition {
+                shard_id: mz_persist_client::ShardId::new(),
+                ..applied
+            }),
+            Some(CatalogPosition {
+                deployment_generation: applied.deployment_generation + 1,
+                ..applied
+            }),
+        ] {
+            let request = Uuid::new_v4();
+            h.query(query, Some(catalog_peek(request, position)));
+            h.query(query, Some(catalog_dataflow(request, position)));
+            let responses = h.flush();
+            assert_eq!(responses.len(), 2, "{responses:?}");
+            assert!(
+                matches!(&responses[0], (ComputeResponse::PeekResponse(id, PeekResponse::Error(error), _), n)
+                if *id == request && *n == query && error.to_string().contains("catalog"))
+            );
+            assert!(
+                matches!(&responses[1], (ComputeResponse::QueryDataflowResponse { request_id, error: Some(error) }, n)
+                if *request_id == request && *n == query && error.contains("catalog"))
+            );
+            assert_eq!(h.worker.timely_worker.next_dataflow_index(), installed);
+        }
+    });
+}
+
+#[mz_ore::test]
+fn native_catalog_wait_cleanup_overtakes_without_later_execution() {
+    with_query_worker(true, |h| {
+        let canceled = Uuid::new_v4();
+        let disconnected = Uuid::new_v4();
+        let request = Uuid::new_v4();
+        let required = catalog_position();
+        for query in [canceled, disconnected] {
+            h.open(query);
+        }
+        h.flush();
+        let installed = h.worker.timely_worker.next_dataflow_index();
+        for query in [canceled, disconnected] {
+            h.query(query, Some(catalog_peek(request, Some(required))));
+            h.query(query, Some(catalog_dataflow(request, Some(required))));
+        }
+        assert_eq!(
+            h.flush(),
+            vec![(
+                ComputeResponse::CatalogCatchup(Box::new(required)),
+                Uuid::nil()
+            )]
+        );
+        for _ in 0..2 {
+            h.query(canceled, Some(ComputeCommand::CancelPeek { uuid: request }));
+            h.query(
+                canceled,
+                Some(ComputeCommand::AllowCompaction {
+                    id: GlobalId::Transient(1),
+                    frontier: timely::progress::Antichain::new(),
+                }),
+            );
+        }
+        h.query(disconnected, None);
+        let responses = h.flush();
+        assert_eq!(responses.len(), 2, "{responses:?}");
+        assert!(
+            matches!(&responses[0], (ComputeResponse::PeekResponse(id, PeekResponse::Canceled, _), n)
+            if *id == request && *n == canceled)
+        );
+        assert!(
+            matches!(&responses[1], (ComputeResponse::QueryDataflowResponse { request_id, error: Some(_) }, n)
+            if *request_id == request && *n == canceled)
+        );
+        assert_eq!(h.worker.timely_worker.next_dataflow_index(), installed);
+
+        h.lifecycle(ComputeCommand::ApplyCatalogPosition(Box::new(required)));
+        assert!(
+            h.flush().is_empty(),
+            "cleanup must not leave work to release later"
+        );
+        assert_eq!(h.worker.timely_worker.next_dataflow_index(), installed);
+        // Cancellation keeps the connection usable and leaves no reserved request or export.
+        h.query(canceled, Some(catalog_dataflow(request, Some(required))));
+        h.query(canceled, Some(catalog_peek(request, Some(required))));
+        let responses = h.flush();
+        assert!(responses.iter().any(|(r, n)| *n == canceled && matches!(r,
+            ComputeResponse::QueryDataflowResponse { request_id, error: None } if *request_id == request)));
+        assert!(responses.iter().any(|(r, n)| *n == canceled
+            && matches!(r,
+            ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _) if *id == request)));
+    });
+}
+
+#[mz_ore::test]
+fn legacy_queries_do_not_require_catalog_context() {
+    with_query_worker(false, |h| {
+        let query = Uuid::new_v4();
+        let request = Uuid::new_v4();
+        h.open(query);
+        h.flush();
+        h.query(query, Some(catalog_dataflow(request, None)));
+        h.query(query, Some(catalog_peek(request, None)));
+        let responses = h.flush();
+        assert!(responses.iter().any(|(r, n)| *n == query && matches!(r,
+            ComputeResponse::QueryDataflowResponse { request_id, error: None } if *request_id == request)));
+        assert!(responses.iter().any(|(r, n)| *n == query
+            && matches!(r,
+            ComputeResponse::PeekResponse(id, PeekResponse::Rows(_), _) if *id == request)));
+    });
+}
 
 #[mz_ore::test]
 fn routing_retirement_without_local_endpoint_is_bounded() {
@@ -54,46 +465,7 @@ fn unfinished_lifecycle_initialization_services_queries() {
     let _guard = runtime.enter();
     let handle = runtime.handle().clone();
     timely::execute_directly(move |timely_worker| {
-        let registry = MetricsRegistry::new();
-        let metrics =
-            ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Solo).for_worker(0);
-        let context = ComputeInstanceContext {
-            scratch_directory: None,
-            worker_core_affinity: false,
-            connection_context: mz_storage_types::connections::ConnectionContext::for_tests(
-                Arc::new(mz_secrets::InMemorySecretsController::new()),
-            ),
-        };
-        let persist_clients = Arc::new(PersistClientCache::new_no_metrics());
-        let tracing_handle = Arc::new(TracingHandle::disabled());
-        let peek_permits = Arc::new(PeekPermits::new(1));
-        let state = ComputeState::new(
-            Arc::clone(&persist_clients),
-            TxnsContext::default(),
-            metrics.clone(),
-            Arc::clone(&tracing_handle),
-            context.clone(),
-            registry.clone(),
-            1,
-            Arc::clone(&peek_permits),
-        );
-        let (commands, command_rx) = command_channel::render(timely_worker, None);
-        let (responses, mut response_rx) = mpsc::unbounded_channel();
-        let mut worker = Worker {
-            timely_worker,
-            command_rx: CommandReceiver::new(command_rx, 0),
-            response_tx: ResponseSender::new(responses, 0),
-            compute_state: Some(state),
-            metrics,
-            persist_clients,
-            txns_ctx: TxnsContext::default(),
-            tracing_handle,
-            context,
-            metrics_registry: registry,
-            workers_per_process: 1,
-            peek_permits,
-            storage: None,
-        };
+        let (mut worker, commands, mut response_rx) = query_worker(timely_worker);
         let state = worker.compute_state.take();
         let early_query = Uuid::new_v4();
         worker.command_rx.deferred_queries.extend([
@@ -110,40 +482,7 @@ fn unfinished_lifecycle_initialization_services_queries() {
         // A pending peek keeps this producer alive across export retirement.
         // It will finish while the replacement lifecycle is still initializing.
         let retired_id = mz_repr::GlobalId::User(2);
-        let view_id = mz_repr::GlobalId::User(1);
-        let typ =
-            mz_repr::ReprRelationType::new(vec![mz_repr::ReprScalarType::UInt64.nullable(false)]);
-        let mut dataflow =
-            mz_compute_types::dataflows::DataflowDescription::new("retired producer".into());
-        dataflow.insert_plan(
-            view_id,
-            mz_expr::OptimizedMirRelationExpr::declare_optimized(
-                mz_expr::MirRelationExpr::Constant {
-                    rows: Ok(vec![(
-                        mz_repr::Row::pack_slice(&[mz_repr::Datum::UInt64(1)]),
-                        mz_repr::Diff::ONE,
-                    )]),
-                    typ: typ.clone(),
-                },
-            ),
-        );
-        dataflow.export_index(
-            retired_id,
-            mz_compute_types::dataflows::IndexDesc {
-                on_id: view_id,
-                key: vec![mz_expr::MirScalarExpr::Column(0, Default::default())],
-            },
-            typ,
-        );
-        dataflow.as_of = Some(timely::progress::Antichain::from_elem(
-            mz_repr::Timestamp::MIN,
-        ));
-        let dataflow = mz_compute_types::plan::LirRelationExpr::finalize_dataflow(
-            dataflow, &Default::default(), None,
-        ).expect("constant dataflow").into_render_plan::<
-            mz_storage_types::controller::CollectionMetadata, std::convert::Infallible,
-        >(|_| unreachable!("no storage inputs"), |_| unreachable!("no storage outputs"))
-        .expect("render constant dataflow");
+        let dataflow = constant_dataflow(retired_id);
         worker.set_nonce(Uuid::new_v4());
         let mut active = worker.activate_compute().expect("initialized worker");
         active.handle_compute_command(ComputeCommand::CreateDataflow(Box::new(dataflow)));

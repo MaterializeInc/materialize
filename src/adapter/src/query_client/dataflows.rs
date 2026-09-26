@@ -239,6 +239,7 @@ impl QueryClient {
                 "no desired query replica for cluster {cluster}, target {target:?}"
             )));
         }
+        let catalog_position = catalog.planning_position();
         let dataflow = self.enrich_dataflow(&catalog, dataflow).await?;
         let (events, receiver) = mpsc::unbounded_channel();
         let (clients, client_rx) = watch::channel(BTreeMap::new());
@@ -296,7 +297,7 @@ impl QueryClient {
                         // SDK registration precedes creation. The returned guard owns
                         // both exports and early responses, and lives through recv.
                         let mut handle = client
-                            .create_dataflow(dataflow)
+                            .create_dataflow(dataflow, catalog_position)
                             .await
                             .map_err(query_error)?;
                         drop(holds);

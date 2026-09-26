@@ -187,6 +187,7 @@ pub fn render(
                                     cmd,
                                     Some(
                                         ComputeCommand::UpdateConfiguration(_)
+                                            | ComputeCommand::ApplyCatalogPosition(_)
                                             | ComputeCommand::HelloQuery { .. }
                                             | ComputeCommand::SetQueryMaxResultSize { .. }
                                     )
@@ -371,11 +372,15 @@ fn split_compute_command(
 ) -> impl Iterator<Item = (usize, ComputeCommand)> {
     use itertools::Either;
 
-    let (command, request_id) = match command {
+    let (command, query_context) = match command {
         ComputeCommand::CreateQueryDataflow {
             request_id,
             dataflow,
-        } => (ComputeCommand::CreateDataflow(dataflow), Some(request_id)),
+            catalog_position,
+        } => (
+            ComputeCommand::CreateDataflow(dataflow),
+            Some((request_id, catalog_position)),
+        ),
         command => (command, None),
     };
     let commands = match command {
@@ -425,10 +430,11 @@ fn split_compute_command(
 
     commands
         .into_iter()
-        .map(move |command| match (request_id, command) {
-            (Some(request_id), ComputeCommand::CreateDataflow(dataflow)) => {
+        .map(move |command| match (&query_context, command) {
+            (Some((request_id, catalog_position)), ComputeCommand::CreateDataflow(dataflow)) => {
                 ComputeCommand::CreateQueryDataflow {
-                    request_id,
+                    request_id: *request_id,
+                    catalog_position: catalog_position.clone(),
                     dataflow,
                 }
             }

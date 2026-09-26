@@ -92,6 +92,7 @@ where
 
         let mut hello_command = None;
         let mut create_inst_command = None;
+        let mut apply_catalog_position = None;
 
         // Collect only the final configuration.
         // Note that this is only correct as long as all config parameters apply globally. If we
@@ -123,6 +124,9 @@ where
                 }
                 ComputeCommand::UpdateConfiguration(params) => {
                     final_configuration.update(*params);
+                }
+                marker @ ComputeCommand::ApplyCatalogPosition(_) => {
+                    apply_catalog_position = Some(marker);
                 }
                 ComputeCommand::CreateDataflow(dataflow) => {
                     created_dataflows.push(dataflow);
@@ -257,6 +261,13 @@ where
             self.commands.push(ComputeCommand::InitializationComplete);
         }
 
+        // Certify only after replaying the configuration and retirement effects.
+        let count = u64::from(apply_catalog_position.is_some());
+        command_counts.apply_catalog_position.borrow().set(count);
+        if let Some(marker) = apply_catalog_position {
+            self.commands.push(marker);
+        }
+
         self.reduced_count = self.commands.len();
     }
 
@@ -298,5 +309,57 @@ where
     /// Iterate through the contained commands.
     pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand> {
         self.commands.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::CommandMetrics;
+    use mz_cluster_client::CatalogPosition;
+    use mz_repr::{GlobalId, Timestamp};
+
+    #[mz_ore::test]
+    fn reduction_keeps_latest_catalog_marker_after_lifecycle_effects() {
+        let command_counts = CommandMetrics::build(|name| UIntGauge::new(name, name).unwrap());
+        let marker_count = command_counts.apply_catalog_position.clone();
+        let mut history = ComputeCommandHistory::new(HistoryMetrics {
+            command_counts,
+            dataflow_count: UIntGauge::new("dataflows", "dataflows").unwrap(),
+        });
+        let mut position = CatalogPosition {
+            shard_id: mz_persist_types::ShardId::new(),
+            deployment_generation: 1,
+            upper: Timestamp::MIN,
+        };
+        history.push(ComputeCommand::InitializationComplete);
+        let config = ComputeCommand::UpdateConfiguration(Box::new(ComputeParameters {
+            max_result_size: Some(100),
+            ..Default::default()
+        }));
+        history.push(config.clone());
+        for upper in 1..=100 {
+            position.upper = Timestamp::from(upper);
+            history.push(ComputeCommand::ApplyCatalogPosition(Box::new(position)));
+        }
+        let retirement = ComputeCommand::AllowCompaction {
+            id: GlobalId::User(1),
+            frontier: Antichain::new(),
+        };
+        history.push(retirement.clone());
+        position.upper = Timestamp::from(101);
+        let marker = ComputeCommand::ApplyCatalogPosition(Box::new(position));
+        history.push(marker.clone());
+        let expected = vec![
+            config,
+            retirement,
+            ComputeCommand::InitializationComplete,
+            marker,
+        ];
+        for _ in 0..2 {
+            history.reduce();
+            assert_eq!(history.iter().cloned().collect::<Vec<_>>(), expected);
+            assert_eq!(marker_count.get(), 1);
+        }
     }
 }

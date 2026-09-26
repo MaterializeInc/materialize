@@ -487,6 +487,8 @@ pub struct CommandMetrics<M> {
     pub set_query_max_result_size: M,
     /// Metrics for query-local dataflow creation.
     pub create_query_dataflow: M,
+    /// Metrics for lifecycle catalog application.
+    pub apply_catalog_position: M,
     /// Metrics for `CreateInstance`.
     pub create_instance: M,
     /// Metrics for `CreateDataflow`.
@@ -518,6 +520,7 @@ impl<M> CommandMetrics<M> {
             hello_query: build_metric("hello_query"),
             set_query_max_result_size: build_metric("set_query_max_result_size"),
             create_query_dataflow: build_metric("create_query_dataflow"),
+            apply_catalog_position: build_metric("apply_catalog_position"),
             create_instance: build_metric("create_instance"),
             create_dataflow: build_metric("create_dataflow"),
             schedule: build_metric("schedule"),
@@ -538,6 +541,7 @@ impl<M> CommandMetrics<M> {
         f(&self.hello_query);
         f(&self.set_query_max_result_size);
         f(&self.create_query_dataflow);
+        f(&self.apply_catalog_position);
         f(&self.create_instance);
         f(&self.initialization_complete);
         f(&self.update_configuration);
@@ -558,6 +562,7 @@ impl<M> CommandMetrics<M> {
             HelloQuery { .. } => &self.hello_query,
             SetQueryMaxResultSize { .. } => &self.set_query_max_result_size,
             CreateQueryDataflow { .. } => &self.create_query_dataflow,
+            ApplyCatalogPosition(_) => &self.apply_catalog_position,
             CreateInstance(_) => &self.create_instance,
             InitializationComplete => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
@@ -574,6 +579,7 @@ impl<M> CommandMetrics<M> {
 /// Metrics keyed by `ComputeResponse` type.
 #[derive(Debug)]
 struct ResponseMetrics<M> {
+    catalog_catchup: M,
     query_ready: M,
     query_dataflow_response: M,
     frontiers: M,
@@ -589,6 +595,7 @@ impl<M> ResponseMetrics<M> {
         F: Fn(&str) -> M,
     {
         Self {
+            catalog_catchup: build_metric("catalog_catchup"),
             query_ready: build_metric("query_ready"),
             query_dataflow_response: build_metric("query_dataflow_response"),
             frontiers: build_metric("frontiers"),
@@ -603,6 +610,7 @@ impl<M> ResponseMetrics<M> {
         use ComputeResponse::*;
 
         match response {
+            CatalogCatchup(_) => &self.catalog_catchup,
             QueryReady => &self.query_ready,
             QueryDataflowResponse { .. } => &self.query_dataflow_response,
             Frontiers(..) => &self.frontiers,

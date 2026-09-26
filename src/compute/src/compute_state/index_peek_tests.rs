@@ -145,6 +145,7 @@ pub(crate) fn index_peek(
         .finish();
     Peek {
         target: PeekTarget::Index { id: TARGET_ID },
+        catalog_position: None,
         result_desc,
         literal_constraints,
         uuid: Uuid::nil(),
