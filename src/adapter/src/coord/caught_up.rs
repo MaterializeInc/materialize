@@ -38,11 +38,13 @@ use differential_dataflow::lattice::Lattice as _;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK, ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK,
-    WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG, WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
-    WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD,
+    ENABLE_0DT_CAUGHT_UP_LEADER_HYDRATION_CHECK, ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK,
+    ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
+    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF, WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD,
 };
-use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
+use mz_catalog::builtin::{
+    MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY, MZ_COMPUTE_HYDRATION_TIMES,
+};
 use mz_catalog::memory::objects::Cluster;
 use mz_compute_client::controller::CollectionReadiness;
 use mz_controller::clusters::{ClusterStatus, ProcessId};
@@ -50,7 +52,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, Row, Timestamp};
 use timely::progress::{Antichain, Timestamp as _};
 
 use crate::coord::{ClusterReplicaStatuses, Coordinator};
@@ -361,6 +363,32 @@ impl Coordinator {
             })
             .collect_vec();
 
+        let leader_unhydrated = if ENABLE_0DT_CAUGHT_UP_LEADER_HYDRATION_CHECK
+            .get(self.catalog().system_config().dyncfgs())
+        {
+            let item_id = self
+                .catalog()
+                .resolve_builtin_storage_collection(&MZ_COMPUTE_HYDRATION_TIMES);
+            let id = self.catalog().get_entry(&item_id).latest_global_id();
+            // Like the frontiers above, this must be the leader's shard. The
+            // migration guard forbids replacing this source. Its controller
+            // maintains a set, as required by snapshot_latest.
+            match self
+                .controller
+                .storage_collections
+                .snapshot_latest(id)
+                .await
+            {
+                Ok(rows) => leader_unhydrated_collections(&live_frontiers, rows),
+                Err(error) => {
+                    tracing::warn!(%error, "cannot read leader hydration; requiring local hydration");
+                    BTreeSet::new()
+                }
+            }
+        } else {
+            BTreeSet::new()
+        };
+
         // We care about each collection being hydrated on _some_
         // replica. We don't check that at least one replica has all
         // collections of that cluster hydrated.
@@ -430,6 +458,7 @@ impl Coordinator {
                 cutoff.into(),
                 now.into(),
                 &live_collection_frontiers,
+                &leader_unhydrated,
                 &exclude_collections,
                 &problematic_replicas,
             )
@@ -576,7 +605,8 @@ impl Coordinator {
     ///
     ///  (1) A cluster is caught-up if all non-transient, non-excluded collections installed on it
     ///      are either caught-up or ignored.
-    ///  (2) A collection is caught-up when it is (a) hydrated and (b) its write frontier is within
+    ///  (2) A collection is caught-up when it is (a) hydrated, or explicitly unhydrated on
+    ///      every hosting leader replica, and (b) its write frontier is within
     ///      `allowed_lag` of the "live" frontier, the collection's frontier reported by the leader
     ///      environment.
     ///  (3) A collection is ignored if its "live" frontier is behind `now` by more than `cutoff`.
@@ -595,6 +625,7 @@ impl Coordinator {
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        leader_unhydrated: &BTreeSet<GlobalId>,
         exclude_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> BTreeMap<ClusterId, ClusterCaughtUpStatus> {
@@ -607,6 +638,7 @@ impl Coordinator {
                     cutoff.clone(),
                     now.clone(),
                     live_frontiers,
+                    leader_unhydrated,
                     exclude_collections,
                     problematic_replicas,
                 )
@@ -640,6 +672,7 @@ impl Coordinator {
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        leader_unhydrated: &BTreeSet<GlobalId>,
         exclude_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> Result<ClusterCaughtUpStatus, anyhow::Error> {
@@ -795,7 +828,9 @@ impl Coordinator {
             };
 
             let readiness = CollectionReadiness::classify(
-                collection_hydrated,
+                collection_hydrated
+                    || (matches!(collection_type, CollectionType::Compute)
+                        && leader_unhydrated.contains(&id)),
                 &write_frontier,
                 Some((live_write_frontier, allowed_lag)),
             );
@@ -984,6 +1019,48 @@ impl Coordinator {
     }
 }
 
+/// Only explicit unhydrated reports from every frontier-hosting replica permit
+/// skipping local hydration. In particular, a missing report is not evidence of
+/// an unhydrated collection, and one unhydrated replica cannot mask a hydrated one.
+fn leader_unhydrated_collections(
+    frontiers: &[(GlobalId, String, Antichain<Timestamp>)],
+    rows: Vec<Row>,
+) -> BTreeSet<GlobalId> {
+    let mut hydrated = BTreeSet::new();
+    let unhydrated: BTreeSet<_> = rows
+        .into_iter()
+        .filter_map(|row| {
+            let mut values = row.iter();
+            let replica = values
+                .next()
+                .expect("missing replica_id")
+                .unwrap_str()
+                .to_owned();
+            let id: GlobalId = values
+                .next()
+                .expect("missing object_id")
+                .unwrap_str()
+                .parse()
+                .expect("valid object ID");
+            if values.next().expect("missing time_ns").is_null() {
+                Some((id, replica))
+            } else {
+                hydrated.insert(id);
+                None
+            }
+        })
+        .collect();
+    let mut collections = BTreeMap::new();
+    for (id, replica, _) in frontiers {
+        let all_unhydrated = collections.entry(*id).or_insert(true);
+        *all_unhydrated &= !hydrated.contains(id) && unhydrated.contains(&(*id, replica.clone()));
+    }
+    collections
+        .into_iter()
+        .filter_map(|(id, unhydrated)| unhydrated.then_some(id))
+        .collect()
+}
+
 /// Match the leader's healthy-run age at the incoming run's start, capped by
 /// the configured period. The difference between run starts stays fixed as
 /// both runs age. If the leader's run is newer, the incoming run is already
@@ -1005,6 +1082,7 @@ fn replica_stability_period(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_repr::Datum;
 
     /// Builds a health snapshot with all restarts attributed to a single
     /// replica process. `change_secs` is the max status-change time as a
@@ -1219,6 +1297,46 @@ mod tests {
         reports.remove(&1);
         reports.insert(2, Some(12_000));
         assert_eq!(health.leader_healthy_since(Some(&reports)), None);
+    }
+
+    #[mz_ore::test]
+    fn leader_hydration_requires_complete_unhydrated_evidence() {
+        let frontier = |id, replica: &str| {
+            (
+                GlobalId::User(id),
+                replica.to_owned(),
+                Antichain::from_elem(Timestamp::from(100)),
+            )
+        };
+        let row = |id: &str, replica: &str, time| {
+            Row::pack_slice(&[Datum::String(replica), Datum::String(id), time])
+        };
+        let frontiers = vec![
+            frontier(1, "u10"),
+            frontier(1, "u11"),
+            frontier(2, "u10"),
+            frontier(2, "u11"),
+            frontier(3, "u10"),
+            frontier(3, "u11"),
+            frontier(4, "u10"),
+            frontier(5, "u10"),
+        ];
+        let rows = vec![
+            row("u1", "u10", Datum::Null),
+            row("u1", "u11", Datum::Null),
+            row("u2", "u10", Datum::Null),
+            row("u2", "u11", Datum::UInt64(7)),
+            row("u3", "u10", Datum::Null), // u11 has not reported.
+            row("u4", "u10", Datum::Null),
+            row("u4", "u12", Datum::UInt64(9)),
+            // u5 has no hydration reports. u6 has no frontier.
+            row("u6", "u10", Datum::Null),
+        ];
+        assert_eq!(
+            leader_unhydrated_collections(&frontiers, rows),
+            BTreeSet::from([GlobalId::User(1)])
+        );
+        assert!(leader_unhydrated_collections(&frontiers, Vec::new()).is_empty());
     }
 
     #[mz_ore::test]
