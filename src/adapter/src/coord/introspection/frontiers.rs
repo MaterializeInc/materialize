@@ -14,8 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use differential_dataflow::lattice::Lattice;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_cluster_client::WallclockLagFn;
+use mz_compute_client::controller::refresh_introspection;
 use mz_compute_client::protocol::response::FrontiersResponse;
 use mz_controller_types::ReplicaId;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::{IntrospectionType, StorageWriteOp, WallclockLag};
 use timely::PartialOrder;
@@ -32,6 +34,7 @@ pub(crate) struct NativeFrontiers {
     global: BTreeSet<Row>,
     replicas: BTreeSet<Row>,
     dependencies: BTreeSet<Row>,
+    refreshes: BTreeSet<Row>,
     wallclock_lag: lag::NativeWallclockLag,
 }
 
@@ -94,11 +97,47 @@ impl Coordinator {
                     })
             })
             .collect();
+        // Refresh state belongs to the committed MV, even with no replicas or
+        // after its dataflow completes. Only storage progress establishes which
+        // refreshes have completed, not installation or compaction frontiers.
+        let refreshes = self
+            .catalog()
+            .entries()
+            .filter_map(|entry| {
+                let CatalogItem::MaterializedView(mv) = entry.item() else {
+                    return None;
+                };
+                let schedule = mv.refresh_schedule.as_ref()?;
+                let initial_as_of = mv.initial_as_of.as_ref()?;
+                let id = mv.global_id_writes();
+                // Metadata-only recovery has a placeholder empty upper, not an
+                // observation of completion.
+                self.controller
+                    .storage_collections
+                    .collection_metadata(id)
+                    .ok()?;
+                let frontiers = self
+                    .controller
+                    .storage_collections
+                    .collection_frontiers(id)
+                    .ok();
+                refresh_row(
+                    id,
+                    schedule,
+                    initial_as_of,
+                    frontiers.as_ref().map(|f| &f.write_frontier),
+                )
+            })
+            .collect();
         let mut updates = self.native_lag_updates(&observations);
         updates.extend(self.native_frontiers.update(observations));
         updates.push((
             IntrospectionType::ComputeDependencies,
             replace_rows(&mut self.native_frontiers.dependencies, dependencies),
+        ));
+        updates.push((
+            IntrospectionType::ComputeMaterializedViewRefreshes,
+            replace_rows(&mut self.native_frontiers.refreshes, refreshes),
         ));
         for (kind, updates) in updates {
             if !updates.is_empty() {
@@ -327,6 +366,21 @@ impl NativeFrontiers {
 
 fn frontier_datum(frontier: &Antichain<Timestamp>) -> Datum<'static> {
     frontier.as_option().map_or(Datum::Null, |ts| (*ts).into())
+}
+
+fn refresh_row(
+    id: GlobalId,
+    schedule: &RefreshSchedule,
+    initial_as_of: &Antichain<Timestamp>,
+    upper: Option<&Antichain<Timestamp>>,
+) -> Option<Row> {
+    let (last_completed_refresh, next_refresh) =
+        refresh_introspection(schedule, initial_as_of, upper?);
+    Some(Row::pack_slice(&[
+        Datum::String(&id.to_string()),
+        last_completed_refresh,
+        next_refresh,
+    ]))
 }
 
 fn replace_rows(old: &mut BTreeSet<Row>, new: BTreeSet<Row>) -> Vec<(Row, Diff)> {

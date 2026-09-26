@@ -1581,6 +1581,13 @@ def workflow_catalog_read_protection(c: Composition) -> None:
         bound_kind = "CollectionCompactionBound"
         requirement_kind = "MaintainedReadRequirement"
         once = record(requirement_kind, ids["protected_once"])
+        td("""
+            > SELECT last_completed_refresh IS NULL, next_refresh IS NOT NULL
+              FROM mz_internal.mz_materialized_view_refreshes r
+              JOIN mz_materialized_views v ON v.id = r.materialized_view_id
+              WHERE v.name = 'protected_once';
+            true true
+        """)
         [(first_refresh,)] = query("""
             SELECT next_refresh::text FROM mz_internal.mz_materialized_view_refreshes r
             JOIN mz_materialized_views v ON v.id = r.materialized_view_id
