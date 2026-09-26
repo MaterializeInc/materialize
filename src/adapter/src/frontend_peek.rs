@@ -58,7 +58,7 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::peek_client::{ExecutionLogging, TakeOver};
-use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::statement_logging::WatchSetCreation;
 use crate::{
@@ -651,6 +651,7 @@ impl PeekClient {
         // it would be the cleanest to just simply disallow AS OF queries inside transactions.
         let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when)
             && !matches!(query_plan, QueryPlan::Subscribe { .. });
+        let requires_linearization = RequireLinearization::from(&explain_ctx);
 
         // Fetch or generate a timestamp for this query and fetch or acquire read holds.
         let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
@@ -744,7 +745,10 @@ impl PeekClient {
                     )
                     .await?;
 
-                if needs_linearized_read_ts
+                // Explanations use the fresh statement-entry catalog. Their hypothetical
+                // data timestamp can be in the future, with no execution to linearize.
+                if matches!(requires_linearization, RequireLinearization::Required)
+                    && needs_linearized_read_ts
                     && isolation_level == IsolationLevel::StrictSerializable
                     && let Some(validated_at) = catalog_read_ts
                     && let TimestampContext::TimelineTimestamp {
@@ -844,7 +848,6 @@ impl PeekClient {
         // OF or we're inside an explicit transaction. The latter case is
         // necessary to support PG's `BEGIN` semantics, whose behavior can
         // depend on whether or not reads have occurred in the txn.
-        let requires_linearization = (&explain_ctx).into();
         let mut transaction_determination = determination.clone();
         match query_plan {
             QueryPlan::Subscribe { .. } => {

@@ -29,6 +29,7 @@ use crate::coord::{
     Coordinator, ExecuteContext, Message, TimestampContext, TimestampDetermination,
 };
 use crate::peek_client::{CoordinatorClient, PeekClient};
+use crate::session::RequireLinearization;
 
 /// The entry point to resume after capturing a fresh catalog. Portal execution
 /// has not started logging yet, while direct statement reentries already have.
@@ -45,14 +46,15 @@ pub enum ExecuteCatalogContinuation {
 }
 
 impl Coordinator {
-    /// Validate a newly chosen data timestamp before storing transaction state.
-    /// Fixed timestamps retain independent per-statement catalog freshness.
+    /// Validate a newly chosen execution timestamp before storing transaction state.
+    /// Diagnostics and fixed timestamps retain independent statement-entry freshness.
     pub(crate) fn validate_query_catalog(
         &self,
         ctx: &ExecuteContext,
         determination: &TimestampDetermination,
         when: &QueryWhen,
         new_timestamp: bool,
+        requires_linearization: RequireLinearization,
     ) -> Option<BoxFuture<'static, Result<(), AdapterError>>> {
         let certified = ctx.query_catalog_timestamp()?;
         let catalog = Arc::clone(ctx.query_catalog()?);
@@ -64,7 +66,8 @@ impl Coordinator {
         else {
             return None;
         };
-        if !new_timestamp
+        if matches!(requires_linearization, RequireLinearization::NotRequired)
+            || !new_timestamp
             || chosen_ts <= certified
             || ctx.session().vars().transaction_isolation() != &IsolationLevel::StrictSerializable
             || !Self::needs_linearized_read_ts(&IsolationLevel::StrictSerializable, when)
