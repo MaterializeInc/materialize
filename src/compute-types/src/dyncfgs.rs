@@ -116,11 +116,13 @@ pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
 /// installation of the process buffer pool (`mz_ore::pool`): the first
 /// configuration tick with either gate on reserves the pool's virtual
 /// address space and spawns its spill threads. Turning the gates back off
-/// stops retuning but does not tear the installed pool down.
+/// stops retuning but does not tear the installed pool down. The pool's
+/// chunk spill gate is the OR of the two flags, and every chunk consumer in
+/// the process reads it: the column-paged batcher and the MV sink correction
+/// buffer's chunk bodies spill while either flag is on.
 ///
-/// It additionally enables the process-global column pager, which the MV
-/// sink's correction buffer and storage's paged upsert stash draw from, so
-/// it is not exclusive to the arrange path.
+/// It additionally enables the process-global column pager, which storage's
+/// paged upsert stash draws from, so it is not exclusive to the arrange path.
 ///
 /// Off by default, even when the batcher path itself is on, so the
 /// no-pressure case stays a pure resident operation. Tune the budget via
@@ -128,8 +130,9 @@ pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
 pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     "enable_column_paged_batcher_spill",
     false,
-    "Allow chunk bodies to spill to the process buffer pool under memory pressure. Only \
-     meaningful for arrange sites when `enable_column_paged_batcher = true`.",
+    "Allow chunk bodies to spill to the process buffer pool under memory pressure: the arrange \
+     batchers' (only meaningful when `enable_column_paged_batcher = true`) and the MV sink \
+     correction buffer's. Either this flag or `enable_upsert_paged_spill` enables both.",
     ParameterScope::Replica,
 );
 
