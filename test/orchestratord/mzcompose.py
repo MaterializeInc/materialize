@@ -770,10 +770,6 @@ class BalancerdNodeSelector(Modification):
         retry(check, 240)
 
 
-# Must match the `persist_backend_url` in the install-on-local-kind docs, which
-# replaces the MinIO URL shipped in misc/helm-charts/testing/materialize.yaml.
-RUSTFS_PERSIST_URL = "s3://rustfsadmin:rustfsadmin@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Frustfs.materialize.svc.cluster.local%3A9000&region=us-east-1"
-
 # Must match test/orchestratord/priorityclass.yaml.
 PRIORITY_CLASS_NAME = "mz-test-priority"
 PRIORITY_CLASS_VALUE = 1000000000
@@ -2421,10 +2417,10 @@ def workflow_documentation_defaults(
             "misc/helm-charts/operator/values.yaml",
             os.path.join(dir, "sample-values.yaml"),
         )
-        # The docs fetch RustFS from main rather than a release tag.
+        # The docs fetch MinIO from main rather than a release tag.
         shutil.copyfile(
-            "misc/helm-charts/testing/rustfs.yaml",
-            os.path.join(dir, "sample-rustfs.yaml"),
+            "misc/helm-charts/testing/minio.yaml",
+            os.path.join(dir, "sample-minio.yaml"),
         )
         files = {
             "sample-postgres.yaml": "misc/helm-charts/testing/postgres.yaml",
@@ -2447,7 +2443,7 @@ def workflow_documentation_defaults(
         spawn.runv(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-postgres.yaml")]
         )
-        spawn.runv(["kubectl", "apply", "-f", os.path.join(dir, "sample-rustfs.yaml")])
+        spawn.runv(["kubectl", "apply", "-f", os.path.join(dir, "sample-minio.yaml")])
         spawn.runv(["kubectl", "get", "all", "-n", "materialize"])
 
         wait_for_crd_established()
@@ -2459,7 +2455,7 @@ def workflow_documentation_defaults(
                 "materialize",
                 "--for=condition=Available",
                 "--timeout=300s",
-                "deployment/rustfs",
+                "deployment/minio",
             ]
         )
         spawn.runv(
@@ -2470,7 +2466,7 @@ def workflow_documentation_defaults(
                 "materialize",
                 "--for=condition=Complete",
                 "--timeout=300s",
-                "job/rustfs-setup",
+                "job/minio-setup",
             ]
         )
         spawn.runv(
@@ -2493,7 +2489,6 @@ def workflow_documentation_defaults(
             materialize_setup[2]["spec"][
                 "environmentdImageRef"
             ] = f"materialize/environmentd:{version}"
-        materialize_setup[1]["stringData"]["persist_backend_url"] = RUSTFS_PERSIST_URL
         if version >= MzVersion.parse_mz("v26.0.0"):
             # Self-managed v25.1/2 don't require a license key yet
             materialize_setup[1]["stringData"]["license_key"] = os.environ[

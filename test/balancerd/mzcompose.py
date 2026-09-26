@@ -20,15 +20,13 @@ import struct
 import subprocess
 import time
 import uuid
-from collections.abc import Callable
 from textwrap import dedent
-from typing import Any
 from urllib.parse import quote
 
 import pg8000
 import psycopg
 import requests
-from pg8000.exceptions import InterfaceError
+from pg8000.exceptions import DatabaseError
 from psycopg import Cursor
 from psycopg.errors import OperationalError, ProgramLimitExceeded, ProgrammingError
 
@@ -623,29 +621,19 @@ def workflow_pgwire_param_rejection(c: Composition) -> None:
     """Parameters should be rejected"""
     c.up("balancerd", "frontegg-mock", "materialized")
 
-    def check_error(
-        message: str, f: Callable[..., Any], ExpectedError: type[Exception]
-    ):
-        try:
-            f()
-        except ExpectedError:
-            return
-        raise AssertionError(f"Expected {message} to raise {ExpectedError}")
-
     # Uses pg8000, because with psycopg/libpq only a notice is printed, and
     # catching it during the connection process is not easy:
     # NOTICE:  startup setting mz_forwarded_for not set: unrecognized configuration parameter "mz_forwarded_for"
-    check_error(
-        "connect with mz_forwarded_for param",
-        lambda: pg8000_sql_cursor(c, startup_params={"mz_forwarded_for": "1.1.1.1"}),
-        InterfaceError,
-    )
-
-    check_error(
-        "connect with mz_connection_uuid param",
-        lambda: pg8000_sql_cursor(c, startup_params={"mz_connection_uuid": "123456"}),
-        InterfaceError,
-    )
+    for param, value in [
+        ("mz_forwarded_for", "1.1.1.1"),
+        ("mz_connection_uuid", "123456"),
+    ]:
+        try:
+            pg8000_sql_cursor(c, startup_params={param: value})
+        except DatabaseError as e:
+            assert e.args[0]["M"] == f"invalid parameter '{param}'", e
+            continue
+        raise AssertionError(f"Expected connecting with {param} to be rejected")
 
 
 def workflow_balancerd_restarted(c: Composition) -> None:

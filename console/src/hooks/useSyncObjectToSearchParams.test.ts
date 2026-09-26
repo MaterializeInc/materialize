@@ -9,7 +9,8 @@
 
 import { renderHook, waitFor } from "@testing-library/react";
 import { act } from "react-dom/test-utils";
-import { BrowserRouter } from "react-router-dom";
+
+import { RouterWrapper } from "~/test/utils";
 
 import {
   encodeObjectAsSearchParams,
@@ -91,7 +92,7 @@ describe("useSyncObjectToSearchParams", () => {
         useSyncObjectToSearchParams(input.object);
       },
       {
-        wrapper: BrowserRouter,
+        wrapper: RouterWrapper,
       },
     );
 

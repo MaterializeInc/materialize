@@ -18,12 +18,15 @@ on:
   pull_request_review:
     types: [submitted]
 
+permissions: {}
+
 concurrency:
   group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   claude:
+    name: claude
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
@@ -32,21 +35,22 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      pull-requests: read
-      id-token: write
+      pull-requests: read # Checks out the PR branch and reads PR context.
+      id-token: write # Exchanges an OIDC token for the Claude GitHub App token.
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Checkout PR branch
         if: github.event.issue.pull_request
-        run: gh pr checkout ${{ github.event.issue.number }}
+        run: gh pr checkout "$PR_NUMBER"
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
 
       - name: Run Claude Code
         id: claude
