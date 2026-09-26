@@ -210,6 +210,7 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
+use timely::PartialOrder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
 use timely::progress::Antichain;
@@ -271,6 +272,16 @@ pub fn build_ingestion_dataflow(
             } else {
                 Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
             };
+
+            // Only the OLTP sources hold a snapshotting export's frontier at the as_of for the
+            // length of its snapshot, so only their exports give the persist sink something to
+            // group behind the pin.
+            let oltp_source = matches!(
+                connection,
+                GenericSourceConnection::Postgres(_)
+                    | GenericSourceConnection::MySql(_)
+                    | GenericSourceConnection::SqlServer(_)
+            );
 
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),
@@ -372,6 +383,14 @@ pub fn build_ingestion_dataflow(
                     export_id,
                     primary_source_id
                 );
+
+                // An export snapshots when its resume upper is at or below the as_of. The
+                // controller uses the same test to hand the connector a minimum from-time resume
+                // upper.
+                let snapshotting = oltp_source
+                    && resume_uppers
+                        .get(&export_id)
+                        .is_some_and(|upper| PartialOrder::less_equal(upper, &as_of));
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
                     export_id,
@@ -380,6 +399,8 @@ pub fn build_ingestion_dataflow(
                     storage_state,
                     metrics,
                     Arc::clone(&busy_signal),
+                    snapshotting.then(|| as_of.clone()),
+                    description.desc.timestamp_interval,
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
