@@ -315,8 +315,13 @@ class ScenarioRunner:
         if "CREATE SECRET" not in query:
             print(f"> {query} {params or ''}")
         for retry in range(retries + 1):
+            in_transaction = False
             try:
                 with self.connection as cur:
+                    in_transaction = (
+                        self.connection.connection.info.transaction_status
+                        != psycopg.pq.TransactionStatus.IDLE
+                    )
                     cur.execute(query.encode(), params)
                     if fetch:
                         return cur.fetchall()
@@ -327,7 +332,12 @@ class ScenarioRunner:
                 OperationalError,
                 psycopg.errors.SystemError,
             ) as e:
-                if retry >= retries:
+                # A retry runs on a fresh connection that lacks the open
+                # transaction's state, such as a declared cursor. Re-raise so
+                # that `ConnectionHandler.retryable` reconnects and reruns the
+                # whole statement sequence. All caught errors derive from
+                # `InterfaceError` or `OperationalError`, which it retries.
+                if retry >= retries or in_transaction:
                     raise
                 print(f"Retryable error (attempt {retry + 1}/{retries}): {e}")
                 time.sleep(5 * (retry + 1))
