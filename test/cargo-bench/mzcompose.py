@@ -808,6 +808,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "error" if failed else "info",
             f"Cargo bench results ({', '.join(shard_packages)})",
             markdown,
+            # `bin/ci-annotate-errors` posts under the default `error` context
+            # and would otherwise replace this table on a failed shard.
+            context="cargo-bench",
         )
         try:
             spawn.runv(
