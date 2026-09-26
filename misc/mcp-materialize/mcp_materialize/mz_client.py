@@ -95,7 +95,7 @@ class MzClient:
             self._bg_task.cancel()
             try:
                 await asyncio.wait_for(self._bg_task, timeout=5.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
+            except (TimeoutError, asyncio.CancelledError):
                 pass
 
     async def _subscribe(self) -> None:
