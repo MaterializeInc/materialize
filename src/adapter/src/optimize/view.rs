@@ -79,6 +79,16 @@ impl<S> Optimizer<S> {
         }
     }
 
+    /// Optimizes a view definition, which is independent of any cluster.
+    ///
+    /// Leaves map expressions that error on constant inputs unfolded. That is correct under both
+    /// error scopes, because a dataflow that uses the view folds again under its cluster's scope.
+    /// Folding here would bake a row-scoped error into the view.
+    pub fn for_view_definition(mut self) -> Self {
+        self.config.features.enable_cell_errors = true;
+        self
+    }
+
     /// Folds constants of any size, instead of giving up above the configured
     /// limit.
     pub fn without_fold_constants_limit(mut self) -> Self {

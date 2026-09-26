@@ -204,6 +204,8 @@ pub(super) struct Instance {
 
     /// The persist location where we can stash large peek results.
     peek_stash_persist_location: PersistLocation,
+    /// Whether map errors are scoped to cells, see [`InstanceConfig::cell_errors`].
+    cell_errors: bool,
 
     /// A function that produces the current wallclock time.
     now: NowFn,
@@ -878,6 +880,7 @@ impl Instance {
             build_info: _,
             storage_collections: _,
             peek_stash_persist_location: _,
+            cell_errors: _,
             initialized,
             read_only,
             workload_class,
@@ -948,6 +951,7 @@ impl Instance {
         build_info: &'static BuildInfo,
         storage: StorageCollections,
         peek_stash_persist_location: PersistLocation,
+        cell_errors: bool,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState)>,
         metrics: InstanceMetrics,
         now: NowFn,
@@ -984,6 +988,7 @@ impl Instance {
             build_info,
             storage_collections: storage,
             peek_stash_persist_location,
+            cell_errors,
             initialized: false,
             read_only,
             workload_class: None,
@@ -1018,6 +1023,7 @@ impl Instance {
 
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
+            cell_errors: self.cell_errors,
             // The remaining fields are replica-specific and will be set in
             // `ReplicaTask::specialize_command` (logging, expiration, dictionary compression) and
             // `Instance::specialize_command_for_replica` (the initial config snapshot).
@@ -3731,6 +3737,7 @@ mod tests {
             expiration_offset: None,
             peek_stash_persist_location: PersistLocation::new_in_mem(),
             arrangement_dictionary_compression: false,
+            cell_errors: false,
             initial_config: Default::default(),
         }))
     }

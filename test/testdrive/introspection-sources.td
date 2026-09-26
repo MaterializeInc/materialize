@@ -534,8 +534,10 @@ mv_div_by_zero   2
 # drop them immediately, removing all their associated logging in the process.
 
 > CREATE MATERIALIZED VIEW mv_zero AS SELECT 0 AS x
-> CREATE VIEW div_by_zero AS SELECT 1 / x FROM mv_zero
-> CREATE INDEX idx_div_by_zero ON div_by_zero ()
+# The index key is the erroring column: with cell-scoped errors, an error in an
+# index value stays in its cell and does not count as a dataflow error.
+> CREATE VIEW div_by_zero AS SELECT 1 / x AS y FROM mv_zero
+> CREATE INDEX idx_div_by_zero ON div_by_zero (y)
 
 > SELECT name, count
   FROM mz_introspection.mz_compute_error_counts c

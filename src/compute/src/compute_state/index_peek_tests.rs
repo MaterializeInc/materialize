@@ -299,6 +299,7 @@ fn index_peek_over(peek: Peek, keys: &[Row], errors: ErrorUpdates) -> IndexPeek 
     IndexPeek {
         peek,
         trace_bundle: trace_bundle(keys, errors),
+        error_scope: mz_expr::ErrorScope::Row,
         span: tracing::Span::none(),
     }
 }

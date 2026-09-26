@@ -34,6 +34,8 @@ where
     cursor: TraceCursor<Tr>,
     storage: TraceStorage<Tr>,
     map_filter_project: mz_expr::SafeMfpPlan,
+    /// Where errors in `map_filter_project` land.
+    error_scope: mz_expr::ErrorScope,
     peek_timestamp: mz_repr::Timestamp,
     row_builder: Row,
     datum_vec: DatumVec,
@@ -206,6 +208,12 @@ where
         )
     }
 
+    /// Sets where errors in the MFP land. Defaults to [`mz_expr::ErrorScope::Row`].
+    pub(super) fn with_error_scope(mut self, error_scope: mz_expr::ErrorScope) -> Self {
+        self.error_scope = error_scope;
+        self
+    }
+
     /// Builds an iterator over an already-opened cursor.
     pub(super) fn from_cursor(
         target_id: GlobalId,
@@ -224,6 +232,7 @@ where
             cursor,
             storage,
             map_filter_project,
+            error_scope: mz_expr::ErrorScope::Row,
             peek_timestamp,
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
@@ -460,12 +469,32 @@ where
                 .expect("literal position must be at a matching literal during row extraction");
             maybe_literal.extend_datums(&arena, &mut borrow, None);
         }
-        if let Some(result) = self
+        // See `SafeMfpPlan::evaluate_inner_scoped` for where evaluation expects it.
+        if let Some(error) = row_item.row_error() {
+            borrow.push(mz_repr::Datum::Error(error));
+        }
+        let result = self
             .map_filter_project
-            .evaluate_into(&mut borrow, &arena, &mut self.row_builder)
-            .map(|row| row.cloned())
-            .map_err(PeekError::from)?
-        {
+            .evaluate_into_scoped(&mut borrow, &arena, &mut self.row_builder, self.error_scope)
+            .map(|row| row.cloned());
+        let result = match result {
+            Ok(result) => result,
+            // The error belongs to this value only if the value exists at the peek time. A value
+            // whose updates cancel, such as a retracted row with an error datum, has none.
+            Err(error) => {
+                let mut copies = Diff::ZERO;
+                self.cursor.map_times(&self.storage, |time, diff| {
+                    if time.less_equal(&self.peek_timestamp) {
+                        copies += diff;
+                    }
+                });
+                if copies.is_zero() {
+                    return Ok(None);
+                }
+                return Err(PeekError::from(error));
+            }
+        };
+        if let Some(result) = result {
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
                 if time.less_equal(&self.peek_timestamp) {

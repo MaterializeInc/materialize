@@ -54,6 +54,8 @@ pub struct Optimizer {
     with_snapshot: bool,
     /// Sink timestamp.
     up_to: Option<Timestamp>,
+    /// Whether rows with errors reach the subscribe, see `SubscribeSinkConnection::inline_errors`.
+    inline_errors: bool,
     /// A human-readable name exposed internally (useful for debugging).
     debug_name: String,
     /// Optimizer config.
@@ -97,11 +99,18 @@ impl Optimizer {
             sink_id,
             with_snapshot,
             up_to,
+            inline_errors: false,
             debug_name,
             config,
             metrics,
             duration: Default::default(),
         }
+    }
+
+    /// Delivers rows with errors to the subscribe instead of failing it.
+    pub fn with_inline_errors(mut self, inline_errors: bool) -> Self {
+        self.inline_errors = inline_errors;
+        self
     }
 
     pub fn cluster_id(&self) -> ComputeInstanceId {
@@ -189,7 +198,10 @@ impl Optimizer {
         let sink_description = ComputeSinkDesc {
             from,
             from_desc,
-            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection { output }),
+            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                output,
+                inline_errors: self.inline_errors,
+            }),
             with_snapshot: self.with_snapshot,
             up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
             // No `FORCE NOT NULL` for subscribes

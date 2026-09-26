@@ -423,6 +423,7 @@ pub(super) fn persist_source<'s>(
         SnapshotMode::Include,
         until,
         map_filter_project,
+        mz_expr::ErrorScope::Row,
         compute_state.dataflow_max_inflight_bytes(),
         start_signal.into_send_future(),
         ErrorHandler::Halt("compute persist sink"),

@@ -1067,7 +1067,8 @@ impl PeekClient {
                     debug_name,
                     optimizer_config,
                     self.optimizer_metrics.clone(),
-                );
+                )
+                .with_inline_errors(plan.inline_errors);
                 mz_ore::task::spawn_blocking(
                     || "optimize subscribe",
                     move || {

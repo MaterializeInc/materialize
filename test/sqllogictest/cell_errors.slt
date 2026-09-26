@@ -1,0 +1,384 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Cell-scoped errors: an error in a map expression stays in its cell, and
+# projecting the column away drops the error. Filters, reduces, sinks, and
+# materialized views elevate error cells to collection-scoped errors.
+#
+# A cluster records `enable_compute_cell_errors` when it is created, so each
+# mode gets its own cluster, created after setting the flag.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_cell_errors TO false;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER row_scoped SIZE 'scale=1,workers=1'
+
+statement ok
+SET cluster = row_scoped
+
+statement ok
+CREATE TABLE customers (id int, province text, sin text)
+
+statement ok
+INSERT INTO customers VALUES (1, 'ON', '123456789'), (2, 'BC', '123-456-789')
+
+# Row-scoped baseline: the indexed view fails every read.
+
+statement ok
+CREATE VIEW v_row AS SELECT id, province, length(sin::int8::text) = 9 AS sin_valid FROM customers
+
+statement ok
+CREATE INDEX v_row_idx ON v_row (id)
+
+query error invalid input syntax for type bigint
+SELECT id, province FROM v_row
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_cell_errors TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER cell_scoped SIZE 'scale=1,workers=1'
+
+statement ok
+SET cluster = cell_scoped
+
+statement ok
+CREATE VIEW v AS SELECT id, province, length(sin::int8::text) = 9 AS sin_valid FROM customers
+
+statement ok
+CREATE INDEX v_idx ON v (id)
+
+# Reading only columns without errors succeeds.
+query IT rowsort
+SELECT id, province FROM v
+----
+1  ON
+2  BC
+
+# Reading the column with the error raises it.
+query error invalid input syntax for type bigint
+SELECT * FROM v
+
+query error invalid input syntax for type bigint
+SELECT sin_valid FROM v
+
+# A predicate over the error column fails the row.
+query error invalid input syntax for type bigint
+SELECT id FROM v WHERE sin_valid
+
+# `AND` masks an error with `false`, as for any other erroring expression.
+query IB rowsort
+SELECT id, province = 'ON' AND sin_valid FROM v
+----
+1  true
+2  false
+
+# A filter that removes the erroring row avoids the error.
+query IB
+SELECT id, sin_valid FROM v WHERE id = 1
+----
+1  true
+
+# Aggregates that do not read the error column succeed.
+query I
+SELECT count(*) FROM v
+----
+2
+
+query error invalid input syntax for type bigint
+SELECT count(sin_valid) FROM v
+
+# A join that projects the error column away succeeds.
+query ITT rowsort
+SELECT a.id, a.province, b.province FROM v a JOIN v b ON a.id = b.id
+----
+1  ON  ON
+2  BC  BC
+
+query error invalid input syntax for type bigint
+SELECT a.id, b.sin_valid FROM v a JOIN v b ON a.id = b.id
+
+statement ok
+CREATE TABLE only1 (id int, flag bool)
+
+statement ok
+INSERT INTO only1 VALUES (1, true)
+
+statement ok
+CREATE TABLE both_ids (id int, flag bool)
+
+statement ok
+INSERT INTO both_ids VALUES (1, true), (2, true)
+
+# A row whose value column holds an error and that finds no match disappears
+# with its error.
+query I
+SELECT a.id FROM v a JOIN only1 b ON a.id = b.id
+----
+1
+
+query IB
+SELECT a.id, a.sin_valid FROM v a JOIN only1 b ON a.id = b.id
+----
+1  true
+
+# An error in a join key surfaces whether or not the row would match.
+query error invalid input syntax for type bigint
+SELECT a.id FROM v a JOIN only1 b ON a.sin_valid = b.flag
+
+# Every column of a join equality acts as a key, so its error surfaces whether
+# or not the row would match. Here the planner arranges both inputs by
+# `(id, sin_valid)`. An equality that the planner leaves to the join closure
+# errors only for matched pairs, see the design doc's open questions.
+query error invalid input syntax for type bigint
+SELECT a.id FROM v a JOIN only1 b ON a.id = b.id AND a.sin_valid = b.flag
+
+query error invalid input syntax for type bigint
+SELECT a.id FROM v a JOIN both_ids b ON a.id = b.id AND a.sin_valid = b.flag
+
+# Outer joins keep unmatched rows with their error cells.
+query II rowsort
+SELECT a.id, b.id FROM v a LEFT JOIN only1 b ON a.id = b.id
+----
+1  1
+2  NULL
+
+query error invalid input syntax for type bigint
+SELECT a.id, a.sin_valid FROM v a LEFT JOIN only1 b ON a.id = b.id
+
+query II rowsort
+SELECT a.id, b.id FROM only1 b RIGHT JOIN v a ON a.id = b.id
+----
+1  1
+2  NULL
+
+query II rowsort
+SELECT a.id, b.id FROM v a FULL JOIN only1 b ON a.id = b.id
+----
+1  1
+2  NULL
+
+query error invalid input syntax for type bigint
+SELECT a.sin_valid, b.id FROM v a FULL JOIN only1 b ON a.id = b.id
+
+# A three-way join over indexed inputs, which plans as a delta join.
+statement ok
+CREATE INDEX only1_idx ON only1 (id)
+
+statement ok
+CREATE INDEX both_ids_idx ON both_ids (id)
+
+query I
+SELECT a.id FROM v a JOIN only1 b ON a.id = b.id JOIN both_ids c ON a.id = c.id
+----
+1
+
+query I rowsort
+SELECT a.id FROM v a JOIN both_ids b ON a.id = b.id JOIN both_ids c ON a.id = c.id
+----
+1
+2
+
+query error invalid input syntax for type bigint
+SELECT a.sin_valid FROM v a JOIN both_ids b ON a.id = b.id JOIN both_ids c ON a.id = c.id
+
+# Grouping by the error column elevates the error.
+query error invalid input syntax for type bigint
+SELECT sin_valid, count(*) FROM v GROUP BY sin_valid
+
+# Top-k elevates error cells in its input.
+query error invalid input syntax for type bigint
+SELECT * FROM (SELECT * FROM v ORDER BY province LIMIT 1)
+
+# A materialized view over the index that drops the error column succeeds.
+statement ok
+CREATE MATERIALIZED VIEW mv_ok AS SELECT id, province FROM v
+
+query IT rowsort
+SELECT * FROM mv_ok
+----
+1  ON
+2  BC
+
+# A materialized view is a boundary: an error cell it writes becomes a
+# collection-scoped error, and every read of it fails.
+statement ok
+CREATE MATERIALIZED VIEW mv_err AS SELECT id, province, length(sin::int8::text) = 9 AS sin_valid FROM customers
+
+query error invalid input syntax for type bigint
+SELECT id, province FROM mv_err
+
+# A materialized view that reads the index unchanged elevates too. The index
+# key is the first column, so reading the arrangement evaluates nothing.
+statement ok
+CREATE MATERIALIZED VIEW mv_all AS SELECT * FROM v
+
+query error invalid input syntax for type bigint
+SELECT id FROM mv_all
+
+# Predicates combine like `AND`: `false` masks an error in another predicate,
+# whichever order they are evaluated in.
+query I
+SELECT id FROM v WHERE sin_valid AND id = 1
+----
+1
+
+query I
+SELECT id FROM v WHERE id = 1 AND sin_valid
+----
+1
+
+query error invalid input syntax for type bigint
+SELECT id FROM v WHERE sin_valid AND id = 2
+
+# Constant evaluation agrees with dataflow evaluation: each query below gives
+# the same answer over constants, over a table, and over an indexed view.
+
+statement ok
+CREATE TABLE nums (a int)
+
+statement ok
+INSERT INTO nums VALUES (1), (0)
+
+query I
+SELECT x FROM (SELECT 1 AS x, 1/0 AS y)
+----
+1
+
+query error division by zero
+SELECT y FROM (SELECT 1 AS x, 1/0 AS y)
+
+query I rowsort
+SELECT a FROM (SELECT a, 1/a AS y FROM (VALUES (1), (0)) t(a))
+----
+0
+1
+
+query I rowsort
+SELECT a FROM (SELECT a, 1/a AS y FROM nums)
+----
+0
+1
+
+query error division by zero
+SELECT a, y FROM (SELECT a, 1/a AS y FROM (VALUES (1), (0)) t(a))
+
+query error division by zero
+SELECT a, y FROM (SELECT a, 1/a AS y FROM nums)
+
+query IB rowsort
+SELECT a, a = 1 AND y > 0 FROM (SELECT a, 1/a AS y FROM (VALUES (1), (0)) t(a))
+----
+0  false
+1  true
+
+query IB rowsort
+SELECT a, a = 1 AND y > 0 FROM (SELECT a, 1/a AS y FROM nums)
+----
+0  false
+1  true
+
+query error division by zero
+SELECT a FROM (SELECT a, 1/a AS y FROM (VALUES (1), (0)) t(a)) WHERE y > 0
+
+query error division by zero
+SELECT a FROM (SELECT a, 1/a AS y FROM nums) WHERE y > 0
+
+query I
+SELECT count(*) FROM (SELECT a, 1/a AS y FROM (VALUES (1), (0)) t(a))
+----
+2
+
+query I
+SELECT count(*) FROM (SELECT a, 1/a AS y FROM nums)
+----
+2
+
+statement ok
+CREATE VIEW c_const AS SELECT a, 1/a AS y FROM (VALUES (1), (0)) t(a)
+
+statement ok
+CREATE INDEX c_const_idx ON c_const (a)
+
+statement ok
+CREATE VIEW c_table AS SELECT a, 1/a AS y FROM nums
+
+statement ok
+CREATE INDEX c_table_idx ON c_table (a)
+
+query I rowsort
+SELECT a FROM c_const
+----
+0
+1
+
+query I rowsort
+SELECT a FROM c_table
+----
+0
+1
+
+query error division by zero
+SELECT * FROM c_const
+
+query error division by zero
+SELECT * FROM c_table
+
+# A scalar subquery's error lands in the cell of its join output, so an
+# expression that does not read the cell does not raise it. Row-scoped errors
+# fail both queries, see `error_semantics.slt`.
+
+statement ok
+CREATE TABLE test (a int, b int)
+
+statement ok
+INSERT INTO test VALUES (1, 0)
+
+query I
+SELECT coalesce(a, (SELECT a/b FROM test)) FROM test
+----
+1
+
+query III
+SELECT *, CASE WHEN a = 5 THEN (SELECT a/b FROM test) ELSE 7 END FROM test
+----
+1  0  7
+
+# The error of a map expression the peek computes stays in its cell when the
+# peek projects it away.
+query I rowsort
+SELECT a FROM (SELECT a, 10 / (a - 1) AS z FROM c_table)
+----
+0
+1
+
+# Retracting the row whose error datum the index holds removes the error. A
+# peek sees the error datum only while its row exists.
+statement ok
+DELETE FROM customers WHERE id = 2
+
+query ITB
+SELECT * FROM v
+----
+1  ON  true
+
+statement ok
+RESET cluster
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_cell_errors;
+----
+COMPLETE 0

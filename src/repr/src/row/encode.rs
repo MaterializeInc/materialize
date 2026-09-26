@@ -1472,6 +1472,10 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
     }
 
     fn append(&mut self, val: &Row) {
+        assert!(
+            val.row_error().is_none(),
+            "internal error: cannot encode a row with a row-level error"
+        );
         let mut num_datums = 0;
         for (datum, encoder) in val.iter().zip_eq(self.encoders.iter_mut()) {
             encoder.push(datum);
@@ -2018,6 +2022,9 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::Uuid(x) => DatumType::Uuid(x.as_bytes().to_vec()),
             Datum::MzTimestamp(x) => DatumType::MzTimestamp(x.into()),
             Datum::Dummy => DatumType::Other(ProtoDatumOther::Dummy.into()),
+            // Error datums are elevated before they leave their dataflow, and durable encodings
+            // never see them.
+            Datum::Error(_) => panic!("internal error: cannot encode an error datum"),
             Datum::Null => DatumType::Other(ProtoDatumOther::Null.into()),
             Datum::Range(super::Range { inner }) => DatumType::Range(Box::new(ProtoRange {
                 inner: inner.map(|RangeInner { lower, upper }| {
@@ -2252,6 +2259,11 @@ impl TryFrom<&ProtoRow> for Row {
 
 impl RustType<ProtoRow> for Row {
     fn into_proto(&self) -> ProtoRow {
+        // Row-level errors are elevated before rows leave their dataflow, like error datums.
+        assert!(
+            self.row_error().is_none(),
+            "internal error: cannot encode a row with a row-level error"
+        );
         let datums = self.iter().map(|x| x.into()).collect();
         ProtoRow { datums }
     }

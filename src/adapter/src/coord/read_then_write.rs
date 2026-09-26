@@ -116,6 +116,7 @@ impl Coordinator {
             // spuriously retire the statement with `SubscribeFellBehind`.
             max_buffered_bytes: usize::MAX,
             emit_progress: true, // We need progress updates for OCC
+            inline_errors: false,
             as_of,
             arity,
             cluster_id,

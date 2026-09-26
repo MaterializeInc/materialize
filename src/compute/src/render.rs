@@ -310,6 +310,7 @@ pub fn build_compute_dataflow(
                         snapshot_mode,
                         until.clone(),
                         mfp.as_mut(),
+                        context::inner_error_scope(compute_state.cell_errors),
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone().into_send_future(),
                         ErrorHandler::Halt("compute_import"),
@@ -1401,12 +1402,17 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
+                            self.error_scope(),
                         );
                         CollectionBundle::from_edge(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) =
-                            collection.as_collection_core(mfp, None, self.until.clone());
+                        let (oks, errs) = collection.as_collection_core(
+                            mfp,
+                            None,
+                            self.until.clone(),
+                            self.error_scope(),
+                        );
                         CollectionBundle::from_edge(oks, errs)
                     }
                 }
@@ -1421,8 +1427,12 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) =
-                        input.as_collection_core(mfp, input_key_val, self.until.clone());
+                    let (oks, errs) = input.as_collection_core(
+                        mfp,
+                        input_key_val,
+                        self.until.clone(),
+                        self.error_scope(),
+                    );
                     CollectionBundle::from_edge(oks, errs)
                 }
             }
@@ -1471,7 +1481,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 top_k_plan,
                 temporal_bucketing_strategy,
             } => {
-                let input = expect_input(input);
+                let input = self.elevate_cell_errors(expect_input(input));
                 self.render_topk(input, top_k_plan, temporal_bucketing_strategy)
             }
             Negate { input } => {
@@ -1547,6 +1557,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     self.until.clone(),
                     &self.config_set,
                     strategy,
+                    self.error_scope(),
                 )
             }
         }
