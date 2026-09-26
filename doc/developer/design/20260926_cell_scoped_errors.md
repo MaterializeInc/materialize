@@ -165,7 +165,7 @@ With the feature enabled, two queries that `test/sqllogictest/error_semantics.sl
 ## Open questions
 
 * `mz_compute_error_counts` counts collection-scoped errors only, so an index whose values hold error cells reports no errors.
-  Introspection and the console need a way to see error cells, for example a count maintained where cells are produced.
+  Whether error counts should exist at all is a separate question.
 * Whether an error in a join equality surfaces depends on the plan.
   An equality in the arrangement key raises for every row, matched or not, while an equality the planner leaves to the join closure raises only for matched pairs.
   Elevating every column of a join equality at the join's inputs would make the result plan-independent.
