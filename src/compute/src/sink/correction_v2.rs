@@ -87,8 +87,8 @@
 //! chunk, copying the update in, and then likely merging with an existing chain to restore the
 //! chain invariant. If updates trickle in in small batches, this can cause a considerable
 //! overhead. To amortize this overhead, new updates aren't immediately inserted into the sorted
-//! chains but instead stored in a `Stage` buffer. Once enough updates have been staged to fill a
-//! `Chunk`, they are sorted and routed.
+//! chains but instead stored in a `Stage` buffer. Once the staged updates reach the configured
+//! byte size, they are sorted and routed.
 //!
 //! The insert operation has an amortized complexity of O(log N), with N being the current number
 //! of updates stored.
@@ -153,7 +153,7 @@ use columnar::{Columnar, Index, Len, Ref};
 use mz_ore::cast::CastLossy;
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
-use mz_repr::{Diff, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::column_pager::{self, PagedColumn};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::temporal::{Bucket, BucketChain};
@@ -173,6 +173,7 @@ use crate::sink::correction::{ChannelLogging, SizeMetrics};
 pub trait Data:
     differential_dataflow::Data
     + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
+    + DataBytes
     + Send
     + Sync
 {
@@ -180,9 +181,25 @@ pub trait Data:
 impl<D> Data for D where
     D: differential_dataflow::Data
         + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
+        + DataBytes
         + Send
         + Sync
 {
+}
+
+/// The bytes a datum occupies, so the staging area can be sized in bytes.
+///
+/// Counts `size_of::<Self>()` plus what the datum owns on the heap. An estimate suffices: the
+/// figure paces when staged updates ship and feeds the buffer's size metrics, nothing else.
+pub trait DataBytes {
+    /// The bytes this datum occupies, heap included.
+    fn data_bytes(&self) -> usize;
+}
+
+impl DataBytes for Row {
+    fn data_bytes(&self) -> usize {
+        self.byte_len()
+    }
 }
 
 /// A data structure used to store corrections in the MV sink implementation.
@@ -255,14 +272,11 @@ impl<D: Data> CorrectionV2<D> {
         chain_proportionality: f64,
         chunk_size: usize,
     ) -> Self {
-        let update_size = std::mem::size_of::<(D, Timestamp, Diff)>();
-        let chunk_capacity = std::cmp::max(chunk_size / update_size, 1);
-
         Self {
             chain: BucketChain::new(ChainBucket::new(chain_proportionality, logging.clone())),
             pending_low: Vec::new(),
             emitted: Chain::new(),
-            stage: Stage::new(logging.clone(), chunk_capacity),
+            stage: Stage::new(logging.clone(), chunk_size),
             boundary: Antichain::from_elem(Timestamp::MIN),
             since: Antichain::from_elem(Timestamp::MIN),
             prev_update_count: 0,
@@ -1591,8 +1605,20 @@ impl<D: Data> ChunkBuilder<D> {
 struct Stage<D> {
     /// The contained updates.
     ///
-    /// This vector has a fixed capacity equal to the [`Chunk`] capacity.
+    /// Grows on demand rather than being allocated at the ship size, so a sink that never
+    /// stages that much never holds it. One of these exists per sink and worker, which is why
+    /// the eager allocation is worth avoiding even though a staging area is small.
     data: Vec<(D, Timestamp, Diff)>,
+    /// Bytes held by `data`: the tuples plus what they own on the heap.
+    bytes: usize,
+    /// How many bytes to accumulate before shipping a batch, from
+    /// `compute_correction_v2_chunk_size`.
+    ///
+    /// Shipping less often costs staging memory and saves inserts: it is the number of chains
+    /// minted per update, and every chain minted is a chain some later read has to merge.
+    /// Counted in bytes with the heap included, so the staging memory is bounded by this
+    /// setting regardless of row width, and a wide row fills the stage in fewer updates.
+    chunk_size: usize,
     /// Introspection logging.
     ///
     /// We want to report the number of records in the stage. To do so, we pretend that the stage
@@ -1602,20 +1628,30 @@ struct Stage<D> {
 }
 
 impl<D: Data> Stage<D> {
-    fn new(logging: Option<ChannelLogging>, chunk_capacity: usize) -> Self {
+    fn new(logging: Option<ChannelLogging>, chunk_size: usize) -> Self {
         // For logging, we pretend the stage consists of a single chain.
         if let Some(logging) = &logging {
             logging.chain_created(0);
         }
 
         Self {
-            data: Vec::with_capacity(chunk_capacity),
+            data: Vec::new(),
+            bytes: 0,
+            chunk_size,
             logging,
         }
     }
 
+    /// Bytes an update occupies: its datum, heap included, plus time and diff.
+    fn update_bytes(update: &(D, Timestamp, Diff)) -> usize {
+        update.0.data_bytes() + std::mem::size_of::<(Timestamp, Diff)>()
+    }
+
     /// Insert a batch of updates, possibly producing a batch of sorted, consolidated updates
     /// ready to be stored.
+    ///
+    /// Everything staged ships together, the new batch included, once the staged bytes reach
+    /// `chunk_size`.
     fn insert(
         &mut self,
         updates: &mut Vec<(D, Timestamp, Diff)>,
@@ -1626,33 +1662,17 @@ impl<D: Data> Stage<D> {
 
         let prev_length = self.ilen();
 
-        // Determine how many chunks we can fill with the available updates.
-        let update_count = self.data.len() + updates.len();
-        let chunk_capacity = self.data.capacity();
-        let chunk_count = update_count / chunk_capacity;
+        self.bytes += updates.iter().map(Self::update_bytes).sum::<usize>();
+        self.data.append(updates);
 
-        let mut new_updates = updates.drain(..);
-
-        // If we have enough shipable updates, collect them and consolidate.
-        let maybe_ready = if chunk_count > 0 {
-            let ship_count = chunk_count * chunk_capacity;
-            let mut buffer = Vec::with_capacity(ship_count);
-
-            buffer.append(&mut self.data);
-            while buffer.len() < ship_count {
-                let update = new_updates.next().unwrap();
-                buffer.push(update);
-            }
-
-            consolidate(&mut buffer);
-
-            Some(buffer)
+        let maybe_ready = if self.bytes >= self.chunk_size {
+            let mut ready = std::mem::take(&mut self.data);
+            self.bytes = 0;
+            consolidate(&mut ready);
+            Some(ready)
         } else {
             None
         };
-
-        // Stage the remaining updates.
-        Extend::extend(&mut self.data, new_updates);
 
         self.log_length_diff(self.ilen() - prev_length);
 
@@ -1664,14 +1684,13 @@ impl<D: Data> Stage<D> {
         self.log_length_diff(-self.ilen());
 
         consolidate(&mut self.data);
+        self.bytes = 0;
 
         if self.data.is_empty() {
             return None;
         }
 
-        let capacity = self.data.capacity();
-        let data = std::mem::replace(&mut self.data, Vec::with_capacity(capacity));
-        Some(data)
+        Some(std::mem::take(&mut self.data))
     }
 
     /// Advance the times of staged updates by the given `since`.
@@ -1680,6 +1699,7 @@ impl<D: Data> Stage<D> {
             // If the since is the empty frontier, discard all updates.
             self.log_length_diff(-self.ilen());
             self.data.clear();
+            self.bytes = 0;
             return;
         };
 
@@ -1690,12 +1710,13 @@ impl<D: Data> Stage<D> {
 
     /// Return the size of the stage, for use in metrics.
     ///
-    /// Note: We don't follow pointers here, so the returned `size` and `capacity` values are
-    /// under-estimates. That's fine as the stage should always be small.
+    /// Heap bytes owned by the staged updates are included. The vector's spare capacity counts
+    /// toward `capacity` only.
     fn get_size(&self) -> SizeMetrics {
+        let slack = self.data.capacity() - self.data.len();
         SizeMetrics {
-            size: self.data.len() * std::mem::size_of::<(D, Timestamp, Diff)>(),
-            capacity: self.data.capacity() * std::mem::size_of::<(D, Timestamp, Diff)>(),
+            size: self.bytes,
+            capacity: self.bytes + slack * std::mem::size_of::<(D, Timestamp, Diff)>(),
             allocations: 1,
         }
     }
@@ -1911,6 +1932,18 @@ mod tests {
             expected += 1;
         }
         assert_eq!(expected, count);
+    }
+
+    impl DataBytes for String {
+        fn data_bytes(&self) -> usize {
+            std::mem::size_of::<Self>() + self.len()
+        }
+    }
+
+    impl DataBytes for i64 {
+        fn data_bytes(&self) -> usize {
+            std::mem::size_of::<Self>()
+        }
     }
 
     fn sink_metrics() -> SinkMetrics {
