@@ -12,12 +12,16 @@
 use std::num::NonZeroI64;
 use std::time::Duration;
 
+use async_trait::async_trait;
+use bytes::Bytes;
 use mz_compute_types::dyncfgs::{
     PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
 };
 use mz_dyncfg::{ConfigUpdates, ConfigVal};
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastLossy;
 use mz_ore::metrics::MetricsRegistry;
+use mz_persist::location::{Blob, BlobMetadata, ExternalError};
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_repr::{Datum, Row, SqlScalarType};
@@ -50,7 +54,93 @@ pub(crate) struct CountedBlob {
     clients: Arc<PersistClientCache>,
 }
 
+/// Holds successful writes until the test has cancelled the upload.
+#[derive(Debug)]
+pub(crate) struct BlobWriteGate {
+    written: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+impl BlobWriteGate {
+    pub(crate) async fn wait_until_uploading(&self) {
+        // With one outstanding part, starting the second write proves the first add
+        // returned and StashUpload recorded ownership. Neither write can complete,
+        // so the second add stalls before the builder can reach a run merge.
+        tokio::time::timeout(Duration::from_secs(30), self.written.acquire_many(2))
+            .await
+            .expect("the upload must write two parts")
+            .expect("the write notification stays open")
+            .forget();
+    }
+
+    pub(crate) fn release(&self) {
+        self.release.close();
+    }
+}
+
+#[derive(Debug)]
+struct GatedBlob {
+    blob: Arc<dyn Blob>,
+    gate: Arc<BlobWriteGate>,
+}
+
+#[async_trait]
+impl Blob for GatedBlob {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        self.blob.get(key).await
+    }
+
+    async fn list_keys_and_metadata(
+        &self,
+        prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        self.blob.list_keys_and_metadata(prefix, f).await
+    }
+
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        self.blob.set(key, value).await?;
+        self.gate.written.add_permits(1);
+        let _ = self.gate.release.acquire().await;
+        Ok(())
+    }
+
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        self.blob.delete(key).await
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.blob.restore(key).await
+    }
+}
+
 impl CountedBlob {
+    /// A cancellation fixture that stalls an upload after real blob output and
+    /// before run merging. Ordinary counted uploads do not use this gate.
+    pub(crate) async fn with_gated_writes() -> (Self, Arc<BlobWriteGate>) {
+        let blob = Self::new();
+        let mut updates = ConfigUpdates::default();
+        updates.add_dynamic(
+            "persist_batch_builder_max_outstanding_parts",
+            ConfigVal::Usize(1),
+        );
+        updates.apply(blob.clients.cfg());
+        let gate = Arc::new(BlobWriteGate {
+            written: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        blob.clients
+            .intercept_blob_for_tests(PersistLocation::new_in_mem().blob_uri, |blob| {
+                Arc::new(GatedBlob {
+                    blob,
+                    gate: Arc::clone(&gate),
+                })
+            })
+            .await
+            .expect("the in-memory blob opens");
+        (blob, gate)
+    }
+
     /// A cache in which every row an upload takes becomes a part in blob storage.
     pub(crate) fn new() -> Self {
         Self::with_part_size(Some(0))

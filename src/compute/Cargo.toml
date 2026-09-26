@@ -60,7 +60,10 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 core_affinity.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
+bytes.workspace = true
 criterion.workspace = true
+mz-persist-client = { path = "../persist-client", features = ["test"] }
 mz-secrets = { path = "../secrets" }
 mz-storage-types = { path = "../storage-types", features = ["proptest"] }
 proptest.workspace = true
