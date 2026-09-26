@@ -92,6 +92,17 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  # Every module the roots pin requires helm < 2.18 and kubernetes < 2.39, and
+  # Terraform needs one provider version that satisfies the roots and all
+  # modules. Move these to a new major only together with a module tag that
+  # accepts it.
+  ignore:
+    - dependency-name: hashicorp/helm
+      update-types:
+        - version-update:semver-major
+    - dependency-name: hashicorp/kubernetes
+      update-types:
+        - version-update:semver-major
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:
