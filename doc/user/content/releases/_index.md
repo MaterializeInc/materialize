@@ -182,6 +182,13 @@ Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_repli
 - Fixed `mz_object_dependencies` omitting a sink's dependency on a user-defined type that the sink references through a `DOC ON TYPE` or `DOC ON COLUMN` option.
 - Fixed `mz-deploy compile` rejecting valid SQL with `precision for type numeric must be between 1 and 39` when a view aggregated a `bigint` or `uint8` column with `sum()` and another view in the project read it, and fixed declared `numeric(p, s)` columns being stubbed with the scale in the precision position.
 
+## v26.41.2
+*Released to Materialize Cloud: 2026-09-18* <br>
+*Released to Materialize Self-Managed: 2026-09-19* <br>
+
+### Bug Fixes {#v26.41.2-bug-fixes}
+- Fixed a security vulnerability in the `rustls` dependency (RUSTSEC-2026-0285), where TLS 1.3 handshake messages sent at the wrong encryption level were accepted rather than rejected.
+
 ## v26.41.0
 *Released to Materialize Cloud: 2026-09-10* <br>
 *Released to Materialize Self-Managed: 2026-09-11* <br>
