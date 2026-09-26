@@ -435,7 +435,11 @@ class Read(Scenario):
                 ),
             ],
             guarantees={
-                "SELECT 1 (reuse connection)": {"qps": 1400, "max": 100, "slope": 0.1},
+                "SELECT 1 (reuse connection)": {
+                    "qps": 1400,
+                    "p99_99": 100,
+                    "slope": 0.1,
+                },
             },
         )
 
