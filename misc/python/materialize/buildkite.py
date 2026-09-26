@@ -19,8 +19,6 @@ import yaml
 
 from materialize import git, spawn, ui
 
-T = TypeVar("T")
-
 
 class BuildkiteEnvVar(Enum):
     # environment
@@ -227,6 +225,9 @@ def notify_qa_team_about_failure(failure: str) -> None:
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
     )
+
+
+T = TypeVar("T")
 
 
 def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:

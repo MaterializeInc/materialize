@@ -1270,7 +1270,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"--- Random seed is {args.seed}")
 
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=args.runtime)
     ).timestamp()
 
     toxiproxy_start(c, args.jitter)
