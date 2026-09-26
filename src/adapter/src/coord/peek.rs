@@ -438,6 +438,7 @@ impl FastPathPlan {
 
 #[derive(Debug)]
 pub struct PlannedPeek {
+    pub catalog: Arc<crate::catalog::Catalog>,
     pub plan: PeekPlan,
     pub determination: TimestampDetermination,
     pub conn_id: ConnectionId,
@@ -730,6 +731,7 @@ impl crate::coord::Coordinator {
         max_returned_query_size: Option<u64>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let PlannedPeek {
+            catalog,
             plan: fast_path,
             determination,
             conn_id,
@@ -832,6 +834,7 @@ impl crate::coord::Coordinator {
                             });
                         }
                         return Ok(self.dispatch_query_peek(
+                            Arc::clone(&catalog),
                             client,
                             ctx_extra,
                             conn_id,
@@ -886,8 +889,9 @@ impl crate::coord::Coordinator {
                                 id: coll_id.to_string(),
                             });
                         }
-                        let metadata = client.collection_metadata(self.catalog(), coll_id)?;
+                        let metadata = client.collection_metadata(&catalog, coll_id)?;
                         return Ok(self.dispatch_query_peek(
+                            Arc::clone(&catalog),
                             client,
                             ctx_extra,
                             conn_id,
@@ -990,6 +994,7 @@ impl crate::coord::Coordinator {
                         );
                         let map_filter_project = mfp_to_safe_plan(mfp)?;
                         return Ok(self.dispatch_query_peek(
+                            Arc::clone(&catalog),
                             client,
                             ctx_extra,
                             conn_id,
@@ -1160,6 +1165,7 @@ impl crate::coord::Coordinator {
     /// the ordinary query peek path. Read holds must cover the chosen timestamp.
     fn dispatch_query_peek(
         &mut self,
+        catalog: Arc<crate::catalog::Catalog>,
         client: Arc<crate::query_client::QueryClient>,
         ctx_extra: &mut ExecuteContextGuard,
         conn_id: ConnectionId,
@@ -1189,7 +1195,7 @@ impl crate::coord::Coordinator {
         }
         let registration = client.register_peek(uuid);
         let peek = Peek {
-            catalog_position: self.catalog.planning_position(),
+            catalog_position: catalog.planning_position(),
             target: peek_target,
             result_desc,
             literal_constraints,
@@ -1216,7 +1222,6 @@ impl crate::coord::Coordinator {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let catalog = Arc::clone(&self.catalog);
         let commands = self.internal_cmd_tx.clone();
         let offset = finishing.offset;
         let limit = finishing.limit.map(usize::cast_from);
@@ -1612,6 +1617,7 @@ impl crate::coord::Coordinator {
     /// the necessary PlannedPeek structure.)
     pub(crate) async fn implement_slow_path_peek(
         &mut self,
+        catalog: Arc<crate::catalog::Catalog>,
         dataflow_plan: PeekDataflowPlan,
         determination: TimestampDetermination,
         finishing: RowSetFinishing,
@@ -1639,6 +1645,7 @@ impl crate::coord::Coordinator {
         let source_arity = intermediate_result_type.arity();
 
         let planned_peek = PlannedPeek {
+            catalog,
             plan: PeekPlan::SlowPath(dataflow_plan),
             determination,
             conn_id,
@@ -1686,6 +1693,7 @@ impl crate::coord::Coordinator {
     /// All errors (setup or execution) are sent through tx.
     pub(crate) async fn implement_copy_to(
         &mut self,
+        catalog: Arc<crate::catalog::Catalog>,
         df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
@@ -1744,9 +1752,13 @@ impl crate::coord::Coordinator {
                 .collect(),
             };
             match self.acquire_query_read_holds(&imports).await {
-                Ok(holds) => {
-                    self.start_query_sink(df_desc, compute_instance, target_replica, holds)
-                }
+                Ok(holds) => self.start_query_sink(
+                    Arc::clone(&catalog),
+                    df_desc,
+                    compute_instance,
+                    target_replica,
+                    holds,
+                ),
                 Err(error) => Err(error),
             }
         } else {

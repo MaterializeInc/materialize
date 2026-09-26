@@ -66,7 +66,7 @@ async fn test_peer_index_pending_installation() {
         CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
     };
     use mz_catalog::expr_cache::ExpressionCacheHandle;
-    use mz_postgres_util::{PostgresError, batch_execute, query, query_one, sql};
+    use mz_postgres_util::{batch_execute, query, query_one, sql};
 
     let test_case = async {
         let server = test_util::TestHarness::default().start().await;
@@ -223,25 +223,13 @@ async fn test_peer_index_pending_installation() {
             }
         }
 
-        // An ordinary metadata write observes the peer's content through the
-        // coordinator's production catalog CAS/follow path. If it discovers
-        // structural peer changes, retry the rejected DDL from a fresh snapshot.
-        loop {
-            match batch_execute(
-                &client,
-                sql!("COMMENT ON TABLE peer_input IS 'follow peer'"),
-            )
+        // Name resolution must see acknowledged peer definitions without a
+        // refresh-triggering DDL, including one that has no installable plan.
+        let pending_name: String = query_one(&client, sql!("SHOW CREATE INDEX peer_pending"), &[])
             .await
-            {
-                Ok(()) => break,
-                Err(PostgresError::Postgres(error))
-                    if error.code() == Some(&SqlState::T_R_SERIALIZATION_FAILURE) =>
-                {
-                    continue;
-                }
-                Err(error) => panic!("follow peer DDL: {error}"),
-            }
-        }
+            .unwrap()
+            .get(0);
+        assert_eq!(pending_name, "materialize.public.peer_pending");
         let names: Vec<String> = query(
             &client,
             sql!(

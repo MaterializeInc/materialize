@@ -198,6 +198,61 @@ async fn catalog_positions_use_actual_commit_upper() {
         progress
     );
     assert_eq!(opened.catalog.planning_position(), Some(position));
+
+    let first_value = catalog.system_config().max_connections() + 1;
+    let mut committed = Vec::new();
+    for value in [first_value, first_value + 1] {
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::UpdateSystemConfiguration {
+                    name: "max_connections".into(),
+                    value: OwnedVarInput::Flat(value.to_string()),
+                }],
+            )
+            .await
+            .expect("commit planning context");
+        committed.push(catalog.planning_position().expect("committed position"));
+    }
+    // A durable handle may have consumed beyond the requested prefix. Keeping
+    // that suffix buffered must not certify it as applied to this projection.
+    let error = opened
+        .catalog
+        .storage()
+        .await
+        .ensure_not_out_of_sync(committed[1].upper)
+        .await
+        .expect_err("two planning updates remain unapplied");
+    assert!(matches!(
+        error,
+        crate::durable::CatalogError::Durable(
+            crate::durable::DurableCatalogError::CatalogOutOfSync { .. }
+        )
+    ));
+    opened
+        .catalog
+        .sync_updates_through(committed[0].upper)
+        .await
+        .expect("apply only the requested prefix");
+    assert_eq!(opened.catalog.observed_position(), Some(committed[0]));
+    assert_eq!(opened.catalog.planning_position(), Some(committed[0]));
+    assert_eq!(
+        opened.catalog.system_config().max_connections(),
+        first_value
+    );
+    opened
+        .catalog
+        .sync_updates_through(committed[1].upper)
+        .await
+        .expect("apply the buffered suffix");
+    assert_eq!(opened.catalog.observed_position(), Some(committed[1]));
+    assert_eq!(
+        opened.catalog.system_config().max_connections(),
+        first_value + 1
+    );
     opened.catalog.expire().await;
     drop(snapshot);
     catalog.expire().await;

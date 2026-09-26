@@ -33,8 +33,7 @@ use std::time::{Duration, Instant};
 
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::{
-    FRONTEND_READ_THEN_WRITE, HYDRATION_HISTORY_COLLECTION_INTERVAL,
-    HYDRATION_HISTORY_RETENTION_PERIOD,
+    HYDRATION_HISTORY_COLLECTION_INTERVAL, HYDRATION_HISTORY_RETENTION_PERIOD,
 };
 use mz_catalog::builtin::{
     MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY,
@@ -55,7 +54,6 @@ use crate::catalog::Catalog;
 use crate::command::ExecuteResponse;
 use crate::coord::{Coordinator, Message};
 use crate::metrics::Metrics;
-use crate::peek_client::CoordinatorClient;
 use crate::session::Session;
 use crate::{AdapterError, PeekClient};
 
@@ -269,29 +267,10 @@ impl Coordinator {
     /// Assembles the sweep context, including the client it writes through.
     fn new_sweep(&self, catalog: Arc<Catalog>, retention: Duration) -> Sweep {
         let retention_ms = u64::try_from(retention.as_millis()).unwrap_or(u64::MAX);
-        let build_version = catalog.state().config().build_info.human_version(None);
         // Background read-then-write always uses the frontend OCC path. This
         // shared constructor field only controls session fallback, so the flag
         // does not gate history collection.
-        let client = PeekClient::new(
-            CoordinatorClient::Background {
-                tx: self.internal_cmd_tx.clone(),
-                metrics: self.metrics.clone(),
-            },
-            &catalog,
-            self.query_client
-                .is_none()
-                .then(|| Arc::clone(&self.controller.storage_collections)),
-            self.query_client.clone(),
-            Arc::clone(&self.transient_id_gen),
-            self.optimizer_metrics.clone(),
-            self.persist_client.clone(),
-            self.statement_logging.create_frontend(build_version),
-            Arc::clone(&self.occ_write_semaphore),
-            FRONTEND_READ_THEN_WRITE.get(self.catalog().system_config().dyncfgs()),
-            self.group_commit_tx.clone(),
-            self.read_only_controllers,
-        );
+        let client = self.background_peek_client(&catalog);
         Sweep {
             client,
             object_history_id: catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),

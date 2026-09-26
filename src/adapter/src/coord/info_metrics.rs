@@ -289,6 +289,7 @@ impl Coordinator {
                     Command::CatalogSnapshot {
                         tx,
                         include_durable_upper: false,
+                        through: None,
                     },
                 ));
                 // Bail if the coordinator has gone away.

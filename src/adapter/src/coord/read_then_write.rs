@@ -74,6 +74,7 @@ impl Coordinator {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_create_internal_subscribe(
         &mut self,
+        catalog: std::sync::Arc<crate::catalog::Catalog>,
         df_desc: crate::optimize::LirDataflowDescription,
         cluster_id: mz_compute_types::ComputeInstanceId,
         replica_id: Option<mz_cluster_client::ReplicaId>,
@@ -145,7 +146,9 @@ impl Coordinator {
             // an owner. Admission must not block the coordinator event loop.
             self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
                 .await;
-            if let Err(error) = self.start_query_sink(df_desc, cluster_id, replica_id, read_holds) {
+            if let Err(error) =
+                self.start_query_sink(catalog, df_desc, cluster_id, replica_id, read_holds)
+            {
                 self.remove_active_compute_sink(sink_id).await;
                 let _ = response_tx.send(Err(error));
                 return;

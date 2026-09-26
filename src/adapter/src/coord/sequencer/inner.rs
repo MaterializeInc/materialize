@@ -36,7 +36,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
-use mz_ore::task::{self, JoinHandle, spawn};
+use mz_ore::task::{self, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
 use mz_repr::adt::jsonb::Jsonb;
@@ -219,7 +219,10 @@ impl Coordinator {
         S: Staged + 'static,
         S::Ctx: Send + 'static,
     {
-        return_if_err!(stage.validity().check(self.catalog()), ctx);
+        if let Err(error) = stage.validity().check(self.catalog()) {
+            ctx.handle_error(error);
+            return;
+        }
         loop {
             let mut cancel_enabled = stage.cancel_enabled();
             if let Some(session) = ctx.session() {
@@ -248,11 +251,24 @@ impl Coordinator {
                 .stage(self, &mut ctx)
                 .instrument(parent_span.clone())
                 .await;
-            let res = return_if_err!(next, ctx);
+            let res = match next {
+                Ok(next) => next,
+                Err(error) => {
+                    ctx.handle_error(error);
+                    return;
+                }
+            };
             stage = match res {
                 StageResult::Handle(handle) => {
                     let internal_cmd_tx = self.internal_cmd_tx.clone();
                     self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, next| {
+                        let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
+                    });
+                    return;
+                }
+                StageResult::Await(future) => {
+                    let internal_cmd_tx = self.internal_cmd_tx.clone();
+                    self.handle_spawn(ctx, future, cancel_enabled, move |ctx, next| {
                         let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
                     });
                     return;
@@ -274,10 +290,12 @@ impl Coordinator {
 
     /// Waits for either the spawned stage work to complete or cancellation to
     /// be signaled through the connection-scoped cancel watch.
-    fn handle_spawn<C, T, F>(
+    /// Cancellation drops the supplied future, including its caller-chosen
+    /// ownership policy for any spawned work.
+    pub(crate) fn handle_spawn<C, T, F>(
         &self,
         ctx: C,
-        handle: JoinHandle<Result<T, AdapterError>>,
+        handle: impl Future<Output = Result<T, AdapterError>> + Send + 'static,
         cancel_enabled: bool,
         f: F,
     ) where
@@ -301,8 +319,10 @@ impl Coordinator {
         spawn(|| "sequence_staged", async move {
             tokio::select! {
                 res = handle => {
-                    let next = return_if_err!(res, ctx);
-                    f(ctx, next);
+                    match res {
+                        Ok(next) => f(ctx, next),
+                        Err(error) => ctx.handle_error(error),
+                    }
                 }
                 _ = rx, if cancel_enabled => {
                     ctx.retire(Err(AdapterError::Canceled));
@@ -2536,6 +2556,9 @@ impl Coordinator {
             }) => {
                 let stage = return_if_err!(
                     self.peek_validate(
+                        ctx.query_catalog()
+                            .cloned()
+                            .unwrap_or_else(|| self.owned_catalog()),
                         ctx.session(),
                         plan,
                         target_cluster,
@@ -2731,6 +2754,10 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
+        let catalog = ctx
+            .query_catalog()
+            .cloned()
+            .unwrap_or_else(|| self.owned_catalog());
         if ctx
             .session()
             .vars()
@@ -2756,9 +2783,24 @@ impl Coordinator {
             .selection
             .depends_on()
             .into_iter()
-            .map(|gid| self.catalog().resolve_item_id(&gid))
+            .map(|gid| catalog.resolve_item_id(&gid))
             .collect();
         source_ids.insert(plan.id);
+
+        // Replanning must not reacquire a partial lock set inside a transaction.
+        // A changed dependency set follows the existing lock-conflict boundary.
+        if ctx.query_replanned
+            && ctx
+                .session()
+                .transaction()
+                .write_locks()
+                .is_some_and(|locks| !locks.covers(source_ids.iter().copied()))
+        {
+            ctx.retire(Err(AdapterError::ChangedPlan(
+                "query dependencies changed while acquiring write locks".into(),
+            )));
+            return;
+        }
 
         // If the transaction doesn't already have write locks, acquire them.
         if ctx.session().transaction().write_locks().is_none() {
@@ -2814,7 +2856,8 @@ impl Coordinator {
 
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog().try_get_entry(&id) {
-            Some(table) => {
+            Some(_) => {
+                let table = catalog.get_entry(&id);
                 // Inserts always occur at the latest version of the table.
                 table
                     .relation_desc_latest()
@@ -2846,11 +2889,11 @@ impl Coordinator {
         let dependency_ids = selection
             .depends_on()
             .into_iter()
-            .map(|gid| self.catalog().resolve_item_id(&gid));
+            .map(|gid| catalog.resolve_item_id(&gid));
         let max_rw_dependencies =
-            READ_THEN_WRITE_MAX_DEPENDENCIES.get(self.catalog().system_config().dyncfgs());
+            READ_THEN_WRITE_MAX_DEPENDENCIES.get(catalog.system_config().dyncfgs());
         if let Err(err) = validate_read_then_write_dependencies(
-            self.catalog(),
+            &catalog,
             dependency_ids,
             max_rw_dependencies,
             DependencyPolicy::UserDml,
@@ -2862,6 +2905,9 @@ impl Coordinator {
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
         let statement_deadline = ctx.statement_deadline();
+        let query_timestamp = ctx.query_catalog_timestamp();
+        let query_replan = ctx.query_replan.clone();
+        let query_portal = ctx.query_portal.clone();
         let (tx, _, session, extra, response_barriers) = ctx.into_parts();
         // We construct a new execute context for the peek, with a trivial (`Default::default()`)
         // execution context, because this peek does not directly correspond to an execute,
@@ -2874,13 +2920,14 @@ impl Coordinator {
         // It's debatable whether this makes sense conceptually,
         // because the inner fragment here is not actually a
         // "statement" in its own right.
-        let peek_ctx = ExecuteContext::from_parts(
+        let mut peek_ctx = ExecuteContext::from_parts(
             peek_client_tx,
             self.internal_cmd_tx.clone(),
             session,
             Default::default(),
         )
         .with_statement_deadline(statement_deadline);
+        peek_ctx.set_query_catalog(Arc::clone(&catalog), query_timestamp);
 
         self.sequence_peek(
             peek_ctx,
@@ -2898,8 +2945,7 @@ impl Coordinator {
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
-        let catalog = self.owned_catalog();
-        let max_result_size = self.catalog().system_config().max_result_size();
+        let max_result_size = catalog.system_config().max_result_size();
 
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, session) = match peek_rx.await {
@@ -2916,7 +2962,7 @@ impl Coordinator {
                     session,
                     otel_ctx,
                 }) => {
-                    let ctx = ExecuteContext::from_parts_with_response_barriers(
+                    let mut ctx = ExecuteContext::from_parts_with_response_barriers(
                         tx,
                         internal_cmd_tx.clone(),
                         session,
@@ -2924,8 +2970,10 @@ impl Coordinator {
                         response_barriers,
                     )
                     .with_statement_deadline(statement_deadline);
+                    ctx.query_replan = query_replan;
+                    ctx.query_portal = query_portal;
                     otel_ctx.attach_as_parent();
-                    ctx.retire(Err(e));
+                    StagedContext::handle_error(ctx, e);
                     return;
                 }
                 // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
@@ -4487,11 +4535,12 @@ impl Coordinator {
     #[instrument]
     pub(super) fn sequence_execute(
         &self,
+        catalog: &crate::catalog::Catalog,
         session: &mut Session,
         plan: plan::ExecutePlan,
     ) -> Result<String, AdapterError> {
         // Verify the stmt is still valid.
-        Self::verify_prepared_statement(self.catalog(), session, &plan.name)?;
+        Self::verify_prepared_statement(catalog, session, &plan.name)?;
         let ps = session
             .get_prepared_statement_unverified(&plan.name)
             .expect("known to exist");

@@ -1730,6 +1730,13 @@ pub struct WriteLocks {
 }
 
 impl WriteLocks {
+    /// Whether the existing transaction locks cover all dependencies of a plan.
+    pub(crate) fn covers(&self, collections: impl IntoIterator<Item = CatalogItemId>) -> bool {
+        collections
+            .into_iter()
+            .all(|id| self.locks.contains_key(&id))
+    }
+
     /// Create a [`WriteLocksBuilder`] pre-defining all of the locks we need.
     ///
     /// When "finishing" the builder with [`WriteLocksBuilder::all_or_nothing`], if we haven't

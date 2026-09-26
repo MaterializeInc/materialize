@@ -878,7 +878,7 @@ impl Coordinator {
                             )
                         ) =>
                     {
-                        self.refresh_catalog_after_conflict().await?;
+                        self.refresh_catalog(None).await?;
                         if self.catalog().transient_revision() != planning_revision {
                             return Err(AdapterError::DDLTransactionRace);
                         }

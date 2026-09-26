@@ -115,6 +115,17 @@ impl Coordinator {
                     self.message_controller(m).boxed_local().await
                 }
             }
+            Message::ExecuteCatalogReady {
+                ctx,
+                continuation,
+                otel_ctx,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.execute_catalog_ready(ctx, continuation)
+                    .boxed_local()
+                    .await;
+            }
+            Message::ExecuteReplan(ctx) => self.replan_execute(ctx),
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
                     .boxed_local()

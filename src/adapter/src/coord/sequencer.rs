@@ -107,6 +107,25 @@ impl Coordinator {
         sql_impl_resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
         async move {
+            let query_catalog = match &plan {
+                Plan::Select(_)
+                | Plan::Subscribe(_)
+                | Plan::ShowColumns(_)
+                | Plan::ShowCreate(_)
+                | Plan::CopyFrom(_)
+                | Plan::ReadThenWrite(_)
+                | Plan::Insert(_)
+                | Plan::ExplainPlan(_)
+                | Plan::ExplainPushdown(_)
+                | Plan::ExplainTimestamp(_)
+                | Plan::Prepare(_)
+                | Plan::Declare(_)
+                | Plan::Execute(_) => ctx
+                    .query_catalog()
+                    .cloned()
+                    .unwrap_or_else(|| self.owned_catalog()),
+                _ => self.owned_catalog(),
+            };
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
@@ -118,14 +137,14 @@ impl Coordinator {
             // Check if we're still waiting for any of the builtin table appends from when we
             // started the Session to complete.
             if let Some((dependencies, wait_future)) =
-                super::appends::waiting_on_startup_appends(self.catalog(), ctx.session_mut(), &plan)
+                super::appends::waiting_on_startup_appends(&query_catalog, ctx.session_mut(), &plan)
             {
                 let conn_id = ctx.session().conn_id();
                 tracing::debug!(%conn_id, "deferring plan for startup appends");
 
                 let role_metadata = ctx.session().role_metadata().clone();
                 let validity =
-                    PlanValidity::new(&self.catalog, dependencies, None, None, role_metadata);
+                    PlanValidity::new(&query_catalog, dependencies, None, None, role_metadata);
                 let deferred_plan = DeferredPlan {
                     ctx,
                     plan,
@@ -151,7 +170,7 @@ impl Coordinator {
                 Some(cluster_id) => TargetCluster::Transaction(cluster_id),
                 // If there isn't a current cluster set for a transaction, then try to auto route.
                 None => {
-                    let session_catalog = self.catalog.for_session(ctx.session());
+                    let session_catalog = query_catalog.for_session(ctx.session());
                     catalog_serving::auto_run_on_catalog_server(
                         &session_catalog,
                         ctx.session(),
@@ -159,13 +178,11 @@ impl Coordinator {
                     )
                 }
             };
-            let (target_cluster_id, target_cluster_name) = match self
-                .catalog()
-                .resolve_target_cluster(target_cluster, ctx.session())
-            {
-                Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
-                Err(_) => (None, None),
-            };
+            let (target_cluster_id, target_cluster_name) =
+                match query_catalog.resolve_target_cluster(target_cluster, ctx.session()) {
+                    Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
+                    Err(_) => (None, None),
+                };
 
             if let (Some(cluster_id), Some(cluster_name), Some(statement_id)) = (
                 target_cluster_id,
@@ -175,7 +192,7 @@ impl Coordinator {
                 self.set_statement_execution_cluster(statement_id, cluster_id, cluster_name);
             }
 
-            let session_catalog = self.catalog.for_session(ctx.session());
+            let session_catalog = query_catalog.for_session(ctx.session());
 
             if let Some(cluster_name) = &target_cluster_name {
                 if let Err(e) = catalog_serving::check_cluster_restrictions(
@@ -435,7 +452,7 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CopyFrom(plan) => {
-                    self.sequence_copy_from(ctx, plan, target_cluster, Arc::clone(&self.catalog))
+                    self.sequence_copy_from(ctx, plan, target_cluster, Arc::clone(&query_catalog))
                         .await;
                 }
                 Plan::ExplainPlan(plan) => {
@@ -610,7 +627,7 @@ impl Coordinator {
                         ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)));
                     } else {
                         let state_revision = StateRevision {
-                            catalog_revision: self.catalog().transient_revision(),
+                            catalog_revision: query_catalog.transient_revision(),
                             session_state_revision: ctx.session().state_revision(),
                         };
                         ctx.session_mut().set_prepared_statement(
@@ -625,7 +642,7 @@ impl Coordinator {
                     }
                 }
                 Plan::Execute(plan) => {
-                    match self.sequence_execute(ctx.session_mut(), plan) {
+                    match self.sequence_execute(&query_catalog, ctx.session_mut(), plan) {
                         Ok(portal_name) => {
                             let (tx, _, session, extra, response_barriers) = ctx.into_parts();
                             // The obligation travels as data and

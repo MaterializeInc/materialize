@@ -34,6 +34,7 @@ impl Coordinator {
     /// holds pass to the query client, which retains them through each replica ACK.
     pub(crate) fn start_query_sink(
         &mut self,
+        catalog: Arc<crate::catalog::Catalog>,
         dataflow: DataflowDescription<LirRelationExpr>,
         cluster: ComputeInstanceId,
         target: Option<ReplicaId>,
@@ -61,7 +62,8 @@ impl Coordinator {
         if sink.query_execution_mut().is_some() {
             return Err(invalid("query sink execution already started"));
         }
-        let execution = self.spawn_query_sink(dataflow, cluster, target, creation_holds)?;
+        let execution =
+            self.spawn_query_sink(catalog, dataflow, cluster, target, creation_holds)?;
         *self
             .active_compute_sinks
             .get_mut(&id)
@@ -75,6 +77,7 @@ impl Coordinator {
     /// drops the query's exports when aborted.
     pub(super) fn spawn_query_sink(
         &self,
+        catalog: Arc<crate::catalog::Catalog>,
         dataflow: DataflowDescription<LirRelationExpr>,
         cluster: ComputeInstanceId,
         target: Option<ReplicaId>,
@@ -99,7 +102,6 @@ impl Coordinator {
             .as_of
             .clone()
             .ok_or_else(|| invalid("query sink requires as_of"))?;
-        let catalog = Arc::clone(&self.catalog);
         let tx = self.internal_cmd_tx.clone();
         Ok(mz_ore::task::spawn(
             || "query sink",

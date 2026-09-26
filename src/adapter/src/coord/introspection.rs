@@ -187,8 +187,10 @@ impl Coordinator {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
     ) {
-        let catalog = self.catalog().for_system_session();
-        let plan = spec.to_plan(&catalog).expect("valid spec");
+        let catalog = self.owned_catalog();
+        let plan = spec
+            .to_plan(&catalog.for_system_session())
+            .expect("valid spec");
 
         let role_metadata = RoleMetadata::new(MZ_SYSTEM_ROLE_ID);
         let dependencies = plan
@@ -206,6 +208,7 @@ impl Coordinator {
         );
 
         let stage = IntrospectionSubscribeStage::OptimizeMir(IntrospectionSubscribeOptimizeMir {
+            catalog,
             validity,
             plan,
             subscribe_id,
@@ -220,6 +223,7 @@ impl Coordinator {
         stage: IntrospectionSubscribeOptimizeMir,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
         let IntrospectionSubscribeOptimizeMir {
+            catalog,
             mut validity,
             plan,
             subscribe_id,
@@ -232,14 +236,18 @@ impl Coordinator {
             .expect("must exist");
         let (_, view_id) = self.allocate_transient_id();
 
-        let vars = self.catalog().system_config();
-        let overrides = self.catalog.get_cluster(cluster_id).config.features();
+        let vars = catalog.system_config();
+        let overrides = catalog.get_cluster(cluster_id).config.features();
         let optimizer_config = optimize::OptimizerConfig::from(vars)
             .override_from(&overrides)
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster_id),
+            );
 
         let mut optimizer = optimize::subscribe::Optimizer::new(
-            self.owned_catalog(),
+            std::sync::Arc::<crate::catalog::Catalog>::clone(&catalog),
             compute_instance,
             view_id,
             subscribe_id,
@@ -249,7 +257,6 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
-        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -265,6 +272,7 @@ impl Coordinator {
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {
+                            catalog,
                             validity,
                             optimizer,
                             global_mir_plan,
@@ -283,6 +291,7 @@ impl Coordinator {
         stage: IntrospectionSubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
         let IntrospectionSubscribeTimestampOptimizeLir {
+            catalog,
             validity,
             mut optimizer,
             global_mir_plan,
@@ -307,6 +316,7 @@ impl Coordinator {
                         optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
                     let stage = IntrospectionSubscribeStage::Finish(IntrospectionSubscribeFinish {
+                        catalog,
                         validity,
                         global_lir_plan,
                         read_holds,
@@ -324,6 +334,7 @@ impl Coordinator {
         stage: IntrospectionSubscribeFinish,
     ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
         let IntrospectionSubscribeFinish {
+            catalog,
             validity: _,
             global_lir_plan,
             read_holds,
@@ -338,8 +349,13 @@ impl Coordinator {
         if self.introspection_subscribes.contains_key(&subscribe_id) {
             let (df_desc, _df_meta) = global_lir_plan.unapply();
             if self.query_client.is_some() {
-                let execution =
-                    self.spawn_query_sink(df_desc, cluster_id, Some(replica_id), read_holds)?;
+                let execution = self.spawn_query_sink(
+                    catalog,
+                    df_desc,
+                    cluster_id,
+                    Some(replica_id),
+                    read_holds,
+                )?;
                 self.introspection_subscribes
                     .get_mut(&subscribe_id)
                     .expect("registered subscribe")

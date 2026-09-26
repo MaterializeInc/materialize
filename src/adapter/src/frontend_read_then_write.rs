@@ -128,7 +128,6 @@ use std::collections::BTreeSet;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use bytesize::ByteSize;
 use differential_dataflow::consolidation;
@@ -712,7 +711,8 @@ impl PeekClient {
     /// enabled. The caller owns the end-of-execution logging for
     /// `statement_logging_id` and verified and planned the portal against
     /// `catalog`, which stays in force through optimization and write-target
-    /// generation capture.
+    /// generation capture. `None` requests replanning before execution or session
+    /// transaction state has changed.
     pub(crate) async fn frontend_read_then_write(
         &mut self,
         session: &mut Session,
@@ -721,7 +721,7 @@ impl PeekClient {
         catalog: &Arc<Catalog>,
         statement_logging_id: Option<StatementLoggingId>,
         attempt_state: Arc<FrontendWriteAttemptState>,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
         self.read_then_write(
             session,
             plan,
@@ -771,7 +771,8 @@ impl PeekClient {
             Arc::new(FrontendWriteAttemptState::new()),
             RtwCaller::Background { replica_id },
         )
-        .await
+        .await?
+        .ok_or_else(|| AdapterError::ChangedPlan("background catalog context changed".into()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -784,7 +785,7 @@ impl PeekClient {
         statement_logging_id: Option<StatementLoggingId>,
         attempt_state: Arc<FrontendWriteAttemptState>,
         caller: RtwCaller,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
         // The OCC dataflow emits raw diffs and does not apply top-level
         // finishing. Silently dropping a LIMIT, OFFSET, projection or ordering
         // can change the rows written, so this stage requires trivial finishing.
@@ -860,11 +861,6 @@ impl PeekClient {
                 "read-then-write cannot be run inside a transaction block".into(),
             ));
         }
-
-        // Mark this as a write transaction in the session state machine, so
-        // auto-commit treats the statement as a write. The rows follow once we
-        // know them.
-        session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
 
         // Prepare expressions (resolve unmaterializable functions like
         // current_user())
@@ -961,6 +957,21 @@ impl PeekClient {
 
         let as_of = determination.timestamp_context.timestamp_or_default();
 
+        if catalog.observed_position().is_some()
+            && governing_timeline(&timeline) == Some(Timeline::EpochMilliseconds)
+        {
+            self.oracle_read_ts_at_least(Timeline::EpochMilliseconds, as_of)
+                .await?;
+            let current = self.catalog_snapshot_at(Arc::clone(catalog), as_of).await?;
+            if current.planning_position() != catalog.planning_position() {
+                return Ok(None);
+            }
+        }
+
+        // Mark the transaction only after catalog validation. A replan must not
+        // make an otherwise standalone write look like a subsequent statement.
+        session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
+
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
         let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
@@ -1042,6 +1053,7 @@ impl PeekClient {
 
         let subscribe_handle = self
             .create_internal_subscribe(
+                Arc::clone(catalog),
                 Box::new(df_desc),
                 cluster_id,
                 replica_id,
@@ -1213,7 +1225,7 @@ impl PeekClient {
 
         drop(permit);
 
-        response
+        response.map(Some)
     }
 
     /// Builds the subscribe optimizer and the unresolved global MIR plan for a
@@ -1350,45 +1362,8 @@ impl PeekClient {
             None => return Ok(()),
         };
 
-        // Cloned before `ensure_oracle` borrows `self` for the rest of this
-        // function. The handle is an `Arc` internally, so this is cheap.
-        let group_commit_notifier = self.group_commit_notifier.clone();
-        let oracle = self.ensure_oracle(tl).await?;
-
-        // The oracle advances only when a group commit applies, and an empty
-        // group commit is already the periodic keepalive. So when we have
-        // nothing to write ourselves, waiting for the next tick costs up to a
-        // full `default_timestamp_interval`. We ask for that commit instead of
-        // waiting for it, which also spares the oracle the ~1ms poll below
-        // running for the whole interval.
-        //
-        // Once per wait rather than once per poll. The committer never
-        // allocates a write timestamp above wall clock, so a far-future `as_of`
-        // cannot be reached by asking, and nudging per iteration would spin for
-        // as long as such a statement legitimately parks. That case pays one
-        // empty commit, which is what the keepalive would have done anyway.
-        let mut nudged = false;
-
-        loop {
-            let oracle_ts = oracle.read_ts().await;
-            if as_of <= oracle_ts {
-                return Ok(());
-            }
-
-            if !nudged {
-                group_commit_notifier.notify();
-                nudged = true;
-            }
-
-            // Sleep for roughly the difference between as_of and the current
-            // oracle timestamp. Since timestamps are epoch milliseconds, the
-            // difference is the approximate wall-clock time we need to wait.
-            // Cap at 1s to avoid very long sleeps if clocks are skewed,
-            // matching the cap in `message_linearize_reads`.
-            let wait_ms = u64::from(as_of.saturating_sub(oracle_ts));
-            let wait = Duration::from_millis(wait_ms).min(Duration::from_secs(1));
-            tokio::time::sleep(wait).await;
-        }
+        self.oracle_read_ts_at_least(tl, as_of).await?;
+        Ok(())
     }
 
     /// Submits frontier-independent diffs to group commit, which picks the
@@ -1447,6 +1422,7 @@ impl PeekClient {
     /// cleanup on drop.
     async fn create_internal_subscribe(
         &self,
+        catalog: Arc<Catalog>,
         df_desc: Box<optimize::LirDataflowDescription>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,
@@ -1460,6 +1436,7 @@ impl PeekClient {
     ) -> Result<SubscribeHandle, AdapterError> {
         let rx: mpsc::UnboundedReceiver<PeekResponseUnary> = self
             .call_coordinator(|tx| Command::CreateInternalSubscribe {
+                catalog,
                 df_desc,
                 cluster_id,
                 replica_id,
