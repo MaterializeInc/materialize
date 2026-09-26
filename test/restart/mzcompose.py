@@ -3046,6 +3046,34 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
     """
     c.up("materialized", Service("testdrive_no_reset", idle=True))
 
+    def await_index(table: str) -> None:
+        # MV planning may use storage until an index is observed readable.
+        # Establish the intended access path before committing its physical plan.
+        deadline = time.monotonic() + 45
+        with c.sql_connection(startup_params={"statement_timeout": "20s"}) as conn:
+            with conn.cursor() as cursor:
+                while True:
+                    cursor.execute(
+                        f"EXPLAIN TIMESTAMP AS JSON FOR SELECT y FROM {table}"
+                    )
+                    [(raw,)] = cursor.fetchall()
+                    explanation = json.loads(raw)
+                    if any(
+                        source["name"].startswith(f"materialize.public.{table}_y_idx (")
+                        and source["name"].endswith(", compute)")
+                        and source["read_frontier"]
+                        and source["write_frontier"]
+                        for source in explanation["sources"]
+                    ):
+                        cursor.execute(f"SELECT y FROM {table}")
+                        cursor.fetchall()
+                        return
+                    if time.monotonic() >= deadline:
+                        raise UIError(
+                            f"index for {table} is not readable: {explanation}"
+                        )
+                    time.sleep(0.2)
+
     def depends_on(c: Composition, obj_name: str, dep_name: str, expected: bool):
         """Check whether `(obj_name, dep_name)` is a compute dependency or not."""
         c.testdrive(
@@ -3098,13 +3126,25 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
             > CREATE TABLE t2(y int, z int);
 
             > CREATE INDEX ON t1(y);
+            """),
+    )
+    await_index("t1")
 
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent("""
             > CREATE VIEW v1 AS SELECT * FROM t1 JOIN t2 USING (y);
             > CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v1;
             > CREATE INDEX ix1 ON v1(x);
 
             > CREATE INDEX ON t2(y);
+            """),
+    )
+    await_index("t2")
 
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent("""
             > CREATE VIEW v2 AS SELECT * FROM t2 JOIN t1 USING (y);
             > CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM v2;
             > CREATE INDEX ix2 ON v2(x);
