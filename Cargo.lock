@@ -7225,7 +7225,7 @@ dependencies = [
 
 [[package]]
 name = "mz-deploy"
-version = "0.7.0"
+version = "26.44.0-dev.0"
 dependencies = [
  "annotate-snippets",
  "async-stream",
@@ -7261,6 +7261,7 @@ dependencies = [
  "reqwest 0.12.28",
  "ropey",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
