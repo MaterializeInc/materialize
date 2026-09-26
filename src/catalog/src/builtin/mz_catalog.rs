@@ -2855,7 +2855,7 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(||
             ),
             (
                 "object_type",
-                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
+                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `standing-query`, `system`, `table`, `type`, or `view`.",
             ),
             (
                 "details",

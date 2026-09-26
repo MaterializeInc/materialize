@@ -487,6 +487,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_object_global_ids",
         ),
+        // The mz_audit_events MV gained a `standing-query` arm in its object_type
+        // CASE, changing its SQL fingerprint. See the NOTE above: this version must
+        // stay at the workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.45.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
+        ),
     ]
 });
 
