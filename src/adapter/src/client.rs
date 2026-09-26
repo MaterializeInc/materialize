@@ -861,13 +861,11 @@ impl SessionClient {
         // statement discards an earlier cancellation. Replanning, fallback, and
         // cursor execution inside FETCH must retain an in-flight request.
         let conn_id = self.session().conn_id().clone();
-        let timeout = *self.session().vars().statement_timeout();
-        let expires = (!timeout.is_zero())
-            .then_some(timeout)
-            .and_then(|timeout| execute_started.checked_add(timeout));
+        // Admission is cancellable, but statement_timeout belongs to the
+        // operations that enforce it, not to every statement entering here.
         let mut connection_cancel = crate::util::run_cancellable(
             cancel_future.clone(),
-            expires,
+            None,
             self.peek_client
                 .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
                     conn_id,

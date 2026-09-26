@@ -98,14 +98,12 @@ impl PeekClient {
             }
         }
 
-        let timeout = *session.vars().statement_timeout();
-        let expires = (!timeout.is_zero())
-            .then_some(timeout)
-            .and_then(|timeout| execute_started.checked_add(timeout));
+        // Catalog certification is shared by statements with different timeout
+        // policies. Keep it cancellable without imposing an execution deadline.
         let diagnostic_cancel = diagnostic_cancel.boxed().shared();
         let (mut catalog, mut catalog_read_ts) = crate::util::run_cancellable(
             diagnostic_cancel.clone(),
-            expires,
+            None,
             self.fresh_catalog_snapshot("try_frontend_peek"),
         )
         .await?;
@@ -223,7 +221,7 @@ impl PeekClient {
                     &params,
                     logging,
                     diagnostic_cancel.clone(),
-                    expires,
+                    execute_started,
                 )
                 .await?;
             if response.is_some() {
@@ -233,7 +231,7 @@ impl PeekClient {
             // definition prefix requires planning again, not replaying old work.
             (catalog, catalog_read_ts) = crate::util::run_cancellable(
                 diagnostic_cancel.clone(),
-                expires,
+                None,
                 self.fresh_catalog_snapshot("replan frontend peek"),
             )
             .await?;
@@ -258,7 +256,7 @@ impl PeekClient {
         params: &Params,
         logging: &mut ExecutionLogging,
         diagnostic_cancel: impl std::future::Future<Output = ()> + Send + Clone,
-        expires: Option<std::time::Instant>,
+        execute_started: std::time::Instant,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -759,7 +757,7 @@ impl PeekClient {
                     && *timestamp > validated_at
                 {
                     let current =
-                        crate::util::run_cancellable(diagnostic_cancel.clone(), expires, async {
+                        crate::util::run_cancellable(diagnostic_cancel.clone(), None, async {
                             self.oracle_read_ts_at_least(Timeline::EpochMilliseconds, *timestamp)
                                 .await?;
                             self.catalog_snapshot_at(Arc::clone(&catalog), *timestamp)
@@ -1361,6 +1359,10 @@ impl PeekClient {
                     // Diagnostic work has not dispatched a peek. It can stop on
                     // disconnect, cancellation, or the original execution budget
                     // without abandoning an executing query.
+                    let timeout = *session.vars().statement_timeout();
+                    let expires = (!timeout.is_zero())
+                        .then_some(timeout)
+                        .and_then(|timeout| execute_started.checked_add(timeout));
                     let observe = async {
                         Ok(client
                             .explain_timestamp(
