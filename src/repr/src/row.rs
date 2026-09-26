@@ -792,7 +792,7 @@ impl<'a> IntoIterator for &'a RowRef {
     type IntoIter = DatumListIter<'a>;
 
     fn into_iter(self) -> DatumListIter<'a> {
-        DatumListIter { data: &self.0 }
+        self.iter()
     }
 }
 
@@ -1368,9 +1368,6 @@ assert_consecutive!(
 // --------------------------------------------------------------------------------
 // reading data
 
-/// Read a byte slice starting at byte `offset`.
-///
-/// Updates `offset` to point to the first byte after the end of the read region.
 /// Splits the encoding of a row into its row-level error, if any, and its datums.
 ///
 /// Readers of raw row bytes, such as arrangement containers, call this before decoding datums.
@@ -1385,6 +1382,9 @@ pub fn split_row_error(data: &[u8]) -> (Option<DatumError<'_>>, &[u8]) {
     }
 }
 
+/// Read a byte slice starting at byte `offset`.
+///
+/// Updates `offset` to point to the first byte after the end of the read region.
 fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
     let len = u64::from_le_bytes(read_byte_array(data));
     let len = usize::cast_from(len);

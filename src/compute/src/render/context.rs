@@ -52,13 +52,15 @@ use timely::progress::{Antichain, Timestamp};
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
-use crate::render::columnar::{ColCollection, flat_map_datums};
+use crate::render::columnar::{ColCollection, columnar_to_vec, flat_map_datums, vec_to_columnar};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
 use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
+use mz_timely_util::operator::CollectionExt;
+use timely::container::CapacityContainerBuilder;
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -1103,32 +1105,35 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         (stream.as_collection(), errors)
     }
 
-    /// Elevates cell-scoped errors in the unarranged collection to collection-scoped errors.
+    /// Elevates row-level errors and error datums in the unarranged collection to
+    /// collection-scoped errors.
     ///
-    /// Operators that read rows without defining semantics for error datums call this on their
-    /// input. The result contains no error datums.
+    /// Operators that read rows without defining semantics for either call this on their input.
+    /// A row reports its row-level error first, then its first error datum in column order, like
+    /// every other boundary. The result contains neither.
     pub fn elevate_cell_errors(
         &self,
     ) -> (
         ColCollection<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
-        let (stream, errors) = self.flat_map::<ConsolidatingColumnBuilder<Row, T, Diff>, _>(
-            None,
-            usize::MAX,
-            move |row_datums, time, diff, ok_session, err_session| {
-                match EvalError::elevate(row_datums.iter().copied()) {
-                    Ok(()) => {
-                        let mut row_builder = SharedRow::get();
-                        row_builder.packer().extend(row_datums.iter());
-                        ok_session.give((row_builder.clone(), time, diff));
-                    }
-                    Err(e) => err_session.give((e.into(), time, diff)),
+        let (oks, errs) = self
+            .collection
+            .clone()
+            .expect("Invariant violated: CollectionBundle contains no collection.");
+        type CB<C> = CapacityContainerBuilder<C>;
+        let (oks, elevated) = columnar_to_vec(oks).map_fallible::<CB<_>, CB<_>, _, _, _>(
+            "ElevateCellErrors",
+            |row: Row| {
+                if let Some(error) = row.row_error() {
+                    return Err(DataflowErrorSer::from(EvalError::from_datum_error(error)));
                 }
-                1
+                EvalError::elevate(row.iter())
+                    .map(|()| row)
+                    .map_err(DataflowErrorSer::from)
             },
         );
-        (stream.as_collection(), errors)
+        (vec_to_columnar(oks), errs.concat(elevated))
     }
     pub fn ensure_collections(
         mut self,

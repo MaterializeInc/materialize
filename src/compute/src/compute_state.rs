@@ -720,8 +720,10 @@ impl<'a> ActiveComputeState<'a> {
         // `handle_update_configuration`, so flipping the flag does not retroactively change this
         // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global and a replica process
         // hosts a single instance, so this single store covers all of the replica's arrangements.
+        // Cell-scoped errors win over compression: the codec encodes datums, and a row-level error
+        // is not one, so a compressed container cannot hold a tainted row.
         mz_row_spine::DICTIONARY_COMPRESSION.store(
-            config.arrangement_dictionary_compression,
+            config.arrangement_dictionary_compression && !config.cell_errors,
             std::sync::atomic::Ordering::Relaxed,
         );
 

@@ -277,6 +277,13 @@ impl Coordinator {
             ..
         } = &plan;
 
+        // Only a cluster with cell-scoped errors produces rows that carry errors.
+        if plan.inline_errors && !self.catalog().get_cluster(cluster_id).config.cell_errors() {
+            return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "INLINE ERRORS requires a cluster created with cell-scoped errors"
+            )));
+        }
+
         // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(cluster_id)

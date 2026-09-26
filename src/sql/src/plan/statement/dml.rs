@@ -1574,6 +1574,14 @@ pub fn describe_subscribe(
     } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
     let inline_errors = inline_errors.unwrap_or(false);
+    if inline_errors
+        && matches!(
+            stmt.output,
+            SubscribeOutput::EnvelopeUpsert { .. } | SubscribeOutput::EnvelopeDebezium { .. }
+        )
+    {
+        sql_bail!("INLINE ERRORS is not supported with ENVELOPE UPSERT or ENVELOPE DEBEZIUM");
+    }
     let mut desc = RelationDesc::builder().with_column(
         "mz_timestamp",
         SqlScalarType::Numeric {

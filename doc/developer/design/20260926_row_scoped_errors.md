@@ -56,7 +56,8 @@ A header is found by reading one byte, whatever prefix a reader decodes.
 The header is lost wherever a row's datums are repacked into a new row, so repacking code carries it over explicitly: MFP output, arrangement values, and join key preparation.
 Code that decodes a row for MFP evaluation appends the row-level error as an error datum after the decoded columns, where `SafeMfpPlan::evaluate_inner_scoped` expects it at index `input_arity`.
 Join closures append the greater row-level error of the two matched sides instead.
-Durable encodings refuse rows with a row-level error, and dictionary compression refuses to encode them.
+Durable encodings refuse rows with a row-level error.
+Dictionary compression encodes datums and cannot hold a row-level error, so a replica with cell-scoped errors does not compress its arrangements.
 
 The payload is one `EvalError`.
 When two errors meet on one row, the payload is the `max` of the two under `EvalError`'s derived order, the combiner scalar `AND` already uses.
@@ -221,7 +222,7 @@ Payload redaction, peek opt-in, and the presentation policy can wait.
 ## Open questions
 
 * Threshold in the prototype treats tainted and ok copies of a row as different values, so `A EXCEPT B` with an ok row in `A` and a tainted copy in `B` returns the row without a taint, where the interval rule returns it tainted.
-* Dictionary compression of arrangements cannot hold a row-level error.
+* Cell-scoped clusters give up dictionary compression of arrangements, which cannot hold a row-level error.
 * Whether to include the producing operator in the payload, so that independent errors do not cancel under `EXCEPT ALL`.
 * `FoldConstants` must leave a `Join` unfolded when a constant input has an error datum in an equivalence column, as it does for an erroring `Map`.
 * A mechanized model of the tagged collection, with the new `AND` order, proving filter fusion, pushdown across joins, and the threshold rule against an enumeration of resolutions.

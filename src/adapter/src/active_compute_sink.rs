@@ -256,6 +256,11 @@ impl ActiveSubscribe {
                 }
             }
 
+            // Fill in the mz_error column.
+            if self.inline_errors {
+                packer.push(Datum::Null);
+            }
+
             let bytes = row_buf.byte_len();
             let row_iter = Box::new(row_buf.into_row_iter());
             self.send(PeekResponseUnary::Rows(row_iter), bytes);
