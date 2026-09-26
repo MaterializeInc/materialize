@@ -533,8 +533,13 @@ impl Coordinator {
             )
             .await?;
 
-        let validation =
-            self.validate_query_catalog(ctx, &determination, &plan.when, !fixed_timestamp);
+        let validation = self.validate_query_catalog(
+            ctx,
+            &determination,
+            &plan.when,
+            !fixed_timestamp,
+            (&explain_ctx).into(),
+        );
         let stage = Box::new(PeekStage::TimestampValidated(PeekStageTimestampValidated {
             read_holds,
             stage: PeekStageOptimize {

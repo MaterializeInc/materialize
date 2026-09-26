@@ -43,6 +43,17 @@ contains:Invalid data in source, saw retractions (2) for row that does not exist
 
 > CREATE DEFAULT INDEX ON topk;
 
+# Exercise the maintained, non-monotonic operator, not a one-shot SELECT's
+# monotonic rendering while the index is still being installed.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+    WHERE i.name = 'topk_primary_idx' AND f.read_frontier IS NOT NULL
+  )
+true
+
 ! SELECT * from topk;
 contains:Negative multiplicities in TopK
 
@@ -64,6 +75,16 @@ contains:Non-positive accumulation in ReduceInaccumulable
 
 > CREATE DEFAULT INDEX ON max_data;
 
+# Wait for the maintained, non-monotonic reduction to be available.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+    WHERE i.name = 'max_data_primary_idx' AND f.read_frontier IS NOT NULL
+  )
+true
+
 ! SELECT * FROM max_data;
 contains:Invalid data in source, saw non-positive accumulation
 
@@ -82,6 +103,16 @@ contains:Invalid data in source, saw non-positive accumulation
     GROUP BY data;
 
 > CREATE DEFAULT INDEX ON collation;
+
+# The broad error match below must still exercise the maintained collation plan.
+> SELECT EXISTS (
+    SELECT 1
+    FROM mz_internal.mz_frontiers AS f
+    JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = f.object_id
+    JOIN mz_catalog.mz_indexes AS i ON i.id = g.id
+    WHERE i.name = 'collation_primary_idx' AND f.read_frontier IS NOT NULL
+  )
+true
 
 ! SELECT * FROM collation;
 # Case-insensitive match for both 'Non' and 'non'

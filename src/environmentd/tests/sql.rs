@@ -4241,6 +4241,15 @@ async fn test_explain_timestamp_blocking() {
 
     let mv_timestamp = get_explain_timestamp("const_mv", &client).await;
 
+    // A plan's hypothetical timestamp must not make EXPLAIN wait for the refresh.
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        client.query("EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM const_mv", &[]),
+    )
+    .await
+    .expect("EXPLAIN must not wait for a future refresh")
+    .unwrap();
+
     let row = client
         .query_one("SELECT mz_now()::text;", &[])
         .await

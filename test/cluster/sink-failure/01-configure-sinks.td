@@ -7,21 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
-
 > DROP SOURCE IF EXISTS mz_source CASCADE;
 > DROP SECRET IF EXISTS pgpass CASCADE;
-
-> CREATE CLUSTER storage REPLICAS (
-    r1 (
-      STORAGECTL ADDRESSES ['clusterd1:2100'],
-      STORAGE ADDRESSES ['clusterd1:2103'],
-      COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      COMPUTE ADDRESSES ['clusterd1:2102'],
-      WORKERS 4
-    )
-  )
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);

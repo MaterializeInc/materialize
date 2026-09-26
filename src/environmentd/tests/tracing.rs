@@ -35,6 +35,7 @@ async fn test_expected_spans() {
         ("peek_explain_plan", "EXPLAIN SELECT 1"),
     ];
 
+    eprintln!("test_expected_spans: starting server");
     let server = test_util::TestHarness::default()
         .with_enable_tracing(true)
         .with_capture(storage.clone())
@@ -45,13 +46,16 @@ async fn test_expected_spans() {
     // This test checks for specific functions of the old peek sequencing, so we disable the new
     // peek sequencing for now.
     // TODO(peek-seq): Modify the test to check for the new peek sequencing instead of the old one.
+    eprintln!("test_expected_spans: configuring sequencing");
     server
         .disable_feature_flags(&["enable_frontend_peek_sequencing"])
         .await;
 
+    eprintln!("test_expected_spans: connecting");
     let client = server.connect().await.unwrap();
 
     // Assert that there are no expected spans.
+    eprintln!("test_expected_spans: checking initial capture");
     {
         let storage = storage.lock();
         for (name, _) in tests {
@@ -63,10 +67,13 @@ async fn test_expected_spans() {
         }
     }
 
-    for (_, sql) in tests {
+    for (name, sql) in tests {
+        eprintln!("test_expected_spans: executing {name}: {sql}");
         client.batch_execute(sql).await.unwrap();
+        eprintln!("test_expected_spans: completed {name}");
     }
 
+    eprintln!("test_expected_spans: checking generated spans");
     {
         let storage = storage.lock();
         for (name, _) in tests {
@@ -83,6 +90,7 @@ async fn test_expected_spans() {
             assert_eq!(stat.is_closed, true, "{name}: {stat:?}");
         }
     }
+    eprintln!("test_expected_spans: assertions complete");
 }
 
 // Test that secrets are not leaked in tracing. Send many kinds of queries that should execute many

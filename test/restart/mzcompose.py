@@ -29,6 +29,7 @@ from psycopg.errors import (
     InternalError_,
     OperationalError,
 )
+from psycopg.sql import SQL, Identifier
 from urllib3.exceptions import ReadTimeoutError
 
 from materialize import MZ_ROOT, buildkite
@@ -746,20 +747,37 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM
-
+            """),
+    )
+    # A same-generation restart can leave the predecessor eligible for Kafka
+    # until the five-minute incarnation grace elapses.
+    c.testdrive(
+        service="testdrive_no_reset",
+        args=["--default-timeout=420s"],
+        input=dedent("""
             $ kafka-verify-topic sink=materialize.public.kafka_sink
             """),
     )
 
     # Fill mz_source_status_history and mz_sink_status_history up with enough events
-    for i in range(5):
-        c.testdrive(
-            service="testdrive_no_reset",
-            input=dedent("""
-                > ALTER CONNECTION kafka_conn SET (BROKER = 'kafka:9093') WITH (VALIDATE = false);
-                > ALTER CONNECTION kafka_conn SET (BROKER = 'kafka:9092') WITH (VALIDATE = true);
-                """),
-        )
+    for _ in range(5):
+        for broker, validate in (("kafka:9093", "false"), ("kafka:9092", "true")):
+            [(source_rows, sink_rows)] = c.sql_query("""
+                SELECT (SELECT COUNT(*) FROM mz_internal.mz_source_status_history),
+                       (SELECT COUNT(*) FROM mz_internal.mz_sink_status_history)
+            """)
+            # Observe enactment before replacing the configuration again. Both
+            # endpoints are healthy, so coalescing changes need not add history.
+            c.testdrive(
+                service="testdrive_no_reset",
+                input=dedent(f"""
+                    > ALTER CONNECTION kafka_conn SET (BROKER = '{broker}') WITH (VALIDATE = {validate});
+                    > SELECT COUNT(*) > {source_rows} FROM mz_internal.mz_source_status_history;
+                    true
+                    > SELECT COUNT(*) > {sink_rows} FROM mz_internal.mz_sink_status_history;
+                    true
+                    """),
+            )
 
     # Verify that we have enough events so that they can be truncated
     c.testdrive(
@@ -785,7 +803,13 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
         input=dedent("""
             > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
             14
-
+            """),
+    )
+    # New sink execution contributes its starting/running rows after takeover.
+    c.testdrive(
+        service="testdrive_no_reset",
+        args=["--default-timeout=420s"],
+        input=dedent("""
             > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7
             """),
@@ -2535,6 +2559,48 @@ def workflow_catalog_publication_measurement(
                 "catalog_and_persist_series": counters,
             }
         end = time.monotonic()
+        shard_samples = {}
+        for name, shard in shards.items():
+            try:
+                shard_samples[name] = _catalog_protection_metrics(response.text, shard)
+            except AssertionError:
+                # Preserve the failing scrape and a bounded view of its lifetime.
+                # Follow-up observations are diagnostics, never substitute results.
+                observed = response
+                scrape_start, scrape_end = start, environmentd_end
+                for attempt in range(3):
+                    print(
+                        json.dumps(
+                            {
+                                "metric_failure_endpoint": response.url,
+                                "collection": name,
+                                "shard": shard,
+                                "diagnostic_sample": attempt,
+                                "scrape_start": scrape_start,
+                                "scrape_end": scrape_end,
+                                "series": [
+                                    line
+                                    for line in observed.text.splitlines()
+                                    if line.startswith("mz_persist_shard_")
+                                    and f'shard="{shard}"' in line
+                                ],
+                            }
+                        ),
+                        flush=True,
+                    )
+                    if attempt < 2:
+                        time.sleep(1)
+                        try:
+                            scrape_start = time.monotonic()
+                            observed = requests.get(response.url, timeout=2)
+                            scrape_end = time.monotonic()
+                            observed.raise_for_status()
+                        except requests.RequestException as error:
+                            print(
+                                f"Follow-up metrics scrape failed: {error}", flush=True
+                            )
+                            break
+                raise
         return {
             "start": start,
             "end": end,
@@ -2549,10 +2615,7 @@ def workflow_catalog_publication_measurement(
             "catalog_committed_updates": _catalog_committed_update_metrics(
                 response.text
             ),
-            "shards": {
-                name: _catalog_protection_metrics(response.text, shard)
-                for name, shard in shards.items()
-            },
+            "shards": shard_samples,
         }
 
     def catalog_bounds(timeout: float | tuple[float, float] | None = None) -> dict:
@@ -3054,7 +3117,9 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
             with conn.cursor() as cursor:
                 while True:
                     cursor.execute(
-                        f"EXPLAIN TIMESTAMP AS JSON FOR SELECT y FROM {table}"
+                        SQL("EXPLAIN TIMESTAMP AS JSON FOR SELECT y FROM {}").format(
+                            Identifier(table)
+                        )
                     )
                     [(raw,)] = cursor.fetchall()
                     explanation = json.loads(raw)
@@ -3065,7 +3130,9 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
                         and source["write_frontier"]
                         for source in explanation["sources"]
                     ):
-                        cursor.execute(f"SELECT y FROM {table}")
+                        cursor.execute(
+                            SQL("SELECT y FROM {}").format(Identifier(table))
+                        )
                         cursor.fetchall()
                         return
                     if time.monotonic() >= deadline:
@@ -3444,7 +3511,7 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
             Materialized(
                 deploy_generation=1,
                 sanity_restart=False,
-                system_parameter_defaults={
+                additional_system_parameter_defaults={
                     "enable_catalog_read_protection": str(protected).lower(),
                 },
             )
@@ -3659,7 +3726,9 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
                 deploy_generation=2,
                 sanity_restart=False,
                 restart="on-failure",
-                system_parameter_defaults={"enable_catalog_read_protection": "true"},
+                additional_system_parameter_defaults={
+                    "enable_catalog_read_protection": "true"
+                },
             )
         ):
             c.up("materialized")

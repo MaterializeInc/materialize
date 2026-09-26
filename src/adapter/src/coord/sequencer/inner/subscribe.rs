@@ -426,7 +426,13 @@ impl Coordinator {
             )
             .await?;
 
-        let validation = self.validate_query_catalog(ctx, &determination, &stage.plan.when, true);
+        let validation = self.validate_query_catalog(
+            ctx,
+            &determination,
+            &stage.plan.when,
+            true,
+            (&stage.explain_ctx).into(),
+        );
         let next = Box::new(SubscribeStage::TimestampValidated(
             SubscribeTimestampValidated {
                 stage,

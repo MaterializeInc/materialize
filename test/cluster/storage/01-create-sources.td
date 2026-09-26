@@ -7,11 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
-ALTER SYSTEM SET storage_statistics_collection_interval = 1000
-ALTER SYSTEM SET storage_statistics_interval = 2000
-
 # Create sources and verify they can ingest data while `environmentd` is online.
 
 $ kafka-create-topic topic=remote1
@@ -21,16 +16,6 @@ $ kafka-ingest format=bytes topic=remote1
 one
 $ kafka-ingest format=bytes topic=remote2
 one
-
-> CREATE CLUSTER storage_cluster REPLICAS (
-    r1 (
-      STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-      STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-      COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-      COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-      WORKERS 4
-    )
-  )
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);

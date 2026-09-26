@@ -152,33 +152,9 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    with c.override(
-        Clusterd(
-            name="clusterd1",
-            workers=2,
-            process_names=["clusterd1", "clusterd2"],
-        ),
-        Clusterd(
-            name="clusterd2",
-            workers=2,
-            process_names=["clusterd1", "clusterd2"],
-        ),
-        Clusterd(
-            name="clusterd3",
-            workers=2,
-            process_names=["clusterd3", "clusterd4"],
-        ),
-        Clusterd(
-            name="clusterd4",
-            workers=2,
-            process_names=["clusterd3", "clusterd4"],
-        ),
-    ):
+    with ExitStack() as stack:
         c.up("kafka", "schema-registry", "localstack")
         c.up("materialized")
-
-        # Create a cluster and verify that tests pass.
-        c.up("clusterd1", "clusterd2")
 
         # Make sure cluster1 is owned by the system so it doesn't get dropped
         # between testdrive runs.
@@ -202,12 +178,29 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             user="mz_system",
         )
 
+        catalog_options = native_catalog_options(c)
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+        for name in ("clusterd1", "clusterd2"):
+            stack.enter_context(
+                c.override(
+                    Clusterd(
+                        name=name,
+                        workers=2,
+                        process_names=["clusterd1", "clusterd2"],
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                )
+            )
+        c.up("clusterd1", "clusterd2")
         c.run_testdrive_files(*args.glob)
 
         # Add a replica to that cluster and verify that tests still pass.
-        c.up("clusterd3")
-        c.up("clusterd4")
-
         c.sql(
             """
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
@@ -222,6 +215,25 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             port=6877,
             user="mz_system",
         )
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'cluster1' AND r.name = 'replica2'""")
+        for name in ("clusterd3", "clusterd4"):
+            stack.enter_context(
+                c.override(
+                    Clusterd(
+                        name=name,
+                        workers=2,
+                        process_names=["clusterd3", "clusterd4"],
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                )
+            )
+        c.up("clusterd3", "clusterd4")
         c.run_testdrive_files(*args.glob)
 
         # Kill one of the nodes in the first replica of the compute cluster and
@@ -1628,26 +1640,53 @@ def workflow_test_upsert(c: Composition) -> None:
 def workflow_test_remote_storage(c: Composition) -> None:
     """Test creating sources in a remote clusterd process."""
 
-    with c.override(
-        Testdrive(no_reset=True, consistent_seed=True),
-        Clusterd(
-            name="clusterd1",
-            workers=4,
-            process_names=["clusterd1", "clusterd2"],
+    with (
+        c.override(
+            Testdrive(no_reset=True, consistent_seed=True),
         ),
-        Clusterd(
-            name="clusterd2",
-            workers=4,
-            process_names=["clusterd1", "clusterd2"],
-        ),
+        ExitStack() as stack,
     ):
-        c.up(
-            "materialized",
-            "clusterd1",
-            "clusterd2",
-            "kafka",
-            "schema-registry",
+        c.up("materialized", "kafka", "schema-registry")
+        c.sql(
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+            ALTER SYSTEM SET storage_statistics_collection_interval = 1000;
+            ALTER SYSTEM SET storage_statistics_interval = 2000;
+            """,
+            user="mz_system",
+            port=6877,
         )
+        c.sql("""
+            CREATE CLUSTER storage_cluster REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
+                    WORKERS 4
+                )
+            );
+            """)
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'storage_cluster' AND r.name = 'r1'""")
+        catalog_options = native_catalog_options(c)
+        for name in ("clusterd1", "clusterd2"):
+            stack.enter_context(
+                c.override(
+                    Clusterd(
+                        name=name,
+                        workers=4,
+                        process_names=["clusterd1", "clusterd2"],
+                        options=[
+                            f"--catalog-cluster-id={cluster_id}",
+                            f"--catalog-replica-id={replica_id}",
+                            *catalog_options,
+                        ],
+                    )
+                )
+            )
+        c.up("clusterd1", "clusterd2")
 
         c.run_testdrive_files("storage/01-create-sources.td")
 
@@ -1692,19 +1731,51 @@ def workflow_test_resource_limits(c: Composition) -> None:
         c.run_testdrive_files("resources/resource-limits.td")
 
 
+def configure_storage_fault_replica(c: Composition) -> list[str]:
+    """Declare the external storage replica and return its native startup options."""
+    c.sql(
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("""
+        CREATE CLUSTER storage REPLICAS (
+            r1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 4
+            )
+        );
+        """)
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'storage' AND r.name = 'r1'""")
+    return [
+        f"--catalog-cluster-id={cluster_id}",
+        f"--catalog-replica-id={replica_id}",
+        *native_catalog_options(c),
+    ]
+
+
 def workflow_pg_snapshot_resumption(c: Composition) -> None:
     """Test PostgreSQL snapshot resumption."""
 
-    with c.override(
-        # Start postgres for the pg source
-        Testdrive(no_reset=True),
-        Clusterd(
-            name="clusterd1",
-            environment_extra=["FAILPOINTS=pg_snapshot_failure=return"],
-            workers=4,
-        ),
-    ):
-        c.up("materialized", "postgres", "clusterd1")
+    with c.override(Testdrive(no_reset=True)), ExitStack() as stack:
+        c.up("materialized", "postgres")
+        options = configure_storage_fault_replica(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    environment_extra=["FAILPOINTS=pg_snapshot_failure=return"],
+                    workers=4,
+                    options=options,
+                )
+            )
+        )
+        c.up("clusterd1")
 
         c.run_testdrive_files("pg-snapshot-resumption/01-configure-postgres.td")
         c.run_testdrive_files("pg-snapshot-resumption/02-create-sources.td")
@@ -1717,7 +1788,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 
         with c.override(
             # turn off the failpoint
-            Clusterd(name="clusterd1", workers=4)
+            Clusterd(name="clusterd1", workers=4, options=options)
         ):
             c.up("clusterd1")
             c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
@@ -1726,26 +1797,33 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 
-    with c.override(
-        # Start postgres for the pg source
-        Testdrive(no_reset=True),
-        Clusterd(
-            name="clusterd1",
-            environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
-            workers=4,
-        ),
-    ):
-        c.up("materialized", "kafka", "schema-registry", "clusterd1")
+    with c.override(Testdrive(no_reset=True)), ExitStack() as stack:
+        c.up("materialized", "kafka", "schema-registry")
+        options = configure_storage_fault_replica(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    environment_extra=["FAILPOINTS=kafka_sink_creation_error=return"],
+                    workers=4,
+                    options=options,
+                )
+            )
+        )
+        c.up("clusterd1")
 
         c.run_testdrive_files("sink-failure/01-configure-sinks.td")
         c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")
 
         with c.override(
             # turn off the failpoint
-            Clusterd(name="clusterd1", workers=4)
+            Clusterd(name="clusterd1", workers=4, options=options)
         ):
             c.up("clusterd1")
-            c.run_testdrive_files("sink-failure/03-verify-data.td")
+            # Kafka takeover may wait for the predecessor's incarnation grace.
+            c.run_testdrive_files(
+                "--default-timeout=420s", "sink-failure/03-verify-data.td"
+            )
 
 
 def workflow_test_bootstrap_vars(c: Composition) -> None:
@@ -1838,10 +1916,8 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
             redacted_create_sql \
         FROM mz_views;
         CREATE DEFAULT INDEX ON v_mz_views;
-
-        > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u2
     """))
+        [(index_id,)] = c.sql_query("SELECT id FROM mz_indexes WHERE id LIKE 'u%'")
         c.kill("materialized")
 
     with c.override(
@@ -1849,10 +1925,13 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         Materialized(),
     ):
         c.up("materialized", Service("testdrive", idle=True))
-        c.testdrive(input=dedent("""
-        > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u2
-    """))
+        c.testdrive(
+            input=dedent("""
+                > SELECT id FROM mz_indexes WHERE id LIKE 'u%';
+                ${created-index-id}
+            """),
+            args=[f"--var=created-index-id={index_id}"],
+        )
 
 
 def workflow_test_timestamp_interval_catalog_persistence(c: Composition) -> None:
@@ -1900,7 +1979,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     replica disconnects.
     """
 
-    c.up("materialized", "clusterd1", "clusterd2")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -1927,6 +2006,26 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
         );
         CREATE TABLE t (a int);
         """)
+
+    replicas = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'cluster1' ORDER BY r.name""")
+    catalog_options = native_catalog_options(c)
+    for name, (cluster_id, replica_id) in zip(
+        ("clusterd1", "clusterd2"), replicas, strict=True
+    ):
+        with c.override(
+            Clusterd(
+                name=name,
+                workers=2,
+                options=[
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *catalog_options,
+                ],
+            )
+        ):
+            c.up(name)
 
     def drop_replica_with_delay() -> None:
         time.sleep(2)
@@ -2619,7 +2718,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     mz_subscriptions.
     """
 
-    c.up("materialized", "clusterd1")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2643,6 +2742,23 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         INSERT INTO t2 VALUES (1);
         INSERT INTO t3 VALUES (1);
         """)
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'cluster1' AND r.name = 'r'""")
+    catalog_options = native_catalog_options(c)
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        )
+    ):
+        c.up("clusterd1")
 
     def start_subscribe(table: str, cluster: str) -> Cursor:
         """Start a subscribe on the given table and cluster."""
@@ -2712,7 +2828,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     Regression test for https://github.com/MaterializeInc/database-issues/issues/5676
     """
 
-    c.up("materialized", "clusterd1")
+    c.up("materialized")
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2731,6 +2847,23 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
         ));
         SET cluster = cluster1;
         """)
+
+    [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+        FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+        WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+    catalog_options = native_catalog_options(c)
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            options=[
+                f"--catalog-cluster-id={cluster_id}",
+                f"--catalog-replica-id={replica_id}",
+                *catalog_options,
+            ],
+        )
+    ):
+        c.up("clusterd1")
 
     def extract_since_ts(output: str) -> int:
         j = json.loads(output)
@@ -2983,7 +3116,7 @@ class Metrics:
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
 
-    with c.override(Clusterd(name="clusterd1", workers=1)):
+    with c.override(Clusterd(name="clusterd1", workers=1)), ExitStack() as stack:
         c.up("materialized", "clusterd1")
 
         def fetch_metrics() -> Metrics:
@@ -3016,6 +3149,26 @@ def workflow_test_replica_metrics(c: Composition) -> None:
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 1
             ));
+            """)
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'cluster1' AND r.name = 'replica1'""")
+        catalog_options = native_catalog_options(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    workers=1,
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *catalog_options,
+                    ],
+                )
+            )
+        )
+        c.up("clusterd1")
+        c.sql("""
             SET cluster = cluster1;
 
             CREATE TABLE t (a int);
@@ -4434,14 +4587,49 @@ def workflow_test_github_cloud_7998(
 ) -> None:
     """Regression test for MaterializeInc/cloud#7998."""
 
-    with c.override(
-        Testdrive(no_reset=True),
-        Clusterd(name="clusterd1"),
-        Materialized(
-            support_external_clusterd=True,
+    with (
+        c.override(
+            Testdrive(no_reset=True),
+            Materialized(
+                support_external_clusterd=True,
+            ),
         ),
+        ExitStack() as stack,
     ):
-        c.up("materialized", "clusterd1")
+        c.up("materialized")
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            user="mz_system",
+            port=6877,
+        )
+        c.sql("""
+            CREATE CLUSTER compute REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            """)
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'compute' AND r.name = 'r1'""")
+        catalog_options = native_catalog_options(c)
+        stack.enter_context(
+            c.override(
+                Clusterd(
+                    name="clusterd1",
+                    options=[
+                        f"--catalog-cluster-id={cluster_id}",
+                        f"--catalog-replica-id={replica_id}",
+                        *catalog_options,
+                    ],
+                )
+            )
+        )
+        c.up("clusterd1")
 
         c.run_testdrive_files("github-cloud-7998/setup.td")
 
@@ -6645,7 +6833,9 @@ def workflow_test_adhoc_system_indexes(
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name = 'mz_test_idx1'
         """)
-    assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
+    index1_id = output[0][0]
+    assert index1_id.startswith("u"), output
+    assert output[0] == (index1_id, "mz_tables", "mz_catalog_server"), output
     output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 8")
     assert "mz_test_idx1" in output[0][0], output
     output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 8")
@@ -6672,8 +6862,10 @@ def workflow_test_adhoc_system_indexes(
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name = 'mz_test_idx2'
         """)
+    index2_id = output[0][0]
+    assert index2_id.startswith("u") and index2_id != index1_id, output
     assert output[0] == (
-        "u2",
+        index2_id,
         "mz_compute_hydration_statuses",
         "mz_catalog_server",
     ), output
@@ -6697,11 +6889,11 @@ def workflow_test_adhoc_system_indexes(
         JOIN mz_objects o ON (i.on_id = o.id)
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name LIKE 'mz_test_idx%'
-        ORDER BY id
+        ORDER BY i.name
         """)
-    assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
+    assert output[0] == (index1_id, "mz_tables", "mz_catalog_server"), output
     assert output[1] == (
-        "u2",
+        index2_id,
         "mz_compute_hydration_statuses",
         "mz_catalog_server",
     ), output
@@ -7932,7 +8124,7 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
     """
 
     with c.override(Testdrive(no_reset=True)):
-        c.up("materialized", "clusterd1")
+        c.up("materialized")
 
         c.sql(
             """
@@ -7953,6 +8145,23 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM v;
             """,
         )
+
+        [(cluster_id, replica_id)] = c.sql_query("""SELECT c.id, r.id
+            FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id
+            WHERE c.name = 'compute' AND r.name = 'replica1'""")
+        catalog_options = native_catalog_options(c)
+        with c.override(
+            Clusterd(
+                name="clusterd1",
+                workers=2,
+                options=[
+                    f"--catalog-cluster-id={cluster_id}",
+                    f"--catalog-replica-id={replica_id}",
+                    *catalog_options,
+                ],
+            )
+        ):
+            c.up("clusterd1")
 
         # Wait for dataflows to hydrate.
         c.testdrive(dedent("""
