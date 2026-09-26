@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_catalog::memory::objects::{CatalogItem, TableDataSource};
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastLossy;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
@@ -749,6 +750,11 @@ impl Coordinator {
             read_holds,
             upper.clone(),
         )?;
+        if !self.read_only_controllers
+            && det.needs_table_progress(self.catalog().state(), id_bundle)
+        {
+            self.trigger_group_commit();
+        }
         self.metrics
             .by_cluster
             .determine_timestamp(
@@ -834,6 +840,31 @@ pub struct TimestampDetermination {
 }
 
 impl TimestampDetermination {
+    /// Whether an oracle-timestamped read is waiting on a table-backed input.
+    /// Catalog-only writes can advance the oracle without advancing tables.
+    /// Notify the existing table progress worker instead of awaiting its timer.
+    pub(crate) fn needs_table_progress(
+        &self,
+        catalog: &CatalogState,
+        id_bundle: &CollectionIdBundle,
+    ) -> bool {
+        if self.respond_immediately()
+            || self.oracle_read_ts.is_none()
+            || self.timestamp_context.timeline() != Some(&Timeline::EpochMilliseconds)
+        {
+            return false;
+        }
+        id_bundle
+            .iter()
+            .filter_map(|id| catalog.try_get_entry_by_global_id(&id))
+            .any(|entry| {
+                catalog.transitive_uses(entry.id()).any(|id| {
+                    matches!(catalog.get_entry(&id).item(), CatalogItem::Table(table)
+                    if matches!(table.data_source, TableDataSource::TableWrites { .. }))
+                })
+            })
+    }
+
     pub fn respond_immediately(&self) -> bool {
         match &self.timestamp_context {
             TimestampContext::TimelineTimestamp { chosen_ts, .. } => {

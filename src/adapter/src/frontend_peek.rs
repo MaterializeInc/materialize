@@ -697,6 +697,7 @@ impl PeekClient {
                 let (determination, read_holds) = self
                     .frontend_determine_timestamp(
                         session,
+                        catalog.state(),
                         determine_bundle,
                         when,
                         target_cluster_id,
@@ -1566,6 +1567,7 @@ impl PeekClient {
     pub(crate) async fn frontend_determine_timestamp(
         &mut self,
         session: &Session,
+        catalog: &crate::catalog::CatalogState,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -1607,6 +1609,9 @@ impl PeekClient {
             upper.clone(),
         )?;
 
+        if !self.read_only && det.needs_table_progress(catalog, id_bundle) {
+            self.group_commit_notifier.notify();
+        }
         session
             .metrics()
             .by_cluster()
