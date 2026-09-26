@@ -32,8 +32,8 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
-use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
+use mz_expr::{ErrorScope, SafeMfpPlan};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -76,6 +76,7 @@ use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
+use crate::render::context::boundary_error_scope;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
@@ -243,6 +244,9 @@ pub struct ComputeState {
     /// Reference-counted to avoid cloning for `Context`.
     pub worker_config: Rc<ConfigSet>,
 
+    /// Whether this replica scopes map errors to cells, from `CreateInstance`.
+    pub cell_errors: bool,
+
     /// The process-global metrics registry.
     pub metrics_registry: MetricsRegistry,
 
@@ -338,6 +342,7 @@ impl ComputeState {
             tracing_handle,
             context,
             worker_config,
+            cell_errors: false,
             metrics_registry,
             workers_per_process,
             peek_permits,
@@ -727,6 +732,7 @@ impl<'a> ActiveComputeState<'a> {
         self.initialize_logging(config.logging);
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
+        self.compute_state.cell_errors = config.cell_errors;
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
@@ -915,7 +921,8 @@ impl<'a> ActiveComputeState<'a> {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
-                PendingPeek::index(peek, trace_bundle)
+                let error_scope = boundary_error_scope(self.compute_state.cell_errors);
+                PendingPeek::index(peek, trace_bundle, error_scope)
             }
             PeekTarget::Persist { metadata, .. } => {
                 let metadata = metadata.clone();
@@ -926,6 +933,7 @@ impl<'a> ActiveComputeState<'a> {
                     usize::cast_from(self.compute_state.max_result_size),
                     self.timely_worker,
                     PeekRowIterationConfig::new(&self.compute_state.worker_config),
+                    boundary_error_scope(self.compute_state.cell_errors),
                 )
             }
         };
@@ -1584,7 +1592,7 @@ impl PendingPeek {
         })
     }
 
-    fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
+    fn index(peek: Peek, mut trace_bundle: TraceBundle, error_scope: ErrorScope) -> Self {
         let empty_frontier = Antichain::new();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
         trace_bundle
@@ -1603,6 +1611,7 @@ impl PendingPeek {
         PendingPeek::Index(IndexPeek {
             peek,
             trace_bundle,
+            error_scope,
             span: tracing::Span::current(),
         })
     }
@@ -1614,6 +1623,7 @@ impl PendingPeek {
         max_result_size: usize,
         timely_worker: &TimelyWorker,
         row_iteration_config: PeekRowIterationConfig,
+        error_scope: ErrorScope,
     ) -> Self {
         let active_worker = {
             // Choose the worker that does the actual peek arbitrarily but consistently.
@@ -1652,13 +1662,20 @@ impl PendingPeek {
                     max_result_size,
                     max_results_needed,
                     row_iteration_config,
+                    error_scope,
                 )
                 .await
             } else {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(vec![RowCollection::new(rows, &order_by)]),
+                Ok(rows) => {
+                    crate::render::errors::soft_assert_no_error_datums(
+                        rows.iter().map(|(row, _)| row.as_row_ref()),
+                        "a persist peek",
+                    );
+                    PeekResponse::Rows(vec![RowCollection::new(rows, &order_by)])
+                }
                 Err(error) => PeekResponse::Error(error),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1724,6 +1741,7 @@ impl PersistPeek {
         max_result_size: usize,
         mut limit_remaining: usize,
         row_iteration_config: PeekRowIterationConfig,
+        error_scope: ErrorScope,
     ) -> Result<Vec<(Row, NonZeroUsize)>, PeekError> {
         let client = persist_clients
             .open(metadata.persist_location)
@@ -1819,7 +1837,7 @@ impl PersistPeek {
                 };
                 let mut datum_local = datum_vec.borrow_with(&row);
                 let eval_result = mfp_plan
-                    .evaluate_into(&mut datum_local, &arena, &mut row_builder)
+                    .evaluate_into_scoped(&mut datum_local, &arena, &mut row_builder, error_scope)
                     .map(|row| row.cloned())
                     .map_err(PeekError::from)?;
                 if let Some(row) = eval_result {
@@ -1845,6 +1863,8 @@ pub struct IndexPeek {
     peek: Peek,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
+    /// Where errors in the peek's MFP land.
+    error_scope: ErrorScope,
     /// The `tracing::Span` tracking this peek's operation
     span: tracing::Span,
 }
@@ -1925,7 +1945,7 @@ impl IndexPeek {
     ) -> PeekStatus {
         let peek = &self.peek;
         let (oks, errs) = self.trace_bundle.oks_errs_mut();
-        let mut scan = PeekScan::new(peek, errs, oks, max_result_size, stash);
+        let mut scan = PeekScan::new(peek, errs, oks, max_result_size, stash, self.error_scope);
 
         let outcome = scan.step(row_iteration_limit, fuel);
 

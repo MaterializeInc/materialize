@@ -147,6 +147,13 @@ pub enum Datum<'a> {
     /// A list of privileges granted to a user that uses [`Oid`]s for role references.
     /// This type is used primarily for compatibility with PostgreSQL.
     AclItem(AclItem),
+    /// A cell-scoped evaluation error.
+    ///
+    /// The payload is an opaque, encoded error that `mz_repr` does not interpret. An error datum
+    /// is an instance of every type. It must not escape the dataflow that produced it: every
+    /// operator whose semantics for errors are not defined elevates it to a collection-scoped
+    /// error first.
+    Error(DatumError<'a>),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -177,6 +184,26 @@ pub enum Datum<'a> {
     // This order of variants of this enum determines how nulls sort. We
     // have decided that nulls should sort last in Materialize, so all
     // other datum variants should appear before `Null`.
+}
+
+/// The encoded payload of a [`Datum::Error`].
+///
+/// `mz_repr` treats the bytes as opaque. The crate that defines the error type owns the encoding.
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Debug)]
+pub struct DatumError<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> DatumError<'a> {
+    /// Wraps an encoded error payload.
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data }
+    }
+
+    /// The encoded error payload.
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
 }
 
 impl Debug for Datum<'_> {
@@ -217,6 +244,7 @@ impl Debug for Datum<'_> {
             Datum::Range(x) => f.debug_tuple("Range").field(&redact(x)).finish(),
             Datum::MzAclItem(x) => f.debug_tuple("MzAclItem").field(&redact(x)).finish(),
             Datum::AclItem(x) => f.debug_tuple("AclItem").field(&redact(x)).finish(),
+            Datum::Error(_) => f.debug_tuple("Error").finish(),
             Datum::Dummy => f.debug_tuple("Dummy").finish(),
             Datum::Null => f.debug_tuple("Null").finish(),
         }
@@ -1010,6 +1038,7 @@ impl<'a> Datum<'a> {
             if let ReprScalarType::Jsonb = scalar_type {
                 // json type checking
                 match datum {
+                    Datum::Error(_) => true,
                     Datum::Dummy => false,
                     Datum::JsonNull
                     | Datum::False
@@ -1027,6 +1056,7 @@ impl<'a> Datum<'a> {
             } else {
                 // general scalar repr type checking
                 match (datum, scalar_type) {
+                    (Datum::Error(_), _) => true,
                     (Datum::Dummy, _) => false,
                     (Datum::Null, _) => false,
                     (Datum::False, ReprScalarType::Bool) => true,
@@ -1141,6 +1171,7 @@ impl<'a> Datum<'a> {
             if let SqlScalarType::Jsonb = scalar_type {
                 // json type checking
                 match datum {
+                    Datum::Error(_) => true,
                     Datum::Dummy => false,
                     Datum::JsonNull
                     | Datum::False
@@ -1158,6 +1189,7 @@ impl<'a> Datum<'a> {
             } else {
                 // sql type checking
                 match (datum, scalar_type) {
+                    (Datum::Error(_), _) => true,
                     (Datum::Dummy, _) => false,
                     (Datum::Null, _) => false,
                     (Datum::False, SqlScalarType::Bool) => true,
@@ -1588,6 +1620,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
             Datum::MzTimestamp(t) => write!(f, "{}", t),
             Datum::JsonNull => f.write_str("json_null"),
+            Datum::Error(_) => f.write_str("error"),
             Datum::Dummy => f.write_str("dummy"),
             Datum::Range(i) => write!(f, "{}", i),
             Datum::MzAclItem(mz_acl_item) => write!(f, "{mz_acl_item}"),

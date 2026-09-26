@@ -5244,6 +5244,12 @@ pub fn plan_create_cluster_inner(
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
             enable_union_cancellation_after_relation_cse,
+            // Recorded once here and kept for the cluster's lifetime: replicas and the optimizer
+            // both read it from the cluster, so a later flag change cannot split them.
+            enable_cell_errors: Some(
+                mz_compute_types::dyncfgs::ENABLE_COMPUTE_CELL_ERRORS
+                    .get(scx.catalog.system_vars().dyncfgs()),
+            ),
             ..Default::default()
         };
 
@@ -5382,6 +5388,7 @@ pub fn unplan_create_cluster(
                 enable_coalesce_case_transform: _,
                 enable_will_distinct_propagation: _,
                 enable_fixed_correlated_cte_lowering: _,
+                enable_cell_errors: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {

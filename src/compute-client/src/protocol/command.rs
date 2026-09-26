@@ -282,6 +282,12 @@ pub struct InstanceConfig {
     /// held fixed for the replica's lifetime, so flipping the flag only affects replicas created
     /// afterwards rather than retroactively changing arrangements across the environment.
     pub arrangement_dictionary_compression: bool,
+    /// Whether map errors are scoped to cells rather than rows.
+    ///
+    /// Fixed when the cluster is created and identical for all its replicas, so that replicas
+    /// agree with each other and with the optimizer. Arrangements hold error datums that every
+    /// later reader must expect, so the value is part of [`InstanceConfig::compatible_with`].
+    pub cell_errors: bool,
     /// A snapshot of the controller's dynamic configuration at replica creation, including any
     /// replica-scoped overrides.
     ///
@@ -318,6 +324,7 @@ impl InstanceConfig {
             peek_stash_persist_location: self_peek_stash_persist_location,
             // Captured at replica creation; intentionally not part of compatibility (see above).
             arrangement_dictionary_compression: _,
+            cell_errors: self_cell_errors,
             // Globally-applied dyncfg snapshot, intentionally not part of compatibility (see above).
             initial_config: _,
         } = self;
@@ -326,6 +333,7 @@ impl InstanceConfig {
             expiration_offset: other_offset,
             peek_stash_persist_location: other_peek_stash_persist_location,
             arrangement_dictionary_compression: _,
+            cell_errors: other_cell_errors,
             initial_config: _,
         } = other;
 
@@ -341,7 +349,10 @@ impl InstanceConfig {
         let persist_location_compatible =
             self_peek_stash_persist_location == other_peek_stash_persist_location;
 
-        logging_compatible && offset_compatible && persist_location_compatible
+        logging_compatible
+            && offset_compatible
+            && persist_location_compatible
+            && self_cell_errors == other_cell_errors
     }
 }
 

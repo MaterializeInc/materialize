@@ -625,6 +625,7 @@ fn open(
             threshold_bytes: peek_stash_threshold_bytes,
             batch_bytes: 0,
         },
+        mz_expr::ErrorScope::Row,
     )
 }
 

@@ -364,6 +364,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_compute_cell_errors",
+            "true" if version >= MzVersion.parse_mz("v26.45.0-dev") else "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_frontend_peek_sequencing",
             "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false",
             ["true", "false"],

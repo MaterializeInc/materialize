@@ -24,7 +24,7 @@ use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_dyncfg::ConfigSet;
-use mz_expr::Eval;
+use mz_expr::{ErrorScope, Eval};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::Column;
@@ -208,12 +208,13 @@ fn apply_closure<'a>(
     closure: &'a JoinClosure,
     datums: &mut DatumVecBorrow<'a>,
     temp_storage: &'a RowArena,
+    scope: ErrorScope,
 ) -> Result<Option<Row>, DataflowErrorSer> {
     let mut row_builder = SharedRow::get();
     // `cloned` detaches the result from `temp_storage` and the shared row builder, both of
     // which drop at the end of the caller's per-record work.
     closure
-        .apply(datums, temp_storage, &mut row_builder)
+        .apply(datums, temp_storage, &mut row_builder, scope)
         .map(|row| row.cloned())
         .map_err(DataflowErrorSer::from)
 }
@@ -227,6 +228,7 @@ fn apply_closure_to_edge<'s, T>(
     edge: ColCollection<'s, T>,
     name: &str,
     closure: JoinClosure,
+    scope: ErrorScope,
 ) -> (
     ColCollection<'s, T>,
     VecCollection<'s, T, DataflowErrorSer, Diff>,
@@ -247,7 +249,7 @@ where
                 let temp_storage = RowArena::new();
                 let mut datums = datum_vec.borrow();
                 datums.extend(row_datums.iter());
-                match apply_closure(&closure, &mut datums, &temp_storage) {
+                match apply_closure(&closure, &mut datums, &temp_storage, scope) {
                     Ok(Some(row)) => {
                         ok_session.give((row, time, diff));
                         1
@@ -339,8 +341,12 @@ where
                     // directly on the starting collection.
                     // If there is only one input, we are done joining, so run filters.
                     // Current lowering never takes this branch.
-                    let (j, errs) =
-                        apply_closure_to_edge(joined, "LinearJoinInitialization", closure);
+                    let (j, errs) = apply_closure_to_edge(
+                        joined,
+                        "LinearJoinInitialization",
+                        closure,
+                        self.error_scope(),
+                    );
                     errors.push(errs);
                     JoinedFlavor::Collection(j)
                 } else {
@@ -377,8 +383,12 @@ where
         let ok_edge = match (joined, linear_plan.final_closure) {
             (JoinedFlavor::Collection(edge), None) => edge,
             (JoinedFlavor::Collection(edge), Some(closure)) => {
-                let (updates, errs) =
-                    apply_closure_to_edge(edge, "LinearJoinFinalization", closure);
+                let (updates, errs) = apply_closure_to_edge(
+                    edge,
+                    "LinearJoinFinalization",
+                    closure,
+                    self.error_scope(),
+                );
                 errors.push(errs);
                 updates
             }
@@ -516,14 +526,17 @@ where
         // The builder for the error-capable arm, whose `Result`s are not columnar.
         type VecCB<D, T> = CapacityContainerBuilder<Vec<(D, T, Diff)>>;
 
-        if closure.could_error() {
+        // Error datums in the inputs raise errors in the closure even when its expressions cannot
+        // error on their own.
+        let scope = self.error_scope();
+        if closure.could_error() || scope != ErrorScope::Row {
             let results = self
                 .linear_join_spec
                 .render::<T, _, _, _, _, VecCB<Result<Row, DataflowErrorSer>, T>>(
                     prev_keyed,
                     next_input,
                     move |key, old, new| {
-                        apply_join_closure(&closure, &mut datums, key, old, new)
+                        apply_join_closure(&closure, &mut datums, key, old, new, scope)
                             .map_err(DataflowErrorSer::from)
                             .transpose()
                     },
@@ -537,7 +550,7 @@ where
                     prev_keyed,
                     next_input,
                     move |key, old, new| {
-                        apply_join_closure(&closure, &mut datums, key, old, new)
+                        apply_join_closure(&closure, &mut datums, key, old, new, scope)
                             .expect("Closure claimed to never error")
                     },
                 );
@@ -552,7 +565,7 @@ where
                     prev_keyed,
                     next_input,
                     move |key, old, new| {
-                        apply_join_closure(&closure, &mut datums, key, old, new)
+                        apply_join_closure(&closure, &mut datums, key, old, new, scope)
                             .expect("Closure claimed to never error")
                     },
                 );
@@ -573,6 +586,7 @@ fn apply_join_closure<K, V1, V2>(
     key: K,
     old: V1,
     new: V2,
+    scope: ErrorScope,
 ) -> Result<Option<Row>, mz_expr::EvalError>
 where
     K: ExtendDatums,
@@ -588,7 +602,7 @@ where
     new.extend_datums(&temp_storage, &mut datums_local, None);
 
     closure
-        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+        .apply(&mut datums_local, &temp_storage, &mut row_builder, scope)
         .map(|row| row.cloned())
 }
 

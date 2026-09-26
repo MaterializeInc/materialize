@@ -96,6 +96,7 @@ impl Driver {
             expiration_offset,
             peek_stash_persist_location: self.host.location().clone(),
             arrangement_dictionary_compression,
+            cell_errors: false,
             initial_config,
         })))?;
         let mut dyncfg_updates = ConfigUpdates::default();

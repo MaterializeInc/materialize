@@ -235,6 +235,10 @@ impl SubscribeProtocol {
             // Chop of the tail of the reverse-sorted buffer (ie. the prefix we care about) and ship
             // it, preserving the rest of the values for future iterations.
             let split_at = rows.partition_point(|(t, _, _)| upper.less_equal(t));
+            crate::render::errors::soft_assert_no_error_datums(
+                rows[split_at..].iter().map(|(_, r, _)| r.as_row_ref()),
+                "a subscribe",
+            );
             let ship_updates = rows[split_at..]
                 .iter()
                 .rev()

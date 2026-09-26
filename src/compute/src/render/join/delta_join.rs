@@ -27,7 +27,7 @@ use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_dyncfg::ConfigSet;
-use mz_expr::Eval;
+use mz_expr::{ErrorScope, Eval};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -147,6 +147,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         source_key,
                         source_relation,
                         initial_closure,
+                        self.error_scope(),
                     );
                     region_errs.push(err_stream);
 
@@ -187,6 +188,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             source_relation < lookup_relation,
                             closure,
                             Rc::clone(&self.config_set),
+                            self.error_scope(),
                         );
                         update_stream = oks;
                         region_errs.push(errs);
@@ -208,6 +210,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     // and projections that could not be applied (e.g. column repetition).
                     if let Some(final_closure) = final_closure {
                         let name = "DeltaJoinFinalization";
+                        let scope = self.error_scope();
                         type CB<C> = ConsolidatingContainerBuilder<C>;
                         let (updates, errors) = update_stream
                             .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
@@ -219,7 +222,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                     let mut datums_local = datums.borrow_with(&row);
                                     // TODO(mcsherry): re-use `row` allocation.
                                     final_closure
-                                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                                        .apply(
+                                            &mut datums_local,
+                                            &temp_storage,
+                                            &mut row_builder,
+                                            scope,
+                                        )
                                         .map(|row| row.cloned())
                                         .map_err(DataflowErrorSer::from)
                                         .transpose()
@@ -348,6 +356,7 @@ fn build_halfjoin<'scope, T>(
     source_precedes_lookup: bool,
     closure: JoinClosure,
     config_set: Rc<ConfigSet>,
+    scope: ErrorScope,
 ) -> (
     VecCollection<'scope, T, (Row, T), Diff>,
     VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -366,6 +375,7 @@ where
                     |t1, t2| t1.le(t2),
                     closure,
                     config_set,
+                    scope,
                 )
             } else {
                 build_halfjoin_trace::<_, RowRowAgent<_, _>, _>(
@@ -376,6 +386,7 @@ where
                     |t1, t2| t1.lt(t2),
                     closure,
                     config_set,
+                    scope,
                 )
             };
             (oks, errs2)
@@ -390,6 +401,7 @@ where
                     |t1, t2| t1.le(t2),
                     closure,
                     config_set,
+                    scope,
                 )
             } else {
                 build_halfjoin_trace::<_, RowRowEnter<_, _, _>, _>(
@@ -400,6 +412,7 @@ where
                     |t1, t2| t1.lt(t2),
                     closure,
                     config_set,
+                    scope,
                 )
             };
             (oks, errs2)
@@ -426,6 +439,7 @@ fn build_halfjoin_trace<'scope, T, Tr, CF>(
     comparison: CF,
     closure: JoinClosure,
     config_set: Rc<ConfigSet>,
+    scope: ErrorScope,
 ) -> (
     VecCollection<'scope, T, (Row, T), Diff>,
     VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -442,6 +456,8 @@ where
     CF: Fn(<BatchCursor<Tr> as Cursor>::TimeGat<'_>, &T) -> bool + 'static,
 {
     let use_half_join2 = ENABLE_HALF_JOIN2.get(&config_set);
+    // Error datums in the inputs raise errors in the closure even when its expressions cannot
+    // error on their own.
 
     let name = "DeltaJoinKeyPreparation";
     type CB<C> = CapacityContainerBuilder<C>;
@@ -469,9 +485,9 @@ where
     let datums = DatumVec::new();
 
     if use_half_join2 {
-        build_halfjoin2(updates, trace, comparison, closure, datums, errs)
+        build_halfjoin2(updates, trace, comparison, closure, scope, datums, errs)
     } else {
-        build_halfjoin1(updates, trace, comparison, closure, datums, errs)
+        build_halfjoin1(updates, trace, comparison, closure, scope, datums, errs)
     }
 }
 
@@ -481,6 +497,7 @@ fn build_halfjoin2<'scope, T, Tr, CF>(
     trace: Arranged<'scope, Tr>,
     comparison: CF,
     closure: JoinClosure,
+    scope: ErrorScope,
     mut datums: DatumVec,
     errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
 ) -> (
@@ -500,7 +517,9 @@ where
 {
     type CB<C> = CapacityContainerBuilder<C>;
 
-    if closure.could_error() {
+    // Error datums in the inputs raise errors in the closure even when its expressions cannot
+    // error on their own.
+    if closure.could_error() || scope != ErrorScope::Row {
         let (oks, errs2) = differential_dogs3::operators::half_join2::half_join_internal_unsafe(
             updates,
             trace,
@@ -521,7 +540,7 @@ where
                 datums_local.extend(stream_row.iter());
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
-                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder, scope);
 
                 for (time, diff2) in output.drain(..) {
                     let row = row.as_ref().map(|row| row.cloned()).map_err(Clone::clone);
@@ -570,7 +589,7 @@ where
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
                 if let Some(row) = closure
-                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                    .apply(&mut datums_local, &temp_storage, &mut row_builder, scope)
                     .expect("Closure claimed to never error")
                 {
                     for (time, diff2) in output.drain(..) {
@@ -592,6 +611,7 @@ fn build_halfjoin1<'scope, T, Tr, CF>(
     trace: Arranged<'scope, Tr>,
     comparison: CF,
     closure: JoinClosure,
+    scope: ErrorScope,
     mut datums: DatumVec,
     errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
 ) -> (
@@ -611,7 +631,9 @@ where
 {
     type CB<C> = CapacityContainerBuilder<C>;
 
-    if closure.could_error() {
+    // Error datums in the inputs raise errors in the closure even when its expressions cannot
+    // error on their own.
+    if closure.could_error() || scope != ErrorScope::Row {
         let (oks, errs2) = differential_dogs3::operators::half_join::half_join_internal_unsafe(
             updates,
             trace,
@@ -635,7 +657,7 @@ where
                 datums_local.extend(stream_row.iter());
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
-                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder, scope);
 
                 for (time, diff2) in output.drain(..) {
                     let row = row.as_ref().map(|row| row.cloned()).map_err(Clone::clone);
@@ -683,7 +705,7 @@ where
                 lookup_row.extend_datums(&temp_storage, &mut datums_local, None);
 
                 if let Some(row) = closure
-                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                    .apply(&mut datums_local, &temp_storage, &mut row_builder, scope)
                     .expect("Closure claimed to never error")
                 {
                     for (time, diff2) in output.drain(..) {
@@ -713,6 +735,7 @@ fn build_update_stream<'scope, T>(
     source_key: Option<Vec<LirScalarExpr>>,
     source_relation: usize,
     initial_closure: JoinClosure,
+    scope: ErrorScope,
 ) -> (
     VecCollection<'scope, T, Row, Diff>,
     VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -728,7 +751,7 @@ where
             .collection
             .clone()
             .expect("The unarranged collection doesn't exist.");
-        return build_update_stream_stream(oks, as_of, source_relation, initial_closure);
+        return build_update_stream_stream(oks, as_of, source_relation, initial_closure, scope);
     };
     match bundle.arrangement(&source_key) {
         Some(ArrangementFlavor::Local(oks, _errs)) => {
@@ -737,6 +760,7 @@ where
                 as_of,
                 source_relation,
                 initial_closure,
+                scope,
             )
         }
         Some(ArrangementFlavor::Trace(_, oks, _errs)) => {
@@ -745,6 +769,7 @@ where
                 as_of,
                 source_relation,
                 initial_closure,
+                scope,
             )
         }
         None => panic!("Arrangement promised by the planner is absent!"),
@@ -761,6 +786,7 @@ fn build_update_stream_trace<'scope, T, Tr>(
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
+    scope: ErrorScope,
 ) -> (
     VecCollection<'scope, T, Row, Diff>,
     VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -824,6 +850,7 @@ where
                                                     &mut datums_local,
                                                     &temp_storage,
                                                     &mut row_builder,
+                                                    scope,
                                                 )
                                                 .map(|row| row.cloned())
                                                 .transpose()
@@ -877,6 +904,7 @@ fn build_update_stream_stream<'scope, T>(
     _as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
+    scope: ErrorScope,
 ) -> (
     VecCollection<'scope, T, Row, Diff>,
     VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -910,7 +938,7 @@ where
                 // `cloned` detaches the result from `temp_storage` and the shared row
                 // builder, both of which drop at the end of this call.
                 match initial_closure
-                    .apply(&mut datums, &temp_storage, &mut row_builder)
+                    .apply(&mut datums, &temp_storage, &mut row_builder, scope)
                     .map(|row| row.cloned())
                     .transpose()
                 {

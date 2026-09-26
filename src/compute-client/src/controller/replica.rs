@@ -385,6 +385,7 @@ mod tests {
             logging: Default::default(),
             expiration_offset: None,
             peek_stash_persist_location: mz_persist_client::PersistLocation::new_in_mem(),
+            cell_errors: false,
             arrangement_dictionary_compression: false,
             initial_config,
         }));
