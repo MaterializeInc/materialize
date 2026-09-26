@@ -449,6 +449,85 @@ impl<T> JoinSetExt<T> for tokio::task::JoinSet<T> {
     }
 }
 
+/// Spawns request-owned work, retaining diagnostic identity during polls and drop.
+///
+/// Shared services must use [`spawn`], even when created by a request. Work passed
+/// between requests must carry its own context on each message.
+#[cfg(feature = "tracing")]
+#[track_caller]
+pub fn spawn_in_request<F, Name, NameClosure>(nc: NameClosure, future: F) -> JoinHandle<F::Output>
+where
+    Name: AsRef<str>,
+    NameClosure: FnOnce() -> Name,
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    if crate::tracing::QpsTracingMode::current().request_context() {
+        spawn(
+            nc,
+            crate::request_context::scope(crate::request_context::current(), future),
+        )
+    } else {
+        spawn(nc, future)
+    }
+}
+
+/// Spawns request-owned blocking work, including scoped cleanup if canceled queued.
+#[cfg(feature = "tracing")]
+#[track_caller]
+pub fn spawn_blocking_in_request<F, T, Name, NameClosure>(
+    nc: NameClosure,
+    function: F,
+) -> JoinHandle<T>
+where
+    Name: AsRef<str>,
+    NameClosure: FnOnce() -> Name,
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    if crate::tracing::QpsTracingMode::current().request_context() {
+        let work = BlockingRequest::new(function);
+        spawn_blocking(nc, move || work.run())
+    } else {
+        spawn_blocking(nc, function)
+    }
+}
+
+#[cfg(feature = "tracing")]
+struct BlockingRequest<F> {
+    context: Option<crate::request_context::RequestContext>,
+    function: Option<F>,
+}
+
+#[cfg(feature = "tracing")]
+impl<F> BlockingRequest<F> {
+    fn new(function: F) -> Self {
+        Self {
+            context: crate::request_context::capture(),
+            function: Some(function),
+        }
+    }
+
+    fn run<T>(mut self) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        crate::request_context::in_scope_if_enabled(self.context, || {
+            self.function
+                .take()
+                .expect("blocking function present until run")()
+        })
+    }
+}
+
+#[cfg(feature = "tracing")]
+impl<F> Drop for BlockingRequest<F> {
+    fn drop(&mut self) {
+        // Tokio can cancel queued blocking work before calling its closure.
+        crate::request_context::in_scope_if_enabled(self.context, || drop(self.function.take()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future;

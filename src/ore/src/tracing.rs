@@ -56,7 +56,7 @@ use tracing::{Event, Level, Span, Subscriber, warn};
 #[cfg(feature = "capture")]
 use tracing_capture::{CaptureLayer, SharedStorage};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use tracing_subscriber::filter::Directive;
+use tracing_subscriber::filter::{Directive, FilterExt};
 use tracing_subscriber::fmt::format::{Writer, format};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, SubscriberExt};
@@ -69,6 +69,82 @@ use crate::metrics::MetricsRegistry;
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
 use crate::now::{EpochMillis, NowFn, SYSTEM_TIME};
+
+#[cfg(test)]
+mod diagnostic_tests;
+mod in_process;
+mod lifecycle_gate;
+mod request_log;
+pub use in_process::InProcessContext;
+
+/// Startup-only tracing variants for controlled QPS diagnostics.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum QpsTracingMode {
+    /// Unchanged logging and execution tracing.
+    #[default]
+    Baseline,
+    /// Preserve spans and log output, gating unnecessary filter callbacks.
+    FilterOnly,
+    /// Request-attributed events without internal execution spans.
+    RequestOnly,
+    /// Request-attributed events with internal spans exported through OTEL.
+    Detailed,
+}
+
+static QPS_TRACING_MODE: OnceLock<QpsTracingMode> = OnceLock::new();
+
+impl QpsTracingMode {
+    /// Returns the configured startup mode, or baseline before initialization.
+    pub fn current() -> Self {
+        QPS_TRACING_MODE.get().copied().unwrap_or_default()
+    }
+
+    /// Whether request context is carried independently of tracing spans.
+    pub fn request_context(self) -> bool {
+        matches!(self, Self::RequestOnly | Self::Detailed)
+    }
+
+    fn from_env() -> Result<Self, anyhow::Error> {
+        match std::env::var("MZ_QPS_TRACING_MODE").as_deref() {
+            Err(std::env::VarError::NotPresent) | Ok("baseline") => Ok(Self::Baseline),
+            Ok("filter") => Ok(Self::FilterOnly),
+            Ok("request") => Ok(Self::RequestOnly),
+            Ok("detailed") => Ok(Self::Detailed),
+            _ => {
+                anyhow::bail!("MZ_QPS_TRACING_MODE must be baseline, filter, request, or detailed")
+            }
+        }
+    }
+
+    fn validate<F>(self, config: &TracingConfig<F>) -> Result<(), anyhow::Error> {
+        if !self.request_context() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            matches!(config.stderr_log.format, StderrLogFormat::Json),
+            "request-context diagnostics require JSON logs"
+        );
+        anyhow::ensure!(
+            config.sentry.is_none(),
+            "request-context diagnostics do not yet support Sentry"
+        );
+        #[cfg(feature = "tokio-console")]
+        anyhow::ensure!(
+            config.tokio_console.is_none(),
+            "request-context diagnostics do not yet support Tokio console"
+        );
+        #[cfg(feature = "capture")]
+        anyhow::ensure!(
+            config.capture.is_none(),
+            "request-context diagnostics do not yet support span capture"
+        );
+        anyhow::ensure!(
+            config.opentelemetry.is_some() == (self == Self::Detailed),
+            "request mode requires no OTEL exporter; detailed mode requires an OTEL exporter"
+        );
+        Ok(())
+    }
+}
 
 /// Application tracing configuration.
 ///
@@ -324,53 +400,10 @@ pub async fn configure<F>(config: TracingConfig<F>) -> Result<TracingHandle, any
 where
     F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,
 {
-    let stderr_log_layer: Box<dyn Layer<Registry> + Send + Sync> = match config.stderr_log.format {
-        StderrLogFormat::Text { prefix } => {
-            // See: https://no-color.org/
-            let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
-            Box::new(
-                fmt::layer()
-                    .with_writer(io::stderr)
-                    .event_format(PrefixFormat {
-                        inner: format(),
-                        prefix,
-                    })
-                    .with_ansi(!no_color && io::stderr().is_terminal()),
-            )
-        }
-        StderrLogFormat::Json => Box::new(
-            fmt::layer()
-                .with_writer(io::stderr)
-                .json()
-                .with_current_span(true),
-        ),
-    };
-    let (stderr_log_filter, stderr_log_filter_reloader) = reload::Layer::new({
-        let mut filter = config.stderr_log.filter;
-        for directive in LOGGING_DEFAULTS.iter() {
-            filter = filter.add_directive(directive.clone());
-        }
-        filter
-    });
-    // Add rate limiting for OpenTelemetry internal logs to prevent log spam
-    // when there are issues with the OpenTelemetry pipeline (e.g., channel full,
-    // connection errors). This only affects logs from "opentelemetry*" targets.
-    let otel_rate_limit_filter = OpenTelemetryRateLimitingFilter::new(Duration::from_secs(
-        OPENTELEMETRY_RATE_LIMIT_BACKOFF_SECS,
-    ));
-    // IMPORTANT: The order matters here. The outer filter's `max_level_hint()` is used
-    // to determine the global tracing level. The `otel_rate_limit_filter` doesn't provide
-    // a `max_level_hint()` (defaults to TRACE), so the `stderr_log_filter` (EnvFilter)
-    // must be the outer filter to ensure the correct max level is reported.
-    let stderr_log_layer = stderr_log_layer
-        .with_filter(otel_rate_limit_filter)
-        .with_filter(stderr_log_filter);
-    let stderr_log_reloader = Arc::new(move |mut filter: EnvFilter, defaults: Vec<Directive>| {
-        for directive in &defaults {
-            filter = filter.add_directive(directive.clone());
-        }
-        Ok(stderr_log_filter_reloader.reload(filter)?)
-    });
+    let mode = QpsTracingMode::from_env()?;
+    mode.validate(&config)?;
+    let (stderr_log_layer, stderr_log_reloader) =
+        stderr_logging(config.stderr_log, mode, io::stderr)?;
 
     let (otel_layer, otel_reloader): (_, Reloader) = if let Some(otel_config) = config.opentelemetry
     {
@@ -566,6 +599,7 @@ where
     assert!(GLOBAL_SUBSCRIBER.set(Arc::new(stack)).is_ok());
     // Initialize the subscriber.
     Arc::clone(GLOBAL_SUBSCRIBER.get().unwrap()).init();
+    assert!(QPS_TRACING_MODE.set(mode).is_ok());
 
     #[cfg(feature = "tokio-console")]
     if let Some(console_config) = config.tokio_console {
@@ -584,6 +618,94 @@ where
     };
 
     Ok(handle)
+}
+
+type StderrLayer = Box<dyn Layer<Registry> + Send + Sync>;
+
+fn stderr_logging<W>(
+    config: StderrLogConfig,
+    mode: QpsTracingMode,
+    writer: W,
+) -> Result<(StderrLayer, Reloader), anyhow::Error>
+where
+    W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
+{
+    let base: StderrLayer = match config.format {
+        StderrLogFormat::Text { prefix } => {
+            let no_color = std::env::var_os("NO_COLOR").unwrap_or_else(|| "".into()) != "";
+            fmt::layer()
+                .with_writer(writer)
+                .event_format(PrefixFormat {
+                    inner: format(),
+                    prefix,
+                })
+                .with_ansi(!no_color && io::stderr().is_terminal())
+                .boxed()
+        }
+        StderrLogFormat::Json if mode.request_context() => fmt::layer()
+            .with_writer(writer)
+            .with_ansi(false)
+            .event_format(request_log::RequestJson)
+            .boxed(),
+        StderrLogFormat::Json => fmt::layer()
+            .with_writer(writer)
+            .json()
+            .with_current_span(true)
+            .boxed(),
+    };
+    let mut filter = config.filter;
+    for directive in LOGGING_DEFAULTS.iter() {
+        filter = filter.add_directive(directive.clone());
+    }
+    let rate_limit = OpenTelemetryRateLimitingFilter::new(Duration::from_secs(
+        OPENTELEMETRY_RATE_LIMIT_BACKOFF_SECS,
+    ));
+    if mode == QpsTracingMode::Baseline {
+        let (filter, handle) = reload::Layer::new(filter);
+        // Keep EnvFilter outermost so its max-level hint controls verbose calls.
+        let layer = base.with_filter(rate_limit).with_filter(filter).boxed();
+        let reloader: Reloader = Arc::new(move |mut filter, defaults| {
+            for directive in defaults {
+                filter = filter.add_directive(directive);
+            }
+            Ok(handle.reload(filter)?)
+        });
+        return Ok((layer, reloader));
+    }
+    let validate = move |filter: &EnvFilter| -> Result<(), anyhow::Error> {
+        anyhow::ensure!(
+            !mode.request_context() || !lifecycle_gate::needs_lifecycle(filter),
+            "request-context log filters support only static targets and levels, not span/field directives"
+        );
+        Ok(())
+    };
+    validate(&filter)?;
+    let (filter, handle) = lifecycle_gate::gated(filter);
+    let layer = if mode.request_context() {
+        // A single decision must reject spans. Nested outer filters can otherwise
+        // keep spans alive after the event-only logging filter rejects them.
+        base.with_filter(lifecycle_gate::EventsOnly.and(filter).and(rate_limit))
+            .boxed()
+    } else {
+        base.with_filter(rate_limit).with_filter(filter).boxed()
+    };
+    let layer = if mode == QpsTracingMode::RequestOnly {
+        // This mode forbids every other span consumer. Reject spans globally as
+        // well, including when another dispatcher makes callsite interest mixed.
+        tracing_subscriber::filter::filter_fn(|metadata| metadata.is_event())
+            .and_then(layer)
+            .boxed()
+    } else {
+        layer
+    };
+    let reloader: Reloader = Arc::new(move |mut filter, defaults| {
+        for directive in defaults {
+            filter = filter.add_directive(directive);
+        }
+        validate(&filter)?;
+        Ok(handle.reload(filter)?)
+    });
+    Ok((layer, reloader))
 }
 
 /// Returns the [`Level`] of a crate from an [`EnvFilter`] by performing an

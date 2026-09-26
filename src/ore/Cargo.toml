@@ -55,6 +55,7 @@ stacker = { workspace = true, optional = true }
 sentry = { workspace = true, optional = true }
 sentry-panic = { workspace = true, optional = true }
 serde.workspace = true
+serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tokio-openssl = { workspace = true, optional = true }
 thiserror.workspace = true
@@ -66,7 +67,8 @@ tracing-capture = { workspace = true, optional = true }
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
 tracing-subscriber = { workspace = true, optional = true }
-uuid = { workspace = true, optional = true, features = ["v4", "v7"] }
+tracing-log = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true, features = ["v4", "v7", "serde"] }
 url = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
@@ -124,6 +126,9 @@ process = ["libc"]
 region = ["dep:lgalloc", "dep:bytemuck"]
 tracing = [
     "anyhow",
+    "uuid",
+    "serde_json",
+    "tracing-log",
     "dep:tracing",
     "tracing-subscriber",
     "tracing-subscriber/ansi",
@@ -167,6 +172,10 @@ required-features = ["panic"]
 [[test]]
 name = "task"
 required-features = ["async"]
+
+[[test]]
+name = "request_context"
+required-features = ["tracing", "async"]
 
 [[bench]]
 name = "id_gen"

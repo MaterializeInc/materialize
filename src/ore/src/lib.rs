@@ -79,6 +79,9 @@ pub mod pool;
 pub mod process;
 #[cfg(feature = "region")]
 pub mod region;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
+pub mod request_context;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "process")))]
 pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]

@@ -8064,6 +8064,7 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-capture",
+ "tracing-log",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "turmoil",
